@@ -1,5 +1,5 @@
 import React from 'react';
-import { motion, AnimatePresence, PanInfo } from 'motion/react';
+import { motion, AnimatePresence, PanInfo, useDragControls } from 'motion/react';
 import { X } from 'lucide-react';
 import { SPRING_BUBBLY } from '../../utils/springPhysics';
 
@@ -18,6 +18,8 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   subtitle,
   children,
 }) => {
+  const dragControls = useDragControls();
+
   const handleDragEnd = (_: unknown, info: PanInfo) => {
     if (info.offset.y > 100 || info.velocity.y > 500) {
       onClose();
@@ -41,6 +43,8 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
           {/* Sheet / Dialog Surface */}
           <motion.div
             drag="y"
+            dragControls={dragControls}
+            dragListener={false}
             dragConstraints={{ top: 0 }}
             dragElastic={0.2}
             onDragEnd={handleDragEnd}
@@ -53,7 +57,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
               relative z-10 w-full max-w-2xl
               rounded-t-[2.5rem] sm:rounded-[2.4rem]
               flex flex-col overflow-hidden
-              max-h-[90vh] sm:max-h-[85vh]
+              max-h-[90dvh] sm:max-h-[85dvh]
               transform-gpu
             "
           >
@@ -61,12 +65,23 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
             <div className="absolute inset-x-8 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/35 to-transparent pointer-events-none" />
 
             {/* Tactile Drag Handle (Mobile) */}
-            <div className="pt-3 pb-1 cursor-grab active:cursor-grabbing w-full flex justify-center sm:hidden">
+            <div
+              onPointerDown={(e) => dragControls.start(e)}
+              style={{ touchAction: 'none' }}
+              className="pt-3 pb-1 cursor-grab active:cursor-grabbing w-full flex justify-center sm:hidden"
+            >
               <div className="w-12 h-1.5 bg-white/25 rounded-full hover:bg-white/40 transition-colors" />
             </div>
 
             {/* Header - Negative space hierarchy without divider border */}
-            <div className="px-6 pt-4 pb-2 flex items-center justify-between gap-3 shrink-0">
+            <div
+              onPointerDown={(e) => {
+                if ((e.target as HTMLElement).closest('button')) return;
+                dragControls.start(e);
+              }}
+              style={{ touchAction: 'none' }}
+              className="px-5 sm:px-6 pt-3 sm:pt-4 pb-2 flex items-center justify-between gap-3 shrink-0 cursor-grab active:cursor-grabbing sm:cursor-default"
+            >
               <div className="min-w-0 flex-1">
                 <h3 className="text-base sm:text-lg font-bold text-white tracking-tight truncate">
                   {title}

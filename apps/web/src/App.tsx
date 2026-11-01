@@ -105,17 +105,37 @@ export default function App() {
     };
   }, [isOmnibarOpen, setOmnibarOpen]);
 
+  const syncAgentWithHost = useCallback(
+    (hostIdOrDev: string | any) => {
+      const targetHost =
+        typeof hostIdOrDev === 'string'
+          ? fleet.hosts.find((h) => h.id === hostIdOrDev)
+          : hostIdOrDev;
+      if (targetHost && targetHost.ip && targetHost.ip !== '0.0.0.0') {
+        const expectedWs = `ws://${targetHost.ip}:${targetHost.port || 8765}`;
+        if (agent.wsUrl !== expectedWs) {
+          agent.setWsUrl(expectedWs);
+        }
+      }
+    },
+    [fleet.hosts, agent]
+  );
+
   const handleSelectHostTerminal = useCallback(
     (hostId: string) => {
       fleet.setSelectedTarget(hostId);
+      syncAgentWithHost(hostId);
       setActiveTab('terminal');
     },
-    [fleet, setActiveTab]
+    [fleet, setActiveTab, syncAgentWithHost]
   );
 
   const handleSelectHost = useCallback(
-    (hostId: string) => fleet.setSelectedTarget(hostId),
-    [fleet]
+    (hostId: string) => {
+      fleet.setSelectedTarget(hostId);
+      syncAgentWithHost(hostId);
+    },
+    [fleet, syncAgentWithHost]
   );
 
   const handleInspectWol = useCallback(
@@ -125,10 +145,11 @@ export default function App() {
 
   const handleViewScreen = useCallback(
     (dev: any) => {
+      syncAgentWithHost(dev);
       openModal('screen', dev);
       agent.requestScreenRefresh(dev.id);
     },
-    [openModal, agent.requestScreenRefresh]
+    [openModal, agent.requestScreenRefresh, syncAgentWithHost]
   );
 
   const handleOpenMemory = useCallback(() => openModal('memory'), [openModal]);
@@ -522,7 +543,12 @@ export default function App() {
           onTriggerSchedule={fleet.triggerSchedule}
           onUpdateSchedules={fleet.updateSchedules}
           onUpdateHostInstructions={fleet.updateHostInstructions}
-          onAddHost={fleet.addCustomHost}
+          onAddHost={(newHost) => {
+            fleet.addCustomHost(newHost);
+            syncAgentWithHost(newHost);
+          }}
+          onEditHost={fleet.editHost}
+          onDeleteHost={fleet.deleteHost}
           isCapturingScreen={agent.isCapturingScreen}
           onRequestScreenRefresh={agent.requestScreenRefresh}
           wsUrl={agent.wsUrl}

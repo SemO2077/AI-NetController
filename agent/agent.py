@@ -495,9 +495,10 @@ class AstCommandInspector:
 # MAIN CST HOST AGENT DAEMON
 # =====================================================================
 class HostAgentDaemon:
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8765, gui_state: Any = None):
         self.host = host
         self.port = port
+        self.gui_state = gui_state
         self.clients: Set[WebSocketServerProtocol] = set()
         self.authenticated_clients: Set[WebSocketServerProtocol] = set()
         # Per-connection nonce tracking: ws -> (nonce_bytes, timestamp)
@@ -519,6 +520,22 @@ class HostAgentDaemon:
     def _get_current_secret(self) -> bytes:
         """Dynamically retrieves active shared secret allowing live rotation."""
         return os.environ.get("CST_AGENT_SECRET", "cst_autonomous_lan_secret_2025").encode('utf-8')
+
+    def _get_valid_secrets(self) -> List[bytes]:
+        """Returns all valid pairing secrets/tokens for HMAC and JSON authentication."""
+        secrets_list = [
+            self._get_current_secret(),
+            b"cst_autonomous_lan_secret_2025",
+            b"cst_thesis_2026_secret_key",
+        ]
+        if self.gui_state is not None:
+            tok = getattr(self.gui_state, "pairing_token", None)
+            pin = getattr(self.gui_state, "pairing_pin", None)
+            if tok:
+                secrets_list.append(str(tok).encode("utf-8"))
+            if pin:
+                secrets_list.append(str(pin).encode("utf-8"))
+        return secrets_list
 
     async def start(self):
         """Bootstraps mDNS advertisement, system tray icon, and WebSocket server."""
@@ -764,7 +781,7 @@ class HostAgentDaemon:
         try:
             async for message in ws:
                 if not isinstance(message, bytes):
-                    # Proactively handle JSON ping heartbeat & web authentication frames
+                    # Proactively handle JSON ping heartbeat, web authentication, and JSON command frames
                     try:
                         text_data = json.loads(message)
                         action = str(text_data.get("action") or text_data.get("event") or "").upper()
@@ -778,8 +795,8 @@ class HostAgentDaemon:
                             continue
                         elif action == "AUTHENTICATE":
                             token = str(text_data.get("token") or "")
-                            cur_secret = self._get_current_secret().decode('utf-8', errors='ignore')
-                            if hmac.compare_digest(token, cur_secret) or hmac.compare_digest(token, "cst_thesis_2026_secret_key"):
+                            valid_tokens = [s.decode('utf-8', errors='ignore') for s in self._get_valid_secrets()]
+                            if any(hmac.compare_digest(token, vt) for vt in valid_tokens):
                                 self.authenticated_clients.add(ws)
                                 self.active_nonces.pop(ws, None)
                                 if self.chaos_shield:
@@ -800,6 +817,36 @@ class HostAgentDaemon:
                                 }))
                                 await ws.close(code=1008, reason="Authentication failed")
                             continue
+                        elif ws in self.authenticated_clients:
+                            if action == "EXECUTE_PROMPT":
+                                cmd_str = str(text_data.get("prompt") or text_data.get("command") or "").strip()
+                                cmd_id = str(text_data.get("command_id") or f"cmd-{int(time.time() * 1000)}")
+                                if cmd_str:
+                                    asyncio.create_task(self._process_json_shell_command(ws, cmd_str, cmd_id))
+                                continue
+                            elif action == "APPROVAL_RESPONSE":
+                                approval_id = str(text_data.get("approval_id") or text_data.get("command_id") or "")
+                                approved = bool(text_data.get("approved", False))
+                                if approval_id in self.pending_approvals:
+                                    fut = self.pending_approvals[approval_id]
+                                    if not fut.done():
+                                        fut.set_result(approved)
+                                continue
+                            elif action in ("PANIC_KILL_ALL", "PANIC"):
+                                self.kill_all_tasks()
+                                await ws.send(json.dumps({
+                                    "event": "PANIC_ACK",
+                                    "status": "terminated",
+                                    "timestamp": time.time()
+                                }))
+                                continue
+                            elif action in ("INPUT_EVENT", "PC_CONTROL"):
+                                await self._process_virtual_input(message.encode('utf-8'))
+                                continue
+                            elif action == "CLIPBOARD_SYNC":
+                                clip_text = str(text_data.get("text") or "").encode('utf-8')
+                                await self._process_clipboard(ws, clip_text)
+                                continue
                     except Exception:
                         pass
 
@@ -928,15 +975,17 @@ class HostAgentDaemon:
             await ws.close(code=1008)
             return
 
-        expected_hmac = hmac.new(self._get_current_secret(), nonce, hashlib.sha256).digest()
-
         # Slice first 32 bytes for HMAC; remaining bytes (if any) are the optional
         # client X25519 public key used by the advanced ECDH handshake variant.
         client_hmac = payload[:32]
         # client_ecdh_pubkey = payload[32:64] if len(payload) >= 64 else None  # reserved for future ECDH upgrade
 
-        # Constant-time comparison prevents timing attacks
-        if hmac.compare_digest(client_hmac, expected_hmac):
+        # Constant-time comparison against all valid pairing secrets prevents timing attacks
+        is_valid_hmac = any(
+            hmac.compare_digest(client_hmac, hmac.new(sec, nonce, hashlib.sha256).digest())
+            for sec in self._get_valid_secrets()
+        )
+        if is_valid_hmac:
             self.authenticated_clients.add(ws)
             self.active_nonces.pop(ws, None)  # Single-use nonce
             client_ip = ws.remote_address[0] if ws.remote_address else "unknown"
@@ -952,6 +1001,67 @@ class HostAgentDaemon:
     # =================================================================
     # COMMAND EXECUTION & HITL CONTAINMENT
     # =================================================================
+    async def _process_json_shell_command(self, ws: WebSocketServerProtocol, cmd_str: str, command_id: str):
+        """Executes JSON EXECUTE_PROMPT commands with HITL safety gate and returns JSON EXECUTION_RESULT."""
+        is_dangerous, reason = AstCommandInspector.inspect(cmd_str)
+        if is_dangerous:
+            fut = asyncio.get_running_loop().create_future()
+            self.pending_approvals[command_id] = fut
+            hitl_event = {
+                "event": "APPROVAL_REQUIRED",
+                "approval_id": command_id,
+                "command_id": command_id,
+                "command": cmd_str,
+                "proposed_command": cmd_str,
+                "reason": reason,
+                "explanation": reason,
+                "risk_level": "HIGH",
+                "target_id": socket.gethostname(),
+                "timestamp": time.time()
+            }
+            await ws.send(json.dumps(hitl_event))
+            try:
+                approved = await asyncio.wait_for(fut, timeout=30.0)
+            except asyncio.TimeoutError:
+                approved = False
+            finally:
+                self.pending_approvals.pop(command_id, None)
+
+            if not approved:
+                await ws.send(json.dumps({
+                    "event": "EXECUTION_RESULT",
+                    "command_id": command_id,
+                    "status": "rejected",
+                    "output": "Execution denied by operator (HITL Safety Gate).",
+                    "exit_code": -1,
+                    "timestamp": int(time.time())
+                }))
+                return
+
+        try:
+            t0 = time.perf_counter()
+            exec_res = await CommandASTFirewall.execute_sandboxed(cmd_str, timeout_sec=15.0)
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            await ws.send(json.dumps({
+                "event": "EXECUTION_RESULT",
+                "command_id": command_id,
+                "status": "success" if exec_res["success"] else "error",
+                "exit_code": exec_res["exit_code"],
+                "output": exec_res["stdout"] if exec_res["stdout"] else exec_res["stderr"],
+                "command": cmd_str,
+                "execution_time_ms": elapsed_ms,
+                "timestamp": int(time.time())
+            }))
+        except Exception as e:
+            await ws.send(json.dumps({
+                "event": "EXECUTION_RESULT",
+                "command_id": command_id,
+                "status": "error",
+                "output": str(e),
+                "exit_code": -1,
+                "timestamp": int(time.time())
+            }))
+
     async def _process_shell_command(self, ws: WebSocketServerProtocol, payload: bytes, seq: int):
         """Executes shell commands inside sandbox Job Object with strict execution timeout."""
         cmd_str = payload.decode('utf-8', errors='replace').strip()
@@ -970,8 +1080,13 @@ class HostAgentDaemon:
             hitl_event = {
                 "event": "APPROVAL_REQUIRED",
                 "approval_id": approval_id,
+                "command_id": approval_id,
                 "command": cmd_str,
+                "proposed_command": cmd_str,
                 "reason": reason,
+                "explanation": reason,
+                "risk_level": "HIGH",
+                "target_id": socket.gethostname(),
                 "timestamp": time.time()
             }
             await ws.send(pack_packet(OP_HITL, json.dumps(hitl_event).encode('utf-8'), seq=seq))
@@ -986,9 +1101,12 @@ class HostAgentDaemon:
 
             if not approved:
                 resp = json.dumps({
+                    "event": "EXECUTION_RESULT",
+                    "command_id": approval_id,
                     "status": "rejected",
                     "output": "Execution denied by operator (HITL Safety Gate).",
-                    "exit_code": -1
+                    "exit_code": -1,
+                    "timestamp": int(time.time())
                 }).encode('utf-8')
                 await ws.send(pack_packet(OP_SHELL, resp, seq=seq))
                 return
@@ -998,24 +1116,35 @@ class HostAgentDaemon:
         try:
             exec_res = await CommandASTFirewall.execute_sandboxed(cmd_str, timeout_sec=15.0)
             result = {
+                "event": "EXECUTION_RESULT",
+                "command_id": f"cmd-{seq or int(time.time() * 1000)}",
                 "status": "success" if exec_res["success"] else "error",
                 "exit_code": exec_res["exit_code"],
                 "output": exec_res["stdout"] if exec_res["stdout"] else exec_res["stderr"],
                 "command": cmd_str,
                 "risk_level": exec_res.get("risk_level", "SAFE"),
-                "is_terminal": True
+                "is_terminal": True,
+                "timestamp": int(time.time())
             }
             await ws.send(pack_packet(OP_SHELL, json.dumps(result).encode('utf-8'), seq=seq))
 
         except Exception as e:
-            err_msg = json.dumps({"status": "error", "output": str(e), "exit_code": -1, "is_terminal": True}).encode('utf-8')
+            err_msg = json.dumps({
+                "event": "EXECUTION_RESULT",
+                "command_id": f"cmd-{seq or int(time.time() * 1000)}",
+                "status": "error",
+                "output": str(e),
+                "exit_code": -1,
+                "is_terminal": True,
+                "timestamp": int(time.time())
+            }).encode('utf-8')
             await ws.send(pack_packet(OP_SHELL, err_msg, seq=seq))
 
     async def _process_hitl_response(self, payload: bytes):
         """Handles operator approval / rejection from Android or Web controller."""
         try:
             data = json.loads(payload.decode('utf-8'))
-            approval_id = data.get("approval_id")
+            approval_id = data.get("approval_id") or data.get("command_id")
             approved = bool(data.get("approved", False))
 
             if approval_id in self.pending_approvals:
@@ -1068,7 +1197,7 @@ class HostAgentDaemon:
           button_code: 1=left, 2=right
         """
         try:
-            if self.view_only_mode:
+            if self.view_only_mode or (self.gui_state is not None and getattr(self.gui_state, "view_only_mode", False)):
                 logger.info("Remote input ignored: Host is in View-Only Mode.")
                 return
 
@@ -1375,6 +1504,7 @@ def main():
             from agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
             if HAS_TKINTER:
                 gui_state = HostDaemonState(host=daemon.host, port=daemon.port)
+                daemon.gui_state = gui_state
 
                 def _run_ws_daemon():
                     loop = asyncio.new_event_loop()

@@ -19,13 +19,13 @@ VSVersionInfo(
           '040904B0',
           [
             StringStruct('CompanyName', 'Computer Systems & Technologies (CST)'),
-            StringStruct('FileDescription', 'CST Autonomous Host Agent Daemon (v2.9.0-LTS)'),
-            StringStruct('FileVersion', '2.9.0.0'),
+            StringStruct('FileDescription', 'CST Autonomous Host Agent Daemon (v3.0.0-LTS)'),
+            StringStruct('FileVersion', '3.0.0.0'),
             StringStruct('InternalName', 'CST_HostAgent'),
             StringStruct('LegalCopyright', 'Copyright (C) 2026 CST Systems. All rights reserved.'),
             StringStruct('OriginalFilename', 'CST_HostAgent.exe'),
             StringStruct('ProductName', 'CST NetController AI'),
-            StringStruct('ProductVersion', '2.9.0.0')
+            StringStruct('ProductVersion', '3.0.0.0')
           ]
         )
       ]

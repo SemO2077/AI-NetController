@@ -24,6 +24,8 @@ interface ModalManagerProps {
   onUpdateSchedules: any;
   onUpdateHostInstructions: any;
   onAddHost?: (host: any) => void;
+  onEditHost?: (host: any, previousId?: string) => void;
+  onDeleteHost?: (hostId: string) => void;
   wsUrl: string;
   setWsUrl: any;
   isConnected: boolean;
@@ -81,6 +83,10 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
         onSendWol={(h) => {
           props.onSendWolPacket({ mac: h.mac, broadcastIp: '255.255.255.255' }, h.id);
         }}
+        onEditHost={(h) => {
+          useUIStore.getState().openModal('addHost', h);
+        }}
+        onDeleteHost={props.onDeleteHost}
       />
       <WolModal
         isOpen={activeModal === 'wol'}
@@ -131,9 +137,19 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
       <AddHostModal
         isOpen={activeModal === 'addHost'}
         onClose={closeModal}
+        editingHost={
+          activeModal === 'addHost' && payload && typeof payload === 'object' && 'id' in payload
+            ? payload
+            : null
+        }
         onAddHost={(newHost) => {
           if (props.onAddHost) {
             props.onAddHost(newHost);
+          }
+        }}
+        onEditHost={(updatedHost, previousId) => {
+          if (props.onEditHost) {
+            props.onEditHost(updatedHost, previousId);
           }
         }}
       />

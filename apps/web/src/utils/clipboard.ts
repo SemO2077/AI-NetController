@@ -8,6 +8,15 @@
 export async function copyToClipboard(text: string): Promise<boolean> {
   if (!text) return false;
 
+  // 0. Native Android Bridge direct system clipboard support
+  if (typeof window !== 'undefined' && (window as any).AndroidBridge && typeof (window as any).AndroidBridge.copyToClipboard === 'function') {
+    try {
+      (window as any).AndroidBridge.copyToClipboard(text);
+    } catch {
+      // Fall through to web APIs
+    }
+  }
+
   // 1. Try modern asynchronous Clipboard API if available and permitted
   if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
     try {

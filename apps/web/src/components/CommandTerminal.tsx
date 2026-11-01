@@ -87,25 +87,29 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
   };
 
   const lastSubmittedPromptRef = useRef<string>('');
-  const lastProcessedTimestampRef = useRef<string>('');
+  const lastProcessedKeyRef = useRef<string>('');
   const logScrollRef = useRef<HTMLDivElement>(null);
 
   const selectedHost = hosts.find((h) => h.id === selectedTarget) || hosts[0] || null;
 
   useEffect(() => {
-    if (
-      lastExecutionResult &&
-      lastExecutionResult.timestamp &&
-      lastExecutionResult.timestamp !== lastProcessedTimestampRef.current
-    ) {
-      lastProcessedTimestampRef.current = lastExecutionResult.timestamp;
+    if (!lastExecutionResult) return;
+    const dedupKey = `${lastExecutionResult.command_id || ''}-${lastExecutionResult.timestamp || ''}-${lastExecutionResult.output?.length || 0}`;
+    if (dedupKey && dedupKey !== lastProcessedKeyRef.current) {
+      lastProcessedKeyRef.current = dedupKey;
+      const resolvedExitCode =
+        typeof (lastExecutionResult as any).exit_code === 'number'
+          ? (lastExecutionResult as any).exit_code
+          : lastExecutionResult.status === 'error'
+          ? 1
+          : 0;
       setExecutionLogs((prev) => [
         ...prev.slice(-24),
         {
           ...lastExecutionResult,
-          id: `${lastExecutionResult.timestamp}-${prev.length}`,
+          id: `${lastExecutionResult.command_id || lastExecutionResult.timestamp}-${prev.length}`,
           commandPrompt: lastSubmittedPromptRef.current || undefined,
-          exitCode: 0,
+          exitCode: resolvedExitCode,
         },
       ]);
     }
@@ -512,7 +516,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                     </div>
                   )}
 
-                  <pre className="text-white/95 text-xs whitespace-pre-wrap font-mono select-text">
+                  <pre className="text-white/95 text-xs whitespace-pre-wrap break-words overflow-x-auto max-w-full font-mono select-text">
                     {entry.output}
                   </pre>
                 </motion.div>

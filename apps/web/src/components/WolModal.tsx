@@ -27,6 +27,7 @@ import {
   resolveScheduleTargets,
   localizeWolSchedule,
   DEFAULT_WOL_SCHEDULES,
+  TEST_WOL_SCHEDULES,
   WEEKDAYS_MAP,
 } from '../services/wolService';
 import { triggerHapticFeedback } from '../services/hapticService';
@@ -173,7 +174,7 @@ export const WolModal: React.FC<WolModalProps> = ({
 
   const handleRestoreDefaults = () => {
     triggerHapticFeedback('medium');
-    persistSchedules(DEFAULT_WOL_SCHEDULES);
+    persistSchedules(TEST_WOL_SCHEDULES.length > 0 ? TEST_WOL_SCHEDULES : DEFAULT_WOL_SCHEDULES);
   };
 
   const handleTestTriggerSchedule = (schedule: WolSchedule) => {
@@ -789,9 +790,27 @@ export const WolModal: React.FC<WolModalProps> = ({
                             <option value="specific_device">
                               {isBg ? 'Конкретен компютър от списъка' : 'Specific Host from Fleet'}
                             </option>
+                            <option value="custom_mac">
+                              {isBg ? 'Ръчно въведен MAC адрес' : 'Custom MAC Address'}
+                            </option>
                           </select>
                         </div>
                       </div>
+
+                      {formTargetType === 'custom_mac' && (
+                        <div>
+                          <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                            {isBg ? 'Целеви MAC адрес' : 'Target MAC Address'}
+                          </label>
+                          <input
+                            type="text"
+                            value={formTargetMac}
+                            onChange={(e) => setFormTargetMac(e.target.value)}
+                            placeholder="00:1A:2B:3C:4D:5E"
+                            className="w-full min-h-[40px] bg-[#0b1324] border border-white/15 rounded-xl px-3 py-2 text-xs text-cyan-200 font-mono focus:border-cyan-400 focus:outline-none"
+                          />
+                        </div>
+                      )}
 
                       {formTargetType === 'specific_device' && (
                         <div>

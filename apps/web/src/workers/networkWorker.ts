@@ -406,19 +406,94 @@ function scheduleReconnect() {
 
 const UTF8_DECODER = new TextDecoder();
 
+// Pure-JS SHA-256 & HMAC-SHA256 fallback for non-HTTPS LAN origins where crypto.subtle is unavailable
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function sha256Pure(data: Uint8Array): Uint8Array {
+  let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+  let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+  const bitLen = data.length * 8;
+  const padLen = ((data.length + 9 + 63) & ~63);
+  const padded = new Uint8Array(padLen);
+  padded.set(data);
+  padded[data.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(padLen - 4, bitLen >>> 0, false);
+  view.setUint32(padLen - 8, Math.floor(bitLen / 0x100000000), false);
+  const w = new Uint32Array(64);
+  for (let offset = 0; offset < padLen; offset += 64) {
+    for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false);
+    for (let i = 16; i < 64; i++) {
+      const s0 = ((w[i - 15] >>> 7) | (w[i - 15] << 25)) ^ ((w[i - 15] >>> 18) | (w[i - 15] << 14)) ^ (w[i - 15] >>> 3);
+      const s1 = ((w[i - 2] >>> 17) | (w[i - 2] << 15)) ^ ((w[i - 2] >>> 19) | (w[i - 2] << 13)) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+    let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+    for (let i = 0; i < 64; i++) {
+      const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+      const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (S0 + maj) >>> 0;
+      h = g; g = f; f = e; e = (d + temp1) >>> 0;
+      d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0;
+  }
+  const out = new Uint8Array(32);
+  const outView = new DataView(out.buffer);
+  outView.setUint32(0, h0, false); outView.setUint32(4, h1, false);
+  outView.setUint32(8, h2, false); outView.setUint32(12, h3, false);
+  outView.setUint32(16, h4, false); outView.setUint32(20, h5, false);
+  outView.setUint32(24, h6, false); outView.setUint32(28, h7, false);
+  return out;
+}
+
+function hmacSha256Pure(key: Uint8Array, message: Uint8Array): Uint8Array {
+  const blockSize = 64;
+  const k = key.length > blockSize ? sha256Pure(key) : key;
+  const oKeyPad = new Uint8Array(blockSize + 32);
+  const iKeyPad = new Uint8Array(blockSize + message.length);
+  for (let i = 0; i < blockSize; i++) {
+    const kb = i < k.length ? k[i] : 0;
+    oKeyPad[i] = kb ^ 0x5c;
+    iKeyPad[i] = kb ^ 0x36;
+  }
+  iKeyPad.set(message, blockSize);
+  const innerHash = sha256Pure(iKeyPad);
+  oKeyPad.set(innerHash, blockSize);
+  return sha256Pure(oKeyPad);
+}
+
 async function respondToBinaryAuthChallenge(nonceBytes: Uint8Array, seq: number) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  const secretStr = currentToken || 'cst_thesis_2026_secret_key';
+  const secretStr = currentToken || 'cst_autonomous_lan_secret_2025';
   const keyData = new TextEncoder().encode(secretStr);
-  const cryptoKey = await self.crypto.subtle.importKey(
-    'raw',
-    keyData,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const sigBuffer = await self.crypto.subtle.sign('HMAC', cryptoKey, nonceBytes);
-  const sigBytes = new Uint8Array(sigBuffer);
+  let sigBytes: Uint8Array;
+  if (typeof self !== 'undefined' && self.crypto && self.crypto.subtle) {
+    const cryptoKey = await self.crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sigBuffer = await self.crypto.subtle.sign('HMAC', cryptoKey, nonceBytes);
+    sigBytes = new Uint8Array(sigBuffer);
+  } else {
+    sigBytes = hmacSha256Pure(keyData, nonceBytes);
+  }
   const packet = new Uint8Array(HEADER_SIZE + sigBytes.length);
   const view = new DataView(packet.buffer);
   packet[0] = MAGIC_0;
@@ -442,7 +517,9 @@ function parseBinaryFrame(bytes: Uint8Array) {
 
   if (bytes.length < HEADER_SIZE + length) return;
 
-  if (seq > 0 && opcode !== 0x01 && !verifyInboundSequence(seq)) {
+  // Skip sequence consumption on OP_PING (0x01), OP_HITL (0x05), OP_AUTH (0x06), and OP_LLM_STREAM (0x0B)
+  // so multi-stage responses sharing a request seq are not dropped by the anti-replay bitmap
+  if (seq > 0 && opcode !== 0x01 && opcode !== 0x05 && opcode !== 0x06 && opcode !== 0x0b && !verifyInboundSequence(seq)) {
     return; // Reject replayed or out-of-window binary frame
   }
 
@@ -480,11 +557,32 @@ function parseBinaryFrame(bytes: Uint8Array) {
     // OP_AUTH challenge (16-byte nonce) or status
     if (length === 16) {
       void respondToBinaryAuthChallenge(payloadSlice, seq);
+    } else if (length > 0) {
+      const statusStr = UTF8_DECODER.decode(payloadSlice);
+      if (statusStr.includes('OK_AUTHENTICATED')) {
+        self.postMessage({ type: 'JSON_FRAME', data: { event: 'AUTHENTICATED', status: 'OK' } });
+      }
+    }
+  } else if (opcode === 0x07) {
+    // OP_CLIP clipboard sync
+    try {
+      self.postMessage({ type: 'JSON_FRAME', data: { event: 'CLIPBOARD_SYNC', text: UTF8_DECODER.decode(payloadSlice) } });
+    } catch {
+      // Ignore
+    }
+  } else if (opcode === 0x0b) {
+    // OP_LLM_STREAM chunk
+    try {
+      self.postMessage({ type: 'JSON_FRAME', data: { event: 'LLM_STREAM', chunk: UTF8_DECODER.decode(payloadSlice), seq } });
+    } catch {
+      // Ignore
     }
   } else if (opcode === 0xee) {
     // OP_ERR structured error
     try {
-      self.postMessage({ type: 'JSON_FRAME', data: { event: 'ERROR', ...JSON.parse(UTF8_DECODER.decode(payloadSlice)) } });
+      const errText = UTF8_DECODER.decode(payloadSlice);
+      const parsedErr = errText.startsWith('{') ? JSON.parse(errText) : { error: errText };
+      self.postMessage({ type: 'JSON_FRAME', data: { event: 'ERROR', ...parsedErr } });
     } catch {
       // Ignore
     }
@@ -564,6 +662,35 @@ self.onmessage = (event: MessageEvent) => {
       } else if (autoReconnectEnabled) {
         if (outboundQueue.length < MAX_QUEUE_SIZE) {
           outboundQueue.push({ type: 'binary', payload: payload.buffer });
+        }
+      }
+      break;
+    }
+
+    case 'SEND_OPCODE': {
+      outboundSeq++;
+      const opcode = Number(payload.opcode || 0x04);
+      const rawText = typeof payload.data === 'string' ? payload.data : JSON.stringify(payload.data || {});
+      const bodyBytes = new TextEncoder().encode(rawText);
+      const packet = new Uint8Array(HEADER_SIZE + bodyBytes.length);
+      const view = new DataView(packet.buffer);
+      packet[0] = MAGIC_0;
+      packet[1] = MAGIC_1;
+      packet[2] = opcode & 0xff;
+      packet[3] = 0x00;
+      view.setUint32(4, outboundSeq, false);
+      view.setUint32(8, bodyBytes.length, false);
+      packet.set(bodyBytes, HEADER_SIZE);
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(packet.buffer);
+        } catch {
+          // send failed
+        }
+      } else if (autoReconnectEnabled) {
+        if (outboundQueue.length < MAX_QUEUE_SIZE) {
+          outboundQueue.push({ type: 'binary', payload: packet.buffer });
         }
       }
       break;

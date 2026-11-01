@@ -17,6 +17,8 @@ import {
   ShieldOff,
   RotateCcw,
   Zap,
+  Edit3,
+  Trash2,
 } from 'lucide-react';
 import { triggerHapticFeedback } from '../services/hapticService';
 import { getBatteryConfig } from './HostCard';
@@ -34,6 +36,8 @@ interface HostDetailsModalProps {
   onSelectForTerminal?: (hostId: string) => void;
   onViewScreen?: (host: HostDevice) => void;
   onSendWol?: (host: HostDevice) => void;
+  onEditHost?: (host: HostDevice) => void;
+  onDeleteHost?: (hostId: string) => void;
 }
 
 export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
@@ -47,6 +51,8 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
   onSelectForTerminal,
   onViewScreen,
   onSendWol,
+  onEditHost,
+  onDeleteHost,
 }) => {
   const { language } = useTranslation();
 
@@ -413,6 +419,40 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
             </motion.button>
           )}
         </div>
+
+        {/* Host Management: Edit & Remove Host */}
+        {(onEditHost || onDeleteHost) && (
+          <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+            {onEditHost && (
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  onClose();
+                  onEditHost(host);
+                }}
+                className="flex-1 min-h-[42px] py-2.5 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.09] border border-white/12 text-slate-200 hover:text-cyan-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{language === 'bg' ? 'Редактирай Хост' : 'Edit Host'}</span>
+              </button>
+            )}
+            {onDeleteHost && (
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHapticFeedback('warning');
+                  onDeleteHost(host.id);
+                  onClose();
+                }}
+                className="flex-1 min-h-[42px] py-2.5 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 hover:text-rose-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                <span>{language === 'bg' ? 'Премахни Хост' : 'Remove Host'}</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </BottomSheet>
   );

@@ -349,9 +349,9 @@ const HostCardComponent: React.FC<HostCardProps> = ({
         <div className="absolute inset-x-8 top-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-300/50 to-transparent pointer-events-none" />
 
         {/* Collapsed Header Row */}
-        <div className="relative z-10 flex items-center justify-between gap-2 sm:gap-3">
+        <div className="relative z-10 flex flex-wrap xs:flex-nowrap items-center justify-between gap-2 sm:gap-3">
           {/* Left: 44x44px Squircle Icon + Full Hostname + OS Badge + Monospace IP + Latency / Sleeping state */}
-          <div className="flex items-center space-x-2.5 sm:space-x-3.5 min-w-0 flex-1">
+          <div className="flex items-center space-x-2.5 sm:space-x-3.5 min-w-[170px] flex-1">
             <motion.div
               animate={
                 isExpanded
@@ -475,11 +475,11 @@ const HostCardComponent: React.FC<HostCardProps> = ({
             </div>
           </div>
 
-          {/* Right: Primary 1-tap action buttons (strict 44x44px touch targets) + expand chevron */}
-          <div className="flex items-center space-x-1.5 shrink-0">
+          {/* Right: Primary 1-tap action buttons + expand chevron */}
+          <div className="flex items-center space-x-1 sm:space-x-1.5 shrink-0 ml-auto">
             {isOffline ? (
               remainingWakeSeconds !== undefined ? (
-                <div className="min-w-[44px] min-h-[44px] w-11 h-11 rounded-full bg-amber-500/15 border border-amber-400/40 flex flex-col items-center justify-center text-amber-300 text-[10px] font-mono font-bold">
+                <div className="min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-amber-500/15 border border-amber-400/40 flex flex-col items-center justify-center text-amber-300 text-[10px] font-mono font-bold">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400 mb-0.5" />
                   <span>{remainingWakeSeconds}s</span>
                 </div>
@@ -490,7 +490,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                   whileTap={{ scale: 0.88 }}
                   transition={SPRING_POP}
                   onClick={(e) => onWakeClick(e, host)}
-                  className="group min-w-[44px] min-h-[44px] w-11 h-11 rounded-full bg-gradient-to-br from-amber-500/25 to-orange-500/20 hover:from-amber-500/40 hover:to-orange-500/30 border border-amber-400/60 text-amber-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_24px_rgba(245,158,11,0.45)] transform-gpu"
+                  className="group min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-amber-500/25 to-orange-500/20 hover:from-amber-500/40 hover:to-orange-500/30 border border-amber-400/60 text-amber-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_24px_rgba(245,158,11,0.45)] transform-gpu"
                   title={t('host_wake_tooltip')}
                   aria-label={t('host_wake_tooltip')}
                 >
@@ -509,7 +509,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     triggerHapticFeedback('light');
                     onSelectForCommand?.(host.id);
                   }}
-                  className="group min-w-[44px] min-h-[44px] w-11 h-11 rounded-full bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_14px_rgba(0,229,255,0.25)] transform-gpu"
+                  className="group min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_14px_rgba(0,229,255,0.25)] transform-gpu"
                   title={t('host_terminal_tooltip')}
                   aria-label={t('host_terminal_tooltip')}
                 >
@@ -526,7 +526,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     triggerHapticFeedback('light');
                     onViewScreen(host);
                   }}
-                  className="group min-w-[44px] min-h-[44px] w-11 h-11 rounded-full bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/50 text-sky-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_18px_rgba(14,165,233,0.35)] transform-gpu"
+                  className="group min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/50 text-sky-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_18px_rgba(14,165,233,0.35)] transform-gpu"
                   title={t('host_screen_tooltip')}
                   aria-label={t('host_screen_tooltip')}
                 >
@@ -545,7 +545,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 triggerHapticFeedback('light');
                 onOpenDetailsModal(host);
               }}
-              className="min-w-[44px] min-h-[44px] w-11 h-11 rounded-full bg-white/[0.04] hover:bg-white/[0.1] border border-white/10 text-white/70 hover:text-cyan-300 flex items-center justify-center transition-colors cursor-pointer transform-gpu"
+              className="min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-white/[0.04] hover:bg-white/[0.1] border border-white/10 text-white/70 hover:text-cyan-300 flex items-center justify-center transition-colors cursor-pointer transform-gpu"
               title={currentLang === 'bg' ? 'Детайли за хост, Карантина и Защити' : 'Host Details, Quarantine & Circuit Breaker'}
               aria-label="Host Details"
             >
@@ -562,7 +562,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 onToggleExpand(host.id);
               }}
               aria-expanded={isExpanded}
-              className={`min-w-[44px] min-h-[44px] w-11 h-11 rounded-full flex items-center justify-center transition-colors cursor-pointer border transform-gpu ${
+              className={`min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full flex items-center justify-center transition-colors cursor-pointer border transform-gpu ${
                 isExpanded
                   ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/35'
                   : 'bg-white/[0.03] text-white/50 hover:text-white border-white/10'
@@ -935,6 +935,12 @@ const HostCardComponent: React.FC<HostCardProps> = ({
 export const HostCard = React.memo(HostCardComponent, (prev, next) => {
   return (
     prev.host.id === next.host.id &&
+    prev.host.name === next.host.name &&
+    prev.host.ip === next.host.ip &&
+    prev.host.mac === next.host.mac &&
+    prev.host.port === next.host.port &&
+    prev.host.os === next.host.os &&
+    prev.host.deviceType === next.host.deviceType &&
     prev.host.isOnline === next.host.isOnline &&
     prev.host.ping === next.host.ping &&
     prev.host.cpuUsage === next.host.cpuUsage &&

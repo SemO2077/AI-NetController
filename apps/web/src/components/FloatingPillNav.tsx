@@ -79,7 +79,9 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
                   triggerHapticFeedback('selection');
                   onChangeTab(tab.id);
                 }}
-                className="relative flex-1 flex items-center justify-center h-full min-h-[44px] px-2 sm:px-3 rounded-full transition-colors cursor-pointer group min-w-0 transform-gpu"
+                className={`relative flex items-center justify-center h-full min-h-[44px] px-2 sm:px-3 rounded-full transition-colors cursor-pointer group min-w-0 transform-gpu ${
+                  isActive ? 'flex-[1.5] sm:flex-1' : 'flex-1'
+                }`}
                 aria-label={`${tab.label} (${tab.shortcut})`}
                 title={`${tab.label} [${tab.shortcut}]`}
               >
@@ -157,7 +159,7 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
               }`}
             />
             <span className="text-white/90 font-semibold text-[10.5px] whitespace-nowrap">
-              {latency ? `${Math.round(latency)}ms` : isConnected ? t('nav_connected') : t('nav_lab')}
+              {isConnected && latency !== null ? `${Math.round(latency)}ms` : isConnected ? t('nav_connected') : t('nav_lab')}
             </span>
           </motion.button>
         </div>

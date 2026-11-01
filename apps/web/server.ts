@@ -226,11 +226,12 @@ app.get('/api/health', (_req: Request, res: Response) => {
 app.get('/api/releases', (_req: Request, res: Response) => {
   try {
     const v300Path = path.join(RELEASES_PUBLIC_DIR, 'v3.0.0', 'RELEASE_MANIFEST.json');
+    const v290Path = path.join(RELEASES_PUBLIC_DIR, 'v2.9.0', 'RELEASE_MANIFEST.json');
     const v280Path = path.join(RELEASES_PUBLIC_DIR, 'v2.8.0', 'RELEASE_MANIFEST.json');
     const v271Path = path.join(RELEASES_PUBLIC_DIR, 'v2.7.1', 'RELEASE_MANIFEST.json');
     const v270Path = path.join(RELEASES_PUBLIC_DIR, 'v2.7.0', 'RELEASE_MANIFEST.json');
     const patchNotesPath = path.join(ROOT_DIR, 'PATCH_NOTES.md');
-    const manifest = fs.existsSync(v290Path)
+    const manifest = fs.existsSync(v300Path) ? JSON.parse(fs.readFileSync(v300Path, 'utf-8')) : fs.existsSync(v290Path)
       ? JSON.parse(fs.readFileSync(v290Path, 'utf-8'))
       : fs.existsSync(v280Path)
       ? JSON.parse(fs.readFileSync(v280Path, 'utf-8'))

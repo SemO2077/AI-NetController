@@ -53,7 +53,7 @@ class HostDaemonState:
     """
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.lock = threading.Lock()
-        self.version = "2.9.0-LTS"
+        self.version = "3.0.0-LTS"
         self.protocol = "CST/3.0-SECURE"
         self.hostname = socket.gethostname()
         self.os_name = f"{platform.system()} {platform.release()}"

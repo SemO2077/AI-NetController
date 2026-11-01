@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X,
@@ -17,6 +17,8 @@ export interface AddHostModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAddHost: (newHost: HostDevice) => void;
+  editingHost?: HostDevice | null;
+  onEditHost?: (updatedHost: HostDevice, previousId?: string) => void;
   existingHostsCount?: number;
 }
 
@@ -24,6 +26,8 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
   isOpen,
   onClose,
   onAddHost,
+  editingHost = null,
+  onEditHost,
   existingHostsCount = 3
 }) => {
   const { language } = useTranslation();
@@ -38,6 +42,31 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
   const [tagsInput, setTagsInput] = useState('');
   const [port, setPort] = useState('8765');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (editingHost) {
+      setName(editingHost.name || '');
+      setIp(editingHost.ip || '');
+      setMac(editingHost.mac || '');
+      setDeviceType(editingHost.deviceType || 'pc');
+      setOs(editingHost.os || 'windows');
+      setInitialStatus(editingHost.isOnline ? 'ready' : 'sleeping');
+      setTagsInput(Array.isArray(editingHost.tags) ? editingHost.tags.join(', ') : '');
+      setPort(String(editingHost.port || 8765));
+      setErrors({});
+    } else {
+      setName('');
+      setIp('');
+      setMac('');
+      setDeviceType('pc');
+      setOs('windows');
+      setInitialStatus('ready');
+      setTagsInput('');
+      setPort('8765');
+      setErrors({});
+    }
+  }, [isOpen, editingHost]);
 
   // Auto-generate random valid MAC address helper
   const handleGenerateMac = () => {
@@ -148,27 +177,33 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
         .replace(/[^A-Z0-9-_]+/g, '-')
         .replace(/^-+|-+$/g, '') || `HOST-${Date.now()}`;
 
+    const parsedPort = Number(port.trim()) || 8765;
     const newHost: HostDevice = {
-      id: safeId,
+      id: editingHost ? editingHost.id : safeId,
       name: name.trim().toUpperCase(),
       ip: ip.trim(),
       mac: formattedMac,
+      port: parsedPort,
       os,
       deviceType,
       isOnline,
       lastSeen: isOnline ? 'Active (Manual host added)' : 'Offline (Ready for Wake-on-LAN)',
       tags,
       specStatus: isOnline ? 'READY' : 'SLEEPING',
-      cpuUsage: isOnline ? Math.floor(Math.random() * 25) + 10 : 0,
-      ramUsage: isOnline ? Math.floor(Math.random() * 35) + 30 : 0,
-      diskUsage: '256 GB / 1024 GB (25%)',
-      persistentInstructions: [
-        `Custom host configured on port ${port.trim() || '8765'}`
+      cpuUsage: editingHost?.cpuUsage ?? (isOnline ? Math.floor(Math.random() * 25) + 10 : 0),
+      ramUsage: editingHost?.ramUsage ?? (isOnline ? Math.floor(Math.random() * 35) + 30 : 0),
+      diskUsage: editingHost?.diskUsage || '256 GB / 1024 GB (25%)',
+      persistentInstructions: editingHost?.persistentInstructions || [
+        `Custom host configured on port ${parsedPort}`
       ],
-      sessionInstructions: []
+      sessionInstructions: editingHost?.sessionInstructions || []
     };
 
-    onAddHost(newHost);
+    if (editingHost && onEditHost) {
+      onEditHost(newHost, editingHost.id);
+    } else {
+      onAddHost(newHost);
+    }
     onClose();
 
     // Reset form

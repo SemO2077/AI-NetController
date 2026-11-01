@@ -12,7 +12,7 @@ block_cipher = None
 MANIFEST_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
   <assemblyIdentity
-    version="2.9.0.0"
+    version="3.0.0.0"
     processorArchitecture="amd64"
     name="CST.NetController.HostAgent"
     type="win32"

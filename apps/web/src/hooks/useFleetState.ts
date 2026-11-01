@@ -306,9 +306,37 @@ export function useFleetState() {
   }, []);
 
   const addCustomHost = useCallback((newHost: HostDevice) => {
-    setHosts((prev) => [newHost, ...prev]);
+    setHosts((prev) => {
+      const existsIdx = prev.findIndex((h) => h.id === newHost.id);
+      if (existsIdx !== -1) {
+        const copy = [...prev];
+        copy[existsIdx] = { ...prev[existsIdx], ...newHost };
+        return copy;
+      }
+      return [newHost, ...prev];
+    });
     setSelectedTarget(newHost.id);
     logStore.addLog('SYSTEM_MDNS', newHost.id, 'success', `Добавен нов хост към флота: ${newHost.name} (${newHost.ip})`);
+  }, []);
+
+  const editHost = useCallback((updatedHost: HostDevice, previousId?: string) => {
+    const matchId = previousId || updatedHost.id;
+    setHosts((prev) =>
+      prev.map((h) => (h.id === matchId ? { ...h, ...updatedHost } : h))
+    );
+    setSelectedTarget((prevTarget) => (prevTarget === matchId ? updatedHost.id : prevTarget));
+    logStore.addLog('SYSTEM_MDNS', updatedHost.id, 'info', `Обновена конфигурация на хост: ${updatedHost.name} (${updatedHost.ip})`);
+  }, []);
+
+  const deleteHost = useCallback((hostId: string) => {
+    setHosts((prev) => {
+      const next = prev.filter((h) => h.id !== hostId);
+      setSelectedTarget((prevTarget) =>
+        prevTarget === hostId ? (next[0]?.id || '') : prevTarget
+      );
+      return next;
+    });
+    logStore.addLog('SYSTEM_MDNS', hostId, 'warn', `Хост ${hostId} беше премахнат от флота.`);
   }, []);
 
   const updateSchedules = useCallback((s: WolSchedule[]) => {
@@ -337,6 +365,8 @@ export function useFleetState() {
       updateSchedules,
       updateHostInstructions,
       addCustomHost,
+      editHost,
+      deleteHost,
     }),
     [
       hosts,
@@ -352,6 +382,8 @@ export function useFleetState() {
       updateSchedules,
       updateHostInstructions,
       addCustomHost,
+      editHost,
+      deleteHost,
     ]
   );
 }

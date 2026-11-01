@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "./fonts.css";
 
+@theme {
+  --breakpoint-xs: 400px;
+}
+
 @layer base {
   :root {
     --canvas-deep: #030712;

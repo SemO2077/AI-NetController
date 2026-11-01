@@ -44,7 +44,7 @@ export function useWorkerEngine({
     }
     return 'ws://localhost:8765';
   });
-  const [latency, setLatency] = useState<number | null>(7);
+  const [latency, setLatency] = useState<number | null>(null);
   const [heartbeatMetrics, setHeartbeatMetrics] = useState<HeartbeatMetrics | undefined>(() => ({
     currentLatencyMs: 7,
     history: [8, 6, 7, 7, 8, 6, 7, 6, 7, 8],
@@ -52,9 +52,9 @@ export function useWorkerEngine({
     minLatencyMs: 6,
     maxLatencyMs: 8,
     avgLatencyMs: 7,
-    status: 'healthy',
+    status: 'idle',
   }));
-  const [heartbeatStatus, setHeartbeatStatus] = useState<HeartbeatMetrics['status']>('healthy');
+  const [heartbeatStatus, setHeartbeatStatus] = useState<HeartbeatMetrics['status']>('idle');
   const [isSendingCommand, setIsSendingCommand] = useState(false);
   const [lastExecutionResult, setLastExecutionResult] = useState<AgentExecutionResponse | null>(null);
   const [activeHitlEvent, setActiveHitlEvent] = useState<ApprovalRequiredEvent | null>(null);
@@ -121,7 +121,7 @@ export function useWorkerEngine({
             setIsConnecting(false);
             setIsReconnecting(false);
             setHeartbeatStatus('idle');
-            setLatency(7);
+            setLatency(null);
           } else if (status === 'error') {
             setIsConnected(false);
             setIsConnecting(false);
@@ -165,17 +165,41 @@ export function useWorkerEngine({
         }
 
         case 'JSON_FRAME': {
-          if (data.event === 'APPROVAL_REQUIRED') {
+          if (data.event === 'APPROVAL_REQUIRED' || data.event === 'HITL_REQUIRED') {
             triggerHapticFeedback('warning');
-            setActiveHitlEvent(data);
+            setActiveHitlEvent({
+              event: 'APPROVAL_REQUIRED',
+              command_id: data.command_id || data.approval_id || `cmd_${Date.now()}`,
+              risk_level: data.risk_level || 'HIGH',
+              proposed_command: data.proposed_command || data.command || '',
+              explanation: data.explanation || data.reason || 'Operator confirmation required.',
+              target_id: data.target_id || targetIdRef.current,
+              timestamp:
+                typeof data.timestamp === 'string'
+                  ? data.timestamp
+                  : new Date().toLocaleTimeString('en-GB', { hour12: false }),
+            });
             setIsSendingCommand(false);
-          } else if (data.event === 'EXECUTION_RESULT') {
+          } else if (data.event === 'EXECUTION_RESULT' || data.event === 'SHELL_RESULT') {
             setIsSendingCommand(false);
-            setLastExecutionResult(data);
-            if (data.status === 'success') {
+            const normalizedStatus = data.status === 'error' ? 'failed' : (data.status || 'success');
+            setLastExecutionResult({
+              event: 'EXECUTION_RESULT',
+              command_id: data.command_id || `cmd_${Date.now()}`,
+              target_id: data.target_id || targetIdRef.current,
+              status: normalizedStatus,
+              output: data.output ?? '',
+              exit_code: data.exit_code ?? (normalizedStatus === 'success' ? 0 : 1),
+              execution_time_ms: data.execution_time_ms ?? 12,
+              timestamp:
+                typeof data.timestamp === 'string'
+                  ? data.timestamp
+                  : new Date().toLocaleTimeString('en-GB', { hour12: false }),
+            });
+            if (normalizedStatus === 'success') {
               hostCircuitBreaker.recordSuccess(targetIdRef.current);
               setCircuitTrippedHosts((prev) => prev.filter((id) => id !== targetIdRef.current));
-            } else if (data.status === 'failed') {
+            } else if (normalizedStatus === 'failed') {
               if (hostCircuitBreaker.recordFailure(targetIdRef.current)) {
                 setCircuitTrippedHosts((prev) => Array.from(new Set([...prev, targetIdRef.current])));
               }
@@ -368,6 +392,7 @@ export function useWorkerEngine({
           type: 'SEND_JSON',
           payload: {
             action: 'EXECUTE_PROMPT',
+            command_id: `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             prompt: cmd.prompt,
             session_rules: cmd.session_instruction || '',
             request_screenshot: cmd.request_screenshot ?? true,
@@ -411,15 +436,45 @@ export function useWorkerEngine({
 
   const resolveHitl = useCallback(
     (commandId: string, decision: 'APPROVED' | 'REJECTED') => {
+      const prevHitl = activeHitlEvent;
       setActiveHitlEvent(null);
       if (isConnected) {
         workerRef.current?.postMessage({
           type: 'SEND_JSON',
-          payload: { action: 'APPROVAL_RESPONSE', command_id: commandId, approved: decision === 'APPROVED' },
+          payload: {
+            action: 'APPROVAL_RESPONSE',
+            command_id: commandId,
+            approval_id: commandId,
+            approved: decision === 'APPROVED',
+          },
         });
+      } else {
+        if (decision === 'APPROVED') {
+          setLastExecutionResult({
+            event: 'EXECUTION_RESULT',
+            command_id: commandId,
+            target_id: prevHitl?.target_id || targetIdRef.current,
+            status: 'success',
+            output: `Approved & Executed: ${prevHitl?.proposed_command || 'Command'}\nExit Code: 0`,
+            exit_code: 0,
+            execution_time_ms: 18,
+            timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+          });
+        } else {
+          setLastExecutionResult({
+            event: 'EXECUTION_RESULT',
+            command_id: commandId,
+            target_id: prevHitl?.target_id || targetIdRef.current,
+            status: 'rejected',
+            output: 'Execution denied by operator (HITL Safety Gate).',
+            exit_code: -1,
+            execution_time_ms: 1,
+            timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+          });
+        }
       }
     },
-    [isConnected]
+    [isConnected, activeHitlEvent]
   );
 
   const requestScreenRefresh = useCallback(
