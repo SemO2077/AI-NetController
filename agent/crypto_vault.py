@@ -9,8 +9,6 @@ Constant-Time Validation & In-Memory Zeroization Scrubbing
 ================================================================================
 """
 
-import os
-import sys
 import hmac
 import struct
 import secrets
@@ -34,7 +32,6 @@ NONCE_SIZE = 12         # 96-bit ChaCha20 nonce (4-byte salt/epoch + 8-byte mono
 TAG_SIZE = 16           # 128-bit Poly1305 authentication tag
 SALT_SIZE = 16          # 128-bit HKDF ephemeral salt
 WINDOW_SIZE = 128       # RFC 6479 Sliding Window Bitmask size (bits)
-WINDOW_WORDS = WINDOW_SIZE // 64
 
 CTX_HOST_TX = b"cst-host-tx"
 CTX_CLIENT_TX = b"cst-client-tx"
@@ -53,6 +50,8 @@ def scrub_memory(buf: Union[bytearray, memoryview, bytes, ctypes.Array]):
             buf[i] = 0
     elif isinstance(buf, memoryview) and not buf.readonly:
         buf[:len(buf)] = b'\x00' * len(buf)
+    elif isinstance(buf, ctypes.Array):
+        ctypes.memset(ctypes.addressof(buf), 0, ctypes.sizeof(buf))
 
 # ------------------------------------------------------------------------------
 # RFC 6479 Sliding-Window Anti-Replay Protection
@@ -148,17 +147,21 @@ def _clamp_scalar(k_bytes: bytes) -> int:
     return val
 
 def _x25519_eval(k: int, u: int) -> int:
-    x_1 = u
+    x_1 = u & ((1 << 255) - 1)
     x_2, z_2 = 1, 0
-    x_3, z_3 = u, 1
+    x_3, z_3 = x_1, 1
     swap = 0
 
     for t in reversed(range(255)):
         k_t = (k >> t) & 1
         swap ^= k_t
-        if swap:
-            x_2, x_3 = x_3, x_2
-            z_2, z_3 = z_3, z_2
+        mask = -swap
+        dx = mask & (x_2 ^ x_3)
+        x_2 ^= dx
+        x_3 ^= dx
+        dz = mask & (z_2 ^ z_3)
+        z_2 ^= dz
+        z_3 ^= dz
         swap = k_t
 
         A = (x_2 + z_2) % _P
@@ -175,9 +178,13 @@ def _x25519_eval(k: int, u: int) -> int:
         x_2 = (AA * BB) % _P
         z_2 = (E * (AA + _A24 * E)) % _P
 
-    if swap:
-        x_2, x_3 = x_3, x_2
-        z_2, z_3 = z_3, z_2
+    mask = -swap
+    dx = mask & (x_2 ^ x_3)
+    x_2 ^= dx
+    x_3 ^= dx
+    dz = mask & (z_2 ^ z_3)
+    z_2 ^= dz
+    z_3 ^= dz
 
     return (x_2 * pow(z_2, _P - 2, _P)) % _P
 
@@ -389,11 +396,19 @@ class HostCryptoVault:
             return False
 
         # Compute X25519 Shared Secret
-        if HAS_CRYPTOGRAPHY_ACCEL and self._priv_obj:
-            peer_pub_obj = x25519.X25519PublicKey.from_public_bytes(client_pub)
-            shared_secret = bytearray(self._priv_obj.exchange(peer_pub_obj))
-        else:
-            shared_secret = bytearray(FallbackCurve25519.compute_shared_secret(self._priv_bytes, client_pub))
+        try:
+            if HAS_CRYPTOGRAPHY_ACCEL and self._priv_obj:
+                peer_pub_obj = x25519.X25519PublicKey.from_public_bytes(client_pub)
+                shared_secret = bytearray(self._priv_obj.exchange(peer_pub_obj))
+            else:
+                shared_secret = bytearray(FallbackCurve25519.compute_shared_secret(self._priv_bytes, client_pub))
+        except Exception:
+            return False
+
+        # RFC 7748 low-order point check: reject all-zero shared secret
+        if hmac.compare_digest(bytes(shared_secret), b"\x00" * 32):
+            scrub_memory(shared_secret)
+            return False
 
         salt = client_n1 + self.host_nonce_n2
 

@@ -100,11 +100,7 @@ export function getLatencyConfig(
       ],
     };
   } else {
-    let seedVal = 0;
-    for (let i = 0; i < seedId.length; i++) {
-      seedVal = (seedVal + seedId.charCodeAt(i)) | 0;
-    }
-    const latency = typeof ping === 'number' ? ping : ((seedVal % 12) + 3);
+    const latency = typeof ping === 'number' && ping >= 0 ? ping : 0;
 
     if (latency <= 20) {
       result = {
@@ -351,15 +347,15 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   const offlineCount = offlineHosts.length;
 
   const fleetHealthScore = useMemo(() => {
-    if (hosts.length === 0) return 100;
+    if (hosts.length === 0) return 0;
     const onlineHosts = hosts.filter((h) => h.isOnline);
-    if (onlineHosts.length === 0) return 75;
+    if (onlineHosts.length === 0) return 0;
     const avgPing =
-      onlineHosts.reduce((acc, h) => acc + (typeof h.ping === 'number' ? h.ping : 10), 0) /
+      onlineHosts.reduce((acc, h) => acc + (typeof h.ping === 'number' ? h.ping : 0), 0) /
       onlineHosts.length;
     const highLoadCount = onlineHosts.filter((h) => (h.cpuUsage ?? 0) >= 85 || (h.ramUsage ?? 0) >= 88).length;
     const score = Math.round(100 - Math.min(12, avgPing / 8) - highLoadCount * 2 - quarantinedHosts.length * 5);
-    return Math.max(72, Math.min(100, score));
+    return Math.max(0, Math.min(100, score));
   }, [hosts, quarantinedHosts.length]);
 
   const handleDiagnoseHost = useCallback(
@@ -437,9 +433,9 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     setWakingCountdown((prev) => ({ ...prev, ...countdownUpdates }));
   }, [offlineHosts, onWakeHost, onInspectWolPacket]);
 
+  const hasWakingHosts = Object.keys(wakingCountdown).length > 0;
   useEffect(() => {
-    const activeKeys = Object.keys(wakingCountdown);
-    if (activeKeys.length === 0) return;
+    if (!hasWakingHosts) return;
 
     const interval = setInterval(() => {
       setWakingCountdown((prev) => {
@@ -455,7 +451,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [wakingCountdown]);
+  }, [hasWakingHosts]);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (window.scrollY <= 5 || (containerRef.current && containerRef.current.scrollTop <= 5)) {
@@ -577,7 +573,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
       return 0;
     });
-  }, [activeFilter, hosts, deferredQuery, sortMode, sortDirection, pinnedHostIds]);
+  }, [activeFilter, hosts, deferredQuery, sortMode, sortDirection, pinnedHostIds, quarantinedHosts]);
 
   const areAllFilteredExpanded = useMemo(() => {
     if (filteredHosts.length === 0) return false;

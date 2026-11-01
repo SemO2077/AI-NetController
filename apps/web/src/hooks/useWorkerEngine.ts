@@ -9,7 +9,6 @@ import { logStore } from '../store/logStore';
 import { useScreenStore } from '../store/screenStore';
 import { useUIStore } from '../store/uiStore';
 import { triggerHapticFeedback } from '../services/hapticService';
-import { generateMockScreenCanvas } from '../services/screenFrameService';
 import {
   inspectCommandSecurity,
   commandRateLimiter,
@@ -45,15 +44,7 @@ export function useWorkerEngine({
     return 'ws://localhost:8765';
   });
   const [latency, setLatency] = useState<number | null>(null);
-  const [heartbeatMetrics, setHeartbeatMetrics] = useState<HeartbeatMetrics | undefined>(() => ({
-    currentLatencyMs: 7,
-    history: [8, 6, 7, 7, 8, 6, 7, 6, 7, 8],
-    jitterMs: 0.8,
-    minLatencyMs: 6,
-    maxLatencyMs: 8,
-    avgLatencyMs: 7,
-    status: 'idle',
-  }));
+  const [heartbeatMetrics, setHeartbeatMetrics] = useState<HeartbeatMetrics | undefined>(undefined);
   const [heartbeatStatus, setHeartbeatStatus] = useState<HeartbeatMetrics['status']>('idle');
   const [isSendingCommand, setIsSendingCommand] = useState(false);
   const [lastExecutionResult, setLastExecutionResult] = useState<AgentExecutionResponse | null>(null);
@@ -67,10 +58,20 @@ export function useWorkerEngine({
   const workerRef = useRef<Worker | null>(null);
   const currentBlobUrlRef = useRef<string | null>(null);
   const targetIdRef = useRef(targetId);
+  const onTelemetryRef = useRef(onTelemetry);
+  const onHostUnreachableRef = useRef(onHostUnreachable);
 
   useEffect(() => {
     targetIdRef.current = targetId;
   }, [targetId]);
+
+  useEffect(() => {
+    onTelemetryRef.current = onTelemetry;
+  }, [onTelemetry]);
+
+  useEffect(() => {
+    onHostUnreachableRef.current = onHostUnreachable;
+  }, [onHostUnreachable]);
 
   useEffect(() => {
     // Instantiate off-main-thread Web Worker with optimal Transferable message handling
@@ -115,7 +116,12 @@ export function useWorkerEngine({
             setIsConnecting(false);
             setIsReconnecting(false);
             setHeartbeatStatus('idle');
-            logStore.addLog('SYSTEM_MDNS', 'GATEWAY', 'info', 'WebSocket шлюзът не отговаря. Преминаване към локален високоскоростен CST симулатор.');
+            const alertMsg = message || 'WebSocket хостът не отговори в рамките на 3.5s.';
+            setUnreachableAlert({ message: alertMsg });
+            if (targetIdRef.current) {
+              onHostUnreachableRef.current(targetIdRef.current, alertMsg);
+            }
+            logStore.addLog('SYSTEM_MDNS', targetIdRef.current || 'GATEWAY', 'warn', alertMsg);
           } else if (status === 'disconnected') {
             setIsConnected(false);
             setIsConnecting(false);
@@ -136,17 +142,17 @@ export function useWorkerEngine({
           setHeartbeatMetrics({
             currentLatencyMs: rtt,
             history: history || [],
-            jitterMs: jitter || 1.2,
-            minLatencyMs: Math.min(...(history || [rtt])),
-            maxLatencyMs: Math.max(...(history || [rtt])),
-            avgLatencyMs: Math.round((history || [rtt]).reduce((a: number, b: number) => a + b, 0) / (history?.length || 1)),
+            jitterMs: jitter ?? 0,
+            minLatencyMs: Math.min(...(history?.length ? history : [rtt])),
+            maxLatencyMs: Math.max(...(history?.length ? history : [rtt])),
+            avgLatencyMs: Math.round((history?.length ? history : [rtt]).reduce((a: number, b: number) => a + b, 0) / (history?.length || 1)),
             status: 'healthy',
           });
           break;
         }
 
         case 'TELEMETRY': {
-          onTelemetry(data);
+          onTelemetryRef.current(data);
           break;
         }
 
@@ -217,7 +223,7 @@ export function useWorkerEngine({
       }
       worker.terminate();
     };
-  }, [onHostUnreachable, onTelemetry]);
+  }, []);
 
   const connect = useCallback((url?: string) => {
     const targetUrl = url || wsUrl;
@@ -400,38 +406,39 @@ export function useWorkerEngine({
           },
         });
       } else {
-        // High-speed simulation for instant UI feedback (35ms execution)
-        setTimeout(() => {
-          setIsSendingCommand(false);
-          if (cmd.prompt.toLowerCase().includes('restart') || cmd.prompt.toLowerCase().includes('rm')) {
-            setActiveHitlEvent({
-              event: 'APPROVAL_REQUIRED',
-              command_id: `cmd_${Date.now()}`,
-              risk_level: 'HIGH',
-              proposed_command: 'winget upgrade --all && shutdown /r /t 30',
-              explanation: 'Изисква рестартиране на системните модули и обновяване на пакети.',
-              target_id: cmd.target_id,
-              timestamp: new Date().toLocaleTimeString('bg-BG', { hour12: false }),
-            });
-          } else {
-            setLastExecutionResult({
-              event: 'EXECUTION_RESULT',
-              command_id: `cmd_${Date.now()}`,
-              target_id: cmd.target_id,
-              status: 'success',
-              output: `Task dispatched successfully via CST Protocol.\nHost: ${cmd.target_id}\nRisk: ${verdict.riskLevel}\nExit Code: 0 (Fast Zero-Copy Dispatch)`,
-              execution_time_ms: 12,
-              timestamp: new Date().toLocaleTimeString('bg-BG', { hour12: false }),
-            });
-            hostCircuitBreaker.recordSuccess(cmd.target_id);
-            if (cmd.request_screenshot) {
-              useScreenStore.getState().setScreenBase64(generateMockScreenCanvas());
-            }
-          }
-        }, 40);
+        setIsSendingCommand(false);
+        setLastExecutionResult({
+          event: 'EXECUTION_RESULT',
+          command_id: `cmd_${Date.now()}`,
+          target_id: cmd.target_id,
+          status: 'failed',
+          output: isBg
+            ? `Грешка: Няма активна WebSocket връзка с хост агента (${cmd.target_id}). Свържете се първо.`
+            : `Error: No active WebSocket connection to host agent (${cmd.target_id}). Connect to the host agent first.`,
+          exit_code: -1,
+          execution_time_ms: 0,
+          timestamp: new Date().toLocaleTimeString(isBg ? 'bg-BG' : 'en-GB', { hour12: false }),
+        });
       }
     },
     [isConnected, quarantinedHosts]
+  );
+
+  const sendInputOpcode = useCallback(
+    (opcode: number, data: Record<string, any> | string): boolean => {
+      if (!isConnected || !workerRef.current) {
+        return false;
+      }
+      workerRef.current.postMessage({
+        type: 'SEND_OPCODE',
+        payload: {
+          opcode,
+          data: typeof data === 'string' ? data : JSON.stringify(data),
+        },
+      });
+      return true;
+    },
+    [isConnected]
   );
 
   const resolveHitl = useCallback(
@@ -449,29 +456,19 @@ export function useWorkerEngine({
           },
         });
       } else {
-        if (decision === 'APPROVED') {
-          setLastExecutionResult({
-            event: 'EXECUTION_RESULT',
-            command_id: commandId,
-            target_id: prevHitl?.target_id || targetIdRef.current,
-            status: 'success',
-            output: `Approved & Executed: ${prevHitl?.proposed_command || 'Command'}\nExit Code: 0`,
-            exit_code: 0,
-            execution_time_ms: 18,
-            timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }),
-          });
-        } else {
-          setLastExecutionResult({
-            event: 'EXECUTION_RESULT',
-            command_id: commandId,
-            target_id: prevHitl?.target_id || targetIdRef.current,
-            status: 'rejected',
-            output: 'Execution denied by operator (HITL Safety Gate).',
-            exit_code: -1,
-            execution_time_ms: 1,
-            timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }),
-          });
-        }
+        setLastExecutionResult({
+          event: 'EXECUTION_RESULT',
+          command_id: commandId,
+          target_id: prevHitl?.target_id || targetIdRef.current,
+          status: decision === 'APPROVED' ? 'failed' : 'rejected',
+          output:
+            decision === 'APPROVED'
+              ? 'Cannot execute approved command: Host WebSocket is disconnected.'
+              : 'Execution denied by operator (HITL Safety Gate).',
+          exit_code: -1,
+          execution_time_ms: 1,
+          timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+        });
       }
     },
     [isConnected, activeHitlEvent]
@@ -479,17 +476,14 @@ export function useWorkerEngine({
 
   const requestScreenRefresh = useCallback(
     (_deviceId: string) => {
-      setIsCapturingScreen(true);
       if (isConnected) {
+        setIsCapturingScreen(true);
         workerRef.current?.postMessage({
-          type: 'SEND_JSON',
-          payload: { action: 'EXECUTE_PROMPT', prompt: 'Screenshot', request_screenshot: true },
+          type: 'SEND_OPCODE',
+          payload: { opcode: 0x0a, data: JSON.stringify({ width: 1280, height: 720 }) },
         });
       } else {
-        setTimeout(() => {
-          useScreenStore.getState().setScreenBase64(generateMockScreenCanvas());
-          setIsCapturingScreen(false);
-        }, 50);
+        setIsCapturingScreen(false);
       }
     },
     [isConnected]
@@ -525,6 +519,7 @@ export function useWorkerEngine({
       reconnectNow,
       disconnect,
       sendCommand,
+      sendInputOpcode,
       resolveHitl,
       requestScreenRefresh,
     }),
@@ -553,6 +548,7 @@ export function useWorkerEngine({
       reconnectNow,
       disconnect,
       sendCommand,
+      sendInputOpcode,
       resolveHitl,
       requestScreenRefresh,
     ]

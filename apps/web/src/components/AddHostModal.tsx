@@ -68,54 +68,6 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
     }
   }, [isOpen, editingHost]);
 
-  // Auto-generate random valid MAC address helper
-  const handleGenerateMac = () => {
-    triggerHapticFeedback('light');
-    const hexDigits = '0123456789ABCDEF';
-    const macParts: string[] = [];
-    for (let i = 0; i < 6; i++) {
-      let part = hexDigits[Math.floor(Math.random() * 16)] + hexDigits[Math.floor(Math.random() * 16)];
-      // First byte unicast (even 2nd hex digit)
-      if (i === 0) part = '00';
-      macParts.push(part);
-    }
-    setMac(macParts.join(':'));
-    if (errors.mac) {
-      setErrors(prev => ({ ...prev, mac: '' }));
-    }
-  };
-
-  // Quick preset templates
-  const handleApplyPreset = (type: 'workstation' | 'server' | 'laptop') => {
-    triggerHapticFeedback('light');
-    const suffix = existingHostsCount + 1;
-    if (type === 'workstation') {
-      setName(`DEV-WORKSTATION-0${suffix}`);
-      setIp(`192.168.1.${Math.min(254, 100 + suffix)}`);
-      setDeviceType('pc');
-      setOs('windows');
-      setInitialStatus('ready');
-      setTagsInput('Windows, Dev, Lab');
-      handleGenerateMac();
-    } else if (type === 'server') {
-      setName(`BACKUP-NAS-0${suffix}`);
-      setIp(`192.168.1.${Math.min(254, 200 + suffix)}`);
-      setDeviceType('server');
-      setOs('linux');
-      setInitialStatus('ready');
-      setTagsInput('Linux, Storage, AI, Docker');
-      handleGenerateMac();
-    } else {
-      setName(`MOBILE-LAPTOP-0${suffix}`);
-      setIp(`192.168.1.${Math.min(254, 70 + suffix)}`);
-      setDeviceType('laptop');
-      setOs('windows');
-      setInitialStatus('sleeping');
-      setTagsInput('Windows, Mobile, WoL');
-      handleGenerateMac();
-    }
-  };
-
   const validate = (): boolean => {
     const newErrors: { [key: string]: string } = {};
 
@@ -190,9 +142,9 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
       lastSeen: isOnline ? 'Active (Manual host added)' : 'Offline (Ready for Wake-on-LAN)',
       tags,
       specStatus: isOnline ? 'READY' : 'SLEEPING',
-      cpuUsage: editingHost?.cpuUsage ?? (isOnline ? Math.floor(Math.random() * 25) + 10 : 0),
-      ramUsage: editingHost?.ramUsage ?? (isOnline ? Math.floor(Math.random() * 35) + 30 : 0),
-      diskUsage: editingHost?.diskUsage || '256 GB / 1024 GB (25%)',
+      cpuUsage: editingHost?.cpuUsage ?? 0,
+      ramUsage: editingHost?.ramUsage ?? 0,
+      diskUsage: editingHost?.diskUsage,
       persistentInstructions: editingHost?.persistentInstructions || [
         `Custom host configured on port ${parsedPort}`
       ],
@@ -208,7 +160,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
 
     // Reset form
     setName('');
-    setIp('192.168.1.');
+    setIp('');
     setMac('');
     setErrors({});
   };
@@ -236,10 +188,22 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
               </div>
               <div>
                 <h3 className="text-base font-bold text-slate-100 font-display tracking-wide uppercase">
-                  {isBg ? 'Добавяне на Хост Машина' : 'Add Host Machine'}
+                  {editingHost
+                    ? isBg
+                      ? 'Редактиране на Хост Машина'
+                      : 'Edit Host Machine'
+                    : isBg
+                      ? 'Добавяне на Хост Машина'
+                      : 'Add Host Machine'}
                 </h3>
                 <p className="text-[11px] text-slate-400 font-mono">
-                  {isBg ? 'Ръчно конфигуриране в CST мрежовия флот' : 'Manual node registration in CST network fleet'}
+                  {editingHost
+                    ? isBg
+                      ? `Актуализиране на параметрите за ${editingHost.name}`
+                      : `Update network configuration for ${editingHost.name}`
+                    : isBg
+                      ? 'Ръчно конфигуриране в CST мрежовия флот'
+                      : 'Manual node registration in CST network fleet'}
                 </p>
               </div>
             </div>
@@ -258,42 +222,6 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
           </div>
 
           <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 max-h-[82dvh] overflow-y-auto">
-            {/* Quick Presets Row */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[11px] font-mono uppercase text-slate-400 font-semibold flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-cyan-400" />
-                  {isBg ? 'Бързи шаблони (Presets):' : 'Quick Templates (Presets):'}
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleApplyPreset('workstation')}
-                  className="min-h-[44px] px-2.5 py-2 rounded-xl bg-slate-800/80 hover:bg-cyan-950/40 border border-slate-700/70 hover:border-cyan-500/40 text-[11px] font-mono text-slate-300 hover:text-cyan-300 flex items-center justify-center space-x-1.5 transition active:scale-98 cursor-pointer"
-                >
-                  <Monitor className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                  <span className="truncate">{isBg ? 'Десктоп PC' : 'Desktop PC'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleApplyPreset('server')}
-                  className="min-h-[44px] px-2.5 py-2 rounded-xl bg-slate-800/80 hover:bg-violet-950/40 border border-slate-700/70 hover:border-violet-500/40 text-[11px] font-mono text-slate-300 hover:text-violet-300 flex items-center justify-center space-x-1.5 transition active:scale-98 cursor-pointer"
-                >
-                  <Server className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-                  <span className="truncate">{isBg ? 'AI Сървър' : 'AI Server'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleApplyPreset('laptop')}
-                  className="min-h-[44px] px-2.5 py-2 rounded-xl bg-slate-800/80 hover:bg-emerald-950/40 border border-slate-700/70 hover:border-emerald-500/40 text-[11px] font-mono text-slate-300 hover:text-emerald-300 flex items-center justify-center space-x-1.5 transition active:scale-98 cursor-pointer"
-                >
-                  <Laptop className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="truncate">{isBg ? 'Лаптоп WoL' : 'WoL Laptop'}</span>
-                </button>
-              </div>
-            </div>
-
             {/* Host Name Field */}
             <div>
               <label className="block text-xs font-mono font-medium text-slate-300 mb-1">
@@ -303,7 +231,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value.toUpperCase())}
-                placeholder={isBg ? 'напр. CST-LAB-PC-2 или BACKUP-NODE' : 'e.g. CST-LAB-PC-2 or BACKUP-NODE'}
+                placeholder={isBg ? 'напр. WORKSTATION-01 или BACKUP-NODE' : 'e.g. WORKSTATION-01 or BACKUP-NODE'}
                 className={`w-full px-3.5 py-2 rounded-xl bg-slate-950 border ${
                   errors.name ? 'border-rose-500/70' : 'border-slate-700/80 focus:border-cyan-400'
                 } text-slate-100 font-mono text-xs focus:outline-none transition`}
@@ -346,20 +274,12 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
               </div>
             </div>
 
-            {/* MAC Address Field with Auto-Generator */}
+            {/* MAC Address Field */}
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs font-mono font-medium text-slate-300">
                   {isBg ? 'MAC АДРЕС (За Wake-on-LAN)' : 'MAC ADDRESS (For Wake-on-LAN)'} <span className="text-cyan-400">*</span>
                 </label>
-                <button
-                  type="button"
-                  onClick={handleGenerateMac}
-                  className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 transition flex items-center space-x-1 cursor-pointer"
-                >
-                  <Sparkles className="w-3 h-3" />
-                  <span>{isBg ? 'Генерирай MAC' : 'Generate MAC'}</span>
-                </button>
               </div>
               <input
                 type="text"
@@ -521,7 +441,15 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                 className="min-h-[44px] px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-mono text-xs font-bold transition shadow-[0_0_15px_rgba(6,182,212,0.4)] active:scale-95 flex items-center space-x-1.5 cursor-pointer"
               >
                 <Plus className="w-4 h-4 stroke-[2.5]" />
-                <span>{isBg ? 'Добави във Флота' : 'Add to Fleet'}</span>
+                <span>
+                  {editingHost
+                    ? isBg
+                      ? 'Запази Промените'
+                      : 'Save Changes'
+                    : isBg
+                      ? 'Добави във Флота'
+                      : 'Add to Fleet'}
+                </span>
               </button>
             </div>
           </form>

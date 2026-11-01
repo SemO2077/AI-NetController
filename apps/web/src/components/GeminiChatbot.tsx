@@ -89,6 +89,7 @@ interface GeminiChatbotProps {
   onToggleLabMode?: () => void;
   onSendCommand?: (cmd: string, targetOverride?: string) => void;
   onViewScreen?: (host: HostDevice) => void;
+  onSendInputOpcode?: (opcode: number, payload: Record<string, any> | string) => boolean;
   onOpenUpdateCenter?: () => void;
   onOpenDaemonGui?: () => void;
   isRealWsConnected?: boolean;
@@ -108,6 +109,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   onToggleLabMode,
   onSendCommand,
   onViewScreen,
+  onSendInputOpcode,
   onOpenUpdateCenter,
   onOpenDaemonGui,
   isRealWsConnected = false,
@@ -415,13 +417,16 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                   h.id.toLowerCase() === targetName.toLowerCase() ||
                   h.mac.toLowerCase() === targetName.toLowerCase()
               ) || primaryHost;
+            const resolvedId = hostObj?.id || targetName || 'UNSET';
+            const resolvedName = hostObj?.name || targetName || 'Host';
+            const resolvedMac = hostObj?.mac || act.mac || '';
             return {
               id: act.id,
               type: 'wol',
-              target: hostObj.id,
-              label: bg ? `Събуди ${hostObj.name} (WoL)` : `Wake ${hostObj.name} (WoL)`,
-              subtitle: `UDP Port 9 • ${hostObj.mac}`,
-              payload: { ...act, host: hostObj, mac: hostObj.mac },
+              target: resolvedId,
+              label: bg ? `Събуди ${resolvedName} (WoL)` : `Wake ${resolvedName} (WoL)`,
+              subtitle: `UDP Port 9 • ${resolvedMac || 'No MAC'}`,
+              payload: { ...act, host: hostObj, mac: resolvedMac },
               executionResult: execRes,
             };
           }
@@ -542,7 +547,23 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         onSendCommand(action.payload.command, action.target || selectedTarget);
       } else if (action.type === 'screen_capture' && onViewScreen) {
         const hostObj = hosts.find((h) => h.id === action.target) || primaryHost;
-        onViewScreen(hostObj as HostDevice);
+        if (hostObj) {
+          onViewScreen(hostObj);
+        }
+      } else if (
+        onSendInputOpcode &&
+        (action.type === 'mouse_click' ||
+          action.type === 'mouse_double_click' ||
+          action.type === 'mouse_move' ||
+          action.type === 'mouse_scroll' ||
+          action.type === 'keyboard_type' ||
+          action.type === 'keyboard_hotkey' ||
+          action.type === 'media_control')
+      ) {
+        onSendInputOpcode(
+          action.type === 'media_control' ? 0x09 : 0x08,
+          { ...(action.payload || {}), type: action.type }
+        );
       }
 
       const res = await fetch('/api/pc-control/execute', {
@@ -560,24 +581,26 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       if (action.type === 'wol') {
         const targetHost =
           hosts.find((h) => h.id === action.target || h.name === action.target) || primaryHost;
-        const resolvedMac = action.payload?.mac || targetHost.mac || '00:2B:67:89:AB:CD';
-        wolHistoryStore.addEntry({
-          deviceId: targetHost.id || action.target || 'CUSTOM-MAC',
-          deviceName: targetHost.name || action.target || 'Target Host',
-          mac: resolvedMac,
-          broadcastIp: '255.255.255.255',
-          port: 9,
-          bytesCount: 102,
-          status: data.success ? 'success' : 'failed',
-          source: 'ai',
-          latencyMs: data.durationMs || 8,
-          details: data.success
-            ? `AI Copilot dispatched 102-byte UDP Magic Packet to ${targetHost.name || action.target} (${resolvedMac}).`
-            : `AI Copilot WoL dispatch failed: ${data.error || data.summary || 'Execution blocked'}`,
-          detailsBg: data.success
-            ? `AI Копилот изпрати 102-байтов UDP Magic Packet към ${targetHost.name || action.target} (${resolvedMac}).`
-            : `Неуспешно AI събуждане (WoL): ${data.error || data.summary || 'Изпълнението е блокирано'}`,
-        });
+        const resolvedMac = action.payload?.mac || targetHost?.mac || '';
+        if (resolvedMac) {
+          wolHistoryStore.addEntry({
+            deviceId: targetHost?.id || action.target || 'CUSTOM-MAC',
+            deviceName: targetHost?.name || action.target || 'Target Host',
+            mac: resolvedMac,
+            broadcastIp: '255.255.255.255',
+            port: 9,
+            bytesCount: 102,
+            status: data.success ? 'success' : 'failed',
+            source: 'ai',
+            latencyMs: data.durationMs || 8,
+            details: data.success
+              ? `AI Copilot dispatched 102-byte UDP Magic Packet to ${targetHost?.name || action.target} (${resolvedMac}).`
+              : `AI Copilot WoL dispatch failed: ${data.error || data.summary || 'Execution blocked'}`,
+            detailsBg: data.success
+              ? `AI Копилот изпрати 102-байтов UDP Magic Packet към ${targetHost?.name || action.target} (${resolvedMac}).`
+              : `Неуспешно AI събуждане (WoL): ${data.error || data.summary || 'Изпълнението е блокирано'}`,
+          });
+        }
       }
 
       // Update action execution result inside the message state
@@ -687,36 +710,49 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       const replyContent = data.reply || '';
       const actions = buildActionItems(replyContent, data.actions, data.executionResults);
 
-      // If autoExecute is on and a shell command or WoL was executed by the AI, sync with terminal & WoL history
+      // If autoExecute is on and a shell command, input event, or WoL was executed by the AI, sync with terminal, WebSocket & WoL history
       if (autoExecutePcActions && Array.isArray(data.actions)) {
         data.actions.forEach((act: any, idx: number) => {
           if (act.type === 'shell_exec' && act.command && onSendCommand) {
             onSendCommand(act.command, act.target || primaryHost?.id || '');
           } else if (act.type === 'rescan' && onTriggerRescan) {
             onTriggerRescan();
+          } else if (
+            onSendInputOpcode &&
+            (act.type === 'mouse_click' ||
+              act.type === 'mouse_double_click' ||
+              act.type === 'mouse_move' ||
+              act.type === 'mouse_scroll' ||
+              act.type === 'keyboard_type' ||
+              act.type === 'keyboard_hotkey' ||
+              act.type === 'media_control')
+          ) {
+            onSendInputOpcode(act.type === 'media_control' ? 0x09 : 0x08, act);
           } else if (act.type === 'wol') {
             const execRes = Array.isArray(data.executionResults) ? data.executionResults[idx] : undefined;
             const isSuccess = execRes ? Boolean(execRes.success) : true;
             const targetHost =
               hosts.find((h) => h.id === act.target || h.name === act.target) || primaryHost;
-            const resolvedMac = act.mac || targetHost.mac || '00:2B:67:89:AB:CD';
-            wolHistoryStore.addEntry({
-              deviceId: targetHost.id || act.target || 'CUSTOM-MAC',
-              deviceName: targetHost.name || act.target || 'Target Host',
-              mac: resolvedMac,
-              broadcastIp: '255.255.255.255',
-              port: 9,
-              bytesCount: 102,
-              status: isSuccess ? 'success' : 'failed',
-              source: 'ai',
-              latencyMs: execRes?.durationMs || 8,
-              details: isSuccess
-                ? `AI Copilot auto-dispatched 102-byte UDP Magic Packet to ${targetHost.name || act.target} (${resolvedMac}).`
-                : `AI Copilot auto-WoL failed: ${execRes?.error || execRes?.summary || 'Blocked'}`,
-              detailsBg: isSuccess
-                ? `AI Копилот автоматично изпрати 102-байтов UDP Magic Packet към ${targetHost.name || act.target} (${resolvedMac}).`
-                : `Неуспешно автоматично AI събуждане (WoL): ${execRes?.error || execRes?.summary || 'Блокирано'}`,
-            });
+            const resolvedMac = act.mac || targetHost?.mac || '';
+            if (resolvedMac) {
+              wolHistoryStore.addEntry({
+                deviceId: targetHost?.id || act.target || 'CUSTOM-MAC',
+                deviceName: targetHost?.name || act.target || 'Target Host',
+                mac: resolvedMac,
+                broadcastIp: '255.255.255.255',
+                port: 9,
+                bytesCount: 102,
+                status: isSuccess ? 'success' : 'failed',
+                source: 'ai',
+                latencyMs: execRes?.durationMs || 8,
+                details: isSuccess
+                  ? `AI Copilot auto-dispatched 102-byte UDP Magic Packet to ${targetHost?.name || act.target} (${resolvedMac}).`
+                  : `AI Copilot auto-WoL failed: ${execRes?.error || execRes?.summary || 'Blocked'}`,
+                detailsBg: isSuccess
+                  ? `AI Копилот автоматично изпрати 102-байтов UDP Magic Packet към ${targetHost?.name || act.target} (${resolvedMac}).`
+                  : `Неуспешно автоматично AI събуждане (WoL): ${execRes?.error || execRes?.summary || 'Блокирано'}`,
+              });
+            }
           }
         });
       }

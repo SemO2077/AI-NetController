@@ -106,10 +106,10 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
   }, [isOpen, fetchSetupDetails]);
 
   // Compute dynamic pairing URL based on detected or user-edited LAN IP
-  const effectiveIp = customIp.trim() || setupInfo?.localIp || window.location.hostname || '192.168.1.104';
+  const effectiveIp = customIp.trim() || setupInfo?.localIp || window.location.hostname || '127.0.0.1';
   const effectivePort = setupInfo?.daemonPort || 8765;
-  const effectiveHostname = setupInfo?.hostname || 'CST-WORKSTATION';
-  const effectiveMac = setupInfo?.mac || '00:2B:67:89:AB:CD';
+  const effectiveHostname = setupInfo?.hostname || 'LOCAL-HOST';
+  const effectiveMac = setupInfo?.mac || '';
   const effectiveToken = setupInfo?.pairingToken || 'cst_autonomous_lan_secret_2025';
   const effectiveWsUri = `ws://${effectiveIp}:${effectivePort}`;
 

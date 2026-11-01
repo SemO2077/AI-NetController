@@ -180,7 +180,7 @@ export default function App() {
       if (pairIp) {
         const pairPort = params.get('pair_port') || '8765';
         const pairName = params.get('pair_name') || `PC-${pairIp.split('.').pop() || 'HOST'}`;
-        const pairMac = params.get('pair_mac') || '00:2B:67:89:AB:CD';
+        const pairMac = params.get('pair_mac') || '';
         const pairOs = params.get('pair_os') === 'linux' ? 'linux' : 'windows';
         const wsUri = `ws://${pairIp}:${pairPort}`;
 
@@ -472,6 +472,7 @@ export default function App() {
                       })
                     }
                     onViewScreen={handleViewScreen}
+                    onSendInputOpcode={agent.sendInputOpcode}
                     onOpenUpdateCenter={handleOpenUpdate}
                     onOpenDaemonGui={() => openModal('pcDaemonGui')}
                     isRealWsConnected={agent.isConnected}
@@ -565,7 +566,8 @@ export default function App() {
           onConnectWs={agent.connect}
           onDisconnectWs={agent.disconnect}
           onSelectTarget={handleSelectHostTerminal}
-          onViewScreen={(h) => openModal('screen', h)}
+          onViewScreen={handleViewScreen}
+          onSendInputOpcode={agent.sendInputOpcode}
         />
       </div>
     </GlobalErrorBoundary>

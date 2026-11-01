@@ -319,14 +319,19 @@ def screen_capture_worker_process(shm_name: str, stop_event: Event, ready_event:
                 if curr_hash != last_raw_hash or frame_seq == 0:
                     last_raw_hash = curr_hash
                     if jpeg:
-                        data = jpeg.encode(frame.bgra, quality=65)
-                    elif Image:
+                        try:
+                            import numpy as np
+                            bgra_arr = np.frombuffer(frame.raw, dtype=np.uint8).reshape((frame.height, frame.width, 4))
+                            data = jpeg.encode(bgra_arr, quality=65, pixel_format=3)
+                        except Exception:
+                            data = None
+                    if data is None and Image:
                         img = Image.frombytes("RGB", frame.size, frame.bgra, "raw", "BGRX")
                         reusable_bio.seek(0)
                         reusable_bio.truncate(0)
                         img.save(reusable_bio, format="JPEG", quality=60)
                         data = reusable_bio.getvalue()
-                    else:
+                    elif data is None:
                         data = synthetic_locked_frame
             except Exception:
                 data = synthetic_locked_frame
@@ -544,6 +549,8 @@ def main():
             from agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
             if HAS_TKINTER:
                 gui_state = HostDaemonState(host="0.0.0.0", port=8765)
+                if ws_daemon:
+                    ws_daemon.gui_state = gui_state
 
                 def _run_async_daemon():
                     loop = asyncio.new_event_loop()

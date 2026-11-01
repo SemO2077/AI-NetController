@@ -43,6 +43,7 @@ interface ModalManagerProps {
   onResetCircuit?: (id: string) => void;
   onSelectTarget?: (targetId: string) => void;
   onViewScreen?: (host: any) => void;
+  onSendInputOpcode?: (opcode: number, payload: Record<string, any> | string) => boolean;
 }
 
 export const ModalManager: React.FC<ModalManagerProps> = (props) => {
@@ -106,6 +107,7 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
         device={payload}
         isCapturing={props.isCapturingScreen}
         onRefreshFrame={() => payload && props.onRequestScreenRefresh(payload.id)}
+        onSendInputOpcode={props.onSendInputOpcode}
       />
 
       <WsConfigModal

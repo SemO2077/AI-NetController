@@ -8,7 +8,6 @@ Implements:
 - Opcode 0x06 Handshake & Monotonic Nonce Replay Prevention
 """
 
-import os
 import struct
 import hmac
 import hashlib
@@ -54,17 +53,21 @@ def _clamp_scalar(k_bytes: bytes) -> int:
     return int.from_bytes(a, 'little')
 
 def _x25519_eval(k: int, u: int) -> int:
-    x_1 = u
+    x_1 = u & ((1 << 255) - 1)
     x_2, z_2 = 1, 0
-    x_3, z_3 = u, 1
+    x_3, z_3 = x_1, 1
     swap = 0
 
     for t in reversed(range(255)):
         k_t = (k >> t) & 1
         swap ^= k_t
-        if swap:
-            x_2, x_3 = x_3, x_2
-            z_2, z_3 = z_3, z_2
+        mask = -swap
+        dx = mask & (x_2 ^ x_3)
+        x_2 ^= dx
+        x_3 ^= dx
+        dz = mask & (z_2 ^ z_3)
+        z_2 ^= dz
+        z_3 ^= dz
         swap = k_t
 
         A = (x_2 + z_2) % _P
@@ -81,9 +84,13 @@ def _x25519_eval(k: int, u: int) -> int:
         x_2 = (AA * BB) % _P
         z_2 = (E * (AA + _A24 * E)) % _P
 
-    if swap:
-        x_2, x_3 = x_3, x_2
-        z_2, z_3 = z_3, z_2
+    mask = -swap
+    dx = mask & (x_2 ^ x_3)
+    x_2 ^= dx
+    x_3 ^= dx
+    dz = mask & (z_2 ^ z_3)
+    z_2 ^= dz
+    z_3 ^= dz
 
     return (x_2 * pow(z_2, _P - 2, _P)) % _P
 
@@ -408,11 +415,18 @@ class HostCryptoSession:
             return False
 
         # Compute ECDH Shared Secret
-        if HAS_CRYPTOGRAPHY_LIB:
-            peer_pub_obj = x25519.X25519PublicKey.from_public_bytes(client_pubkey)
-            shared_secret = self._private_key_obj.exchange(peer_pub_obj)
-        else:
-            shared_secret = PurePythonX25519.compute_shared_secret(self._private_bytes, client_pubkey)
+        try:
+            if HAS_CRYPTOGRAPHY_LIB:
+                peer_pub_obj = x25519.X25519PublicKey.from_public_bytes(client_pubkey)
+                shared_secret = self._private_key_obj.exchange(peer_pub_obj)
+            else:
+                shared_secret = PurePythonX25519.compute_shared_secret(self._private_bytes, client_pubkey)
+        except Exception:
+            return False
+
+        # RFC 7748 low-order point check: reject all-zero shared secret
+        if hmac.compare_digest(shared_secret, b"\x00" * 32):
+            return False
 
         # HKDF-SHA256 Derive Symmetric Session Key
         self.session_key = derive_session_key(shared_secret, self.salt, INFO_STRING)

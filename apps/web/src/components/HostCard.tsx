@@ -254,15 +254,20 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   const BatteryIcon = batteryConfig?.icon || Battery;
 
   const latencyConfig = getLatencyConfig(host.ping, host.isOnline, safeId, currentLang);
-  const cpuVal = clampPercentage(host.cpuUsage, 15);
-  const ramVal = clampPercentage(host.ramUsage, 40);
+  const cpuVal = clampPercentage(host.cpuUsage, 0);
+  const ramVal = clampPercentage(host.ramUsage, 0);
   const isHighLoadAnomaly = host.isOnline && (cpuVal >= 75 || ramVal >= 75);
   const osBadge = host.os === 'windows' ? 'Win 11' : 'Linux';
   const osFullLabel = host.os === 'windows' ? 'Windows 11 Pro' : 'Linux Kernel 6.8';
 
-  const rttMs = latencyConfig.latency ?? 12;
-  const firstChar = safeId.length > 0 ? safeId.charCodeAt(0) : 65;
-  const jitterMs = ((firstChar % 7) * 0.1 + 0.3).toFixed(1);
+  const rttMs = latencyConfig.latency ?? 0;
+  const jitterMs =
+    host.latencyHistory && host.latencyHistory.length >= 2
+      ? Math.abs(
+          host.latencyHistory[host.latencyHistory.length - 1].latency -
+            host.latencyHistory[host.latencyHistory.length - 2].latency
+        ).toFixed(1)
+      : '0.0';
 
   const quickActions = [
     {
@@ -715,7 +720,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                             {host.name}:~/{host.os === 'windows' ? 'PowerShell' : 'bash'}
                           </span>
                         </div>
-                        <span className="text-[8px] font-mono text-white/40">60 FPS • WebRTC</span>
+                        <span className="text-[8px] font-mono text-white/40">CST/3.0 • Binary WS</span>
                       </div>
                       <div className="font-mono text-[8.5px] text-emerald-300/80 leading-tight space-y-0.5">
                         <div>$ agent_daemon --status --tls</div>
@@ -723,7 +728,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                           [OK] Framebuffer pipe active • CPU {cpuVal}% • RAM {ramVal}%
                         </div>
                         <div className="text-white/45">
-                          [OK] Zero-GC H.264 stream ready ({host.ip}:{host.port || 8765})
+                          [OK] CST/3.0 frame stream ready ({host.ip}:{host.port || 8765})
                         </div>
                       </div>
                     </div>
@@ -860,7 +865,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                       {currentLang === 'bg' ? 'Диск:' : 'Disk:'}
                     </span>
                     <span className="text-white/85 font-medium">
-                      {host.diskUsage || '142/512 GB (28%)'}
+                      {host.diskUsage || 'N/A'}
                     </span>
                   </div>
 
@@ -945,6 +950,9 @@ export const HostCard = React.memo(HostCardComponent, (prev, next) => {
     prev.host.ping === next.host.ping &&
     prev.host.cpuUsage === next.host.cpuUsage &&
     prev.host.ramUsage === next.host.ramUsage &&
+    prev.host.diskUsage === next.host.diskUsage &&
+    prev.host.lastSeen === next.host.lastSeen &&
+    prev.host.tags === next.host.tags &&
     prev.host.batteryPercentage === next.host.batteryPercentage &&
     prev.host.isCharging === next.host.isCharging &&
     prev.isSelected === next.isSelected &&

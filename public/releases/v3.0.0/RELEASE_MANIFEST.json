@@ -2,43 +2,43 @@
   "version": "v3.0.0",
   "tag": "v3.0.0-LTS",
   "releaseName": "CST NetController AI v3.0.0 (Updated 3.0) \u2014 True Native Android Controller, Zero-Overflow Multi-Resolution UI & Full-Stack Protocol Parity",
-  "publishedAt": "2026-11-01T10:34:09.708707+00:00",
+  "publishedAt": "2026-11-01T11:21:39.007530+00:00",
   "protocol": "CST/3.0-SECURE",
   "artifacts": [
     {
       "filename": "CST_HostAgent_v3.0.0_win64.exe",
       "kind": "exe",
       "platform": "Windows 10/11 x64 (Standalone Host Agent .EXE)",
-      "sizeBytes": 37006440,
-      "sizeFormatted": "35.29 MB",
-      "sha256": "ab33d3b4ea79e0bf89483221cfdba9dd86ffb29893d18a773f28ffde4aab09b3",
+      "sizeBytes": 37032882,
+      "sizeFormatted": "35.32 MB",
+      "sha256": "6e90065c056934ca777452bcba97bfcf50e27cd333709cf69d0033cd2cbd4969",
       "downloadUrl": "/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe"
     },
     {
       "filename": "CST_HostAgent_v3.0.0_win64_portable.zip",
       "kind": "zip",
       "platform": "Windows Portable Agent Bundle + Internal Runtime (.ZIP)",
-      "sizeBytes": 36722521,
-      "sizeFormatted": "35.02 MB",
-      "sha256": "e190a11a7272b48492b67b6609bef95e9a824c42a241ffa416dbc25715c723ac",
+      "sizeBytes": 36751368,
+      "sizeFormatted": "35.05 MB",
+      "sha256": "5db218345f47a2aa746d8e9aaf9fb6c20643543bddaef8a04816b581b3c4f348",
       "downloadUrl": "/releases/v3.0.0/CST_HostAgent_v3.0.0_win64_portable.zip"
     },
     {
       "filename": "CST_NetController_AI_v3.0.0_arm64-v8a.apk",
       "kind": "apk",
       "platform": "Android 7.0-15 arm64-v8a (144Hz Native Android Controller .APK)",
-      "sizeBytes": 1382540,
-      "sizeFormatted": "1.32 MB",
-      "sha256": "1d7fa75e18e298f3889451f8b51234c268a42fb6dd01973e85715ada30ea72d1",
+      "sizeBytes": 1374348,
+      "sizeFormatted": "1.31 MB",
+      "sha256": "1eba7f4f8445960e15453f137bf6f35828e59129dd30fee3b032010cee5e8d99",
       "downloadUrl": "/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk"
     },
     {
       "filename": "CST_NetController_AI_v3.0.0.apk",
       "kind": "apk",
       "platform": "Android 7.0-15 Universal Package (Mobile Controller .APK)",
-      "sizeBytes": 1382540,
-      "sizeFormatted": "1.32 MB",
-      "sha256": "1d7fa75e18e298f3889451f8b51234c268a42fb6dd01973e85715ada30ea72d1",
+      "sizeBytes": 1374348,
+      "sizeFormatted": "1.31 MB",
+      "sha256": "1eba7f4f8445960e15453f137bf6f35828e59129dd30fee3b032010cee5e8d99",
       "downloadUrl": "/releases/v3.0.0/CST_NetController_AI_v3.0.0.apk"
     }
   ]

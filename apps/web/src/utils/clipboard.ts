@@ -12,6 +12,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   if (typeof window !== 'undefined' && (window as any).AndroidBridge && typeof (window as any).AndroidBridge.copyToClipboard === 'function') {
     try {
       (window as any).AndroidBridge.copyToClipboard(text);
+      return true;
     } catch {
       // Fall through to web APIs
     }

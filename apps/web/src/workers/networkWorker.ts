@@ -246,6 +246,11 @@ function establishConnection(url: string, token: string = currentToken) {
 
   currentUrl = url;
   currentToken = token;
+  highestInboundSeq = 0;
+  replayBitmap = 0n;
+  outboundSeq = 0;
+  pingSeq = 0;
+  activeProtocolMode = 'auto';
 
   // Block insecure ws:// on HTTPS to prevent browser SecurityError exceptions
   const isHttps = typeof self !== 'undefined' && self.location && self.location.protocol === 'https:';
@@ -380,7 +385,7 @@ function scheduleReconnect() {
       type: 'STATUS',
       status: 'disconnected',
       attempt: reconnectAttempts,
-      message: 'WebSocket сървърът не отговаря на този адрес. Приложението е готово в режим Lab.',
+      message: 'WebSocket сървърът не отговаря на този адрес.',
     });
     return;
   }

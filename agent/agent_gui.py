@@ -75,7 +75,7 @@ class HostDaemonState:
         self.autostart_on_boot = True
         self.security_profile = "balanced"
         self.setup_completed = True
-        self.pairing_pin = f"{random.randint(100000, 999999)}"
+        self.pairing_pin = f"{secrets.randbelow(900000) + 100000}"
         self.pairing_token = os.environ.get("CST_AGENT_SECRET", "cst_autonomous_lan_secret_2025")
 
         # Live metrics
@@ -102,7 +102,8 @@ class HostDaemonState:
         }
 
         # Recent event logs (capped at 200 entries)
-        self.logs: List[Dict[str, str]] = []
+        self.logs: List[Dict[str, Any]] = []
+        self._log_seq: int = 0
         self.add_log("INFO", f"CST Host Daemon GUI v{self.version} initialized on {self.local_ip}:{self.port}")
         self.add_log("SECURITY", "AV-Safe Mode active: Native HWND window, UPX disabled, zero hidden shell spawns.")
 
@@ -120,7 +121,8 @@ class HostDaemonState:
     def add_log(self, level: str, message: str) -> None:
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         with self.lock:
-            self.logs.append({"time": ts, "level": level.upper(), "message": message})
+            self._log_seq += 1
+            self.logs.append({"seq": self._log_seq, "time": ts, "level": level.upper(), "message": message})
             if len(self.logs) > 200:
                 self.logs = self.logs[-200:]
 
@@ -224,11 +226,11 @@ class HostDaemonState:
         self.add_log("SECURITY", f"Applied Security Profile: {profile.upper()}")
 
     def sample_telemetry(self) -> Dict[str, Any]:
-        cpu = 8.0
-        ram_pct = 32.0
-        ram_used = 5.1
-        ram_total = 16.0
-        disk_pct = 41.0
+        cpu = 0.0
+        ram_pct = 0.0
+        ram_used = 0.0
+        ram_total = 0.0
+        disk_pct = 0.0
 
         if psutil is not None:
             try:
@@ -243,7 +245,7 @@ class HostDaemonState:
                     du = psutil.disk_usage(os.path.abspath(os.sep))
                     self._cached_disk_pct = float(du.percent)
                     self._last_disk_time = now
-                disk_pct = getattr(self, '_cached_disk_pct', 41.0)
+                disk_pct = getattr(self, '_cached_disk_pct', 0.0)
             except Exception:
                 pass
 
@@ -258,7 +260,7 @@ class HostDaemonState:
             elif len(self.connected_clients) > 0:
                 self.capture_fps = 120
             else:
-                self.capture_fps = 2
+                self.capture_fps = 0
 
         return self.get_snapshot()
 
@@ -312,7 +314,7 @@ class HostDaemonState:
         new_token = f"cst_sec_{secrets.token_hex(12)}"
         with self.lock:
             self.pairing_token = new_token
-            self.pairing_pin = f"{random.randint(100000, 999999)}"
+            self.pairing_pin = f"{secrets.randbelow(900000) + 100000}"
         os.environ["CST_AGENT_SECRET"] = new_token
         self.add_log("SECURITY", f"Pairing token & 6-digit PIN ({self.pairing_pin}) rotated by operator.")
         return new_token
@@ -522,7 +524,7 @@ class HostDaemonDesktopGUI:
         ).pack(side=tk.RIGHT)
         tk.Label(uri_row, textvariable=self.ws_uri_var, bg="#0b1324", fg="#22d3ee", font=("Consolas", 10, "bold")).pack(side=tk.RIGHT, padx=8)
 
-        self.clients_var = tk.StringVar(value="2 Connected • 1 Blacklisted")
+        self.clients_var = tk.StringVar(value="0 Connected • 0 Banned")
         cli_row = tk.Frame(net_card, bg="#0b1324")
         cli_row.pack(fill=tk.X, pady=4)
         tk.Label(cli_row, text="Device Access:", bg="#0b1324", fg="#94a3b8", font=("Segoe UI", 9)).pack(side=tk.LEFT)
@@ -946,7 +948,6 @@ class HostDaemonDesktopGUI:
         ban_act_row = tk.Frame(bot_card, bg="#0b1324")
         ban_act_row.pack(fill=tk.X)
         ip_entry = tk.Entry(ban_act_row, bg="#050811", fg="#f8fafc", insertbackground="#38bdf8", font=("Consolas", 9), width=18)
-        ip_entry.insert(0, "192.168.1.205")
         ip_entry.pack(side=tk.LEFT, padx=(0, 6), ipady=3)
 
         def manual_ban() -> None:
@@ -1175,6 +1176,10 @@ class HostDaemonDesktopGUI:
     def _clear_logs(self) -> None:
         with self.state.lock:
             self.state.logs.clear()
+        self._rendered_log_len = 0
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.configure(state=tk.DISABLED)
         self.state.add_log("INFO", "Activity log cleared by operator.")
         self._refresh_ui()
 
@@ -1192,21 +1197,14 @@ class HostDaemonDesktopGUI:
         fps_label = "Paused (0 FPS)" if snap["isPaused"] else f"{snap['captureFps']} FPS ({'Active Stream' if snap['captureFps'] > 2 else 'Idle Standby'})"
         self.fps_lbl.configure(text=f"Capture Pipeline: {fps_label}")
 
-        # Differential smooth log updating to eliminate redraw flicker
+        # Differential smooth log updating using monotonic sequence counter
         all_logs = snap["logs"]
-        if len(all_logs) < self._rendered_log_len:
-            # Logs were cleared by operator
+        new_entries = [e for e in all_logs if e.get("seq", 0) > self._rendered_log_len]
+        if new_entries:
             self.log_text.configure(state=tk.NORMAL)
-            self.log_text.delete("1.0", tk.END)
-            self._rendered_log_len = 0
-            self.log_text.configure(state=tk.DISABLED)
-
-        if len(all_logs) > self._rendered_log_len:
-            self.log_text.configure(state=tk.NORMAL)
-            # Append only new entries
-            for entry in all_logs[self._rendered_log_len:]:
+            for entry in new_entries:
                 self.log_text.insert(tk.END, f"[{entry['time']}] [{entry['level']}] {entry['message']}\n")
-            self._rendered_log_len = len(all_logs)
+            self._rendered_log_len = new_entries[-1].get("seq", self._rendered_log_len)
             self.log_text.see(tk.END)
             self.log_text.configure(state=tk.DISABLED)
 

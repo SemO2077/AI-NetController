@@ -6,7 +6,7 @@ export class HeartbeatRingBuffer {
   private head: number = 0;
   private count: number = 0;
 
-  constructor(capacity = 20, initialValues: number[] = [14, 16, 15, 18, 14, 15, 17, 16, 14, 15]) {
+  constructor(capacity = 20, initialValues: number[] = []) {
     this.capacity = Math.max(1, capacity);
     this.buffer = new Float64Array(this.capacity);
     for (let i = 0; i < initialValues.length; i++) {
@@ -23,7 +23,7 @@ export class HeartbeatRingBuffer {
   }
 
   public toArray(): number[] {
-    if (this.count === 0) return [15];
+    if (this.count === 0) return [];
     const result: number[] = new Array(this.count);
     const start = this.count < this.capacity ? 0 : this.head;
     for (let i = 0; i < this.count; i++) {
@@ -35,7 +35,19 @@ export class HeartbeatRingBuffer {
   public getMetrics(currentLatency: number | null, status: 'idle' | 'healthy' | 'warning' | 'unreachable'): HeartbeatMetrics {
     const history = this.toArray();
     const len = history.length;
-    const current = currentLatency ?? history[len - 1] ?? 15;
+    if (len === 0) {
+      const current = currentLatency ?? 0;
+      return {
+        currentLatencyMs: current,
+        history: current > 0 ? [current] : [],
+        jitterMs: 0,
+        minLatencyMs: current,
+        maxLatencyMs: current,
+        avgLatencyMs: current,
+        status
+      };
+    }
+    const current = currentLatency ?? history[len - 1] ?? 0;
     let min = history[0];
     let max = history[0];
     let sum = history[0];
@@ -51,7 +63,7 @@ export class HeartbeatRingBuffer {
     }
 
     const avg = Math.round(sum / len);
-    const jitter = len > 1 ? Math.round((jitterSum / (len - 1)) * 10) / 10 : 1.5;
+    const jitter = len > 1 ? Math.round((jitterSum / (len - 1)) * 10) / 10 : 0;
 
     return {
       currentLatencyMs: current,

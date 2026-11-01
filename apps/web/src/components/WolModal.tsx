@@ -87,7 +87,7 @@ export const WolModal: React.FC<WolModalProps> = ({
   const [formName, setFormName] = useState('');
   const [formTargetType, setFormTargetType] = useState<WolScheduleTargetType>('all_lab');
   const [formTargetDeviceId, setFormTargetDeviceId] = useState<string>('');
-  const [formTargetMac, setFormTargetMac] = useState<string>('00:1A:2B:3C:4D:5E');
+  const [formTargetMac, setFormTargetMac] = useState<string>('');
   const [formTime, setFormTime] = useState('08:00');
   const [formDays, setFormDays] = useState<Weekday[]>(['mon', 'tue', 'wed', 'thu', 'fri']);
   const [formBroadcastIp, setFormBroadcastIp] = useState('192.168.1.255');
@@ -174,7 +174,7 @@ export const WolModal: React.FC<WolModalProps> = ({
 
   const handleRestoreDefaults = () => {
     triggerHapticFeedback('medium');
-    persistSchedules(TEST_WOL_SCHEDULES.length > 0 ? TEST_WOL_SCHEDULES : DEFAULT_WOL_SCHEDULES);
+    persistSchedules(DEFAULT_WOL_SCHEDULES);
   };
 
   const handleTestTriggerSchedule = (schedule: WolSchedule) => {
@@ -252,7 +252,7 @@ export const WolModal: React.FC<WolModalProps> = ({
     setFormName(localized.name);
     setFormTargetType(schedule.targetType);
     setFormTargetDeviceId(schedule.targetDeviceId || hosts[0]?.id || '');
-    setFormTargetMac(schedule.targetMac || '00:1A:2B:3C:4D:5E');
+    setFormTargetMac(schedule.targetMac || '');
     setFormTime(schedule.time);
     setFormDays(schedule.days);
     setFormBroadcastIp(schedule.broadcastIp || '192.168.1.255');

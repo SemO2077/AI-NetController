@@ -124,12 +124,12 @@ interface PcDaemonGuiModalProps {
 const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
   version: '3.0.0-LTS',
   protocol: 'CST/3.0-SECURE',
-  hostname: 'CST-LAB-WS-01',
-  osName: 'Windows 11 Pro 24H2 (x86_64)',
-  localIp: '192.168.1.104',
+  hostname: 'LOCAL-HOST',
+  osName: 'Windows / Linux Host',
+  localIp: '127.0.0.1',
   port: 8765,
-  wsUri: 'ws://192.168.1.104:8765',
-  uptime: '00:14:32',
+  wsUri: 'ws://127.0.0.1:8765',
+  uptime: '00:00:00',
   isRunning: true,
   isPaused: false,
   mdnsEnabled: true,
@@ -143,20 +143,18 @@ const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
   targetFps: 60,
   setupCompleted: true,
   securityProfile: 'balanced',
-  pairingPin: '482910',
+  pairingPin: '',
   pairingToken: 'cst_autonomous_lan_secret_2025',
-  cpuPercent: 11.4,
-  cpuCores: 8,
-  ramPercent: 34.2,
-  ramUsedGb: 5.5,
-  ramTotalGb: 16.0,
-  diskPercent: 42.8,
+  cpuPercent: 0,
+  cpuCores: 1,
+  ramPercent: 0,
+  ramUsedGb: 0,
+  ramTotalGb: 0,
+  diskPercent: 0,
   captureFps: 60,
   connectedClients: [],
   blacklistedDevices: [],
-  activeAdapters: [
-    { name: 'Ethernet0 (Intel I225-V 2.5GbE)', ipv4: '192.168.1.104', mac: '00:2B:67:89:AB:CD' },
-  ],
+  activeAdapters: [],
   avIntegrity: {
     upxDisabled: true,
     visibleHwnd: true,
@@ -165,19 +163,7 @@ const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
     authenticodeReady: true,
     sandboxJobObject: true,
   },
-  logs: [
-    {
-      time: '14:18:00',
-      level: 'INFO',
-      message: 'CST Host Daemon GUI v3.0.0-LTS initialized on 192.168.1.104:8765',
-    },
-    {
-      time: '14:18:02',
-      level: 'SECURITY',
-      message:
-        'AV-Safe Mode verified: Native Tkinter HWND window, UPX disabled, zero hidden PowerShell spawns.',
-    },
-  ],
+  logs: [],
 };
 
 export type DaemonGuiTab = 'overview' | 'devices' | 'setup';
@@ -244,7 +230,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   // Generate QR code for Setup tab
   useEffect(() => {
     if (!isOpen) return;
-    const primaryMac = daemon.activeAdapters?.[0]?.mac || '00:2B:67:89:AB:CD';
+    const primaryMac = daemon.activeAdapters?.[0]?.mac || '';
     const baseOrigin =
       window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
         ? `http://${daemon.localIp}:${window.location.port || 3000}`
@@ -298,10 +284,12 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
           const target = prev.connectedClients.find(
             (c) => c.id === extra?.clientId || c.ip === extra?.ip
           );
+          const resolvedIp = target?.ip || extra?.ip || '';
+          if (!resolvedIp) return prev;
           const banEntry: BlacklistedDevice = {
             id: `BAN-${Math.floor(100 + Math.random() * 900)}`,
-            ip: target?.ip || extra?.ip || '192.168.1.199',
-            mac: (target?.mac || extra?.mac || '00:1F:5B:AA:CC:99').toUpperCase(),
+            ip: resolvedIp,
+            mac: (target?.mac || extra?.mac || '00:00:00:00:00:00').toUpperCase(),
             device: target?.device || extra?.device || 'Blocked Peer',
             reason: extra?.reason || 'Manually blacklisted by operator',
             bannedAt: nowTime,
@@ -344,8 +332,9 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   };
 
   const handleCopyPin = () => {
+    if (!daemon.pairingPin) return;
     triggerHapticFeedback('light');
-    copyToClipboard(daemon.pairingPin || '482910');
+    copyToClipboard(daemon.pairingPin);
     setCopiedPin(true);
     setTimeout(() => setCopiedPin(false), 1800);
   };
@@ -580,7 +569,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
               className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-amber-300 font-bold tabular-nums flex items-center gap-1 cursor-pointer"
               title={isBg ? 'Копирай 6-цифрения ПИН за сдвояване' : 'Copy 6-Digit Pairing PIN'}
             >
-              <span>{daemon.pairingPin || '482910'}</span>
+              <span>{daemon.pairingPin || '------'}</span>
               {copiedPin ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
             </button>
             <button
@@ -1508,7 +1497,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                         </span>
                       </h3>
                       <span className="text-xs font-mono font-bold text-amber-300">
-                        PIN: {daemon.pairingPin || '482910'}
+                        PIN: {daemon.pairingPin || '------'}
                       </span>
                     </div>
 

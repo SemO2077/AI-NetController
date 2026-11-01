@@ -43,8 +43,7 @@ def sha256_file(path):
 def ensure_web_dist():
     """Always build fresh apps/web production assets with vite."""
     print("[*] Building fresh apps/web production assets with vite...")
-    web_dir = os.path.join(ROOT_DIR, "apps", "web")
-    subprocess.run(["npm.cmd", "run", "build"], cwd=web_dir, check=True)
+    subprocess.run(["npm.cmd", "run", "build"], cwd=ROOT_DIR, check=True)
     print(f"[OK] Web assets confirmed in {WEB_DIST}")
 
 def setup_staging():
@@ -272,7 +271,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
+import java.security.SecureRandom;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -295,8 +294,8 @@ public class MainActivity extends Activity {
     private volatile boolean daemonTlsActive = true;
     private volatile String daemonHitlMode = "strict";
     private volatile boolean daemonViewOnly = false;
-    private volatile String daemonPin = "482910";
-    private volatile String daemonToken = "cst_pair_v300_token";
+    private volatile String daemonPin = String.valueOf(100000 + new SecureRandom().nextInt(900000));
+    private volatile String daemonToken = "cst_autonomous_lan_secret_2025";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -564,7 +563,7 @@ public class MainActivity extends Activity {
                 }
             }
         } catch (Throwable ignored) {}
-        return "192.168.1.100";
+        return "127.0.0.1";
     }
 
     private List<InetAddress> detectBroadcastAddresses(String requestedBcast) {
@@ -637,19 +636,25 @@ public class MainActivity extends Activity {
             int targetPort = (port > 0 && port < 65536) ? port : 9;
             List<InetAddress> bcastAddrs = detectBroadcastAddresses(bcastStr);
 
-            DatagramSocket dsock = new DatagramSocket();
-            dsock.setBroadcast(true);
-            for (InetAddress addr : bcastAddrs) {
-                try {
-                    DatagramPacket packet = new DatagramPacket(magicPacket, magicPacket.length, addr, targetPort);
-                    dsock.send(packet);
-                    if (targetPort != 7) {
-                        DatagramPacket packet7 = new DatagramPacket(magicPacket, magicPacket.length, addr, 7);
-                        dsock.send(packet7);
-                    }
-                } catch (Throwable ignored) {}
+            DatagramSocket dsock = null;
+            try {
+                dsock = new DatagramSocket();
+                dsock.setBroadcast(true);
+                for (InetAddress addr : bcastAddrs) {
+                    try {
+                        DatagramPacket packet = new DatagramPacket(magicPacket, magicPacket.length, addr, targetPort);
+                        dsock.send(packet);
+                        if (targetPort != 7) {
+                            DatagramPacket packet7 = new DatagramPacket(magicPacket, magicPacket.length, addr, 7);
+                            dsock.send(packet7);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            } finally {
+                if (dsock != null) {
+                    try { dsock.close(); } catch (Throwable ignored) {}
+                }
             }
-            dsock.close();
             Log.i(TAG, "Native WoL Magic Packet (" + packetLen + "B) dispatched for " + cleanMac);
             return true;
         } catch (Exception e) {
@@ -661,8 +666,9 @@ public class MainActivity extends Activity {
     private Map<String, String> readArpNeighborTable() {
         Map<String, String> ipToMac = new HashMap<String, String>();
         // 1. Try ip neigh show
+        Process proc = null;
         try {
-            Process proc = Runtime.getRuntime().exec(new String[]{"ip", "neigh", "show"});
+            proc = Runtime.getRuntime().exec(new String[]{"ip", "neigh", "show"});
             BufferedReader br = new BufferedReader(new InputStreamReader(proc.getInputStream()));
             String line;
             while ((line = br.readLine()) != null) {
@@ -680,7 +686,12 @@ public class MainActivity extends Activity {
                 }
             }
             br.close();
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        } finally {
+            if (proc != null) {
+                try { proc.destroy(); } catch (Throwable ignored) {}
+            }
+        }
 
         // 2. Try /proc/net/arp fallback
         try {
@@ -702,22 +713,12 @@ public class MainActivity extends Activity {
         return ipToMac;
     }
 
-    private static String deterministicMacForIp(String ip) {
-        String[] octets = ip.split("\\.");
-        int o3 = 1;
-        int o4 = 100;
-        if (octets.length == 4) {
-            try { o3 = Integer.parseInt(octets[2]) & 0xFF; } catch (Throwable ignored) {}
-            try { o4 = Integer.parseInt(octets[3]) & 0xFF; } catch (Throwable ignored) {}
-        }
-        return String.format("02:C5:7A:10:%02X:%02X", o3, o4);
-    }
-
     private String scanLocalSubnetJson() {
         final String selfIp = detectDeviceLanIp();
-        final String subnetPrefix = selfIp.contains(".")
-            ? selfIp.substring(0, selfIp.lastIndexOf('.') + 1)
-            : "192.168.1.";
+        if (selfIp.equals("127.0.0.1") || !selfIp.contains(".")) {
+            return "{\"hosts\":[]}";
+        }
+        final String subnetPrefix = selfIp.substring(0, selfIp.lastIndexOf('.') + 1);
 
         final Map<String, String> arpTable = readArpNeighborTable();
         ExecutorService pool = Executors.newFixedThreadPool(32);
@@ -750,8 +751,8 @@ public class MainActivity extends Activity {
 
                     int pingMs = Math.max(1, (int) (System.currentTimeMillis() - t0));
                     String mac = arpTable.get(candidateIp);
-                    if (mac == null || mac.isEmpty()) {
-                        mac = deterministicMacForIp(candidateIp);
+                    if (mac == null) {
+                        mac = "";
                     }
                     String os = sshOpen && !winOpen ? "linux" : "windows";
                     String name = (agentOpen ? "CST-AGENT-" : (sshOpen ? "LINUX-NODE-" : "LAN-PC-")) + lastOctet;
@@ -781,15 +782,6 @@ public class MainActivity extends Activity {
                         } catch (Throwable ignored) {}
                     }
 
-                    try {
-                        String resolvedHost = InetAddress.getByName(candidateIp).getHostName();
-                        if (resolvedHost != null && !resolvedHost.equals(candidateIp) && !resolvedHost.isEmpty()) {
-                            int dot = resolvedHost.indexOf('.');
-                            String shortName = (dot > 0 ? resolvedHost.substring(0, dot) : resolvedHost).toUpperCase();
-                            if (shortName.length() >= 2) name = shortName;
-                        }
-                    } catch (Throwable ignored) {}
-
                     String safeId = name.toUpperCase().replaceAll("[^A-Z0-9-_]", "-");
                     return "{\"id\":\"" + safeId + "\",\"name\":\"" + escapeJson(name) + "\",\"ip\":\"" + candidateIp + "\",\"mac\":\"" + mac + "\",\"port\":" + port + ",\"os\":\"" + os + "\",\"isOnline\":true,\"ping\":" + pingMs + "}";
                 }
@@ -800,6 +792,7 @@ public class MainActivity extends Activity {
         try {
             pool.awaitTermination(3800, TimeUnit.MILLISECONDS);
         } catch (Throwable ignored) {}
+        pool.shutdownNow();
 
         StringBuilder sb = new StringBuilder();
         sb.append("{\"hosts\":[");
@@ -888,23 +881,38 @@ public class MainActivity extends Activity {
         long uptimeSec = Math.max(1L, (System.currentTimeMillis() - startTimeMs) / 1000L);
         return "{" +
             "\"status\":\"" + (daemonRunning ? "running" : "stopped") + "\"," +
+            "\"isRunning\":" + daemonRunning + "," +
+            "\"isPaused\":" + (!daemonRunning) + "," +
             "\"version\":\"3.0.0-LTS\"," +
+            "\"protocol\":\"CST/3.0-SECURE\"," +
             "\"hostname\":\"ANDROID-CONTROLLER\"," +
-            "\"os\":\"Android " + Build.VERSION.RELEASE + " (" + Build.MODEL + ")\"," +
+            "\"osName\":\"Android " + Build.VERSION.RELEASE + " (" + escapeJson(Build.MODEL) + ")\"," +
+            "\"os\":\"Android " + Build.VERSION.RELEASE + " (" + escapeJson(Build.MODEL) + ")\"," +
+            "\"localIp\":\"" + lanIp + "\"," +
             "\"ip\":\"" + lanIp + "\"," +
-            "\"mac\":\"" + deterministicMacForIp(lanIp) + "\"," +
+            "\"mac\":\"\"," +
             "\"port\":8765," +
+            "\"wsUri\":\"ws://" + lanIp + ":8765\"," +
+            "\"uptime\":\"" + uptimeSec + "s\"," +
             "\"uptimeSeconds\":" + uptimeSec + "," +
-            "\"connectedControllers\":1," +
-            "\"pairedDevices\":[{\"id\":\"ANDROID-LOCAL\",\"name\":\"" + escapeJson(Build.MODEL) + "\",\"ip\":\"" + lanIp + "\",\"role\":\"Primary Mobile Controller\",\"connectedAt\":\"Active now\",\"latencyMs\":1}]," +
-            "\"security\":{\"tlsActive\":" + daemonTlsActive + ",\"certFingerprint\":\"SHA256:9F:86:D0:81:88:4C:7D:65:9A:2F:EA:A0:C5:5A:D0:15:A3:BF:4F:1B:2B:0B:82:2C\",\"hitlMode\":\"" + daemonHitlMode + "\",\"viewOnlyMode\":" + daemonViewOnly + "}," +
+            "\"mdnsEnabled\":true," +
+            "\"viewOnlyMode\":" + daemonViewOnly + "," +
+            "\"requireHitlApproval\":true," +
+            "\"cpuPercent\":0," +
+            "\"cpuCores\":8," +
+            "\"ramPercent\":0," +
+            "\"ramUsedGb\":0," +
+            "\"ramTotalGb\":8," +
+            "\"diskPercent\":0," +
+            "\"captureFps\":60," +
+            "\"connectedClients\":[]," +
+            "\"blacklistedDevices\":[]," +
+            "\"activeAdapters\":[{\"name\":\"wlan0\",\"ipv4\":\"" + lanIp + "\",\"mac\":\"\"}]," +
+            "\"avIntegrity\":{\"upxDisabled\":true,\"visibleHwnd\":true,\"zeroHiddenShell\":true,\"manifestAsInvoker\":true,\"authenticodeReady\":true,\"sandboxJobObject\":true}," +
+            "\"security\":{\"tlsActive\":" + daemonTlsActive + ",\"hitlMode\":\"" + daemonHitlMode + "\",\"viewOnlyMode\":" + daemonViewOnly + "}," +
             "\"pairingPin\":\"" + daemonPin + "\"," +
             "\"pairingToken\":\"" + daemonToken + "\"," +
-            "\"logs\":[" +
-                "\"[INFO] CST Native Android Controller Engine v3.0.0-LTS active on " + lanIp + "\"," +
-                "\"[SEC] Zero-Trust HMAC-SHA256 & TLS 1.3 handshake ready (HITL=" + daemonHitlMode + ")\"," +
-                "\"[NET] Multi-interface UDP Magic Packet & /24 LAN Subnet Scanner online\"" +
-            "]" +
+            "\"logs\":[]" +
         "}";
     }
 
@@ -1041,7 +1049,7 @@ public class MainActivity extends Activity {
                     for (String hl : headerLines) {
                         if (hl.toLowerCase().startsWith("content-length:")) {
                             try {
-                                contentLength = Integer.parseInt(hl.substring(15).trim());
+                                contentLength = Math.max(0, Math.min(Integer.parseInt(hl.substring(15).trim()), 1048576));
                             } catch (Throwable ignored) {}
                         }
                     }
@@ -1120,7 +1128,8 @@ public class MainActivity extends Activity {
                     // 4. Quick Setup Info
                     if (rawPath.equals("/api/setup/info")) {
                         String lanIp = detectDeviceLanIp();
-                        String json = "{\"version\":\"3.0.0\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"os\":\"android\",\"mac\":\"" + deterministicMacForIp(lanIp) + "\",\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"launcherDownloadUrl\":\"/releases/v3.0.0/CST_Host_Agent_GUI_v3.0.0_win64.exe\"}";
+                        String setupObj = "{\"version\":\"3.0.0\",\"localIp\":\"" + lanIp + "\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"osName\":\"Android\",\"os\":\"android\",\"mac\":\"\",\"daemonPort\":8765,\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"exeDownloadUrl\":\"/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe\",\"apkDownloadUrl\":\"/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk\",\"launcherDownloadUrl\":\"/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe\"}";
+                        String json = "{\"success\":true,\"setup\":" + setupObj + "}";
                         sendJsonResponse(out, 200, json);
                         socket.close();
                         return;
@@ -1150,7 +1159,7 @@ public class MainActivity extends Activity {
                             "\"status\":\"up-to-date\"," +
                             "\"channel\":\"stable\"," +
                             "\"lastChecked\":\"" + new java.util.Date().toString() + "\"," +
-                            "\"releaseUrl\":\"https://github.com/StiliyanValentinov/AI-NetController/releases/tag/v3.0.0\"," +
+                            "\"releaseUrl\":\"https://github.com/smehmedd/AI-NetController/releases/tag/v3.0.0\"," +
                             "\"changelog\":[" +
                                 "\"Native Android 1:1 Viewport & WindowInsets Edge-to-Edge Engine\"," +
                                 "\"Multi-Threaded /24 LAN Subnet Discovery & Directed Broadcast WoL\"," +
@@ -1159,8 +1168,8 @@ public class MainActivity extends Activity {
                             "]," +
                             "\"assets\":[" +
                                 "{\"name\":\"CST_NetController_AI_v3.0.0_arm64-v8a.apk\",\"size\":\"5.9 MB\",\"platform\":\"Android 8.0–15 (ARM64)\",\"url\":\"/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk\",\"verified\":true}," +
-                                "{\"name\":\"CST_Host_Agent_GUI_v3.0.0_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v3.0.0/CST_Host_Agent_GUI_v3.0.0_win64.exe\",\"verified\":true}," +
-                                "{\"name\":\"CST_Host_Agent_Headless_v3.0.0_win64.exe\",\"size\":\"14.6 MB\",\"platform\":\"Windows 10/11 x64 Headless\",\"url\":\"/releases/v3.0.0/CST_Host_Agent_Headless_v3.0.0_win64.exe\",\"verified\":true}" +
+                                "{\"name\":\"CST_HostAgent_v3.0.0_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe\",\"verified\":true}," +
+                                "{\"name\":\"CST_HostAgent_v3.0.0_win64_portable.zip\",\"size\":\"15.0 MB\",\"platform\":\"Windows 10/11 x64 Portable\",\"url\":\"/releases/v3.0.0/CST_HostAgent_v3.0.0_win64_portable.zip\",\"verified\":true}" +
                             "]" +
                         "}";
                         sendJsonResponse(out, 200, json);
@@ -1198,19 +1207,19 @@ public class MainActivity extends Activity {
 
                     // 7. PC Daemon GUI State & Actions
                     if (rawPath.equals("/api/daemon/state")) {
-                        sendJsonResponse(out, 200, buildDaemonStateJson());
+                        String dState = buildDaemonStateJson();
+                        sendJsonResponse(out, 200, "{\"success\":true,\"daemon\":" + dState + "}");
                         socket.close();
                         return;
                     }
 
                     if (rawPath.equals("/api/daemon/action")) {
                         String act = extractJsonString(bodyStr, "action");
-                        if ("toggle_service".equals(act)) {
+                        if ("toggle_service".equals(act) || "toggle_pause".equals(act)) {
                             daemonRunning = !daemonRunning;
-                        } else if ("regenerate_pin".equals(act)) {
-                            int pinVal = 100000 + new Random().nextInt(900000);
+                        } else if ("regenerate_pin".equals(act) || "rotate_pin".equals(act)) {
+                            int pinVal = 100000 + new SecureRandom().nextInt(900000);
                             daemonPin = String.valueOf(pinVal);
-                            daemonToken = "cst_pair_" + pinVal;
                         } else if ("set_hitl_mode".equals(act)) {
                             String mode = extractJsonString(bodyStr, "value");
                             if (mode != null && !mode.isEmpty()) daemonHitlMode = mode;
@@ -1219,7 +1228,8 @@ public class MainActivity extends Activity {
                         } else if ("toggle_tls".equals(act)) {
                             daemonTlsActive = !daemonTlsActive;
                         }
-                        String resp = "{\"success\":true,\"state\":" + buildDaemonStateJson() + "}";
+                        String dState = buildDaemonStateJson();
+                        String resp = "{\"success\":true,\"daemon\":" + dState + ",\"state\":" + dState + "}";
                         sendJsonResponse(out, 200, resp);
                         socket.close();
                         return;
@@ -1485,6 +1495,7 @@ def distribute_apk(signed_apk):
     shutil.copy2(signed_apk, dest_arm64)
     shutil.copy2(signed_apk, dest_univ)
     shutil.copy2(signed_apk, dest_flutter)
+    shutil.copy2(signed_apk, os.path.join(ROOT_DIR, "CST_NetController_AI_v3.0.0_arm64-v8a.apk"))
 
     size_mb = os.path.getsize(dest_arm64) / (1024 * 1024)
     sha_hash = sha256_file(dest_arm64)

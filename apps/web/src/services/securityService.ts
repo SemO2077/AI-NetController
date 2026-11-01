@@ -21,7 +21,7 @@ export interface CommandSecurityVerdict {
 
 // Banned malicious signatures that are blocked client-side immediately
 const BLOCKED_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
-  { regex: /:()\s*{\s*:\s*\|\s*:\s*&\s*}\s*;/i, reason: 'Bash fork-bomb detected' },
+  { regex: /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:?/i, reason: 'Bash fork-bomb detected' },
   { regex: /\brm\s+-[rRfF]{1,3}\s+[\/\*]/i, reason: 'Recursive root filesystem deletion prohibited' },
   { regex: /\bformat\s+[c-z]:\s*(\/fs:[a-z]+)?/i, reason: 'Filesystem volume format prohibited' },
   { regex: /\bdd\s+if=.*of=\/dev\/(sd[a-z]|nvme[0-9]|hd[a-z]|null)/i, reason: 'Raw block device overwrite prohibited' },
@@ -82,7 +82,10 @@ export function inspectCommandSecurity(command: string): CommandSecurityVerdict 
   const result = inspectCommandSecurityUncached(command);
   if (typeof command === 'string') {
     if (INSPECT_CACHE.size >= MAX_INSPECT_CACHE) {
-      INSPECT_CACHE.clear();
+      const oldestKey = INSPECT_CACHE.keys().next().value;
+      if (oldestKey !== undefined) {
+        INSPECT_CACHE.delete(oldestKey);
+      }
     }
     INSPECT_CACHE.set(command, result);
   }

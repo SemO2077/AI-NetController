@@ -213,11 +213,11 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
               {language === 'bg' ? 'ПРОЦЕСОР (CPU)' : 'PROCESSOR (CPU)'}
             </span>
             <div className="flex items-center space-x-2">
-              <span className="text-white font-bold">{host.cpuUsage ?? 15}%</span>
+              <span className="text-white font-bold">{host.cpuUsage ?? 0}%</span>
               <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-cyan-400 rounded-full transition-all duration-500"
-                  style={{ width: `${host.cpuUsage ?? 15}%` }}
+                  style={{ width: `${host.cpuUsage ?? 0}%` }}
                 />
               </div>
             </div>
@@ -228,11 +228,11 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
               {language === 'bg' ? 'ПАМЕТ (RAM)' : 'MEMORY (RAM)'}
             </span>
             <div className="flex items-center space-x-2">
-              <span className="text-white font-bold">{host.ramUsage ?? 40}%</span>
+              <span className="text-white font-bold">{host.ramUsage ?? 0}%</span>
               <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-teal-400 rounded-full transition-all duration-500"
-                  style={{ width: `${host.ramUsage ?? 40}%` }}
+                  style={{ width: `${host.ramUsage ?? 0}%` }}
                 />
               </div>
             </div>
@@ -242,7 +242,7 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
             <span className="text-white/40 text-[10px] block">
               {language === 'bg' ? 'ДИСКОВО ПРОСТРАНСТВО' : 'DISK STORAGE'}
             </span>
-            <span className="text-white/80 truncate block">{host.diskUsage || '342 GB / 1000 GB'}</span>
+            <span className="text-white/80 truncate block">{host.diskUsage || 'N/A'}</span>
           </div>
 
           {host.batteryPercentage !== undefined && (

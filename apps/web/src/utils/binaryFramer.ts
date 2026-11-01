@@ -52,6 +52,7 @@ const SCRATCH_HEADER: ParsedHeader = {
 
 const POOL_CONTROL_BUFFER = new ArrayBuffer(64);
 const POOL_CONTROL_VIEW = new DataView(POOL_CONTROL_BUFFER);
+const POOL_HEADER_ONLY_VIEW = new DataView(POOL_CONTROL_BUFFER, 0, HEADER_SIZE);
 const POOL_CONTROL_U8 = new Uint8Array(POOL_CONTROL_BUFFER);
 
 export function parseHeaderInto(dv: DataView, out: ParsedHeader = SCRATCH_HEADER): ParsedHeader {
@@ -98,15 +99,19 @@ export function parseHeader(dv: DataView): ParsedHeader {
 
 export function packControlFrameFast(opcode: Opcode, sequenceId: number, payload?: Uint8Array): DataView {
   const payloadLen = payload ? payload.byteLength : 0;
+  if (HEADER_SIZE + payloadLen > 64) {
+    return new DataView(packFrame(opcode, sequenceId, payload));
+  }
   POOL_CONTROL_VIEW.setUint16(0, 0xC571, false);
   POOL_CONTROL_VIEW.setUint8(2, opcode);
   POOL_CONTROL_VIEW.setUint8(3, 0x00);
   POOL_CONTROL_VIEW.setUint32(4, sequenceId, false);
   POOL_CONTROL_VIEW.setUint32(8, payloadLen, false);
-  if (payload && payloadLen > 0 && HEADER_SIZE + payloadLen <= 64) {
+  if (payload && payloadLen > 0) {
     POOL_CONTROL_U8.set(payload, HEADER_SIZE);
+    return new DataView(POOL_CONTROL_BUFFER, 0, HEADER_SIZE + payloadLen);
   }
-  return POOL_CONTROL_VIEW;
+  return POOL_HEADER_ONLY_VIEW;
 }
 
 export function packFrame(opcode: Opcode, sequenceId: number, payload?: Uint8Array): ArrayBuffer {

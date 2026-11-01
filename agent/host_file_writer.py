@@ -13,6 +13,7 @@ clients to the Host PC. Features:
 
 import os
 import re
+import time
 import struct
 import hashlib
 import logging
@@ -55,22 +56,21 @@ class ActiveTransfer:
         self.target_path = target_path
         self.temp_path = target_path.with_suffix(f"{target_path.suffix}.cst_part")
         self.bytes_written = 0
-        self.hasher = hashlib.sha256()
         self.file_handle = None
 
-    def open(self):
+    def open(self, truncate: bool = False):
         # Ensure parent directory exists
         self.temp_path.parent.mkdir(parents=True, exist_ok=True)
-        self.file_handle = open(self.temp_path, "r+b" if self.temp_path.exists() else "wb")
+        mode = "wb" if (truncate or not self.temp_path.exists()) else "r+b"
+        self.file_handle = open(self.temp_path, mode)
 
     def write_chunk(self, offset: int, data: bytes):
         if offset < 0 or offset > self.total_size or offset + len(data) > MAX_FILE_SIZE:
-            raise ValueError(f"Chunk offset {offset} + len {len(data)} exceeds permitted bounds")
+            raise ValueError(f"Chunk offset {offset} + len {len(data)} exceeds permitted bounds ({MAX_FILE_SIZE})")
         if not self.file_handle:
             self.open()
         self.file_handle.seek(offset)
         self.file_handle.write(data)
-        self.hasher.update(data)
         self.bytes_written += len(data)
 
     def close(self):
@@ -145,16 +145,24 @@ class HostFileWriter:
         self.active_transfers: Dict[int, ActiveTransfer] = {}
         logger.info(f"HostFileWriter initialized. Target chroot directory: {self.download_dir}")
 
+    _WINDOWS_RESERVED_NAMES = {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+
     def _sanitize_filename(self, filename: str) -> str:
         """Strip directory paths and dangerous characters to block path traversal."""
-        # Extract base name only
-        clean_name = os.path.basename(filename)
+        # Normalize backslashes so Windows paths are stripped on all platforms
+        normalized = filename.replace("\\", "/")
+        clean_name = os.path.basename(normalized)
         # Remove any null bytes or control characters
         clean_name = re.sub(r'[\x00-\x1f\x7f]', '', clean_name)
         # Replace dangerous filesystem characters with underscore
-        clean_name = re.sub(r'[<>:"/\\|?*]', '_', clean_name).strip()
-        if not clean_name:
-            clean_name = f"cst_received_{int(os.times().system)}.bin"
+        clean_name = re.sub(r'[<>:"/\\|?*]', '_', clean_name).strip(" .")
+        stem_upper = clean_name.split(".")[0].upper() if clean_name else ""
+        if not clean_name or clean_name in {".", ".."} or stem_upper in self._WINDOWS_RESERVED_NAMES:
+            clean_name = f"cst_received_{time.time_ns()}.bin"
         return clean_name
 
     def _verify_path_contained(self, target_path: Path) -> bool:
@@ -211,7 +219,7 @@ class HostFileWriter:
                 transfer = ActiveTransfer(transfer_id, clean_name, total_size, sha256_hex, target_path)
                 # Keep the metadata visible for the lifecycle tests, but do not leave the
                 # temporary file handle open across idle periods. Chunk writes reopen it on demand.
-                transfer.open()
+                transfer.open(truncate=True)
                 transfer.close()
                 self.active_transfers[transfer_id] = transfer
                 logger.info(f"Transfer initiated: ID {transfer_id}, File: '{clean_name}', Size: {total_size} bytes")

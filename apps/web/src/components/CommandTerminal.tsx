@@ -5,6 +5,7 @@ import {
   ArrowUp,
   RefreshCw,
   CheckCircle2,
+  XCircle,
   Eye,
   Copy,
   Check,
@@ -428,7 +429,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
               </span>
             )}
             <span className="font-mono text-[11px] text-cyan-300/80 pl-1 tabular-nums">
-              {selectedHost ? `${selectedHost.ip}:8765` : (language === 'bg' ? 'Няма хост' : 'No Host')}
+              {selectedHost ? `${selectedHost.ip}:${selectedHost.port || 8765}` : (language === 'bg' ? 'Няма хост' : 'No Host')}
             </span>
           </div>
         </div>
@@ -453,6 +454,10 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
           <AnimatePresence mode="popLayout">
             {executionLogs.map((entry) => {
               const isPinned = entry.commandPrompt ? pinnedCommands.includes(entry.commandPrompt) : false;
+              const isError =
+                entry.status === 'failed' ||
+                entry.status === 'rejected' ||
+                (entry.exitCode !== undefined && entry.exitCode !== 0);
               return (
                 <motion.div
                   key={entry.id}
@@ -460,15 +465,29 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ type: 'spring', stiffness: 420, damping: 26 }}
-                  className="p-3.5 rounded-2xl bg-[#070c18]/90 border border-cyan-400/25 space-y-2"
+                  className={`p-3.5 rounded-2xl bg-[#070c18]/90 border space-y-2 ${
+                    isError ? 'border-rose-500/35' : 'border-cyan-400/25'
+                  }`}
                 >
                   <div className="flex items-center justify-between gap-2 text-[11px] text-white/50 tabular-nums border-b border-white/[0.06] pb-1.5">
-                    <span className="text-emerald-400 flex items-center gap-1.5 font-semibold truncate">
-                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                      <span>
-                        {t('term_exec_success', { time: entry.execution_time_ms })} • Exit {entry.exitCode ?? 0}
+                    {isError ? (
+                      <span className="text-rose-400 flex items-center gap-1.5 font-semibold truncate">
+                        <XCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>
+                          {language === 'bg'
+                            ? `Неуспешно (${entry.execution_time_ms}ms)`
+                            : `Failed (${entry.execution_time_ms}ms)`}{' '}
+                          • Exit {entry.exitCode ?? -1}
+                        </span>
                       </span>
-                    </span>
+                    ) : (
+                      <span className="text-emerald-400 flex items-center gap-1.5 font-semibold truncate">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        <span>
+                          {t('term_exec_success', { time: entry.execution_time_ms })} • Exit {entry.exitCode ?? 0}
+                        </span>
+                      </span>
+                    )}
 
                     <div className="flex items-center gap-2 shrink-0">
                       {entry.commandPrompt && (

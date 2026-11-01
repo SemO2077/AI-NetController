@@ -33,7 +33,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { HostDevice } from '../types';
 import { ScreenAspectPreset } from '../utils/viewportScale';
 import {
-  generateMockScreenCanvas,
   SimulatedWindowType,
   ScreenSimulationState
 } from '../services/screenFrameService';
@@ -47,6 +46,7 @@ export interface ScreenViewerModalProps {
   onClose: () => void;
   isCapturing?: boolean;
   onRefreshFrame?: () => void;
+  onSendInputOpcode?: (opcode: number, payload: Record<string, any> | string) => boolean;
 }
 
 interface ClickRipple {
@@ -69,22 +69,20 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   device,
   onClose,
   isCapturing: externalCapturing = false,
-  onRefreshFrame
+  onRefreshFrame,
+  onSendInputOpcode
 }) => {
   const { language } = useTranslation();
   const isBg = language === 'bg';
 
-  const [fps, setFps] = useState(60);
-  const [latency, setLatency] = useState(12);
   const [quality, setQuality] = useState<'High' | 'Medium' | 'Low'>('High');
   const [aspectPreset, setAspectPreset] = useState<ScreenAspectPreset>('fit');
   const [zoomFactor, setZoomFactor] = useState<number>(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [frameUrl, setFrameUrl] = useState<string>('');
   const [localCapturing, setLocalCapturing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const liveScreenFrame = useScreenStore((s) => s.screenBase64);
-  const displayFrameUrl = liveScreenFrame || frameUrl;
+  const displayFrameUrl = liveScreenFrame || '';
 
   const isCapturing = localCapturing || externalCapturing;
   const isDeviceOnline = Boolean(device && (device.isOnline || (device as any).status === 'Online'));
@@ -176,6 +174,15 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         showFeedback(feedbackLabel);
       }
 
+      if (
+        onSendInputOpcode &&
+        payload.type !== 'terminal_command' &&
+        payload.type !== 'shell_exec'
+      ) {
+        const isAudioOrLock = payload.type === 'media_control' || payload.type === 'lock_pc';
+        onSendInputOpcode(isAudioOrLock ? 0x09 : 0x08, payload);
+      }
+
       try {
         const res = await fetch('/api/pc-control/execute', {
           method: 'POST',
@@ -201,7 +208,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         // Fallback already reflected in local state
       }
     },
-    [device, isDeviceOnline, showFeedback]
+    [device, isDeviceOnline, onSendInputOpcode, showFeedback]
   );
 
   // Apply visual updates when AI returns actions
@@ -302,9 +309,9 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 status: isDeviceOnline ? 'Online' : 'Offline',
                 ip: device.ip,
                 os: device.os,
-                cpu: device.cpuUsage || device.cpu || 24,
-                ram: device.ramUsage || device.ram || 48,
-                gpu: 18
+                cpu: device.cpuUsage ?? device.cpu ?? 0,
+                ram: device.ramUsage ?? device.ram ?? 0,
+                gpu: 0
               }
             ]
           }
@@ -318,7 +325,20 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       const data = await response.json();
       const actions: Array<Record<string, any>> = Array.isArray(data.actions) ? data.actions : [];
 
-      actions.forEach((act) => applyVisualEffectsForAction(act));
+      actions.forEach((act) => {
+        applyVisualEffectsForAction(act);
+        if (
+          onSendInputOpcode &&
+          act.type &&
+          act.type !== 'terminal_command' &&
+          act.type !== 'shell_exec' &&
+          act.type !== 'wol' &&
+          act.type !== 'rescan'
+        ) {
+          const isAudio = act.type === 'media_control' || act.type === 'lock_pc';
+          onSendInputOpcode(isAudio ? 0x09 : 0x08, act);
+        }
+      });
 
       const cleanReply = String(data.reply || '')
         .replace(/```pc_action[\s\S]*?```/gi, '')
@@ -511,7 +531,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     clearHoldTimer();
   };
 
-  // Stream live screen frames or simulated canvas fallback
+  // Request live screen frames from the connected host agent
   useEffect(() => {
     if (!isOpen || !device || !isDeviceOnline || isPaused) return;
 
@@ -519,17 +539,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       onRefreshFrame();
     }
 
-    if (!useScreenStore.getState().screenBase64) {
-      setFrameUrl(generateMockScreenCanvas(device, simStateRef.current));
-    }
-
     const interval = setInterval(() => {
-      setFps(Math.floor(58 + Math.random() * 4));
-      setLatency(Math.floor(10 + Math.random() * 6));
-      if (!useScreenStore.getState().screenBase64) {
-        setFrameUrl(generateMockScreenCanvas(device, simStateRef.current));
+      if (onRefreshFrame) {
+        onRefreshFrame();
       }
-    }, 120);
+    }, 500);
 
     return () => clearInterval(interval);
   }, [isOpen, device, isDeviceOnline, isPaused, onRefreshFrame]);
@@ -826,17 +840,19 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                       ? '1 клик = Ляв бутон • Задръж 1 сек = Десен бутон'
                       : '1 Tap = Left Click • Hold 1s = Right Click'}
                   </span>
-                  <span className="hidden md:flex items-center gap-1">
-                    <Activity className="w-3 h-3 text-emerald-400" />
-                    {fps} FPS • {latency}ms
-                  </span>
+                  {typeof device.ping === 'number' && device.ping > 0 && (
+                    <span className="hidden md:flex items-center gap-1">
+                      <Activity className="w-3 h-3 text-emerald-400" />
+                      {device.ping}ms
+                    </span>
+                  )}
                   {liveScreenFrame ? (
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
                       LIVE
                     </span>
                   ) : (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-cyan-300 bg-cyan-500/10 border border-cyan-500/20 hidden lg:inline">
-                      SIMULATED
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/20 hidden lg:inline">
+                      AWAITING STREAM
                     </span>
                   )}
                 </div>

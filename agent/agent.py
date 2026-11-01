@@ -393,15 +393,20 @@ class AdaptiveScreenPipeline:
                 img.save(buf, format="JPEG", quality=self.jpeg_quality, optimize=False)
                 return buf.getvalue(), False
 
-            # Zero-copy encode for 1:1 desktop resolution (pass raw_shot.raw directly without bytes() copy)
+            # Zero-copy encode for 1:1 desktop resolution
             if self.turbo:
-                encoded = self.turbo.encode(
-                    raw_shot.raw,
-                    quality=self.jpeg_quality,
-                    pixel_format=3,  # TJPF_BGRX (constant 3 is BGRX in turbojpeg)
-                )
-                return encoded, False
-            elif Image:
+                try:
+                    import numpy as np
+                    bgra_arr = np.frombuffer(raw_shot.raw, dtype=np.uint8).reshape((raw_shot.height, raw_shot.width, 4))
+                    encoded = self.turbo.encode(
+                        bgra_arr,
+                        quality=self.jpeg_quality,
+                        pixel_format=3,  # TJPF_BGRX (constant 3 is BGRX in turbojpeg)
+                    )
+                    return encoded, False
+                except Exception as tj_err:
+                    logger.debug(f"TurboJPEG encode fallback to Pillow: {tj_err}")
+            if Image:
                 # Optimized Pillow fallback with reusable thread-local BytesIO
                 img = Image.frombytes("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX")
                 buf = getattr(self._local, 'bio_buf', None)
@@ -646,13 +651,15 @@ class HostAgentDaemon:
                             length = struct.unpack("!H", await reader.readexactly(2))[0]
                         elif length == 127:
                             length = struct.unpack("!Q", await reader.readexactly(8))[0]
+                        if length > MAX_PAYLOAD_SIZE:
+                            raise ValueError(f"Frame payload length {length} exceeds MAX_PAYLOAD_SIZE")
                         mask_key = await reader.readexactly(4) if is_masked else b""
                         raw_payload = await reader.readexactly(length)
-                        if is_masked:
-                            unmasked = bytearray(length)
-                            for i in range(length):
-                                unmasked[i] = raw_payload[i] ^ mask_key[i % 4]
-                            raw_payload = bytes(unmasked)
+                        if is_masked and length > 0:
+                            repeated_mask = (mask_key * ((length // 4) + 1))[:length]
+                            raw_payload = (
+                                int.from_bytes(raw_payload, "big") ^ int.from_bytes(repeated_mask, "big")
+                            ).to_bytes(length, "big")
                         if opcode == 0x01:
                             return raw_payload.decode('utf-8', errors='replace')
                         return raw_payload
@@ -763,15 +770,26 @@ class HostAgentDaemon:
     # =================================================================
     async def handle_connection(self, ws: WebSocketServerProtocol, path: str = ""):
         """Manages lifecycle of connected Flutter or Web clients."""
-        self.clients.add(ws)
         client_ip = ws.remote_address[0] if ws.remote_address else "unknown"
         client_port = ws.remote_address[1] if ws.remote_address and len(ws.remote_address) > 1 else id(ws)
         client_id = f"{client_ip}:{client_port}"
+
+        if self.gui_state is not None:
+            if getattr(self.gui_state, "is_paused", False):
+                await ws.close(code=1013, reason="Daemon is paused by host operator")
+                return
+            if hasattr(self.gui_state, "is_ip_blacklisted") and self.gui_state.is_ip_blacklisted(client_ip):
+                logger.warning(f"Rejected connection from blacklisted IP: {client_ip}")
+                await ws.close(code=1008, reason="IP address is blacklisted")
+                return
+
+        self.clients.add(ws)
         logger.info(f"Client connected from {client_id}")
 
         # Register with SRE Chaos Shield and arm 3000ms watchdog (keyed by unique client session)
         if self.chaos_shield:
             self.chaos_shield.register_client(client_id, lambda: asyncio.create_task(ws.close(code=1008)))
+            self.chaos_shield.transition_state(client_id, ConnectionState.AUTH_PENDING)
 
         # Send an immediate cryptographic authentication challenge
         nonce = secrets.token_bytes(16)
@@ -794,22 +812,38 @@ class HostAgentDaemon:
                             }))
                             continue
                         elif action == "AUTHENTICATE":
-                            token = str(text_data.get("token") or "")
-                            valid_tokens = [s.decode('utf-8', errors='ignore') for s in self._get_valid_secrets()]
-                            if any(hmac.compare_digest(token, vt) for vt in valid_tokens):
+                            token_bytes = str(text_data.get("token") or "").encode("utf-8", errors="replace")
+                            valid_tokens = self._get_valid_secrets()
+                            if any(hmac.compare_digest(token_bytes, vt) for vt in valid_tokens):
                                 self.authenticated_clients.add(ws)
                                 self.active_nonces.pop(ws, None)
                                 if self.chaos_shield:
-                                    self.chaos_shield.transition_state(client_ip, ConnectionState.AUTHENTICATED_STREAMING)
+                                    self.chaos_shield.transition_state(client_id, ConnectionState.AUTHENTICATED_STREAMING)
+                                if self.gui_state is not None:
+                                    with self.gui_state.lock:
+                                        if not any(c.get("id") == client_id for c in self.gui_state.connected_clients):
+                                            self.gui_state.connected_clients.append({
+                                                "id": client_id,
+                                                "ip": client_ip,
+                                                "mac": "N/A",
+                                                "device": str(text_data.get("device") or f"Remote Client ({client_ip})"),
+                                                "connectedAt": time.strftime("%H:%M:%S"),
+                                                "latencyMs": 1,
+                                                "isTrusted": True,
+                                                "inputAllowed": not self.view_only_mode,
+                                            })
+                                    self.gui_state.add_log("SECURITY", f"Client {client_id} authenticated via JSON handshake.")
                                 await ws.send(json.dumps({
                                     "event": "AUTHENTICATED",
                                     "status": "OK",
                                     "protocol": "CST/3.0-SECURE",
                                     "timestamp": time.time()
                                 }))
-                                logger.info(f"Client {client_ip} authenticated via JSON AUTHENTICATE handshake.")
+                                logger.info(f"Client {client_id} authenticated via JSON AUTHENTICATE handshake.")
                             else:
-                                logger.warning(f"JSON Authentication failed from {client_ip}")
+                                logger.warning(f"JSON Authentication failed from {client_id}")
+                                if self.gui_state is not None:
+                                    self.gui_state.add_log("ALERT", f"Failed JSON authentication attempt from {client_id}")
                                 await ws.send(json.dumps({
                                     "event": "ERROR",
                                     "error": "Invalid authentication token",
@@ -856,7 +890,7 @@ class HostAgentDaemon:
 
                 # Pass through Chaos Fuzzer Shield (Packet Loss, Jitter, Reordering Simulation)
                 if self.chaos_shield:
-                    filtered = await self.chaos_shield.filter_incoming_packet(client_ip, message)
+                    filtered = await self.chaos_shield.filter_incoming_packet(client_id, message)
                     if filtered is None:
                         continue
                     message = filtered
@@ -882,13 +916,13 @@ class HostAgentDaemon:
                 # =====================================================
                 if ws not in self.authenticated_clients:
                     if opcode == OP_AUTH:
-                        await self._process_auth(ws, payload)
+                        await self._process_auth(ws, payload, client_id)
                     elif opcode == OP_PING:
                         # Allow ping/pong heartbeat for transport liveness before full session auth
                         await ws.send(pack_packet(OP_PING, b'PONG', seq=seq))
                     else:
                         # Reject any command from unauthenticated client
-                        logger.warning(f"Unauthenticated attempt on opcode {opcode} from {client_ip}. Dropping.")
+                        logger.warning(f"Unauthenticated attempt on opcode {opcode} from {client_id}. Dropping.")
                         await self._send_error(ws, "Authentication required. Complete OP_AUTH handshake first.")
                         await ws.close(code=1008, reason="Authentication failed")
                         break
@@ -943,15 +977,20 @@ class HostAgentDaemon:
         finally:
             if self.chaos_shield:
                 await self.chaos_shield.cleanup_and_scrub(client_id)
+            if self.gui_state is not None:
+                with self.gui_state.lock:
+                    self.gui_state.connected_clients = [
+                        c for c in self.gui_state.connected_clients if c.get("id") != client_id
+                    ]
             self.clients.discard(ws)
             self.authenticated_clients.discard(ws)
             self.active_nonces.pop(ws, None)
-            logger.info(f"Client disconnected: {client_ip}")
+            logger.info(f"Client disconnected: {client_id}")
 
     # =================================================================
     # AUTHENTICATION & HANDSHAKE
     # =================================================================
-    async def _process_auth(self, ws: WebSocketServerProtocol, payload: bytes):
+    async def _process_auth(self, ws: WebSocketServerProtocol, payload: bytes, client_id: Optional[str] = None):
         """
         Validates HMAC-SHA256 signature using constant-time comparison.
         Prevents timing attacks via hmac.compare_digest.
@@ -989,12 +1028,30 @@ class HostAgentDaemon:
             self.authenticated_clients.add(ws)
             self.active_nonces.pop(ws, None)  # Single-use nonce
             client_ip = ws.remote_address[0] if ws.remote_address else "unknown"
+            client_port = ws.remote_address[1] if ws.remote_address and len(ws.remote_address) > 1 else id(ws)
+            resolved_client_id = client_id or f"{client_ip}:{client_port}"
             if self.chaos_shield:
-                self.chaos_shield.transition_state(client_ip, ConnectionState.AUTHENTICATED_STREAMING)
+                self.chaos_shield.transition_state(resolved_client_id, ConnectionState.AUTHENTICATED_STREAMING)
+            if self.gui_state is not None:
+                with self.gui_state.lock:
+                    if not any(c.get("id") == resolved_client_id for c in self.gui_state.connected_clients):
+                        self.gui_state.connected_clients.append({
+                            "id": resolved_client_id,
+                            "ip": client_ip,
+                            "mac": "N/A",
+                            "device": f"Binary Peer ({client_ip})",
+                            "connectedAt": time.strftime("%H:%M:%S"),
+                            "latencyMs": 1,
+                            "isTrusted": True,
+                            "inputAllowed": not self.view_only_mode,
+                        })
+                self.gui_state.add_log("SECURITY", f"Client {resolved_client_id} authenticated via HMAC-SHA256.")
             await ws.send(pack_packet(OP_AUTH, b'OK_AUTHENTICATED'))
-            logger.info(f"Client {ws.remote_address} authenticated successfully.")
+            logger.info(f"Client {resolved_client_id} authenticated successfully.")
         else:
             logger.warning(f"HMAC Authentication failed from {ws.remote_address}")
+            if self.gui_state is not None:
+                self.gui_state.add_log("ALERT", f"Failed HMAC authentication from {ws.remote_address}")
             await self._send_error(ws, "Invalid HMAC signature")
             await ws.close(code=1008, reason="Authentication failed")
 
@@ -1159,6 +1216,9 @@ class HostAgentDaemon:
         Opcode 0x07: Bidirectional Clipboard Synchronization.
         Writes to host clipboard if payload is present, and echoes host clipboard text back to client.
         """
+        if self.gui_state is not None and not getattr(self.gui_state, "clipboard_sync_allowed", True):
+            logger.info("Clipboard sync ignored: disabled by host security policy.")
+            return
         try:
             if payload:
                 text = payload.decode('utf-8', errors='replace')
@@ -1201,77 +1261,107 @@ class HostAgentDaemon:
                 logger.info("Remote input ignored: Host is in View-Only Mode.")
                 return
 
-            # Compact binary struct path (6 bytes, does not start with '{')
-            if len(payload) == 6 and not payload.startswith(b'{'):
-                event_type, dx, dy, btn_code = struct.unpack("!BhhB", payload)
-                btn = "right" if btn_code == 2 else "left"
-                if not pyautogui:
-                    logger.debug("pyautogui not installed - input forwarding skipped")
-                    return
-                if event_type == 1:
-                    pyautogui.moveRel(dx, dy, _pause=False)
-                elif event_type == 2:
-                    pyautogui.click(button=btn)
-                elif event_type == 3:
-                    pyautogui.scroll(dy)
-                return
-
-            data = json.loads(payload.decode('utf-8'))
-            action = data.get("action", "")
-
             if not pyautogui:
                 logger.debug("pyautogui not installed - input forwarding skipped")
                 return
 
-            if action == "move":
-                dx = float(data.get("dx", 0))
-                dy = float(data.get("dy", 0))
-                pyautogui.moveRel(dx, dy, _pause=False)
-            elif action == "move_to":
-                x = int(data.get("x", 0))
-                y = int(data.get("y", 0))
-                pyautogui.moveTo(x, y, _pause=False)
-            elif action == "click":
-                btn = data.get("button", "left")
-                pyautogui.click(button=btn)
-            elif action == "click_at":
-                x = int(data.get("x", 0))
-                y = int(data.get("y", 0))
-                btn = data.get("button", "left")
-                pyautogui.click(x=x, y=y, button=btn)
-            elif action == "double_click":
-                pyautogui.doubleClick()
-            elif action == "double_click_at":
-                x = int(data.get("x", 0))
-                y = int(data.get("y", 0))
-                pyautogui.doubleClick(x=x, y=y)
-            elif action == "right_click_at":
-                x = int(data.get("x", 0))
-                y = int(data.get("y", 0))
-                pyautogui.rightClick(x=x, y=y)
-            elif action == "scroll":
-                dy = int(data.get("dy", 0))
-                pyautogui.scroll(dy)
-            elif action == "scroll_at":
-                x = int(data.get("x", 0))
-                y = int(data.get("y", 0))
-                dy = int(data.get("dy", 0))
-                pyautogui.scroll(dy, x=x, y=y)
-            elif action == "type" or action == "type_text":
-                text = data.get("text", "")
-                press_enter = bool(data.get("press_enter", False))
-                if text:
-                    pyautogui.typewrite(text)
-                if press_enter:
-                    pyautogui.press('enter')
-            elif action == "key":
-                key = data.get("key", "")
-                if key:
-                    pyautogui.press(key)
-            elif action == "hotkey":
-                keys = data.get("keys", [])
-                if isinstance(keys, list) and keys:
-                    pyautogui.hotkey(*keys)
+            loop = asyncio.get_running_loop()
+
+            # Compact binary struct path (6 bytes, does not start with '{')
+            if len(payload) == 6 and not payload.startswith(b'{'):
+                event_type, dx, dy, btn_code = struct.unpack("!BhhB", payload)
+                btn = "right" if btn_code == 2 else "left"
+                def _exec_bin_input():
+                    if event_type == 1:
+                        pyautogui.moveRel(dx, dy, _pause=False)
+                    elif event_type == 2:
+                        pyautogui.click(button=btn, _pause=False)
+                    elif event_type == 3:
+                        pyautogui.scroll(dy, _pause=False)
+                await loop.run_in_executor(None, _exec_bin_input)
+                return
+
+            data = json.loads(payload.decode('utf-8'))
+            action = str(data.get("action") or data.get("type") or "").lower()
+
+            def _exec_json_input():
+                if action == "move":
+                    dx = float(data.get("dx", 0))
+                    dy = float(data.get("dy", 0))
+                    pyautogui.moveRel(dx, dy, _pause=False)
+                elif action in ("move_to", "mouse_move"):
+                    x = int(data.get("x", 0))
+                    y = int(data.get("y", 0))
+                    pyautogui.moveTo(x, y, _pause=False)
+                elif action in ("click", "mouse_click"):
+                    btn = str(data.get("button", "left")).lower()
+                    x = data.get("x")
+                    y = data.get("y")
+                    if btn == "double":
+                        if x is not None and y is not None:
+                            pyautogui.doubleClick(x=int(x), y=int(y), _pause=False)
+                        else:
+                            pyautogui.doubleClick(_pause=False)
+                    elif x is not None and y is not None:
+                        pyautogui.click(x=int(x), y=int(y), button=btn, _pause=False)
+                    else:
+                        pyautogui.click(button=btn, _pause=False)
+                elif action == "click_at":
+                    x = int(data.get("x", 0))
+                    y = int(data.get("y", 0))
+                    btn = data.get("button", "left")
+                    pyautogui.click(x=x, y=y, button=btn, _pause=False)
+                elif action in ("double_click", "mouse_double_click"):
+                    x = data.get("x")
+                    y = data.get("y")
+                    if x is not None and y is not None:
+                        pyautogui.doubleClick(x=int(x), y=int(y), _pause=False)
+                    else:
+                        pyautogui.doubleClick(_pause=False)
+                elif action == "double_click_at":
+                    x = int(data.get("x", 0))
+                    y = int(data.get("y", 0))
+                    pyautogui.doubleClick(x=x, y=y, _pause=False)
+                elif action == "right_click_at":
+                    x = int(data.get("x", 0))
+                    y = int(data.get("y", 0))
+                    pyautogui.rightClick(x=x, y=y, _pause=False)
+                elif action in ("scroll", "mouse_scroll"):
+                    dy = int(data.get("dy", 0))
+                    x = data.get("x")
+                    y = data.get("y")
+                    if x is not None and y is not None:
+                        pyautogui.scroll(dy, x=int(x), y=int(y), _pause=False)
+                    else:
+                        pyautogui.scroll(dy, _pause=False)
+                elif action == "scroll_at":
+                    x = int(data.get("x", 0))
+                    y = int(data.get("y", 0))
+                    dy = int(data.get("dy", 0))
+                    pyautogui.scroll(dy, x=x, y=y, _pause=False)
+                elif action in ("type", "type_text", "keyboard_type"):
+                    text = str(data.get("text", ""))
+                    press_enter = bool(data.get("press_enter", data.get("pressEnter", False)))
+                    if text:
+                        pyautogui.typewrite(text, _pause=False)
+                    if press_enter:
+                        pyautogui.press('enter', _pause=False)
+                elif action in ("key", "key_press"):
+                    key = str(data.get("key", ""))
+                    if key:
+                        pyautogui.press(key, _pause=False)
+                elif action in ("hotkey", "key_combo", "keyboard_hotkey"):
+                    raw_keys = data.get("keys", [])
+                    if isinstance(raw_keys, str):
+                        keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+                    elif isinstance(raw_keys, list):
+                        keys = [str(k).strip() for k in raw_keys if str(k).strip()]
+                    else:
+                        keys = []
+                    if keys:
+                        pyautogui.hotkey(*keys, _pause=False)
+
+            await loop.run_in_executor(None, _exec_json_input)
         except Exception as e:
             logger.debug(f"Virtual input injection error: {e}")
 
@@ -1290,7 +1380,7 @@ class HostAgentDaemon:
                 action = _AUDIO_ACTION_MAP.get(action_code, "")
             else:
                 data = json.loads(payload.decode('utf-8'))
-                action = data.get("action", "")
+                action = str(data.get("action") or data.get("command") or data.get("type") or "").lower()
 
             if platform.system() == "Windows":
                 VK_VOLUME_MUTE = 0xAD
@@ -1299,28 +1389,32 @@ class HostAgentDaemon:
                 VK_MEDIA_PLAY_PAUSE = 0xB3
                 user32 = ctypes.windll.user32
 
-                if action == "volume_up":
+                if action in ("volume_up", "vol_up"):
                     user32.keybd_event(VK_VOLUME_UP, 0, 0, 0)
                     user32.keybd_event(VK_VOLUME_UP, 0, 2, 0)
-                elif action == "volume_down":
+                elif action in ("volume_down", "vol_down"):
                     user32.keybd_event(VK_VOLUME_DOWN, 0, 0, 0)
                     user32.keybd_event(VK_VOLUME_DOWN, 0, 2, 0)
-                elif action == "mute":
+                elif action in ("mute", "volume_mute"):
                     user32.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
                     user32.keybd_event(VK_VOLUME_MUTE, 0, 2, 0)
                 elif action == "play_pause":
                     user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
                     user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
+                elif action in ("lock_pc", "lock"):
+                    user32.LockWorkStation()
             elif platform.system() == "Linux":
                 import subprocess
-                if action == "volume_up":
+                if action in ("volume_up", "vol_up"):
                     subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "5%+"], check=False)
-                elif action == "volume_down":
+                elif action in ("volume_down", "vol_down"):
                     subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "5%-"], check=False)
-                elif action == "mute":
+                elif action in ("mute", "volume_mute"):
                     subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "toggle"], check=False)
                 elif action == "play_pause":
                     subprocess.run(["playerctl", "play-pause"], check=False)
+                elif action in ("lock_pc", "lock"):
+                    subprocess.run(["loginctl", "lock-session"], check=False)
         except Exception as e:
             logger.debug(f"Audio control error: {e}")
 
@@ -1433,8 +1527,8 @@ class HostAgentDaemon:
 
             idle_seconds = 0
             try:
-                cpu = psutil.cpu_percent(interval=None) if psutil else 12.5
-                ram = psutil.virtual_memory().percent if psutil else 42.0
+                cpu = psutil.cpu_percent(interval=None) if psutil else 0.0
+                ram = psutil.virtual_memory().percent if psutil else 0.0
                 telemetry = {
                     "hostname": socket.gethostname(),
                     "cpu_percent": cpu,

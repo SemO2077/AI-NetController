@@ -32,11 +32,19 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-XSS-Protection', '1; mode=block');
 
   const origin = req.headers.origin;
-  if (origin && (origin.includes('.run.app') || origin.includes('localhost') || origin.includes('127.0.0.1'))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (origin) {
+    try {
+      const parsedOrigin = new URL(origin);
+      const hn = parsedOrigin.hostname.toLowerCase();
+      if (hn === 'localhost' || hn === '127.0.0.1' || hn.endsWith('.run.app')) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      }
+    } catch {
+      // Ignore malformed Origin header
+    }
   }
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
@@ -86,12 +94,14 @@ setInterval(() => {
 }, 60_000).unref();
 
 app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-  const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1')
-    .split(',')[0]
-    .trim();
+  const clientIp = String(req.socket.remoteAddress || '127.0.0.1').trim();
   const now = Date.now();
   let bucket = apiRateBuckets.get(clientIp);
   if (!bucket || now >= bucket.resetAt) {
+    if (apiRateBuckets.size >= 10000) {
+      const oldestKey = apiRateBuckets.keys().next().value;
+      if (oldestKey) apiRateBuckets.delete(oldestKey);
+    }
     bucket = { count: 1, resetAt: now + API_WINDOW_MS };
     apiRateBuckets.set(clientIp, bucket);
   } else {
@@ -425,7 +435,49 @@ function detectPrimaryLanIp(): string {
       }
     }
   }
-  return '192.168.1.104';
+  return '127.0.0.1';
+}
+
+let prevCpuSnapshot: { idle: number; total: number } | null = null;
+let lastCpuPercent = 0;
+
+function sampleRealCpuPercent(): number {
+  const cpus = os.cpus();
+  if (!cpus || cpus.length === 0) return 0;
+  let idle = 0;
+  let total = 0;
+  for (const core of cpus) {
+    for (const type of Object.keys(core.times) as Array<keyof typeof core.times>) {
+      total += core.times[type];
+    }
+    idle += core.times.idle;
+  }
+  if (prevCpuSnapshot) {
+    const idleDelta = idle - prevCpuSnapshot.idle;
+    const totalDelta = total - prevCpuSnapshot.total;
+    if (totalDelta > 0) {
+      lastCpuPercent = Number(Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100)).toFixed(1));
+    }
+  }
+  prevCpuSnapshot = { idle, total };
+  return lastCpuPercent;
+}
+
+function sampleRealDiskPercent(): number {
+  try {
+    if (typeof fs.statfsSync === 'function') {
+      const rootPath = path.parse(process.cwd()).root || '/';
+      const stat = fs.statfsSync(rootPath);
+      const totalBlocks = Number(stat.blocks || 0);
+      const freeBlocks = Number(stat.bfree || 0);
+      if (totalBlocks > 0) {
+        return Number((((totalBlocks - freeBlocks) / totalBlocks) * 100).toFixed(1));
+      }
+    }
+  } catch {
+    // Ignore statfs errors
+  }
+  return 0;
 }
 
 interface DaemonConnectedClient {
@@ -454,7 +506,7 @@ interface BlacklistedDeviceEntry {
 const pcDaemonState = {
   version: '3.0.0-LTS',
   protocol: 'CST/3.0-SECURE',
-  hostname: os.hostname() || 'CST-LAB-WS-01',
+  hostname: os.hostname() || 'LOCALHOST',
   osName: `${os.type()} ${os.release()} (${os.arch()})`,
   localIp: detectPrimaryLanIp(),
   port: 8765,
@@ -471,8 +523,8 @@ const pcDaemonState = {
   targetFps: 60 as 60 | 30 | 15,
   setupCompleted: true,
   securityProfile: 'balanced' as 'zero_trust' | 'balanced' | 'view_only',
-  pairingPin: '482910',
-  pairingToken: process.env.CST_AGENT_SECRET || 'cst_autonomous_lan_secret_2025',
+  pairingPin: String(crypto.randomInt(100000, 1000000)),
+  pairingToken: process.env.CST_AGENT_SECRET || `cst_sec_${crypto.randomBytes(12).toString('hex')}`,
   connectedClients: [] as DaemonConnectedClient[],
   blacklistedDevices: [] as BlacklistedDeviceEntry[],
   avIntegrity: {
@@ -483,11 +535,7 @@ const pcDaemonState = {
     authenticodeReady: true,
     sandboxJobObject: true,
   },
-  logs: [
-    { time: new Date().toLocaleTimeString('en-GB', { hour12: false }), level: 'INFO', message: `CST Host Daemon GUI v3.0.0-LTS initialized on ${detectPrimaryLanIp()}:8765` },
-    { time: new Date().toLocaleTimeString('en-GB', { hour12: false }), level: 'SECURITY', message: 'AV-Safe Mode verified: Native Tkinter HWND window, UPX disabled, zero hidden PowerShell spawns.' },
-    { time: new Date().toLocaleTimeString('en-GB', { hour12: false }), level: 'INFO', message: 'mDNS Service registered: _cst-agent._tcp.local. (RFC 6762)' },
-  ] as DaemonLogEntry[],
+  logs: [] as DaemonLogEntry[],
 };
 
 function addDaemonLog(level: DaemonLogEntry['level'], message: string) {
@@ -507,18 +555,8 @@ function getDaemonSnapshot() {
   const ramPercent = Number(((usedMemBytes / Math.max(1, totalMemBytes)) * 100).toFixed(1));
 
   const cpus = os.cpus();
-  let cpuPercent = 12.4;
-  if (cpus && cpus.length > 0) {
-    let idle = 0;
-    let total = 0;
-    for (const core of cpus) {
-      for (const type of Object.keys(core.times) as Array<keyof typeof core.times>) {
-        total += core.times[type];
-      }
-      idle += core.times.idle;
-    }
-    cpuPercent = Number(Math.max(1.5, Math.min(99.0, (1 - idle / Math.max(1, total)) * 100)).toFixed(1));
-  }
+  const cpuPercent = sampleRealCpuPercent();
+  const diskPercent = sampleRealDiskPercent();
 
   const elapsedSec = Math.max(0, Math.floor((Date.now() - daemonBootTime) / 1000));
   const hrs = String(Math.floor(elapsedSec / 3600)).padStart(2, '0');
@@ -530,12 +568,10 @@ function getDaemonSnapshot() {
   for (const [name, list] of Object.entries(nets)) {
     for (const net of list || []) {
       if (net.family === 'IPv4' && !net.internal) {
-        activeAdapters.push({ name, ipv4: net.address, mac: net.mac || '00:1A:2B:3C:4D:5E' });
+        const cleanMac = net.mac && net.mac !== '00:00:00:00:00:00' ? net.mac.toUpperCase() : '';
+        activeAdapters.push({ name, ipv4: net.address, mac: cleanMac });
       }
     }
-  }
-  if (activeAdapters.length === 0) {
-    activeAdapters.push({ name: 'eth0 (GbE LAN)', ipv4: pcDaemonState.localIp, mac: '00:2B:67:89:AB:CD' });
   }
 
   return {
@@ -543,12 +579,12 @@ function getDaemonSnapshot() {
     wsUri: `ws://${pcDaemonState.localIp}:${pcDaemonState.port}`,
     uptime: `${hrs}:${mins}:${secs}`,
     cpuPercent,
-    cpuCores: cpus ? cpus.length : 8,
+    cpuCores: cpus ? cpus.length : 1,
     ramPercent,
     ramUsedGb,
     ramTotalGb,
-    diskPercent: 42.8,
-    captureFps: pcDaemonState.isPaused ? 0 : pcDaemonState.connectedClients.length > 0 ? pcDaemonState.targetFps : 2,
+    diskPercent,
+    captureFps: pcDaemonState.isPaused ? 0 : pcDaemonState.connectedClients.length > 0 ? pcDaemonState.targetFps : 0,
     activeAdapters,
   };
 }
@@ -662,7 +698,7 @@ app.post('/api/daemon/action', (req: Request, res: Response) => {
         addDaemonLog('SECURITY', 'Pre-shared HMAC-SHA256 pairing secret rotated by local operator.');
         break;
       case 'rotate_pin':
-        pcDaemonState.pairingPin = String(Math.floor(100000 + Math.random() * 900000));
+        pcDaemonState.pairingPin = String(crypto.randomInt(100000, 1000000));
         addDaemonLog('SECURITY', `New 6-digit ephemeral pairing PIN generated: ${pcDaemonState.pairingPin}`);
         break;
       case 'update_port': {
@@ -686,8 +722,11 @@ app.post('/api/daemon/action', (req: Request, res: Response) => {
       }
       case 'blacklist_client': {
         const target = pcDaemonState.connectedClients.find((c) => c.id === clientId || c.ip === ip);
-        const banIp = target?.ip || ip || '192.168.1.199';
-        const banMac = target?.mac || mac || '00:1F:5B:AA:CC:99';
+        const banIp = String(target?.ip || ip || '').trim();
+        if (!banIp) {
+          return res.status(400).json({ error: 'Valid client IP or clientId is required to blacklist a device' });
+        }
+        const banMac = String(target?.mac || mac || 'N/A').trim();
         const banDevice = target?.device || device || `Blocked Peer (${banIp})`;
         const banReason = reason || 'Manually disconnected & blacklisted by PC operator';
 
@@ -699,7 +738,7 @@ app.post('/api/daemon/action', (req: Request, res: Response) => {
         // Add to blacklist if not already present
         if (!pcDaemonState.blacklistedDevices.some((b) => b.ip === banIp)) {
           pcDaemonState.blacklistedDevices.unshift({
-            id: `BAN-${Math.floor(100 + Math.random() * 900)}`,
+            id: `BAN-${crypto.randomInt(100, 1000)}`,
             ip: banIp,
             mac: banMac.toUpperCase(),
             device: banDevice,
@@ -826,9 +865,9 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
   try {
     const snap = getDaemonSnapshot();
     const primaryAdapter = snap.activeAdapters[0] || {
-      name: 'eth0 (GbE LAN)',
+      name: 'Loopback',
       ipv4: snap.localIp,
-      mac: '00:2B:67:89:AB:CD',
+      mac: '',
     };
     const webOrigin = `http://${snap.localIp}:${PORT}`;
     const pairParams = new URLSearchParams({
@@ -858,7 +897,7 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
         exeDownloadUrl: '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe',
         apkDownloadUrl: '/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk',
         portableZipUrl: '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64_portable.zip',
-        legacyExeDownloadUrl: '/releases/v2.8.0/CST_HostAgent_v3.0.0_win64.exe',
+        legacyExeDownloadUrl: '/releases/v2.8.0/CST_HostAgent_v2.8.0_win64.exe',
         legacyApkDownloadUrl: '/releases/v2.8.0/CST_NetController_AI_v2.8.0_arm64-v8a.apk',
         launcherDownloadUrl: '/api/setup/windows-launcher',
       },
@@ -1234,23 +1273,33 @@ app.post('/api/wol', async (req: Request, res: Response) => {
     }
 
     const client = dgram.createSocket('udp4');
-    client.once('listening', () => {
-      client.setBroadcast(true);
+    client.on('error', (err) => {
+      try {
+        client.close();
+      } catch {}
+      console.error('[WoL Socket Error]:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      }
     });
 
-    client.send(magicPacket, 0, magicPacket.length, targetPort, cleanBroadcastIp, (err) => {
-      client.close();
-      if (err) {
-        console.error('[WoL Send Error]:', err);
-        return res.status(500).json({ error: err.message });
-      }
-      console.log(`[WoL Sent] 102-byte Magic Packet sent to ${mac} via ${cleanBroadcastIp}:${targetPort}`);
-      return res.json({
-        success: true,
-        mac,
-        broadcastIp: cleanBroadcastIp,
-        port: targetPort,
-        timestamp: new Date().toISOString(),
+    client.bind(0, () => {
+      client.setBroadcast(true);
+      client.send(magicPacket, 0, magicPacket.length, targetPort, cleanBroadcastIp, (err) => {
+        client.close();
+        if (res.headersSent) return;
+        if (err) {
+          console.error('[WoL Send Error]:', err);
+          return res.status(500).json({ error: err.message });
+        }
+        console.log(`[WoL Sent] 102-byte Magic Packet sent to ${mac} via ${cleanBroadcastIp}:${targetPort}`);
+        return res.json({
+          success: true,
+          mac,
+          broadcastIp: cleanBroadcastIp,
+          port: targetPort,
+          timestamp: new Date().toISOString(),
+        });
       });
     });
   } catch (err: any) {
@@ -1262,7 +1311,7 @@ app.post('/api/wol', async (req: Request, res: Response) => {
 app.post('/api/hosts/scan', async (_req: Request, res: Response) => {
   try {
     exec('arp -a', (err, stdout) => {
-      const discovered: Array<{ id: string; name: string; ip: string; mac: string; os: string; isOnline: boolean; ping: number }> = [];
+      const discovered: Array<{ id: string; name: string; ip: string; mac: string; os: string; isOnline: boolean }> = [];
       if (!err && stdout) {
         const lines = stdout.split('\n');
         const ipMacRegex = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})/i;
@@ -1272,16 +1321,15 @@ app.post('/api/hosts/scan', async (_req: Request, res: Response) => {
           if (match) {
             const ip = match[1];
             const mac = match[2].replace(/-/g, ':').toUpperCase();
-            if (!ip.startsWith('224.') && !ip.startsWith('239.') && ip !== '255.255.255.255') {
+            if (!ip.startsWith('224.') && !ip.startsWith('239.') && ip !== '255.255.255.255' && mac !== 'FF:FF:FF:FF:FF:FF') {
               const lastOctet = ip.split('.').pop() || '1';
               discovered.push({
                 id: `LAN-HOST-${lastOctet}`,
                 name: `LAN-HOST-${lastOctet}`,
                 ip,
                 mac,
-                os: ip.endsWith('.1') ? 'linux' : 'windows',
+                os: 'windows',
                 isOnline: true,
-                ping: Math.floor(Math.random() * 6) + 1,
               });
             }
           }
@@ -1338,7 +1386,7 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
   const deobfuscatedCmd = trimmed
     .replace(/\^(.)/g, '$1')
     .replace(/`([a-zA-Z0-9])/g, '$1')
-    .replace(/(?<=\w)["'](?=\w)/g, '');
+    .replace(/(?<=\w)["']+(?=\w)/g, '');
 
   const hasEvasionArtifacts = deobfuscatedCmd !== trimmed;
 
@@ -1374,7 +1422,7 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
     /\b(?:rmdir|del|rm|format|diskpart|shutdown|reboot|Restart-Computer|Stop-Computer|reg\s+delete|bcdedit|vssadmin)\b/i.test(
       deobfuscatedCmd
     ) ||
-    /[;&|`$()]/.test(trimmed);
+    /[;&|`$()\r\n]/.test(trimmed);
 
   if (isHighRisk) {
     return {
@@ -1866,15 +1914,15 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
       };
     }
     case 'wol': {
-      const cleanMac = String(action.mac || '00:2B:67:89:AB:CD').replace(/[^a-fA-F0-9]/g, '');
+      const cleanMac = String(action.mac || '').replace(/[^a-fA-F0-9]/g, '');
       if (cleanMac.length !== 12) {
-        addDaemonLog('WARN', `[AI-CONTROL] Rejected invalid MAC "${action.mac}" for WoL target ${target}`);
+        addDaemonLog('WARN', `[AI-CONTROL] Rejected missing or invalid MAC "${action.mac || ''}" for WoL target ${target}`);
         return {
           success: false,
           actionType: 'wol',
           target,
           opcode: 'UDP:9 (MAGIC_PACKET)',
-          summary: `Invalid MAC address for ${target}`,
+          summary: `Invalid or missing MAC address for ${target}`,
           output: 'Invalid MAC address format (expected 12 hex characters)',
           durationMs: Date.now() - startTime,
           timestamp: new Date().toISOString(),
@@ -1888,6 +1936,7 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
         macBytes.copy(magicPacket, 6 + i * 6);
       }
 
+      let sendSucceeded = false;
       await new Promise<void>((resolve) => {
         const client = dgram.createSocket('udp4');
         let settled = false;
@@ -1908,7 +1957,8 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
         client.bind(0, () => {
           try {
             client.setBroadcast(true);
-            client.send(magicPacket, 0, magicPacket.length, 9, '255.255.255.255', () => {
+            client.send(magicPacket, 0, magicPacket.length, 9, '255.255.255.255', (err) => {
+              if (!err) sendSucceeded = true;
               clearTimeout(safetyTimer);
               finish();
             });
@@ -1921,12 +1971,16 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
 
       addDaemonLog('INFO', `[AI-CONTROL] Dispatched 102-byte UDP Port 9 Magic Packet to wake ${target}`);
       return {
-        success: true,
+        success: sendSucceeded,
         actionType: 'wol',
         target,
         opcode: 'UDP:9 (MAGIC_PACKET)',
-        summary: `Sent 102-byte Wake-on-LAN Magic Packet to ${target}`,
-        output: `Magic Packet (6x 0xFF + 16x MAC) broadcast on UDP Port 9 for ${target}`,
+        summary: sendSucceeded
+          ? `Sent 102-byte Wake-on-LAN Magic Packet to ${target}`
+          : `Failed to broadcast Wake-on-LAN packet to ${target}`,
+        output: sendSucceeded
+          ? `Magic Packet (6x 0xFF + 16x MAC) broadcast on UDP Port 9 for ${target}`
+          : 'UDP broadcast failed on local socket',
         durationMs: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       };
@@ -2131,7 +2185,7 @@ function generateSmartLocalFallbackReply(userText: string, targetHost: string): 
     return `### 🛡️ PC Host Daemon Security Control\nExecuting daemon control action **\`${cmd.toUpperCase()}\`** on \`${pcDaemonState.hostname}\`:\n[ACTION:DAEMON_CONTROL command=${cmd}]`;
   }
 
-  return `### 🤖 CST Fleet Commander AI — Direct PC Control Executed\nExecuting your request on **${targetHost}** (\`${ userText.slice(0, 80) }\`):\n[ACTION:KEYBOARD_TYPE target=${targetHost} text="${userText.replace(/"/g, '').slice(0, 60)}" press_enter=true]`;
+  return `### 🤖 CST Fleet Commander AI\nReceived your request for **${targetHost}**: \`${userText.slice(0, 80)}\`.\nUse one of the quick PC Control actions or specify a command to execute on the connected host.`;
 }
 
 // Multi-turn Gemini & AI Chat Endpoint with Real PC Control & Update Execution

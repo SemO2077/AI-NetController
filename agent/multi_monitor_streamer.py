@@ -10,11 +10,8 @@ Features:
 """
 
 import io
-import json
 import logging
-import struct
 import threading
-import time
 from typing import Dict, List, Optional, Tuple, Any
 
 try:
@@ -28,6 +25,11 @@ except ImportError:
     Image = None
 
 try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
     from turbojpeg import TurboJPEG, TJSAMP_420
     _TURBO_JPEG_INSTANCE = TurboJPEG()
 except Exception:
@@ -35,8 +37,6 @@ except Exception:
 
 logger = logging.getLogger("MultiMonitorStreamer")
 
-OP_FRAME = 0x03
-OP_DISPLAY_ENUM = 0x0B
 DEFAULT_JPEG_QUALITY = 60
 
 
@@ -47,13 +47,23 @@ class MultiMonitorStreamer:
     """
     def __init__(self):
         self._lock = threading.Lock()
-        self._sct = mss.mss() if mss else None
+        self._tls = threading.local()
+        self._sct = (mss.MSS() if hasattr(mss, "MSS") else mss.mss()) if mss else None
         self._active_monitor_index: int = 1  # 1-indexed (monitor 0 is all monitors combined)
         self._current_bbox: Dict[str, int] = {}
         self._dominant_hex_color: str = "#00F0FF"  # Default CST Neon Cyan
         self._has_extracted_color: bool = False
 
         self._refresh_monitors_list()
+
+    def _get_thread_sct(self):
+        if not mss:
+            return None
+        sct = getattr(self._tls, "sct", None)
+        if sct is None:
+            sct = mss.MSS() if hasattr(mss, "MSS") else mss.mss()
+            self._tls.sct = sct
+        return sct
 
     def _refresh_monitors_list(self) -> List[Dict[str, Any]]:
         """Queries MSS for connected monitors and binds default display."""
@@ -123,15 +133,16 @@ class MultiMonitorStreamer:
         Captures raw frame from active monitor and compresses to JPEG via TurboJPEG or PIL.
         Returns: (jpeg_bytes, width, height) or None on failure.
         """
-        if not self._sct:
+        sct = self._get_thread_sct()
+        if not sct:
             return None
 
         with self._lock:
-            bbox = self._current_bbox.copy() if self._current_bbox else self._sct.monitors[1]
+            bbox = self._current_bbox.copy() if self._current_bbox else sct.monitors[1]
 
         try:
             # High-speed hardware screen grab
-            raw_sct_img = self._sct.grab(bbox)
+            raw_sct_img = sct.grab(bbox)
             width, height = raw_sct_img.width, raw_sct_img.height
 
             # Run dynamic color extraction on the first captured frame
@@ -140,15 +151,18 @@ class MultiMonitorStreamer:
                 self._has_extracted_color = True
 
             # 1. Prefer TurboJPEG SIMD hardware compression (<3ms encoding)
-            if _TURBO_JPEG_INSTANCE:
-                # mss raw is BGRA
-                jpeg_bytes = _TURBO_JPEG_INSTANCE.encode(
-                    raw_sct_img.raw,
-                    quality=quality,
-                    pixel_format=3,  # TJPF_BGRX (constant 3 for 4-byte BGRA/BGRX)
-                    jpeg_subsample=TJSAMP_420
-                )
-                return jpeg_bytes, width, height
+            if _TURBO_JPEG_INSTANCE and np is not None:
+                try:
+                    bgra_arr = np.frombuffer(raw_sct_img.raw, dtype=np.uint8).reshape((height, width, 4))
+                    jpeg_bytes = _TURBO_JPEG_INSTANCE.encode(
+                        bgra_arr,
+                        quality=quality,
+                        pixel_format=3,  # TJPF_BGRX (constant 3 for 4-byte BGRA/BGRX)
+                        jpeg_subsample=TJSAMP_420
+                    )
+                    return jpeg_bytes, width, height
+                except Exception as tj_err:
+                    logger.debug(f"TurboJPEG encode fallback to Pillow: {tj_err}")
 
             # 2. Fallback to Pillow
             if Image:

@@ -111,8 +111,9 @@ export interface AgentExecutionResponse {
   event: 'EXECUTION_RESULT' | 'LOG_OUTPUT' | 'SCREENSHOT_READY' | 'STATUS_UPDATE';
   command_id: string;
   target_id: string;
-  status: 'success' | 'failed' | 'pending_approval' | 'rejected' | 'in_progress';
+  status: 'success' | 'failed' | 'error' | 'pending_approval' | 'rejected' | 'in_progress';
   output?: string;
+  exit_code?: number;
   screenshot_base64?: string;
   execution_time_ms?: number;
   tool_invoked?: string;

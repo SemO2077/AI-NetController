@@ -193,10 +193,7 @@ export function resolveScheduleTargets(
           h.name?.toLowerCase().includes('lab') ||
           h.id?.toLowerCase().includes('lab')
       );
-      if (labHosts.length > 0) {
-        return labHosts.map(h => ({ id: h.id, name: h.name, mac: h.mac, ip: h.ip }));
-      }
-      return safeHosts.slice(0, 1).map(h => ({ id: h.id, name: h.name, mac: h.mac, ip: h.ip }));
+      return labHosts.map(h => ({ id: h.id, name: h.name, mac: h.mac, ip: h.ip }));
     }
 
     case 'all_offline': {
@@ -227,10 +224,13 @@ export function resolveScheduleTargets(
     }
 
     case 'custom_mac': {
+      if (!schedule.targetMac || !schedule.targetMac.trim()) {
+        return [];
+      }
       return [{
         id: 'CUSTOM-MAC',
         name: schedule.targetName || 'Custom NIC Target',
-        mac: schedule.targetMac || '00:1A:2B:3C:4D:5E',
+        mac: schedule.targetMac.trim(),
         ip: schedule.broadcastIp || '255.255.255.255'
       }];
     }

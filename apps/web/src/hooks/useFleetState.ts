@@ -1,6 +1,5 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { HostDevice, WolSchedule, WolPacketPayload, LatencyDataPoint, WolPacketTriggerSource } from '../types';
-import { INITIAL_HOSTS, generate30sLatencyHistory } from '../data/mockHosts';
 import { loadWolSchedules, saveWolSchedules, generateMagicPacket, resolveScheduleTargets } from '../services/wolService';
 import { logStore } from '../store/logStore';
 import { wolHistoryStore } from '../store/wolHistoryStore';
@@ -43,7 +42,6 @@ export function useFleetState() {
   }, [hosts, selectedTarget]);
   const [isScanning, setIsScanning] = useState(false);
   const [wolSchedules, setWolSchedules] = useState<WolSchedule[]>(() => loadWolSchedules());
-  const scanTimerRef = useRef<number | null>(null);
 
   // Automatically persist hosts state whenever changed
   useEffect(() => {
@@ -114,11 +112,11 @@ export function useFleetState() {
                   os: dh.os || 'windows',
                   tags: ['LAN', 'Discovered'],
                   isOnline: true,
-                  ping: dh.ping || 4,
-                  latencyHistory: generate30sLatencyHistory(dh.ping || 4, 1.0),
-                  lastSeen: 'Active (mDNS alive)',
-                  cpuUsage: 15,
-                  ramUsage: 32,
+                  ping: typeof dh.ping === 'number' ? dh.ping : undefined,
+                  latencyHistory: [],
+                  lastSeen: 'Discovered on LAN',
+                  cpuUsage: 0,
+                  ramUsage: 0,
                   persistentInstructions: [],
                   sessionInstructions: [],
                 });
@@ -132,13 +130,16 @@ export function useFleetState() {
             return prev;
           });
         }
+        logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'success', `Сканирането завърши успешно.`);
+      } else {
+        logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'warn', `Сканирането на мрежата върна статус HTTP ${res.status}.`);
       }
     } catch (err) {
       console.warn('Network scan API error, fallback to mDNS discovery', err);
+      logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'warn', 'Грешка при сканиране на локалната подмрежа.');
     } finally {
       setIsScanning(false);
       triggerHapticFeedback('medium');
-      logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'success', `Сканирането завърши успешно.`);
     }
   }, []);
 
@@ -224,17 +225,13 @@ export function useFleetState() {
           detailsBg: `Изпратен ${bytesCount}-байтов UDP Magic Packet към ${bcast}:${port} (${latencyMs}ms).`,
         });
 
-        // Optimistic wake transition with initialized latency telemetry
+        // Mark host as waking until telemetry confirms online state
         setHosts((prev) =>
           prev.map((h) =>
             h.id === deviceId || h.mac?.toUpperCase() === payload.mac?.toUpperCase()
               ? {
                   ...h,
-                  isOnline: true,
-                  cpuUsage: 14,
-                  ramUsage: 36,
-                  ping: 12,
-                  latencyHistory: generate30sLatencyHistory(12, 2.5),
+                  lastSeen: 'Magic Packet sent (Waking...)',
                 }
               : h
           )

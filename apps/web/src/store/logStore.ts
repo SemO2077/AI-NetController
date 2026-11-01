@@ -2,16 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { LogEntry } from '../types';
 
 class LogStore {
-  private logs: LogEntry[] = [
-    {
-      id: 'init-1',
-      timestamp: new Date().toLocaleTimeString('bg-BG', { hour12: false }),
-      sender: 'SYSTEM_MDNS',
-      targetId: 'ALL',
-      type: 'info',
-      message: 'mDNS Auto-Discovery listening on _cst-agent._tcp.local',
-    },
-  ];
+  private logs: LogEntry[] = [];
 
   private listeners: Set<() => void> = new Set();
 

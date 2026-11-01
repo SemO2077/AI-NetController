@@ -289,16 +289,14 @@ class NetworkFuzzerShield:
 
         return raw_packet
 
-    async def _delayed_release(self, client_id: str, packet: bytes):
-        """Releases delayed reordered packet."""
-        await asyncio.sleep(0.040)
-        # Packet delivery can be handled by socket queue
-        logger.debug(f"[CHAOS INJECTION] Released out-of-order packet for {client_id}")
-
     def get_audit_metrics(self) -> dict:
         """Returns runtime SRE chaos metrics."""
+        active_count = sum(
+            1 for state in self.client_states.values()
+            if state != ConnectionState.TERMINATED
+        )
         return {
             **self.stats,
-            "active_clients": len(self.client_states),
+            "active_clients": active_count,
             "profile_active": self.profile.enabled
         }

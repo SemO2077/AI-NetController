@@ -14,7 +14,6 @@ import os
 import re
 import shlex
 import signal
-import hashlib
 import asyncio
 import logging
 import platform
@@ -25,34 +24,28 @@ logger = logging.getLogger("CommandFirewall")
 
 IS_WINDOWS = platform.system() == "Windows"
 
-# Known System Binaries Whitelist and Fallback Hashes
-SYSTEM_BINARY_WHITELIST = {
-    "winget.exe": "PACKAGEMANAGER",
-    "powershell.exe": "POWERSHELL",
-    "pwsh.exe": "POWERSHELL_CORE",
-    "cmd.exe": "CMD",
-    "systemctl": "SYSTEMD",
-    "journalctl": "JOURNALD",
-    "ip": "NET_IP",
-    "ping": "NETWORK_PING",
-    "traceroute": "NETWORK_TRACEROUTE",
-    "tracert.exe": "NETWORK_TRACERT",
-    "shutdown.exe": "SYS_SHUTDOWN",
-    "shutdown": "SYS_SHUTDOWN",
-}
-
 # Dangerous Administrative Keywords
 CRITICAL_COMMANDS = {
     "format", "format-volume", "diskpart", "rmdir", "del", "rm", "mkfs", "dd",
     "reg", "bcdedit", "drop", "truncate", "iptables", "netsh",
     "remove-item", "stop-process", "restart-computer",
     "shutdown", "reboot", "poweroff", "init", "vssadmin", "cipher", "takeown",
-    "icacls", "chmod", "chown", "kill", "killall", "pkill", "taskkill"
+    "icacls", "chmod", "chown", "kill", "killall", "pkill", "taskkill",
+    "wmic", "sc", "rundll32", "regsvr32", "mshta", "certutil", "bitsadmin"
+}
+
+INLINE_EXEC_INTERPRETERS = {
+    "python", "python3", "py", "node", "perl", "ruby", "php",
+    "powershell", "pwsh", "cmd", "bash", "sh", "zsh", "wsl"
+}
+
+INLINE_EXEC_FLAGS = {
+    "-c", "-e", "/c", "/k", "-command", "-encodedcommand", "-enc"
 }
 
 # Pre-compiled high-performance regular expressions
 _RE_CARET = re.compile(r"\^")
-_RE_INTERSTITIAL_QUOTES = re.compile(r'(?<=\w)["\'](?=\w)')
+_RE_INTERSTITIAL_QUOTES = re.compile(r'(?<=\w)["\']+(?=\w)')
 _RE_WHITESPACE = re.compile(r"\s+")
 _RE_EVASION_CARET = re.compile(r"\w\^\w")
 _RE_EVASION_BACKTICK = re.compile(r"\w`\w")
@@ -175,6 +168,13 @@ class CommandASTFirewall:
                 if st in CRITICAL_COMMANDS or base_cmd in CRITICAL_COMMANDS:
                     return True, "REQUIRES_BIOMETRIC", cleaned, f"Critical administrative command '{st}' requires biometric confirmation."
 
+        # Check for inline script execution flags (e.g. python -c, node -e, cmd /c, powershell -c)
+        base_primary = primary_token.split(".")[0].strip('"\'`')
+        if base_primary in INLINE_EXEC_INTERPRETERS and len(tokens) > 1:
+            for arg in tokens[1:]:
+                if arg.lower() in INLINE_EXEC_FLAGS:
+                    return True, "REQUIRES_BIOMETRIC", cleaned, f"Inline code execution via '{base_primary} {arg}' requires biometric confirmation."
+
         # Detect shell wrappers invoking destructive operations through cmd.exe / powershell.
         for wrapper in ("cmd /c", "cmd.exe /c", "powershell -command", "powershell -c", "pwsh -command", "pwsh -c"):
             if wrapper in normalized_joined:
@@ -210,6 +210,9 @@ class CommandASTFirewall:
 
         logger.info(f"Executing sandboxed command [{risk}]: {normalized_cmd}")
 
+        # Scrub sensitive daemon secrets from child environment
+        safe_env = {k: v for k, v in os.environ.items() if k.upper() not in ("CST_AGENT_SECRET", "GEMINI_API_KEY", "API_KEY")}
+
         proc = None
         try:
             python_match = _RE_PYTHON_CMD.match(normalized_cmd)
@@ -229,10 +232,11 @@ class CommandASTFirewall:
                     *args,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env=safe_env,
                 )
             else:
                 # Prevent handle inheritance on Windows
-                kwargs = {}
+                kwargs: Dict[str, Any] = {"env": safe_env}
                 if IS_WINDOWS:
                     # CREATE_NO_WINDOW = 0x08000000
                     kwargs["creationflags"] = 0x08000000

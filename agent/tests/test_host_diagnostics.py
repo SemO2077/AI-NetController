@@ -527,7 +527,7 @@ class TestASTCommandFirewall(unittest.TestCase):
 # ==============================================================================
 # TC-09: HUMAN-IN-THE-LOOP (HITL) INTERCEPT & 30-SECOND APPROVAL TIMEOUT
 # ==============================================================================
-class TestHITLSecurityIntercept(unittest.TestCase):
+class TestHITLSecurityIntercept(unittest.IsolatedAsyncioTestCase):
     """
     Validates:
     - Risky commands halt execution and construct a pending approval future.
@@ -535,7 +535,6 @@ class TestHITLSecurityIntercept(unittest.TestCase):
     - Cryptographically verified Opcode 0x05 approval triggers execution.
     """
 
-    @pytest.mark.asyncio if HAS_PYTEST else lambda f: f
     async def test_hitl_approval_and_timeout(self):
         pending_approvals: Dict[str, asyncio.Future] = {}
 
@@ -567,17 +566,16 @@ class TestHITLSecurityIntercept(unittest.TestCase):
 # ==============================================================================
 # TC-10: PROCESS SUPERVISION & JOB OBJECTS (KILL_ON_JOB_CLOSE)
 # ==============================================================================
-class TestProcessSupervision(unittest.TestCase):
+class TestProcessSupervision(unittest.IsolatedAsyncioTestCase):
     """
     Validates process supervision and termination of all descendant processes:
     - On Windows: Win32 Job Object with KILL_ON_JOB_CLOSE
     - On POSIX/Linux: Process group session termination via os.killpg
     """
 
-    @pytest.mark.asyncio if HAS_PYTEST else lambda f: f
     async def test_descendant_orphan_elimination(self):
         # Spawn a python process that spawns a sleep child
-        code = "import subprocess, time; subprocess.Popen(['sleep', '20']); time.sleep(20)"
+        code = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)']); time.sleep(20)"
         proc = subprocess.Popen(
             [sys.executable, "-c", code],
             preexec_fn=os.setsid if platform.system() != "Windows" else None,
@@ -597,9 +595,12 @@ class TestProcessSupervision(unittest.TestCase):
             proc.kill()
 
         proc.wait(timeout=2.0)
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stderr:
+            proc.stderr.close()
         assert proc.poll() is not None, "Parent process was not terminated"
 
-    @pytest.mark.asyncio if HAS_PYTEST else lambda f: f
     async def test_timeout_kill_escalation(self):
         assert HAS_FIREWALL_MODULE
         hang_cmd = "python3 -c 'import time; time.sleep(10)'" if platform.system() != "Windows" else "ping 127.0.0.1 -n 10"
