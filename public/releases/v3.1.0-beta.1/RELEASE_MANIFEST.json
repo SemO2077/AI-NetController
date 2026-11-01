@@ -1,0 +1,49 @@
+{
+  "version": "3.1.0-beta.1",
+  "tag": "v3.1.0-beta.1",
+  "channel": "beta",
+  "isBeta": true,
+  "publishedAt": "2026-11-01T12:07:33.379084+00:00",
+  "artifacts": [
+    {
+      "filename": "CST_HostAgent_v3.1.0_win64.exe",
+      "platform": "Windows 10/11 x64 (GUI + Service)",
+      "arch": "x86_64",
+      "type": "executable",
+      "description": "Standalone workstation host agent with local GUI and background daemon service",
+      "sizeBytes": 37032882,
+      "sizeFormatted": "35.32 MB",
+      "sha256": "6e90065c056934ca777452bcba97bfcf50e27cd333709cf69d0033cd2cbd4969"
+    },
+    {
+      "filename": "CST_HostAgent_v3.1.0_win64_portable.zip",
+      "platform": "Windows 10/11 x64 (Portable Bundle)",
+      "arch": "x86_64",
+      "type": "archive",
+      "description": "Zero-install portable bundle with host agent executable and documentation",
+      "sizeBytes": 36751368,
+      "sizeFormatted": "35.05 MB",
+      "sha256": "5db218345f47a2aa746d8e9aaf9fb6c20643543bddaef8a04816b581b3c4f348"
+    },
+    {
+      "filename": "CST_NetController_AI_v3.1.0_arm64-v8a.apk",
+      "platform": "Android 7.0\u201315 (ARM64)",
+      "arch": "arm64-v8a",
+      "type": "android_package",
+      "description": "High-refresh mobile controller application optimized for 120Hz/144Hz displays",
+      "sizeBytes": 1378444,
+      "sizeFormatted": "1.31 MB",
+      "sha256": "f470a50bd4e0202597f4e3d2a0725077dd0d35d10338c347796d503169732117"
+    },
+    {
+      "filename": "CST_NetController_AI_v3.1.0.apk",
+      "platform": "Android 7.0\u201315 (Universal)",
+      "arch": "universal",
+      "type": "android_package",
+      "description": "Universal Android package compatible with standard ARM64 and x86_64 emulators",
+      "sizeBytes": 1378444,
+      "sizeFormatted": "1.31 MB",
+      "sha256": "f470a50bd4e0202597f4e3d2a0725077dd0d35d10338c347796d503169732117"
+    }
+  ]
+}

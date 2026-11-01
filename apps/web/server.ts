@@ -235,22 +235,27 @@ app.get('/api/health', (_req: Request, res: Response) => {
 // Release Binaries (.EXE & .APK) & Patch Notes Endpoint
 app.get('/api/releases', (_req: Request, res: Response) => {
   try {
+    const v310Path = path.join(RELEASES_PUBLIC_DIR, 'v3.1.0-beta.1', 'RELEASE_MANIFEST.json');
     const v300Path = path.join(RELEASES_PUBLIC_DIR, 'v3.0.0', 'RELEASE_MANIFEST.json');
     const v290Path = path.join(RELEASES_PUBLIC_DIR, 'v2.9.0', 'RELEASE_MANIFEST.json');
     const v280Path = path.join(RELEASES_PUBLIC_DIR, 'v2.8.0', 'RELEASE_MANIFEST.json');
     const v271Path = path.join(RELEASES_PUBLIC_DIR, 'v2.7.1', 'RELEASE_MANIFEST.json');
     const v270Path = path.join(RELEASES_PUBLIC_DIR, 'v2.7.0', 'RELEASE_MANIFEST.json');
     const patchNotesPath = path.join(ROOT_DIR, 'PATCH_NOTES.md');
-    const manifest = fs.existsSync(v300Path) ? JSON.parse(fs.readFileSync(v300Path, 'utf-8')) : fs.existsSync(v290Path)
+    const manifest = fs.existsSync(v310Path)
+      ? JSON.parse(fs.readFileSync(v310Path, 'utf-8'))
+      : fs.existsSync(v300Path)
+      ? JSON.parse(fs.readFileSync(v300Path, 'utf-8'))
+      : fs.existsSync(v290Path)
       ? JSON.parse(fs.readFileSync(v290Path, 'utf-8'))
       : fs.existsSync(v280Path)
       ? JSON.parse(fs.readFileSync(v280Path, 'utf-8'))
       : fs.existsSync(v271Path)
       ? JSON.parse(fs.readFileSync(v271Path, 'utf-8'))
       : (fs.existsSync(v270Path) ? JSON.parse(fs.readFileSync(v270Path, 'utf-8')) : null);
-    const legacyManifest = fs.existsSync(v271Path)
-      ? JSON.parse(fs.readFileSync(v271Path, 'utf-8'))
-      : (fs.existsSync(v270Path) ? JSON.parse(fs.readFileSync(v270Path, 'utf-8')) : null);
+    const legacyManifest = fs.existsSync(v300Path)
+      ? JSON.parse(fs.readFileSync(v300Path, 'utf-8'))
+      : (fs.existsSync(v271Path) ? JSON.parse(fs.readFileSync(v271Path, 'utf-8')) : null);
     const patchNotes = fs.existsSync(patchNotesPath)
       ? fs.readFileSync(patchNotesPath, 'utf-8')
       : '';
@@ -258,7 +263,7 @@ app.get('/api/releases', (_req: Request, res: Response) => {
       success: true,
       manifest,
       legacyManifest,
-      availableVersions: ['v3.0.0', 'v2.9.0', 'v2.8.0', 'v2.7.1', 'v2.7.0'],
+      availableVersions: ['v3.1.0-beta.1', 'v3.0.0', 'v2.9.0', 'v2.8.0', 'v2.7.1', 'v2.7.0'],
       patchNotes,
     });
   } catch (err: any) {
@@ -894,11 +899,11 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
         pairingToken: snap.pairingToken,
         webOrigin,
         mobilePairUrl,
-        exeDownloadUrl: '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe',
-        apkDownloadUrl: '/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk',
-        portableZipUrl: '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64_portable.zip',
-        legacyExeDownloadUrl: '/releases/v2.8.0/CST_HostAgent_v2.8.0_win64.exe',
-        legacyApkDownloadUrl: '/releases/v2.8.0/CST_NetController_AI_v2.8.0_arm64-v8a.apk',
+        exeDownloadUrl: '/releases/v3.1.0-beta.1/CST_HostAgent_v3.1.0_win64.exe',
+        apkDownloadUrl: '/releases/v3.1.0-beta.1/CST_NetController_AI_v3.1.0_arm64-v8a.apk',
+        portableZipUrl: '/releases/v3.1.0-beta.1/CST_HostAgent_v3.1.0_win64_portable.zip',
+        legacyExeDownloadUrl: '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe',
+        legacyApkDownloadUrl: '/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk',
         launcherDownloadUrl: '/api/setup/windows-launcher',
       },
     });
@@ -1032,12 +1037,12 @@ const systemUpdateRegistry: SystemUpdateComponentState[] = [
     id: 'cst-host-agent',
     name: 'CST Host Daemon (Python + Native Win32 GUI)',
     category: 'agent',
-    currentVersion: 'v2.8.0-LTS',
-    latestVersion: 'v3.0.0-LTS',
+    currentVersion: 'v3.0.0 (Beta)',
+    latestVersion: 'v3.1.0-beta.1',
     status: 'available',
     size: '18.4 MB',
     lastChecked: 'Just now',
-    changelog: 'v3.0.0-LTS: Resilient dependency fallbacks, stream frame service overhaul, and direct AI PC control suite.',
+    changelog: 'v3.1.0-beta.1: Direct 144Hz compositor integration, dynamic HTML5 viewport calibration, and zero-overflow multi-aspect layout.',
   },
   {
     id: 'ast-security-rules',

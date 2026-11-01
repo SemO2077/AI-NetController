@@ -59,9 +59,11 @@ def setup_staging():
 
     # Copy web dist into assets/dist
     shutil.copytree(WEB_DIST, os.path.join(STAGE_DIR, "assets", "dist"), dirs_exist_ok=True)
-    # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/v3.0.0
-    rel_src = os.path.join(ROOT_DIR, "public", "releases", "v3.0.0")
-    rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", "v3.0.0")
+    # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/v3.1.0-beta.1
+    rel_src = os.path.join(ROOT_DIR, "public", "releases", "v3.1.0-beta.1")
+    if not os.path.exists(rel_src):
+        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v3.0.0")
+    rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", "v3.1.0-beta.1")
     os.makedirs(rel_dst, exist_ok=True)
     for meta_file in ("RELEASE_MANIFEST.json", "SHA256SUMS.txt", "PATCH_NOTES.md"):
         src_p = os.path.join(rel_src, meta_file)
@@ -73,8 +75,8 @@ def create_android_manifest():
     manifest_content = """<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cst.autonomouslan"
-    android:versionCode="300"
-    android:versionName="3.0.0">
+    android:versionCode="310"
+    android:versionName="3.1.0">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -1504,22 +1506,25 @@ def zipalign_and_sign():
     return signed_apk
 
 def distribute_apk(signed_apk):
-    rel_v290 = os.path.join(ROOT_DIR, "public", "releases", "v3.0.0")
-    os.makedirs(rel_v290, exist_ok=True)
-    dest_arm64 = os.path.join(rel_v290, "CST_NetController_AI_v3.0.0_arm64-v8a.apk")
-    dest_univ = os.path.join(rel_v290, "CST_NetController_AI_v3.0.0.apk")
+    # Distribute to v3.1.0-beta.1 and v3.0.0
+    for rel_tag, apk_tag in [("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
+        rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
+        os.makedirs(rel_dir, exist_ok=True)
+        dest_arm64 = os.path.join(rel_dir, f"CST_NetController_AI_{apk_tag}_arm64-v8a.apk")
+        dest_univ = os.path.join(rel_dir, f"CST_NetController_AI_{apk_tag}.apk")
+        shutil.copy2(signed_apk, dest_arm64)
+        shutil.copy2(signed_apk, dest_univ)
+
     mobile_out = os.path.join(ROOT_DIR, "apps", "mobile", "build", "app", "outputs", "flutter-apk")
     os.makedirs(mobile_out, exist_ok=True)
     dest_flutter = os.path.join(mobile_out, "app-arm64-v8a-release.apk")
-
-    shutil.copy2(signed_apk, dest_arm64)
-    shutil.copy2(signed_apk, dest_univ)
     shutil.copy2(signed_apk, dest_flutter)
-    shutil.copy2(signed_apk, os.path.join(ROOT_DIR, "CST_NetController_AI_v3.0.0_arm64-v8a.apk"))
+    shutil.copy2(signed_apk, os.path.join(ROOT_DIR, "CST_NetController_AI_v3.1.0_arm64-v8a.apk"))
 
-    size_mb = os.path.getsize(dest_arm64) / (1024 * 1024)
-    sha_hash = sha256_file(dest_arm64)
-    print(f"\n[SUCCESS] APK Published to:\n  - {dest_arm64}\n  - Size: {size_mb:.2f} MB\n  - SHA256: {sha_hash}")
+    dest_arm64_main = os.path.join(ROOT_DIR, "public", "releases", "v3.1.0-beta.1", "CST_NetController_AI_v3.1.0_arm64-v8a.apk")
+    size_mb = os.path.getsize(dest_arm64_main) / (1024 * 1024)
+    sha_hash = sha256_file(dest_arm64_main)
+    print(f"\n[SUCCESS] APK Published to:\n  - {dest_arm64_main}\n  - Size: {size_mb:.2f} MB\n  - SHA256: {sha_hash}")
 
     # Update manifest & checksums
     manifest_path = os.path.join(rel_v290, "RELEASE_MANIFEST.json")
