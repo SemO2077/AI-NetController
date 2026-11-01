@@ -36,39 +36,34 @@
     --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
 
     /* Fluid Root Font Size Scaling Across Resolutions & Aspect Ratios */
-    font-size: clamp(14.5px, 0.88rem + 0.22vw, 16.5px);
-  }
-
-  /* Fluid Root Font Size Scaling Across All Resolutions & Aspect Ratios */
-  :root {
-    font-size: clamp(13.25px, 0.82rem + 0.28vw, 17px);
+    font-size: clamp(14px, 0.88rem + 0.22vw, 16.5px);
   }
 
   /* 1. Ultra-Narrow Foldables (e.g. Galaxy Z Fold cover < 320px) */
   @media (max-width: 320px) {
     :root {
-      font-size: 12px;
+      font-size: 12.5px;
     }
   }
 
   /* 2. Compact Narrow Mobile (321px - 374px) */
   @media (min-width: 321px) and (max-width: 374px) {
     :root {
-      font-size: 13px;
+      font-size: 13.5px;
     }
   }
 
   /* 3. Short Mobile Landscape (e.g. 16:9 / 19.5:9 / 21:9 phones <= 480px height) */
   @media (max-height: 480px) and (orientation: landscape) {
     :root {
-      font-size: 12.75px;
+      font-size: 13px;
     }
   }
 
   /* 4. Medium Foldable / Square Inner Displays (aspect-ratio ~ 1:1, 4:3, e.g. 768x1024, 884x1104) */
   @media (min-width: 600px) and (max-width: 960px) and (max-aspect-ratio: 1.35/1) {
     :root {
-      font-size: 14.25px;
+      font-size: 14.5px;
     }
   }
 
@@ -344,14 +339,14 @@ button:hover .icon-plus-bubbly,
 /* Tier 1 — Resting Canvas Cards (High vibrancy, specular neon rim) */
 .glass-liquid {
   background: rgba(9, 16, 34, 0.72);
-  backdrop-filter: blur(28px) saturate(210%);
-  -webkit-backdrop-filter: blur(28px) saturate(210%);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-top-color: rgba(0, 240, 255, 0.32);
+  backdrop-filter: blur(16px) saturate(220%);
+  -webkit-backdrop-filter: blur(16px) saturate(220%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(0, 240, 255, 0.48);
   box-shadow:
-    0 14px 36px -4px rgba(0, 0, 0, 0.65),
-    0 0 24px -4px rgba(0, 229, 255, 0.10),
-    inset 0 1px 1px rgba(255, 255, 255, 0.22);
+    0 14px 36px -4px rgba(0, 0, 0, 0.70),
+    0 0 24px -2px rgba(0, 240, 255, 0.15),
+    inset 0 1px 1px rgba(255, 255, 255, 0.28);
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
   transition:
@@ -362,20 +357,20 @@ button:hover .icon-plus-bubbly,
 }
 
 .glass-liquid:hover {
-  border-color: rgba(0, 240, 255, 0.45);
+  border-color: rgba(0, 240, 255, 0.55);
   box-shadow:
-    0 20px 48px -4px rgba(0, 0, 0, 0.75),
-    0 0 32px rgba(0, 229, 255, 0.22),
-    inset 0 1px 1.5px rgba(255, 255, 255, 0.35);
+    0 20px 48px -4px rgba(0, 0, 0, 0.80),
+    0 0 32px rgba(0, 240, 255, 0.28),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.40);
 }
 
 .glass-liquid-subtle {
   background: rgba(9, 16, 34, 0.68);
-  backdrop-filter: blur(24px) saturate(200%);
-  -webkit-backdrop-filter: blur(24px) saturate(200%);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-top-color: rgba(0, 240, 255, 0.28);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 20px rgba(0, 229, 255, 0.08);
+  backdrop-filter: blur(14px) saturate(210%);
+  -webkit-backdrop-filter: blur(14px) saturate(210%);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-top-color: rgba(0, 240, 255, 0.38);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 20px rgba(0, 240, 255, 0.12);
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
   transition:
@@ -386,14 +381,14 @@ button:hover .icon-plus-bubbly,
 /* Tier 2 — Floating Chrome (FloatingPillNav, Sticky Inputs, Header Capsules) */
 .glass-liquid-elevated {
   background: rgba(6, 12, 26, 0.94);
-  backdrop-filter: blur(36px) saturate(220%);
-  -webkit-backdrop-filter: blur(36px) saturate(220%);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-top-color: rgba(0, 240, 255, 0.45);
+  backdrop-filter: blur(20px) saturate(230%);
+  -webkit-backdrop-filter: blur(20px) saturate(230%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(0, 240, 255, 0.55);
   box-shadow:
     0 20px 50px rgba(0, 0, 0, 0.88),
-    0 0 32px rgba(0, 229, 255, 0.18),
-    inset 0 1px 1.5px rgba(255, 255, 255, 0.38);
+    0 0 32px rgba(0, 240, 255, 0.22),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.40);
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
 }
@@ -401,14 +396,14 @@ button:hover .icon-plus-bubbly,
 /* Tier 3 — Modals, Bottom Sheets & Dropdown Menus */
 .glass-liquid-modal {
   background: rgba(7, 13, 28, 0.98);
-  backdrop-filter: blur(44px) saturate(220%);
-  -webkit-backdrop-filter: blur(44px) saturate(220%);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-top-color: rgba(0, 240, 255, 0.55);
+  backdrop-filter: blur(24px) saturate(230%);
+  -webkit-backdrop-filter: blur(24px) saturate(230%);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-top-color: rgba(0, 240, 255, 0.65);
   box-shadow:
     0 28px 72px rgba(0, 0, 0, 0.95),
-    0 0 44px rgba(0, 229, 255, 0.22),
-    inset 0 1px 2px rgba(255, 255, 255, 0.45);
+    0 0 44px rgba(0, 240, 255, 0.28),
+    inset 0 1px 2px rgba(255, 255, 255, 0.50);
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
 }
@@ -530,11 +525,14 @@ button, [role="button"] {
   background: rgba(255, 255, 255, 0.32);
 }
 
-.scrollbar-none {
+.scrollbar-none,
+.no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
-.scrollbar-none::-webkit-scrollbar {
+.scrollbar-none::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 

@@ -414,10 +414,14 @@ public class MainActivity extends Activity {
 
         webView = new WebView(this);
         webView.setBackgroundColor(0xFF030712);
-        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        // Use direct Chromium GPU hardware composition (LAYER_TYPE_NONE prevents double-FBO memory overhead)
+        webView.setLayerType(View.LAYER_TYPE_NONE, null);
+        webView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         webView.setVerticalScrollBarEnabled(false);
         webView.setHorizontalScrollBarEnabled(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
         root.addView(webView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -429,9 +433,9 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
-        // Critical: 1 CSS px = 1 Android dp (prevents desktop 980px viewport zoom-out on phones)
-        settings.setLoadWithOverviewMode(false);
-        settings.setUseWideViewPort(false);
+        // HTML5 Mobile Viewport: Enables dynamic 1:1 scaling according to viewport-fit=cover
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
@@ -514,7 +518,7 @@ public class MainActivity extends Activity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage msg) {
-                Log.d(TAG, "[" + msg.messageLevel() + "] " + msg.message());
+                Log.i(TAG, "[Console " + msg.messageLevel() + "] " + msg.message() + " (" + msg.sourceId() + ":" + msg.lineNumber() + ")");
                 return true;
             }
 
@@ -525,6 +529,21 @@ public class MainActivity extends Activity {
         });
 
         webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                Log.i(TAG, "onPageStarted: " + url);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                Log.i(TAG, "onPageFinished: " + url);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                Log.e(TAG, "onReceivedError: " + errorCode + " " + description + " URL: " + failingUrl);
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 if (url == null) return false;
@@ -1075,6 +1094,7 @@ public class MainActivity extends Activity {
                     String rawPath = parts[1];
                     int qIdx = rawPath.indexOf('?');
                     if (qIdx != -1) rawPath = rawPath.substring(0, qIdx);
+                    Log.i(TAG, "HTTP " + method + " " + rawPath);
 
                     // CORS preflight handler
                     if (method.equals("OPTIONS")) {

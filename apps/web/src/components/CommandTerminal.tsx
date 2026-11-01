@@ -598,7 +598,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
               transition={SPRING_POP}
               disabled={isExecuting}
               onClick={() => dispatchPrompt(preset.prompt)}
-              className="group min-h-[40px] px-3.5 rounded-full bg-[#070c18]/90 backdrop-blur-3xl backdrop-saturate-[190%] border border-white/15 border-t-white/25 hover:border-cyan-400/45 text-xs font-semibold text-white/85 hover:text-cyan-200 whitespace-nowrap shrink-0 flex items-center gap-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.8)] transition cursor-pointer disabled:opacity-40 transform-gpu"
+              className="group min-h-[40px] px-3.5 rounded-full bg-[#081124]/90 backdrop-blur-2xl border border-cyan-400/20 border-t-cyan-400/45 hover:border-cyan-400/55 text-xs font-semibold text-white/90 hover:text-cyan-200 whitespace-nowrap shrink-0 flex items-center gap-1.5 shadow-[0_10px_25px_rgba(0,0,0,0.6)] transition cursor-pointer disabled:opacity-40 transform-gpu bubble-tap"
             >
               <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0 icon-bubbly" />
               <span className="font-display">{preset.label}</span>
@@ -608,7 +608,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
 
         {/* Tier 2 Liquid Glass Prompt Input Capsule */}
         <form onSubmit={handleSubmit} className="w-full relative">
-          <div className="group min-h-[54px] h-14 rounded-full bg-[#070c18]/90 backdrop-blur-3xl backdrop-saturate-[190%] border border-white/15 border-t-white/25 shadow-[0_16px_40px_rgba(0,0,0,0.8)] px-4 flex items-center space-x-2.5 focus-within:border-cyan-400/60 transition transform-gpu">
+          <div className="group min-h-[54px] h-14 rounded-full bg-[#081024]/95 backdrop-blur-2xl border border-white/18 border-t-cyan-400/45 shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_24px_rgba(0,240,255,0.12)] px-4 flex items-center space-x-2.5 focus-within:border-cyan-400/70 focus-within:shadow-[0_20px_50px_rgba(0,0,0,0.9),0_0_32px_rgba(0,240,255,0.25)] transition transform-gpu">
             <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 icon-sparkle-live" />
             <input
               type="text"

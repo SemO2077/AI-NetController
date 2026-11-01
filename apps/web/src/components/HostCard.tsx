@@ -339,14 +339,14 @@ const HostCardComponent: React.FC<HostCardProps> = ({
           }
         }}
         className={`
-          bg-[#070e20]/80 backdrop-blur-3xl backdrop-saturate-[190%] border border-cyan-400/20 border-t-cyan-400/40 shadow-[0_16px_40px_rgba(0,0,0,0.6),0_0_24px_rgba(0,229,255,0.08)] transform-gpu
+          bg-[#081024]/85 backdrop-blur-2xl backdrop-saturate-[210%] border border-cyan-400/25 border-t-cyan-400/55 shadow-[0_16px_40px_rgba(0,0,0,0.7),0_0_24px_rgba(0,240,255,0.12)] transform-gpu
           w-full max-w-full rounded-[1.75rem] p-3.5 sm:p-5 text-left cursor-pointer select-none relative overflow-hidden transition-all duration-200
           ${
             isSonarPulsing
               ? 'border-cyan-300 shadow-[0_0_48px_rgba(0,240,255,0.6)] ring-2 ring-cyan-400/70'
               : isSelected
-              ? 'border-cyan-400/80 shadow-[0_20px_54px_-8px_rgba(0,0,0,0.8),0_0_36px_rgba(0,229,255,0.3)] ring-1 ring-cyan-400/60'
-              : 'hover:border-cyan-400/40 hover:shadow-[0_20px_50px_rgba(0,0,0,0.65),0_0_32px_rgba(0,229,255,0.18)]'
+              ? 'border-cyan-400/80 shadow-[0_20px_54px_-8px_rgba(0,0,0,0.8),0_0_36px_rgba(0,240,255,0.35)] ring-1 ring-cyan-400/60'
+              : 'hover:border-cyan-400/40 hover:shadow-[0_20px_50px_rgba(0,0,0,0.65),0_0_32px_rgba(0,240,255,0.2)]'
           }
           ${isOffline ? 'opacity-85' : ''}
         `}
@@ -452,13 +452,13 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 </button>
                 <span className="text-white/25" aria-hidden="true">•</span>
                 {isOffline ? (
-                  <span className="text-amber-300 font-semibold text-[11.5px] drop-shadow-[0_0_6px_rgba(245,158,11,0.4)]">
+                  <span className="text-amber-300 font-semibold text-[11.5px] drop-shadow-[0_0_8px_rgba(255,183,3,0.55)]">
                     {currentLang === 'bg' ? 'Спящ • Готов за Wake-on-LAN' : 'Sleeping • Ready for Wake-on-LAN'}
                   </span>
                 ) : (
                   <>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/50 font-mono text-[10.5px] font-bold text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.35)]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_#10b981] animate-pulse" />
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/25 border border-emerald-400/60 font-mono text-[11px] font-bold text-emerald-300 shadow-[0_0_14px_rgba(0,245,155,0.35)]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#00f59b] animate-pulse" />
                       {rttMs}ms
                     </span>
                     {isLaptop && safeBatteryPct !== undefined && batteryConfig && (
@@ -484,7 +484,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
           <div className="flex items-center space-x-1 sm:space-x-1.5 shrink-0 ml-auto">
             {isOffline ? (
               remainingWakeSeconds !== undefined ? (
-                <div className="min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-amber-500/15 border border-amber-400/40 flex flex-col items-center justify-center text-amber-300 text-[10px] font-mono font-bold">
+                <div className="min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-amber-500/15 border border-amber-400/40 flex flex-col items-center justify-center text-amber-300 text-[10px] font-mono font-bold">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400 mb-0.5" />
                   <span>{remainingWakeSeconds}s</span>
                 </div>
@@ -495,7 +495,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                   whileTap={{ scale: 0.88 }}
                   transition={SPRING_POP}
                   onClick={(e) => onWakeClick(e, host)}
-                  className="group min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-amber-500/25 to-orange-500/20 hover:from-amber-500/40 hover:to-orange-500/30 border border-amber-400/60 text-amber-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_24px_rgba(245,158,11,0.45)] transform-gpu"
+                  className="group min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-amber-500/30 to-orange-500/25 hover:from-amber-500/45 hover:to-orange-500/40 border border-amber-400/70 text-amber-100 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_24px_rgba(255,183,3,0.55)] transform-gpu"
                   title={t('host_wake_tooltip')}
                   aria-label={t('host_wake_tooltip')}
                 >
@@ -514,7 +514,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     triggerHapticFeedback('light');
                     onSelectForCommand?.(host.id);
                   }}
-                  className="group min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_14px_rgba(0,229,255,0.25)] transform-gpu"
+                  className="group min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-cyan-500/20 to-sky-500/20 hover:from-cyan-500/35 hover:to-sky-500/35 border border-cyan-400/50 text-cyan-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_16px_rgba(0,240,255,0.3)] transform-gpu"
                   title={t('host_terminal_tooltip')}
                   aria-label={t('host_terminal_tooltip')}
                 >
@@ -531,7 +531,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     triggerHapticFeedback('light');
                     onViewScreen(host);
                   }}
-                  className="group min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/50 text-sky-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_18px_rgba(14,165,233,0.35)] transform-gpu"
+                  className="group min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-sky-500/25 to-blue-500/20 hover:from-sky-500/40 hover:to-blue-500/35 border border-sky-400/60 text-sky-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_18px_rgba(14,165,233,0.4)] transform-gpu"
                   title={t('host_screen_tooltip')}
                   aria-label={t('host_screen_tooltip')}
                 >
@@ -550,7 +550,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 triggerHapticFeedback('light');
                 onOpenDetailsModal(host);
               }}
-              className="min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full bg-white/[0.04] hover:bg-white/[0.1] border border-white/10 text-white/70 hover:text-cyan-300 flex items-center justify-center transition-colors cursor-pointer transform-gpu"
+              className="min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-white/[0.05] hover:bg-white/[0.12] border border-white/15 text-white/75 hover:text-cyan-300 flex items-center justify-center transition-colors cursor-pointer transform-gpu"
               title={currentLang === 'bg' ? 'Детайли за хост, Карантина и Защити' : 'Host Details, Quarantine & Circuit Breaker'}
               aria-label="Host Details"
             >
@@ -567,10 +567,10 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 onToggleExpand(host.id);
               }}
               aria-expanded={isExpanded}
-              className={`min-w-[40px] min-h-[40px] w-10 h-10 sm:min-w-[44px] sm:min-h-[44px] sm:w-11 sm:h-11 rounded-full flex items-center justify-center transition-colors cursor-pointer border transform-gpu ${
+              className={`min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer border transform-gpu ${
                 isExpanded
-                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/35'
-                  : 'bg-white/[0.03] text-white/50 hover:text-white border-white/10'
+                  ? 'bg-cyan-500/25 text-cyan-200 border-cyan-400/50 shadow-[0_0_12px_rgba(0,240,255,0.3)]'
+                  : 'bg-white/[0.04] text-white/55 hover:text-white border-white/15'
               }`}
               title={isExpanded ? t('host_hide_details_btn') : t('host_details_btn')}
             >
@@ -584,18 +584,18 @@ const HostCardComponent: React.FC<HostCardProps> = ({
           </div>
         </div>
 
-        {/* Bottom of Collapsed Card (Online only): Ultra-sleek 3px progress bars for CPU and RAM + Proactive AI Anomaly Pill */}
+        {/* Bottom of Collapsed Card (Online only): Ultra-sleek progress bars for CPU and RAM + Proactive AI Anomaly Pill */}
         {host.isOnline && (
-          <div className="relative z-10 mt-3.5 pt-2.5 border-t border-white/[0.06] space-y-2.5">
+          <div className="relative z-10 mt-3.5 pt-2.5 border-t border-white/[0.08] space-y-2.5">
             <div className="grid grid-cols-2 gap-4 items-center">
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
-                  <span className="text-white/45 font-medium">CPU</span>
-                  <span className={cpuVal >= 75 ? 'text-rose-300 font-semibold' : 'text-cyan-300 font-semibold'}>
+                  <span className="text-white/50 font-medium">CPU</span>
+                  <span className={cpuVal >= 75 ? 'text-rose-300 font-bold drop-shadow-[0_0_6px_rgba(255,42,109,0.5)]' : 'text-cyan-300 font-bold drop-shadow-[0_0_6px_rgba(0,240,255,0.4)]'}>
                     {cpuVal}%
                   </span>
                 </div>
-                <div className="h-[3px] w-full rounded-full bg-white/[0.07] overflow-hidden">
+                <div className="h-[3.5px] w-full rounded-full bg-black/40 border border-white/5 overflow-hidden">
                   <motion.div
                     initial={{ scaleX: 0 }}
                     animate={{ scaleX: Math.min(1, Math.max(0.04, cpuVal / 100)) }}
@@ -603,8 +603,8 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     style={{ transformOrigin: 'left' }}
                     className={`h-full w-full rounded-full transform-gpu ${
                       cpuVal >= 75
-                        ? 'bg-gradient-to-r from-rose-500 via-pink-400 to-amber-400 shadow-[0_0_14px_#ff2a6d]'
-                        : 'bg-gradient-to-r from-cyan-400 via-sky-300 to-cyan-200 shadow-[0_0_14px_#00f0ff]'
+                        ? 'bg-gradient-to-r from-rose-500 via-pink-400 to-amber-400 shadow-[0_0_14px_rgba(255,42,109,0.8)]'
+                        : 'bg-gradient-to-r from-cyan-400 via-sky-300 to-cyan-200 shadow-[0_0_12px_rgba(0,240,255,0.6)]'
                     }`}
                   />
                 </div>
@@ -612,12 +612,12 @@ const HostCardComponent: React.FC<HostCardProps> = ({
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
-                  <span className="text-white/45 font-medium">RAM</span>
-                  <span className={ramVal >= 75 ? 'text-amber-300 font-semibold' : 'text-indigo-300 font-semibold'}>
+                  <span className="text-white/50 font-medium">RAM</span>
+                  <span className={ramVal >= 75 ? 'text-amber-300 font-bold drop-shadow-[0_0_6px_rgba(255,183,3,0.5)]' : 'text-indigo-300 font-bold drop-shadow-[0_0_6px_rgba(139,92,246,0.4)]'}>
                     {ramVal}%
                   </span>
                 </div>
-                <div className="h-[3px] w-full rounded-full bg-white/[0.07] overflow-hidden">
+                <div className="h-[3.5px] w-full rounded-full bg-black/40 border border-white/5 overflow-hidden">
                   <motion.div
                     initial={{ scaleX: 0 }}
                     animate={{ scaleX: Math.min(1, Math.max(0.04, ramVal / 100)) }}
@@ -625,8 +625,8 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     style={{ transformOrigin: 'left' }}
                     className={`h-full w-full rounded-full transform-gpu ${
                       ramVal >= 75
-                        ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 shadow-[0_0_14px_#ffb703]'
-                        : 'bg-gradient-to-r from-indigo-400 via-violet-400 to-cyan-300 shadow-[0_0_14px_#8b5cf6]'
+                        ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 shadow-[0_0_14px_rgba(255,183,3,0.8)]'
+                        : 'bg-gradient-to-r from-violet-400 via-purple-300 to-cyan-300 shadow-[0_0_12px_rgba(139,92,246,0.6)]'
                     }`}
                   />
                 </div>

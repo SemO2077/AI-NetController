@@ -969,7 +969,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   return (
     <div className="flex-1 flex flex-col justify-between w-full max-w-5xl 2xl:max-w-7xl mx-auto px-1 sm:px-3 pb-1 select-none">
       {/* 1. Tier 2 Optical Glass Header Bar with Role Pills & Auto-Execute Toggle */}
-      <header className="flex-none py-2 px-3 mb-2 rounded-full bg-[#070c18]/90 backdrop-blur-3xl backdrop-saturate-[190%] border border-white/15 border-t-white/25 shadow-[0_16px_40px_rgba(0,0,0,0.8)] transform-gpu flex items-center justify-between relative gap-2 flex-wrap sm:flex-nowrap">
+      <header className="flex-none py-2 px-3 mb-2 rounded-full bg-[#081024]/95 backdrop-blur-2xl border border-white/18 border-t-cyan-400/50 shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_24px_rgba(0,240,255,0.12)] transform-gpu flex items-center justify-between relative gap-2 flex-wrap sm:flex-nowrap">
         <div className="absolute inset-x-8 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/40 to-transparent pointer-events-none" />
 
         {/* Gemini Identity & Active Target */}
@@ -1086,7 +1086,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             transition={{ type: 'spring', stiffness: 460, damping: 28 }}
             className="flex-none overflow-hidden mb-2"
           >
-            <div className="px-3 py-2 rounded-2xl bg-[#070d1b]/80 border border-white/10 flex items-center gap-2 overflow-x-auto no-scrollbar">
+            <div className="px-3 py-2 rounded-2xl bg-[#081124]/90 backdrop-blur-2xl border border-cyan-400/20 flex items-center gap-2 overflow-x-auto scrollbar-none [mask-image:linear-gradient(to_right,black_92%,transparent_100%)]">
               <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 shrink-0 flex items-center gap-1 pr-1 border-r border-white/10">
                 <Zap className="w-3 h-3 text-cyan-400" />
                 <span>{language === 'bg' ? 'AI PC Контрол:' : 'AI PC Deck:'}</span>
@@ -1339,7 +1339,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             e.preventDefault();
             handleSendMessage();
           }}
-          className="relative bg-[#070c18]/90 backdrop-blur-3xl backdrop-saturate-[190%] border border-white/15 border-t-white/25 shadow-[0_16px_40px_rgba(0,0,0,0.8)] transform-gpu rounded-full p-1.5 flex items-center"
+          className="relative bg-[#081024]/95 backdrop-blur-2xl border border-white/18 border-t-cyan-400/50 shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_24px_rgba(0,240,255,0.12)] transform-gpu rounded-full p-1.5 flex items-center"
         >
           <div className="absolute inset-x-8 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/40 to-transparent pointer-events-none" />
 

@@ -690,22 +690,22 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
-            className="w-full p-3.5 rounded-2xl bg-gradient-to-r from-violet-950/40 via-cyan-950/30 to-[#070c18] border border-violet-500/30 shadow-[0_8px_24px_rgba(139,92,246,0.12)] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+            className="w-full max-w-full overflow-hidden p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-violet-950/50 via-cyan-950/35 to-[#070c18] border border-violet-500/35 shadow-[0_8px_28px_rgba(139,92,246,0.16)] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
           >
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-violet-500/20 border border-violet-400/40 flex items-center justify-center text-violet-300 shrink-0">
+            <div className="flex items-start sm:items-center gap-3 w-full min-w-0 flex-1">
+              <div className="w-9 h-9 rounded-xl bg-violet-500/25 border border-violet-400/50 flex items-center justify-center text-violet-300 shrink-0 mt-0.5 sm:mt-0 shadow-[0_0_12px_rgba(168,85,247,0.25)]">
                 <Sparkles className="w-4 h-4" />
               </div>
-              <div className="space-y-0.5 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-white tracking-tight">
+              <div className="space-y-0.5 w-full min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs sm:text-sm font-bold text-white tracking-tight">
                     {language === 'bg' ? 'Добре дошли в CST NetController AI' : 'Welcome to CST NetController AI'}
                   </span>
-                  <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-violet-500/20 text-violet-300">
+                  <span className="px-2 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-violet-500/25 text-violet-200 border border-violet-400/30 shrink-0">
                     {language === 'bg' ? 'Първи стъпки' : 'Quick Start'}
                   </span>
                 </div>
-                <p className="text-[11.5px] text-white/60 truncate sm:whitespace-normal">
+                <p className="text-xs text-white/70 line-clamp-2 sm:line-clamp-none break-words leading-relaxed">
                   {language === 'bg'
                     ? 'Започнете с интерактивната обиколка, свържете вашия PC демон или сканирайте QR код.'
                     : 'Explore the 5-step interactive tour, pair your local PC daemon, or scan phone QR.'}
@@ -713,14 +713,14 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-between sm:justify-end pt-2 sm:pt-0 border-t border-white/5 sm:border-t-0">
               <button
                 type="button"
                 onClick={() => {
                   triggerHapticFeedback('light');
                   openModal('onboarding');
                 }}
-                className="px-3 py-1.5 rounded-xl bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 text-violet-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                className="flex-1 sm:flex-none min-h-[40px] px-3.5 py-2 rounded-xl bg-violet-500/25 hover:bg-violet-500/35 active:scale-95 border border-violet-400/50 text-violet-100 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-[0_0_14px_rgba(168,85,247,0.2)]"
               >
                 <Sparkles className="w-3.5 h-3.5 text-violet-300" />
                 <span>{language === 'bg' ? 'Старт на Обиколката' : 'Start Tour'}</span>
@@ -733,8 +733,9 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                     localStorage.setItem('cst_onboarding_banner_dismissed', 'true');
                   } catch {}
                 }}
-                className="p-1.5 rounded-lg hover:bg-white/10 text-white/50 hover:text-white transition cursor-pointer"
+                className="min-h-[40px] min-w-[40px] p-2 rounded-xl hover:bg-white/10 text-white/60 hover:text-white transition cursor-pointer flex items-center justify-center"
                 title={language === 'bg' ? 'Скрий' : 'Dismiss'}
+                aria-label={language === 'bg' ? 'Скрий' : 'Dismiss'}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1235,30 +1236,31 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
           </React.Suspense>
         </motion.div>
       ) : filteredHosts.length === 0 ? (
-        <div className="rounded-3xl bg-[#0b1324]/65 backdrop-blur-2xl border border-white/10 p-8 sm:p-12 flex flex-col items-center justify-center text-center mx-auto max-w-lg my-6 shadow-2xl">
-          <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-400/25 flex items-center justify-center text-cyan-400 mb-4 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
-            <Monitor className="w-8 h-8" />
+        <div className="rounded-3xl bg-[#070e20]/80 backdrop-blur-3xl border border-cyan-500/25 border-t-cyan-400/50 p-6 sm:p-12 flex flex-col items-center justify-center text-center mx-auto max-w-lg my-6 shadow-[0_20px_54px_rgba(0,0,0,0.8),0_0_36px_rgba(0,229,255,0.14)] relative overflow-hidden">
+          <div className="absolute inset-x-8 top-0 h-[1.5px] bg-gradient-to-r from-transparent via-cyan-300/60 to-transparent pointer-events-none" />
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-400/20 via-sky-500/15 to-indigo-500/20 border border-cyan-300/40 flex items-center justify-center text-cyan-300 mb-4 shadow-[0_0_30px_rgba(0,240,255,0.3)]">
+            <Monitor className="w-8 h-8 stroke-[2.2]" />
           </div>
-          <h3 className="text-lg font-bold text-white tracking-tight">
+          <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight font-display">
             {hosts.length === 0
               ? language === 'bg'
                 ? 'Няма добавени компютри'
                 : 'No Computers Added Yet'
               : t('empty_hosts_title')}
           </h3>
-          <p className="text-xs sm:text-sm text-slate-400 max-w-md mt-2 mb-6 leading-relaxed">
+          <p className="text-xs sm:text-sm text-slate-300 max-w-md mt-2 mb-6 leading-relaxed">
             {hosts.length === 0
               ? language === 'bg'
                 ? 'Флотът ви е чист. Натиснете „Добави компютър“, за да въведете своя компютър, или сканирайте мрежата за автоматично откриване на хостове.'
                 : 'Your fleet is ready for setup. Add your computer by entering its IP & MAC address, or scan your local network to discover devices.'
               : t('empty_hosts_desc')}
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-3 w-full">
             {searchQuery && (
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="min-h-[44px] px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 border border-white/15 font-semibold text-xs transition cursor-pointer"
+                className="min-h-[44px] px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 active:scale-95 text-white/90 border border-white/15 font-semibold text-xs transition cursor-pointer"
               >
                 {language === 'bg' ? 'Изчисти търсенето' : 'Clear Search'}
               </button>
@@ -1266,7 +1268,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             <button
               type="button"
               onClick={addHostHandler}
-              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-bold text-xs flex items-center space-x-2 shadow-lg shadow-cyan-500/25 transition cursor-pointer"
+              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-500 to-blue-600 hover:from-cyan-300 hover:to-blue-500 active:scale-95 text-slate-950 font-black text-xs sm:text-sm flex items-center space-x-2 shadow-[0_0_24px_rgba(0,229,255,0.4)] transition cursor-pointer"
             >
               <Plus className="w-4 h-4 stroke-[3]" />
               <span>{language === 'bg' ? 'Добави компютър' : 'Add First PC'}</span>
@@ -1276,7 +1278,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                 type="button"
                 onClick={() => onRescan()}
                 disabled={isScanning}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-cyan-300 border border-cyan-500/30 font-semibold text-xs flex items-center space-x-2 transition cursor-pointer disabled:opacity-50"
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 text-cyan-200 border border-cyan-400/40 font-semibold text-xs flex items-center space-x-2 transition cursor-pointer disabled:opacity-50 shadow-[0_0_14px_rgba(0,229,255,0.15)]"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
                 <span>{isScanning ? (language === 'bg' ? 'Сканиране...' : 'Scanning...') : (language === 'bg' ? 'Сканирай мрежата' : 'Scan Network')}</span>
