@@ -45,6 +45,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [currentStep, setCurrentStep] = useState(0);
   const selectedModel = useUIStore((s) => s.selectedModel);
   const setSelectedModel = useUIStore((s) => s.setSelectedModel);
+  const setCompletedOnboarding = useUIStore((s) => s.setCompletedOnboarding);
   const [dontShowAgain, setDontShowAgain] = useState(true);
 
   const TOTAL_STEPS = 5;
@@ -99,11 +100,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
   const handleFinish = (openSetup = false) => {
     triggerHapticFeedback('heavy');
-    if (dontShowAgain) {
-      try {
-        localStorage.setItem('cst_onboarding_completed', 'true');
-      } catch {}
-    }
+    try {
+      setCompletedOnboarding();
+    } catch {}
     onClose();
     if (openSetup && onOpenQuickSetup) {
       setTimeout(() => {
@@ -161,8 +160,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <span className="text-[11px] font-mono font-bold tracking-wider uppercase text-cyan-400 truncate">
                   CST NetController AI
                 </span>
-                <span className="px-2 py-0.5 rounded text-[10.5px] font-mono font-semibold bg-cyan-500/10 border border-cyan-400/20 text-cyan-300 shrink-0">
-                  v3.0
+                <span className="px-2 py-0.5 rounded text-[10.5px] font-mono font-semibold bg-cyan-500/15 border border-cyan-400/30 text-cyan-300 shrink-0 shadow-[0_0_8px_rgba(0,240,255,0.2)]">
+                  v3.1 Beta
                 </span>
               </div>
               <h2 className="text-sm font-semibold text-white/90 truncate">

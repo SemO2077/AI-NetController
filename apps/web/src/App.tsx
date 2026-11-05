@@ -213,11 +213,13 @@ export default function App() {
           openModal('onboarding');
           window.history.replaceState({}, document.title, window.location.pathname);
         } else {
-          // Auto-prompt first-time users with interactive onboarding walkthrough
-          const hasCompletedOnboarding = localStorage.getItem('cst_onboarding_completed');
+          // Auto-prompt first-time users with interactive onboarding walkthrough only once
+          const hasCompletedOnboarding = localStorage.getItem('cst_onboarding_completed') === 'true';
           if (!hasCompletedOnboarding) {
             const timer = setTimeout(() => {
-              openModal('onboarding');
+              if (localStorage.getItem('cst_onboarding_completed') !== 'true') {
+                openModal('onboarding');
+              }
             }, 600);
             return () => clearTimeout(timer);
           }

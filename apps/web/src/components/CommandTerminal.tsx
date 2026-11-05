@@ -14,6 +14,8 @@ import {
   Star,
   Clock,
   X,
+  Activity,
+  Globe,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HostDevice, AgentExecutionResponse } from '../types';
@@ -128,6 +130,9 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
       {
         id: 'updates',
         label: language === 'bg' ? 'Провери обновления' : 'Check Updates',
+        icon: RefreshCw,
+        colorClass: 'border-emerald-400/35 hover:border-emerald-400/70 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.22)]',
+        iconColor: 'text-emerald-400',
         prompt:
           language === 'bg'
             ? 'Провери за системни обновления на Windows и инсталирани пакети'
@@ -136,6 +141,9 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
       {
         id: 'restart',
         label: language === 'bg' ? 'Рестартирай хоста' : 'Restart Host',
+        icon: RotateCcw,
+        colorClass: 'border-amber-400/35 hover:border-amber-400/70 text-amber-300 shadow-[0_0_16px_rgba(255,183,3,0.22)]',
+        iconColor: 'text-amber-400',
         prompt:
           language === 'bg'
             ? 'Планирай безопасен рестарт на работната станция след 30 секунди'
@@ -144,6 +152,9 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
       {
         id: 'browser',
         label: language === 'bg' ? 'Отвори браузър' : 'Open Browser',
+        icon: Globe,
+        colorClass: 'border-sky-400/35 hover:border-sky-400/70 text-sky-300 shadow-[0_0_16px_rgba(56,189,248,0.22)]',
+        iconColor: 'text-sky-400',
         prompt:
           language === 'bg'
             ? 'Отвори системния браузър с таблото за мониторинг'
@@ -152,6 +163,9 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
       {
         id: 'stats',
         label: language === 'bg' ? 'CPU и RAM Статистика' : 'CPU & RAM Stats',
+        icon: Activity,
+        colorClass: 'border-violet-400/35 hover:border-violet-400/70 text-violet-300 shadow-[0_0_16px_rgba(139,92,246,0.22)]',
+        iconColor: 'text-violet-400',
         prompt:
           language === 'bg'
             ? 'Покажи топ 10 процеса по натоварване на CPU и RAM памет'
@@ -589,21 +603,24 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
             </motion.div>
           ))}
 
-          {localizedPresets.map((preset) => (
-            <motion.button
-              key={preset.id}
-              type="button"
-              whileHover={{ y: -2, scale: 1.03 }}
-              whileTap={{ scale: 0.93 }}
-              transition={SPRING_POP}
-              disabled={isExecuting}
-              onClick={() => dispatchPrompt(preset.prompt)}
-              className="group min-h-[40px] px-3.5 rounded-full bg-[#081124]/90 backdrop-blur-2xl border border-cyan-400/20 border-t-cyan-400/45 hover:border-cyan-400/55 text-xs font-semibold text-white/90 hover:text-cyan-200 whitespace-nowrap shrink-0 flex items-center gap-1.5 shadow-[0_10px_25px_rgba(0,0,0,0.6)] transition cursor-pointer disabled:opacity-40 transform-gpu bubble-tap"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0 icon-bubbly" />
-              <span className="font-display">{preset.label}</span>
-            </motion.button>
-          ))}
+          {localizedPresets.map((preset) => {
+            const PresetIcon = preset.icon || Sparkles;
+            return (
+              <motion.button
+                key={preset.id}
+                type="button"
+                whileHover={{ y: -2, scale: 1.03 }}
+                whileTap={{ scale: 0.93 }}
+                transition={SPRING_POP}
+                disabled={isExecuting}
+                onClick={() => dispatchPrompt(preset.prompt)}
+                className={`group min-h-[40px] px-3.5 rounded-full bg-[#081124]/90 backdrop-blur-2xl border text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 transform-gpu bubble-tap ${preset.colorClass}`}
+              >
+                <PresetIcon className={`w-3.5 h-3.5 shrink-0 icon-bubbly ${preset.iconColor}`} />
+                <span className="font-display">{preset.label}</span>
+              </motion.button>
+            );
+          })}
         </div>
 
         {/* Tier 2 Liquid Glass Prompt Input Capsule */}

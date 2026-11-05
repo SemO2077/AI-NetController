@@ -12,6 +12,7 @@ export interface UIState {
   language: Language;
   selectedModel: string;
   pendingChatPrompt: string | null;
+  hasCompletedOnboarding: boolean;
 
   setActiveTab: (tab: NavTab) => void;
   openModal: (type: ModalType, payload?: any) => void;
@@ -22,7 +23,16 @@ export interface UIState {
   toggleLanguage: () => void;
   setSelectedModel: (model: string) => void;
   setPendingChatPrompt: (prompt: string | null) => void;
+  setCompletedOnboarding: () => void;
 }
+
+const getInitialOnboardingStatus = (): boolean => {
+  try {
+    return localStorage.getItem('cst_onboarding_completed') === 'true';
+  } catch {
+    return false;
+  }
+};
 
 const getInitialLanguage = (): Language => {
   try {
@@ -61,12 +71,20 @@ export const useUIStore = create<UIState>((set) => ({
   language: getInitialLanguage(),
   selectedModel: getInitialModel(),
   pendingChatPrompt: null,
+  hasCompletedOnboarding: getInitialOnboardingStatus(),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
   openModal: (type, payload = null) => set({ activeModal: type, modalPayload: payload }),
   closeModal: () => set({ activeModal: 'none', modalPayload: null }),
   toggleOmnibar: () => set((state) => ({ isOmnibarOpen: !state.isOmnibarOpen })),
   setOmnibarOpen: (isOpen) => set({ isOmnibarOpen: isOpen }),
+  setCompletedOnboarding: () => {
+    try {
+      localStorage.setItem('cst_onboarding_completed', 'true');
+      localStorage.setItem('cst_onboarding_banner_dismissed', 'true');
+    } catch {}
+    set({ hasCompletedOnboarding: true });
+  },
   setLanguage: (lang) => {
     try {
       localStorage.setItem('wakeflow_language', lang);

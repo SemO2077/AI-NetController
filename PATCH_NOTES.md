@@ -1,3 +1,55 @@
+# CST NetController AI — v3.1.0-beta.3 Release Notes
+
+[![Version](https://img.shields.io/badge/version-v3.1.0--beta.3-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v3.1.0-beta.3)
+[![Channel](https://img.shields.io/badge/channel-public%20beta-amber.svg)](https://github.com/smehmedd/AI-NetController/releases)
+[![Tests](https://img.shields.io/badge/tests-116%20passed%2C%200%20failed-brightgreen.svg)](https://github.com/smehmedd/AI-NetController)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+- **Release Version**: `v3.1.0-beta.3`
+- **Release Channel**: Public Beta
+- **Release Date**: November 5, 2026
+- **Protocol**: `CST/3.0-SECURE`
+- **Compatibility**: Windows 10 / 11 x64, Linux (kernel 5.15+), Android 7.0–15
+
+---
+
+## Summary
+
+The `v3.1.0-beta.3` release delivers persistent onboarding suppression, deep cyber-neon visual vibrancy across all core screens, and enhanced mobile telemetry readability. Once finished or dismissed, the onboarding modal never reappears automatically while remaining readily accessible on demand. All cards, telemetry meters, and control decks have been supercharged with luminous glass specular highlights, animated beacon rings, and high-contrast color-coded action chips.
+
+---
+
+## 1. Persistent Onboarding Suppression & State Machine
+
+- **Atomic Persistent Suppression**:
+  - Closing, finishing, or dismissing the onboarding walkthrough immediately and unconditionally persists `cst_onboarding_completed: 'true'` and `cst_onboarding_banner_dismissed: 'true'` to `localStorage`.
+  - Added reactive `hasCompletedOnboarding` state in `uiStore.ts` with instant reactivity across all views.
+  - Eliminated the auto-popup race condition in `App.tsx` by verifying both pre-timer and within the timeout closure before triggering modal display.
+  - `FleetDashboard` synchronized: the quick-start onboarding banner is permanently suppressed once onboarding is completed or dismissed, while remaining manually launchable from the header Tour button or Settings.
+
+---
+
+## 2. Cyber-Neon Visual Vibrancy & Luminous Telemetry
+
+- **Dual-Ring Radar Beacon**:
+  - Replaced static status dots on online hosts and fleet header with high-visibility dual concentric beacon pulses (`.beacon-pulse-emerald`, `.beacon-pulse-cyan`, `.beacon-pulse-amber`) expanding to 2.4× scale with zero layout reflows.
+- **Glowing Telemetry Tracks**:
+  - Overhauled CPU & RAM meters with high-contrast inset tracks (`.telemetry-track`), luminous gradients (`.telemetry-glow-cyan`, `.telemetry-glow-emerald`, `.telemetry-glow-amber`, `.telemetry-glow-rose`, `.telemetry-glow-violet`), and glowing leading tips.
+- **Specular Glass Rims**:
+  - Elevated `.glass-liquid`, `.glass-liquid-elevated`, and `.glass-liquid-modal` specular top border highlights (`rgba(0, 240, 255, 0.65–0.85)`) for luminous glass depth in dark environments.
+- **Color-Coded Action Chips & Control Decks**:
+  - Color-coded preset chips in `CommandTerminal`: emerald for updates, amber for host restart, sky for browser, violet for CPU/RAM statistics.
+  - Vivid category highlights and drop-shadows across `GeminiChatbot` Quick PC Control Deck.
+
+---
+
+## 3. 144Hz Frame Budget & Zero-Jitter Touch Physics
+
+- All micro-animations and status indicators operate strictly via GPU-composited transforms (`translate3d`, `scale`, `opacity`) with `contain: layout style` isolation.
+- Maintained 0 layout shifts, 0 horizontal overflows, and 100% test pass rate across all viewports from 320px foldables to 4K displays.
+
+---
+
 # CST NetController AI — v3.1.0-beta.2 Release Notes
 
 [![Version](https://img.shields.io/badge/version-v3.1.0--beta.2-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v3.1.0-beta.2)

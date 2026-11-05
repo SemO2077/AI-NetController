@@ -2,7 +2,7 @@
   "version": "v3.0.0",
   "tag": "v3.0.0-LTS",
   "releaseName": "CST NetController AI v3.0.0 (Updated 3.0) \u2014 True Native Android Controller, Zero-Overflow Multi-Resolution UI & Full-Stack Protocol Parity",
-  "publishedAt": "2026-11-05T16:14:12.401283+00:00",
+  "publishedAt": "2026-11-05T16:49:25.264451+00:00",
   "protocol": "CST/3.0-SECURE",
   "artifacts": [
     {
@@ -29,7 +29,7 @@
       "platform": "Android 7.0-15 arm64-v8a (144Hz Native Android Controller .APK)",
       "sizeBytes": 1374274,
       "sizeFormatted": "1.3 MB",
-      "sha256": "e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3",
+      "sha256": "4362235af0b547f034e17f70a0726943d4a8f924148efe45b51b5c9fd3389df3",
       "downloadUrl": "/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk"
     },
     {
@@ -38,7 +38,7 @@
       "platform": "Android 7.0-15 Universal Package (Mobile Controller .APK)",
       "sizeBytes": 1374274,
       "sizeFormatted": "1.3 MB",
-      "sha256": "e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3",
+      "sha256": "4362235af0b547f034e17f70a0726943d4a8f924148efe45b51b5c9fd3389df3",
       "downloadUrl": "/releases/v3.0.0/CST_NetController_AI_v3.0.0.apk"
     }
   ]

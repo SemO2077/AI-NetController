@@ -457,8 +457,11 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                   </span>
                 ) : (
                   <>
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/25 border border-emerald-400/60 font-mono text-[11px] font-bold text-emerald-300 shadow-[0_0_14px_rgba(0,245,155,0.35)]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#00f59b] animate-pulse" />
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/25 border border-emerald-400/60 font-mono text-[11px] font-bold text-emerald-300 shadow-[0_0_16px_rgba(0,245,155,0.4)]">
+                      <span className="relative flex h-2 w-2 items-center justify-center shrink-0">
+                        <span className="beacon-pulse-emerald absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400 shadow-[0_0_8px_#00f59b]" />
+                      </span>
                       {rttMs}ms
                     </span>
                     {isLaptop && safeBatteryPct !== undefined && batteryConfig && (
@@ -590,12 +593,12 @@ const HostCardComponent: React.FC<HostCardProps> = ({
             <div className="grid grid-cols-2 gap-4 items-center">
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
-                  <span className="text-white/50 font-medium">CPU</span>
-                  <span className={cpuVal >= 75 ? 'text-rose-300 font-bold drop-shadow-[0_0_6px_rgba(255,42,109,0.5)]' : 'text-cyan-300 font-bold drop-shadow-[0_0_6px_rgba(0,240,255,0.4)]'}>
+                  <span className="text-white/60 font-medium">CPU</span>
+                  <span className={cpuVal >= 75 ? 'text-rose-300 font-bold drop-shadow-[0_0_8px_rgba(255,42,109,0.7)]' : 'text-cyan-300 font-bold drop-shadow-[0_0_8px_rgba(0,240,255,0.6)]'}>
                     {cpuVal}%
                   </span>
                 </div>
-                <div className="h-[3.5px] w-full rounded-full bg-black/40 border border-white/5 overflow-hidden">
+                <div className="h-[4.5px] w-full rounded-full telemetry-track p-[0.5px] overflow-hidden">
                   <motion.div
                     initial={{ scaleX: 0 }}
                     animate={{ scaleX: Math.min(1, Math.max(0.04, cpuVal / 100)) }}
@@ -603,8 +606,8 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     style={{ transformOrigin: 'left' }}
                     className={`h-full w-full rounded-full transform-gpu ${
                       cpuVal >= 75
-                        ? 'bg-gradient-to-r from-rose-500 via-pink-400 to-amber-400 shadow-[0_0_14px_rgba(255,42,109,0.8)]'
-                        : 'bg-gradient-to-r from-cyan-400 via-sky-300 to-cyan-200 shadow-[0_0_12px_rgba(0,240,255,0.6)]'
+                        ? 'bg-gradient-to-r from-rose-500 via-pink-400 to-amber-400 telemetry-glow-rose'
+                        : 'bg-gradient-to-r from-cyan-400 via-sky-300 to-white telemetry-glow-cyan'
                     }`}
                   />
                 </div>
@@ -612,12 +615,12 @@ const HostCardComponent: React.FC<HostCardProps> = ({
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
-                  <span className="text-white/50 font-medium">RAM</span>
-                  <span className={ramVal >= 75 ? 'text-amber-300 font-bold drop-shadow-[0_0_6px_rgba(255,183,3,0.5)]' : 'text-indigo-300 font-bold drop-shadow-[0_0_6px_rgba(139,92,246,0.4)]'}>
+                  <span className="text-white/60 font-medium">RAM</span>
+                  <span className={ramVal >= 75 ? 'text-amber-300 font-bold drop-shadow-[0_0_8px_rgba(255,183,3,0.7)]' : 'text-indigo-300 font-bold drop-shadow-[0_0_8px_rgba(139,92,246,0.6)]'}>
                     {ramVal}%
                   </span>
                 </div>
-                <div className="h-[3.5px] w-full rounded-full bg-black/40 border border-white/5 overflow-hidden">
+                <div className="h-[4.5px] w-full rounded-full telemetry-track p-[0.5px] overflow-hidden">
                   <motion.div
                     initial={{ scaleX: 0 }}
                     animate={{ scaleX: Math.min(1, Math.max(0.04, ramVal / 100)) }}
@@ -625,8 +628,8 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     style={{ transformOrigin: 'left' }}
                     className={`h-full w-full rounded-full transform-gpu ${
                       ramVal >= 75
-                        ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 shadow-[0_0_14px_rgba(255,183,3,0.8)]'
-                        : 'bg-gradient-to-r from-violet-400 via-purple-300 to-cyan-300 shadow-[0_0_12px_rgba(139,92,246,0.6)]'
+                        ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 telemetry-glow-amber'
+                        : 'bg-gradient-to-r from-violet-400 via-purple-300 to-cyan-300 telemetry-glow-violet'
                     }`}
                   />
                 </div>
@@ -708,6 +711,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                         : 'linear-gradient(135deg, #060913 0%, #0a0f1d 100%)',
                     }}
                   />
+                  <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500/10 via-transparent to-white/5 pointer-events-none" />
 
                   {host.isOnline && (
                     <div className="absolute inset-x-4 top-8 bottom-7 rounded-lg border border-cyan-400/20 bg-[#040914]/80 p-2 flex flex-col gap-1.5 pointer-events-none overflow-hidden">

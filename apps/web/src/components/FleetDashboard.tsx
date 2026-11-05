@@ -253,13 +253,24 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     return 'grid';
   });
 
+  const hasCompletedOnboarding = useUIStore((s) => s.hasCompletedOnboarding);
+  const setCompletedOnboarding = useUIStore((s) => s.setCompletedOnboarding);
+
   const [showOnboardingBanner, setShowOnboardingBanner] = useState<boolean>(() => {
     try {
-      return !localStorage.getItem('cst_onboarding_banner_dismissed');
+      const completed = localStorage.getItem('cst_onboarding_completed') === 'true';
+      const dismissed = localStorage.getItem('cst_onboarding_banner_dismissed') === 'true';
+      return !completed && !dismissed;
     } catch {
-      return true;
+      return false;
     }
   });
+
+  useEffect(() => {
+    if (hasCompletedOnboarding) {
+      setShowOnboardingBanner(false);
+    }
+  }, [hasCompletedOnboarding]);
 
   useEffect(() => {
     try {
@@ -729,9 +740,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                 type="button"
                 onClick={() => {
                   setShowOnboardingBanner(false);
-                  try {
-                    localStorage.setItem('cst_onboarding_banner_dismissed', 'true');
-                  } catch {}
+                  setCompletedOnboarding();
                 }}
                 className="min-h-[40px] min-w-[40px] p-2 rounded-xl hover:bg-white/10 text-white/60 hover:text-white transition cursor-pointer flex items-center justify-center"
                 title={language === 'bg' ? 'Скрий' : 'Dismiss'}
@@ -749,13 +758,16 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             <h1 className="text-fluid-title font-black tracking-tight font-display truncate bg-gradient-to-r from-white via-cyan-100 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_2px_14px_rgba(0,229,255,0.35)]">
               {t('fleet_title')}
             </h1>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#060c1c]/95 backdrop-blur-3xl border border-cyan-400/30 text-[11px] font-medium whitespace-nowrap shrink-0 shadow-[0_8px_24px_rgba(0,0,0,0.6),0_0_16px_rgba(0,229,255,0.15)] tabular-nums">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_10px_#10b981] animate-pulse" />
-              <span className="text-emerald-300 font-bold drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#060c1c]/95 backdrop-blur-3xl border border-cyan-400/40 text-[11px] font-medium whitespace-nowrap shrink-0 shadow-[0_8px_24px_rgba(0,0,0,0.6),0_0_20px_rgba(0,240,255,0.22)] tabular-nums">
+              <span className="relative flex h-2 w-2 items-center justify-center shrink-0">
+                <span className="beacon-pulse-emerald absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400 shadow-[0_0_10px_#10b981]" />
+              </span>
+              <span className="text-emerald-300 font-bold drop-shadow-[0_0_8px_rgba(16,185,129,0.7)]">
                 {onlineCount} {t('fleet_online')}
               </span>
               <span className="text-white/30">•</span>
-              <span className="text-amber-300/90 font-medium">
+              <span className="text-amber-300 font-medium drop-shadow-[0_0_6px_rgba(255,183,3,0.5)]">
                 {offlineCount} {t('fleet_sleeping')}
               </span>
             </div>

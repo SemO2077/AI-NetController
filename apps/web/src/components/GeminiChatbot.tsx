@@ -816,7 +816,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         id: 'deck-hotkey',
         icon: Zap,
         label: bg ? 'Диспечер на задачи (Task Manager)' : 'Open Task Manager',
-        color: 'text-indigo-300 border-indigo-400/30 bg-indigo-500/10 hover:bg-indigo-500/20',
+        color: 'text-indigo-300 border-indigo-400/50 bg-indigo-500/15 hover:bg-indigo-500/25 shadow-[0_0_14px_rgba(129,140,248,0.25)]',
         prompt: bg
           ? `Изпрати клавишна комбинация ctrl,shift,esc за отваряне на Task Manager на ${hostName}`
           : `Open Task Manager on ${hostName} using ctrl,shift,esc`,
@@ -825,7 +825,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         id: 'deck-desktop',
         icon: Monitor,
         label: bg ? 'Покажи работния плот (Win+D)' : 'Show Desktop (Win+D)',
-        color: 'text-cyan-300 border-cyan-400/30 bg-cyan-500/10 hover:bg-cyan-500/20',
+        color: 'text-cyan-300 border-cyan-400/50 bg-cyan-500/15 hover:bg-cyan-500/25 shadow-[0_0_14px_rgba(34,211,238,0.25)]',
         prompt: bg
           ? `Покажи работния плот на ${hostName} чрез клавишна комбинация win,d`
           : `Show desktop on ${hostName} using win,d`,
@@ -834,7 +834,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         id: 'deck-explorer',
         icon: Terminal,
         label: bg ? 'Файлов мениджър (Win+E)' : 'Open File Explorer',
-        color: 'text-amber-300 border-amber-400/30 bg-amber-500/10 hover:bg-amber-500/20',
+        color: 'text-amber-300 border-amber-400/50 bg-amber-500/15 hover:bg-amber-500/25 shadow-[0_0_14px_rgba(251,191,36,0.25)]',
         prompt: bg
           ? `Отвори файловия мениджър на ${hostName} чрез win,e`
           : `Open File Explorer on ${hostName} using win,e`,
@@ -843,7 +843,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         id: 'deck-switch',
         icon: RefreshCw,
         label: bg ? 'Смени прозорец (Alt+Tab)' : 'Switch Window (Alt+Tab)',
-        color: 'text-sky-300 border-sky-400/30 bg-sky-500/10 hover:bg-sky-500/20',
+        color: 'text-sky-300 border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 shadow-[0_0_14px_rgba(56,189,248,0.25)]',
         prompt: bg
           ? `Превключи активния прозорец на ${hostName} чрез alt,tab`
           : `Switch active window on ${hostName} using alt,tab`,
@@ -852,7 +852,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         id: 'deck-click',
         icon: MousePointerClick,
         label: bg ? 'Ляв клик (960, 540)' : 'Left Click (960, 540)',
-        color: 'text-cyan-300 border-cyan-400/30 bg-cyan-500/10 hover:bg-cyan-500/20',
+        color: 'text-cyan-300 border-cyan-400/50 bg-cyan-500/15 hover:bg-cyan-500/25 shadow-[0_0_14px_rgba(34,211,238,0.25)]',
         prompt: bg
           ? `Кликни с левия бутон на мишката на координати 960, 540 на ${hostName}`
           : `Click the left mouse button at coordinates 960, 540 on ${hostName}`,
@@ -861,7 +861,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         id: 'deck-right-click',
         icon: MousePointerClick,
         label: bg ? 'Десен клик (960, 540)' : 'Right Click (960, 540)',
-        color: 'text-purple-300 border-purple-400/30 bg-purple-500/10 hover:bg-purple-500/20',
+        color: 'text-purple-300 border-purple-400/50 bg-purple-500/15 hover:bg-purple-500/25 shadow-[0_0_14px_rgba(192,132,252,0.25)]',
         prompt: bg
           ? `Кликни с десния бутон на мишката на координати 960, 540 на ${hostName}`
           : `Right click the mouse at coordinates 960, 540 on ${hostName}`,
@@ -870,7 +870,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         id: 'deck-type',
         icon: Keyboard,
         label: bg ? 'Напиши Статус Команда' : 'Type Status Command',
-        color: 'text-sky-300 border-sky-400/30 bg-sky-500/10 hover:bg-sky-500/20',
+        color: 'text-sky-300 border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 shadow-[0_0_14px_rgba(56,189,248,0.25)]',
         prompt: bg
           ? `Напиши "ipconfig /all" чрез клавиатурата на ${hostName} и натисни Enter`
           : `Type "ipconfig /all" on ${hostName} keyboard and press Enter`,
@@ -879,7 +879,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         id: 'deck-update',
         icon: DownloadCloud,
         label: bg ? 'Системен Ъпдейт' : 'Run System Update',
-        color: 'text-emerald-300 border-emerald-400/35 bg-emerald-500/12 hover:bg-emerald-500/25',
+        color: 'text-emerald-300 border-emerald-400/50 bg-emerald-500/18 hover:bg-emerald-500/30 shadow-[0_0_16px_rgba(52,211,153,0.3)]',
         prompt: bg
           ? 'Провери за налични обновления и обнови всички AI модели, хост демона и правилата на защитната стена'
           : 'Check for available updates and upgrade all AI models, the PC host daemon, and AST firewall rules now',
@@ -994,7 +994,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
           <button
             type="button"
             onClick={toggleAutoExecute}
-            className={`px-2.5 py-1.5 min-h-[36px] rounded-full text-[10px] sm:text-[11px] font-semibold border transition flex items-center space-x-1.5 cursor-pointer bubble-tap ${
+            className={`px-2.5 py-1.5 min-h-[36px] min-w-[36px] rounded-full text-[10px] sm:text-[11px] font-semibold border transition flex items-center justify-center space-x-1.5 cursor-pointer bubble-tap ${
               autoExecutePcActions
                 ? 'bg-emerald-500/18 text-emerald-300 border-emerald-400/40 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
                 : 'bg-white/[0.04] text-slate-400 border-white/10 hover:text-white'
@@ -1022,7 +1022,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
               triggerHapticFeedback('light');
               setShowControlDeck((prev) => !prev);
             }}
-            className={`w-9 h-9 rounded-full border flex items-center justify-center transition cursor-pointer bubble-tap ${
+            className={`w-9 h-9 min-w-[36px] min-h-[36px] rounded-full border flex items-center justify-center transition cursor-pointer bubble-tap ${
               showControlDeck
                 ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/40'
                 : 'bg-white/[0.04] text-slate-400 border-white/10 hover:text-white'
@@ -1163,7 +1163,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                       <button
                         type="button"
                         onClick={() => handleCopy(msg.id, msg.content.replace(/\[ACTION:[^\]]+\]/gi, '').trim())}
-                        className="min-h-[32px] px-2 py-1 rounded-lg text-white/45 hover:text-cyan-300 hover:bg-white/5 transition flex items-center gap-1 cursor-pointer text-xs"
+                        className="min-h-[32px] min-w-[32px] px-2 py-1 rounded-lg text-white/45 hover:text-cyan-300 hover:bg-white/5 transition flex items-center justify-center gap-1 cursor-pointer text-xs"
                         title={language === 'bg' ? 'Копирай отговора' : 'Copy response'}
                       >
                         {copiedId === msg.id ? (
