@@ -1506,8 +1506,8 @@ def zipalign_and_sign():
     return signed_apk
 
 def distribute_apk(signed_apk):
-    # Distribute to v3.1.0-beta.1 and v3.0.0
-    for rel_tag, apk_tag in [("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
+    # Distribute to v3.1.0-beta.2, v3.1.0-beta.1 and v3.0.0
+    for rel_tag, apk_tag in [("v3.1.0-beta.2", "v3.1.0"), ("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
         rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
         os.makedirs(rel_dir, exist_ok=True)
         dest_arm64 = os.path.join(rel_dir, f"CST_NetController_AI_{apk_tag}_arm64-v8a.apk")
@@ -1521,13 +1521,13 @@ def distribute_apk(signed_apk):
     shutil.copy2(signed_apk, dest_flutter)
     shutil.copy2(signed_apk, os.path.join(ROOT_DIR, "CST_NetController_AI_v3.1.0_arm64-v8a.apk"))
 
-    dest_arm64_main = os.path.join(ROOT_DIR, "public", "releases", "v3.1.0-beta.1", "CST_NetController_AI_v3.1.0_arm64-v8a.apk")
+    dest_arm64_main = os.path.join(ROOT_DIR, "public", "releases", "v3.1.0-beta.2", "CST_NetController_AI_v3.1.0_arm64-v8a.apk")
     size_mb = os.path.getsize(dest_arm64_main) / (1024 * 1024)
     sha_hash = sha256_file(dest_arm64_main)
     print(f"\n[SUCCESS] APK Published to:\n  - {dest_arm64_main}\n  - Size: {size_mb:.2f} MB\n  - SHA256: {sha_hash}")
 
     # Update manifest & checksums
-    for rel_tag, apk_tag in [("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
+    for rel_tag, apk_tag in [("v3.1.0-beta.2", "v3.1.0"), ("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
         rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
         manifest_path = os.path.join(rel_dir, "RELEASE_MANIFEST.json")
         if os.path.exists(manifest_path):
