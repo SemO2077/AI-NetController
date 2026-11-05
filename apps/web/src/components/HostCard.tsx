@@ -716,13 +716,13 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                           <span className="w-1.5 h-1.5 rounded-full bg-rose-400/70" />
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70" />
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400/70" />
-                          <span className="text-[8px] font-mono text-cyan-300/70 ml-1">
+                          <span className="text-[10px] font-mono text-cyan-300/70 ml-1">
                             {host.name}:~/{host.os === 'windows' ? 'PowerShell' : 'bash'}
                           </span>
                         </div>
-                        <span className="text-[8px] font-mono text-white/40">CST/3.0 • Binary WS</span>
+                        <span className="text-[10px] font-mono text-white/40">CST/3.0 • Binary WS</span>
                       </div>
-                      <div className="font-mono text-[8.5px] text-emerald-300/80 leading-tight space-y-0.5">
+                      <div className="font-mono text-[10px] text-emerald-300/80 leading-tight space-y-0.5">
                         <div>$ agent_daemon --status --tls</div>
                         <div className="text-cyan-300/75">
                           [OK] Framebuffer pipe active • CPU {cpuVal}% • RAM {ramVal}%
@@ -736,7 +736,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
 
                   <div className="relative z-10 flex items-center justify-between">
                     <span
-                      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9.5px] font-mono font-bold tracking-wider uppercase border ${
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-mono font-bold tracking-wider uppercase border ${
                         host.isOnline
                           ? 'bg-black/65 text-emerald-300 border-emerald-400/40'
                           : 'bg-black/65 text-amber-300 border-amber-400/35'

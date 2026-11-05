@@ -1527,34 +1527,40 @@ def distribute_apk(signed_apk):
     print(f"\n[SUCCESS] APK Published to:\n  - {dest_arm64_main}\n  - Size: {size_mb:.2f} MB\n  - SHA256: {sha_hash}")
 
     # Update manifest & checksums
-    manifest_path = os.path.join(rel_v290, "RELEASE_MANIFEST.json")
-    if os.path.exists(manifest_path):
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-        for art in manifest.get("artifacts", []):
-            if "CST_NetController_AI_v3.0.0" in art["filename"]:
-                art["sizeBytes"] = os.path.getsize(dest_arm64)
-                art["sizeFormatted"] = f"{size_mb:.1f} MB"
-                art["sha256"] = sha_hash
-        manifest["publishedAt"] = datetime.now(timezone.utc).isoformat()
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2)
+    for rel_tag, apk_tag in [("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
+        rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
+        manifest_path = os.path.join(rel_dir, "RELEASE_MANIFEST.json")
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            for art in manifest.get("artifacts", []):
+                if apk_tag in art["filename"]:
+                    art_file = os.path.join(rel_dir, art["filename"])
+                    if os.path.exists(art_file):
+                        art["sizeBytes"] = os.path.getsize(art_file)
+                        art["sizeFormatted"] = f"{art['sizeBytes'] / (1024*1024):.1f} MB"
+                        art["sha256"] = sha256_file(art_file)
+            manifest["publishedAt"] = datetime.now(timezone.utc).isoformat()
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
 
-    sums_path = os.path.join(rel_v290, "SHA256SUMS.txt")
-    if os.path.exists(sums_path):
-        with open(sums_path, "r", encoding="utf-8") as f:
-            lines = [l for l in f.read().splitlines() if l.strip()]
-        new_lines = []
-        for l in lines:
-            parts = l.split(None, 1)
-            if len(parts) == 2 and "CST_NetController_AI_v3.0.0" in parts[1]:
-                new_lines.append(f"{sha_hash}  {parts[1]}")
-            else:
+        sums_path = os.path.join(rel_dir, "SHA256SUMS.txt")
+        if os.path.exists(sums_path):
+            with open(sums_path, "r", encoding="utf-8") as f:
+                lines = [l for l in f.read().splitlines() if l.strip()]
+            new_lines = []
+            for l in lines:
+                parts = l.split(None, 1)
+                if len(parts) == 2:
+                    matched_file = os.path.join(rel_dir, parts[1])
+                    if os.path.exists(matched_file):
+                        new_lines.append(f"{sha256_file(matched_file)}  {parts[1]}")
+                        continue
                 new_lines.append(l)
-        with open(sums_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(new_lines) + "\n")
+            with open(sums_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(new_lines) + "\n")
 
-    return dest_arm64
+    return dest_arm64_main
 
 if __name__ == "__main__":
     ensure_web_dist()

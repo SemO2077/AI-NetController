@@ -189,7 +189,7 @@ const WolEnergyCalculatorComponent: React.FC<WolEnergyCalculatorProps> = ({
             triggerHapticFeedback('light');
             setIsExpanded(!isExpanded);
           }}
-          className="text-xs text-cyan-300 hover:underline flex items-center gap-1 cursor-pointer"
+          className="min-h-[36px] py-1 px-2.5 rounded-lg hover:bg-white/5 text-xs text-cyan-300 flex items-center gap-1.5 cursor-pointer"
         >
           {isExpanded ? (
             <>
@@ -278,7 +278,7 @@ const WolEnergyCalculatorComponent: React.FC<WolEnergyCalculatorProps> = ({
                   <button
                     type="button"
                     onClick={handleResetToDefault}
-                    className="text-[11px] text-slate-400 hover:text-slate-200 font-mono px-2.5 py-1 rounded-full hover:bg-white/5 cursor-pointer bubble-tap"
+                    className="min-h-[36px] text-xs text-slate-400 hover:text-slate-200 font-mono px-3 py-1.5 rounded-full hover:bg-white/5 cursor-pointer bubble-tap flex items-center justify-center"
                   >
                     {t('calc_reset')}
                   </button>

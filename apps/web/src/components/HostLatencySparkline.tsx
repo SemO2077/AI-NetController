@@ -454,7 +454,7 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
 
           {/* Time Axis Labels: -30s, -20s, -10s, Now */}
           {showTimeAxis && (
-            <g className="text-[9px] font-mono fill-white/40 select-none">
+            <g className="text-[10px] font-mono fill-white/40 select-none">
               <text x={paddingLeft} y={height - 4} textAnchor="start">
                 {language === 'bg' ? '-30с' : '-30s'}
               </text>

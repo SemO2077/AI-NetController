@@ -156,7 +156,7 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
               {currentLatencyMs !== null ? `${currentLatencyMs}ms` : '—'}
             </span>
           </div>
-          <span className="text-[9px] text-slate-400 tracking-tight">
+          <span className="text-[10px] text-slate-400 tracking-tight">
             ±{jitterMs}ms jtr
           </span>
         </div>
@@ -258,10 +258,10 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
         </svg>
 
         {/* Watermark Min/Max scale labels */}
-        <div className="absolute bottom-1 right-2 text-[9px] font-mono text-slate-500 pointer-events-none">
+        <div className="absolute bottom-1 right-2 text-[10px] font-mono text-slate-500 pointer-events-none">
           Max: {maxLatencyMs}ms
         </div>
-        <div className="absolute top-1 right-2 text-[9px] font-mono text-slate-500 pointer-events-none">
+        <div className="absolute top-1 right-2 text-[10px] font-mono text-slate-500 pointer-events-none">
           Min: {minLatencyMs}ms
         </div>
       </div>

@@ -36,27 +36,27 @@
     --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
 
     /* Fluid Root Font Size Scaling Across Resolutions & Aspect Ratios */
-    font-size: clamp(14px, 0.88rem + 0.22vw, 16.5px);
+    font-size: clamp(14px, 0.90rem + 0.20vw, 16.5px);
   }
 
-  /* 1. Ultra-Narrow Foldables (e.g. Galaxy Z Fold cover < 320px) */
+  /* 1. Ultra-Narrow Foldables (e.g. Galaxy Z Fold cover <= 320px) */
   @media (max-width: 320px) {
     :root {
-      font-size: 12.5px;
+      font-size: 14px;
     }
   }
 
   /* 2. Compact Narrow Mobile (321px - 374px) */
   @media (min-width: 321px) and (max-width: 374px) {
     :root {
-      font-size: 13.5px;
+      font-size: 14.5px;
     }
   }
 
   /* 3. Short Mobile Landscape (e.g. 16:9 / 19.5:9 / 21:9 phones <= 480px height) */
   @media (max-height: 480px) and (orientation: landscape) {
     :root {
-      font-size: 13px;
+      font-size: 14px;
     }
   }
 
@@ -170,7 +170,7 @@
 }
 
 .text-fluid-meta {
-  font-size: clamp(0.7rem, 0.66rem + 0.16vw, 0.8rem);
+  font-size: clamp(0.75rem, 0.72rem + 0.16vw, 0.84rem);
   line-height: 1.35;
 }
 

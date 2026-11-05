@@ -701,7 +701,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                   <span className="text-xs sm:text-sm font-bold text-white tracking-tight">
                     {language === 'bg' ? 'Добре дошли в CST NetController AI' : 'Welcome to CST NetController AI'}
                   </span>
-                  <span className="px-2 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-violet-500/25 text-violet-200 border border-violet-400/30 shrink-0">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10.5px] font-mono font-bold bg-violet-500/25 text-violet-200 border border-violet-400/30 shrink-0">
                     {language === 'bg' ? 'Първи стъпки' : 'Quick Start'}
                   </span>
                 </div>
@@ -878,7 +878,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                       triggerHapticFeedback('selection');
                       setViewMode(mode);
                     }}
-                    className={`group relative min-h-[36px] px-2.5 rounded-full text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer z-10 whitespace-nowrap ${
+                    className={`group relative min-w-[36px] min-h-[36px] px-2.5 rounded-full text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer z-10 whitespace-nowrap ${
                       isActive ? 'text-cyan-300 font-semibold' : 'text-white/55 hover:text-white'
                     }`}
                     title={label}
@@ -958,14 +958,14 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                 <X className="w-3.5 h-3.5" />
               </button>
             ) : (
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => {
                     triggerHapticFeedback('light');
                     toggleOmnibar();
                   }}
-                  className="px-2 py-0.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-[10px] font-mono text-cyan-300/90 border border-white/10 transition cursor-pointer"
+                  className="min-h-[32px] px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-xs font-mono font-semibold text-cyan-300/90 border border-white/10 transition cursor-pointer flex items-center justify-center"
                   title={t('fleet_spotlight_tooltip')}
                   aria-label={t('fleet_spotlight_aria')}
                 >
@@ -977,7 +977,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                     triggerHapticFeedback('light');
                     openModal('shortcuts');
                   }}
-                  className="px-1.5 py-0.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-[10px] font-mono text-white/50 hover:text-white border border-white/10 transition cursor-pointer"
+                  className="min-h-[32px] min-w-[32px] px-2 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-xs font-mono font-semibold text-white/60 hover:text-white border border-white/10 transition cursor-pointer flex items-center justify-center"
                   title={language === 'bg' ? 'Бързи Клавиши [?]' : 'Keyboard Shortcuts [?]'}
                   aria-label="Shortcuts"
                 >

@@ -161,7 +161,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <span className="text-[11px] font-mono font-bold tracking-wider uppercase text-cyan-400 truncate">
                   CST NetController AI
                 </span>
-                <span className="px-1.5 py-0.5 rounded text-[9.5px] font-mono bg-cyan-500/10 border border-cyan-400/20 text-cyan-300 shrink-0">
+                <span className="px-2 py-0.5 rounded text-[10.5px] font-mono font-semibold bg-cyan-500/10 border border-cyan-400/20 text-cyan-300 shrink-0">
                   v3.0
                 </span>
               </div>
@@ -181,7 +181,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
             <button
               onClick={() => handleFinish()}
-              className="p-1.5 rounded-full hover:bg-white/10 text-white/60 hover:text-white transition cursor-pointer"
+              className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-full hover:bg-white/10 text-white/60 hover:text-white transition cursor-pointer"
               title={isBg ? 'Затвори' : 'Close'}
             >
               <X className="w-5 h-5" />
@@ -276,7 +276,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setLanguage('bg')}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition ${
+                      className={`min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition flex items-center justify-center ${
                         isBg
                           ? 'bg-cyan-500 text-black shadow-[0_0_10px_#00F0FF]'
                           : 'bg-white/5 text-white/70 hover:bg-white/10'
@@ -287,7 +287,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setLanguage('en')}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition ${
+                      className={`min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition flex items-center justify-center ${
                         !isBg
                           ? 'bg-cyan-500 text-black shadow-[0_0_10px_#00F0FF]'
                           : 'bg-white/5 text-white/70 hover:bg-white/10'
@@ -337,7 +337,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         <h4 className="font-semibold text-white text-xs">
                           {isBg ? 'Ефемерен X25519 & ChaCha20-Poly1305' : 'Ephemeral X25519 & ChaCha20-Poly1305'}
                         </h4>
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300">
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
                           RFC 8439
                         </span>
                       </div>
@@ -359,7 +359,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         <h4 className="font-semibold text-white text-xs">
                           {isBg ? 'Human-in-the-Loop (HITL) Портал' : 'Human-in-the-Loop (HITL) Gate'}
                         </h4>
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300">
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">
                           Safety
                         </span>
                       </div>
@@ -381,7 +381,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         <h4 className="font-semibold text-white text-xs">
                           {isBg ? 'AST Командна Защитна Стена' : 'AST Command Firewall'}
                         </h4>
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-teal-500/20 text-teal-300">
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-teal-500/20 text-teal-300">
                           De-Obfuscation
                         </span>
                       </div>
@@ -698,7 +698,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           </div>
 
           {/* Dots Indicator */}
-          <div className="hidden xs:flex items-center gap-1.5">
+          <div className="hidden xs:flex items-center gap-1">
             {Array.from({ length: TOTAL_STEPS }).map((_, idx) => (
               <button
                 key={idx}
@@ -707,13 +707,17 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   triggerHapticFeedback('light');
                   setCurrentStep(idx);
                 }}
-                className={`h-2 rounded-full transition-all cursor-pointer ${
-                  idx === currentStep
-                    ? 'w-6 bg-cyan-400 shadow-[0_0_8px_#00F0FF]'
-                    : 'w-2 bg-white/20 hover:bg-white/40'
-                }`}
+                className="min-w-[32px] min-h-[32px] flex items-center justify-center cursor-pointer"
                 title={`Step ${idx + 1}`}
-              />
+              >
+                <span
+                  className={`h-2 rounded-full transition-all ${
+                    idx === currentStep
+                      ? 'w-6 bg-cyan-400 shadow-[0_0_8px_#00F0FF]'
+                      : 'w-2 bg-white/20 hover:bg-white/40'
+                  }`}
+                />
+              </button>
             ))}
           </div>
 
@@ -722,7 +726,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               <button
                 type="button"
                 onClick={handleNext}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-400 hover:from-cyan-400 hover:to-teal-300 text-black font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-[0_0_15px_rgba(0,240,255,0.25)]"
+                className="min-h-[42px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-400 hover:from-cyan-400 hover:to-teal-300 text-black font-bold text-xs sm:text-sm flex items-center gap-1.5 transition cursor-pointer shadow-[0_0_15px_rgba(0,240,255,0.25)]"
               >
                 <span>{isBg ? 'Напред' : 'Next'}</span>
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -732,7 +736,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleFinish(true)}
-                  className="px-2.5 sm:px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-cyan-300 font-semibold text-xs flex items-center gap-1.5 transition cursor-pointer border border-cyan-400/30 whitespace-nowrap"
+                  className="min-h-[42px] px-3.5 sm:px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-cyan-300 font-semibold text-xs sm:text-sm flex items-center gap-1.5 transition cursor-pointer border border-cyan-400/30 whitespace-nowrap"
                   title={isBg ? 'Свържи реален PC демон сега' : 'Pair Live PC Daemon Now'}
                 >
                   <QrCode className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -741,7 +745,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleFinish(false)}
-                  className="px-3 sm:px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-black font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.3)] whitespace-nowrap"
+                  className="min-h-[42px] px-4 sm:px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-black font-bold text-xs sm:text-sm flex items-center gap-1.5 transition cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.3)] whitespace-nowrap"
                 >
                   <Play className="w-3.5 h-3.5 fill-black shrink-0" />
                   <span>{isBg ? 'Към Конзолата' : 'Enter Console'}</span>

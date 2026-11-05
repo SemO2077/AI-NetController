@@ -122,7 +122,7 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
                   >
                     {tab.label}
                   </span>
-                  <kbd className="hidden lg:inline-block text-[9px] font-mono text-white/30 group-hover:text-white/55 px-1 rounded bg-white/[0.04] border border-white/[0.06] shrink-0">
+                  <kbd className="hidden lg:inline-block text-[10px] font-mono text-white/30 group-hover:text-white/55 px-1 rounded bg-white/[0.04] border border-white/[0.06] shrink-0">
                     {tab.shortcut}
                   </kbd>
                 </div>
@@ -144,7 +144,7 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
                 onOpenNetworkConfig();
               }
             }}
-            className="group px-2.5 py-1.5 rounded-full glass-liquid-subtle hover:border-cyan-400/40 border border-white/12 flex items-center space-x-1.5 text-[11px] font-mono tabular-nums transition cursor-pointer transform-gpu"
+            className="group min-h-[38px] px-3.5 py-1.5 rounded-full glass-liquid-subtle hover:border-cyan-400/40 border border-white/12 flex items-center space-x-1.5 text-xs font-mono tabular-nums transition cursor-pointer transform-gpu"
             title={
               isConnected
                 ? `Network Connected (${latency ? `${Math.round(latency)}ms` : 'active'}) — Click to configure`
@@ -158,7 +158,7 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
                   : 'text-cyan-300 drop-shadow-[0_0_8px_#00f0ff]'
               }`}
             />
-            <span className="text-white/90 font-semibold text-[10.5px] whitespace-nowrap">
+            <span className="text-white/90 font-semibold text-xs whitespace-nowrap">
               {isConnected && latency !== null ? `${Math.round(latency)}ms` : isConnected ? t('nav_connected') : t('nav_lab')}
             </span>
           </motion.button>

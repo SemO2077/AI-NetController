@@ -236,7 +236,7 @@ export const WolEnergyWeeklyChart: React.FC<WolEnergyWeeklyChartProps> = ({
             <h4 className="text-xs font-bold text-white font-display uppercase tracking-wider">
               {isBg ? 'Седмично Сравнение на Енергията' : 'Weekly Energy Comparison'}
             </h4>
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 font-bold">
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 font-bold">
               {weeklyTotals.totalScheduledDays} {isBg ? 'ДНИ С ГРАФИК' : 'SCHEDULED DAYS'}
             </span>
           </div>
@@ -344,7 +344,7 @@ export const WolEnergyWeeklyChart: React.FC<WolEnergyWeeklyChartProps> = ({
             onChange={e => setScheduledDayActiveHours(Number(e.target.value))}
             className="w-full accent-cyan-400 cursor-pointer h-1.5 mt-1"
           />
-          <div className="flex justify-between text-[9px] text-slate-500 font-mono mt-1">
+          <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-1">
             <span>4{isBg ? 'ч' : 'h'}</span>
             <span>8{isBg ? 'ч (Лаб)' : 'h (Lab)'}</span>
             <span>16{isBg ? 'ч' : 'h'}</span>

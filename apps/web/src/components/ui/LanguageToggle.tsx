@@ -31,7 +31,7 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
         <button
           type="button"
           onClick={() => handleSelect('bg')}
-          className={`relative px-3.5 py-1.5 rounded-full text-xs font-bold transition cursor-pointer ${
+          className={`relative min-h-[38px] px-4 py-2 rounded-full text-xs font-bold transition cursor-pointer flex items-center justify-center ${
             language === 'bg' ? 'text-cyan-300' : 'text-white/50 hover:text-white'
           }`}
         >
@@ -48,7 +48,7 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
         <button
           type="button"
           onClick={() => handleSelect('en')}
-          className={`relative px-3.5 py-1.5 rounded-full text-xs font-bold transition cursor-pointer ${
+          className={`relative min-h-[38px] px-4 py-2 rounded-full text-xs font-bold transition cursor-pointer flex items-center justify-center ${
             language === 'en' ? 'text-cyan-300' : 'text-white/50 hover:text-white'
           }`}
         >

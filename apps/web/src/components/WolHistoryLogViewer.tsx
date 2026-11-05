@@ -141,10 +141,10 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                 triggerHapticFeedback('light');
                 wolHistoryStore.resetToDefaultHistory();
               }}
-              className="px-2.5 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/10 border border-white/10 text-slate-300 text-[11px] flex items-center gap-1 transition cursor-pointer"
+              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/10 border border-white/10 text-slate-300 text-xs flex items-center gap-1.5 transition cursor-pointer"
               title={isBg ? 'Възстанови примерните записи' : 'Restore sample logs'}
             >
-              <RotateCcw className="w-3 h-3" />
+              <RotateCcw className="w-3.5 h-3.5" />
               <span>{isBg ? 'Нулирай' : 'Reset'}</span>
             </button>
 
@@ -155,10 +155,10 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                   triggerHapticFeedback('medium');
                   wolHistoryStore.clearHistory();
                 }}
-                className="px-2.5 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 text-[11px] flex items-center gap-1 transition cursor-pointer"
+                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-1.5 transition cursor-pointer"
                 title={isBg ? 'Изчисти историята' : 'Clear history'}
               >
-                <Trash2 className="w-3 h-3" />
+                <Trash2 className="w-3.5 h-3.5" />
                 <span>{isBg ? 'Изчисти' : 'Clear'}</span>
               </button>
             )}
@@ -184,14 +184,14 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                     triggerHapticFeedback('selection');
                     setStatusFilter(tab.id);
                   }}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition cursor-pointer ${
+                  className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                     active
                       ? 'bg-white/10 text-white font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <span>{tab.label}</span>
-                  <span className="text-[10px] text-slate-400">{tab.count}</span>
+                  <span className="text-xs text-slate-400 font-mono">({tab.count})</span>
                 </button>
               );
             })}

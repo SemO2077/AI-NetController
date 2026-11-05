@@ -1119,7 +1119,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   className="absolute w-5 h-5 -ml-2.5 -mt-2.5 pointer-events-none transition-all duration-100 z-20"
                 >
                   <div className="w-full h-full rounded-full border-2 border-cyan-400 bg-cyan-400/30 shadow-[0_0_12px_rgba(34,211,238,0.9)]" />
-                  <span className="absolute left-6 top-0 px-1.5 py-0.5 rounded bg-black/80 border border-white/15 text-[9px] font-mono text-cyan-300 whitespace-nowrap">
+                  <span className="absolute left-6 top-0 px-2 py-0.5 rounded bg-black/85 border border-cyan-400/30 text-[10.5px] font-mono font-semibold text-cyan-300 whitespace-nowrap shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
                     {Math.round(cursorPos.x * 19.2)},{Math.round(cursorPos.y * 10.8)}
                   </span>
                 </div>

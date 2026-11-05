@@ -1099,7 +1099,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                     type="button"
                     disabled={isLoading}
                     onClick={() => handleSendMessage(item.prompt)}
-                    className={`px-2.5 py-1.5 rounded-full border text-[11px] font-semibold flex items-center space-x-1.5 shrink-0 transition cursor-pointer bubble-tap ${item.color}`}
+                    className={`min-h-[38px] px-3.5 py-2 rounded-full border text-xs font-semibold flex items-center space-x-2 shrink-0 transition cursor-pointer bubble-tap ${item.color}`}
                   >
                     <Icon className="w-3.5 h-3.5 shrink-0" />
                     <span>{item.label}</span>
@@ -1113,7 +1113,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                     triggerHapticFeedback('light');
                     onOpenUpdateCenter();
                   }}
-                  className="px-2.5 py-1.5 rounded-full border border-white/15 bg-white/[0.04] hover:bg-white/10 text-slate-300 text-[11px] font-semibold flex items-center space-x-1 shrink-0 transition cursor-pointer ml-auto"
+                  className="min-h-[38px] px-3.5 py-2 rounded-full border border-white/15 bg-white/[0.04] hover:bg-white/10 text-slate-300 text-xs font-semibold flex items-center space-x-1.5 shrink-0 transition cursor-pointer ml-auto"
                 >
                   <RefreshCw className="w-3 h-3 text-emerald-400" />
                   <span>{language === 'bg' ? 'Update Център' : 'Update Center'}</span>
@@ -1163,7 +1163,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                       <button
                         type="button"
                         onClick={() => handleCopy(msg.id, msg.content.replace(/\[ACTION:[^\]]+\]/gi, '').trim())}
-                        className="text-white/45 hover:text-cyan-300 transition flex items-center gap-1 cursor-pointer p-1"
+                        className="min-h-[32px] px-2 py-1 rounded-lg text-white/45 hover:text-cyan-300 hover:bg-white/5 transition flex items-center gap-1 cursor-pointer text-xs"
                         title={language === 'bg' ? 'Копирай отговора' : 'Copy response'}
                       >
                         {copiedId === msg.id ? (
