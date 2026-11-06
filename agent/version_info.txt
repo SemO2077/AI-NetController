@@ -19,7 +19,7 @@ VSVersionInfo(
           '040904B0',
           [
             StringStruct('CompanyName', 'Computer Systems & Technologies (CST)'),
-            StringStruct('FileDescription', 'CST Host Agent Daemon (v3.1.0-beta.1)'),
+            StringStruct('FileDescription', 'CST Host Agent Daemon (v3.1.0-beta.3)'),
             StringStruct('FileVersion', '3.1.0.0'),
             StringStruct('InternalName', 'CST_HostAgent'),
             StringStruct('LegalCopyright', 'Copyright (C) 2026 CST Systems. All rights reserved.'),

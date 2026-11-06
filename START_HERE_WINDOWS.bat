@@ -2,7 +2,7 @@
 title CST NetController AI — 1-Click PC & Phone Launcher
 color 0B
 echo ============================================================================
-echo   CST NetController AI v2.9.0-LTS — 1-Click PC ^& Phone Setup Launcher
+echo   CST NetController AI v3.1.0-beta.3 — 1-Click PC ^& Phone Setup Launcher
 echo ============================================================================
 echo.
 

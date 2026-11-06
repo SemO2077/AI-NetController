@@ -273,28 +273,59 @@ python -m unittest discover -s agent/tests
 
 ```text
 AI-NetController/
-├── agent/                         # Python Host Agent Daemon
+├── agent/                         # Python Host Agent Daemon & Control Center
 │   ├── agent.py                   # Entry point (GUI or --headless mode)
 │   ├── agent_gui.py               # Tkinter desktop control center
-│   ├── agent_daemon.py            # AsyncIO WebSocket server & screen streamer
+│   ├── agent_daemon.py            # AsyncIO WebSocket server & kernel supervisor
 │   ├── command_ast_firewall.py    # AST safety analyzer & command validator
+│   ├── crypto_handshake.py        # X25519 & ChaCha20-Poly1305 key exchange
+│   ├── crypto_vault.py            # Host crypto vault & credential storage
+│   ├── host_file_writer.py        # Sandboxed file transfer engine
+│   ├── multi_monitor_streamer.py  # Screen capture & spatial delta compressor
+│   ├── network_fuzzer_shield.py   # Rate limiting & packet fuzzing firewall
 │   ├── requirements.txt           # Python dependencies
 │   ├── version_info.txt           # Windows PE resource metadata
 │   └── tests/                     # 53 Python unit, sandbox & security tests
 ├── apps/
-│   └── web/                       # React 19 + TypeScript Web Console
-│       ├── server.ts              # Express API & WoL dispatcher server
+│   ├── mobile/                    # Companion Android Application (Flutter / Native)
+│   │   ├── lib/
+│   │   │   ├── main.dart          # Mobile app entry point
+│   │   │   ├── cst_netcontroller.dart # Library export barrel
+│   │   │   ├── protocol/          # Wire framing & fragmentation engine
+│   │   │   ├── security/          # Biometrics & cryptographic channel
+│   │   │   ├── services/          # Video pipeline & OS integrations
+│   │   │   ├── theme/             # Fluid cyber-neon theme tokens
+│   │   │   └── ui/                # Adaptive layout, stream & device widgets
+│   │   ├── android/               # Native Android gradle wrapper & configs
+│   │   └── test/                  # Protocol & crypto channel unit tests
+│   └── web/                       # React 19 + TypeScript Web Console (PWA)
+│       ├── server.ts              # Express API, mDNS & WoL dispatcher server
 │       ├── vite.config.ts         # Vite bundler configuration
-│       ├── src/                   # React components, state stores & styling
-│       └── tests/                 # Pillar verification & stress test suites
+│       ├── src/
+│       │   ├── components/        # Modular UI components
+│       │   │   ├── modals/        # Modal dialogue components & manager
+│       │   │   ├── fleet/         # Fleet dashboard & host cards
+│       │   │   ├── terminal/      # Remote shell & omnibar
+│       │   │   ├── telemetry/     # Sparklines & D3 topology graphs
+│       │   │   ├── wol/           # Wake-on-LAN history & energy calculators
+│       │   │   ├── settings/      # System settings & contextual memory
+│       │   │   ├── ai/            # Gemini AI assistant interface
+│       │   │   ├── layout/        # Floating pill navigation & boundary
+│       │   │   └── ui/            # Primitive sheets, containers & toggles
+│       │   ├── store/             # Zustand reactive state stores
+│       │   ├── services/          # WoL, security & haptic services
+│       │   └── tests/             # 14-pillar verification & stress test suite
 ├── public/releases/               # Distribution binaries, checksums & manifests
-│   ├── v3.1.0-beta.1/             # Current public beta artifacts
-│   └── v3.0.0/                    # Previous beta artifacts
+│   └── v3.1.0-beta.3/             # Current public beta artifacts
 ├── scripts/                       # Build and release automation scripts
 │   ├── build_android_app.py       # Standalone APK compiler and packager
-│   └── publish_release_v310.py    # GitHub release publishing automation
+│   ├── build_release_binaries.py  # Windows launcher & release asset builder
+│   ├── download_fonts.py          # Offline font subset synchronizer
+│   ├── measure_baseline.py        # Quantitative performance benchmark suite
+│   └── publish_release.py         # Unified GitHub release publisher
+├── docs/                          # Architecture & security documentation
 ├── CHANGELOG.md                   # Full version history
-├── PATCH_NOTES.md                 # Detailed v3.1.0-beta.1 release notes
+├── PATCH_NOTES.md                 # Detailed v3.1.0-beta.3 release notes
 ├── LICENSE                        # MIT License
 └── package.json                   # Project metadata & npm scripts
 ```

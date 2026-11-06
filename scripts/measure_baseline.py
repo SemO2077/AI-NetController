@@ -4,7 +4,7 @@ import sys
 import zlib
 
 # Ensure agent directory is importable directly
-repo_dir = r"c:\Users\Lenovo\Downloads\AI-NetController-main\AI-NetController-main"
+repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 agent_dir = os.path.join(repo_dir, "agent")
 if agent_dir not in sys.path:
     sys.path.insert(0, agent_dir)

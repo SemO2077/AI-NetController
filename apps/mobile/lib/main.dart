@@ -8,11 +8,11 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-import 'fluid_theme.dart';
-import 'adaptive_layout_builder.dart';
-import 'responsive_device_card.dart';
-import 'viewport_stream_widget.dart';
-import 'onboarding_sheet.dart';
+import 'theme/fluid_theme.dart';
+import 'ui/adaptive_layout_builder.dart';
+import 'ui/responsive_device_card.dart';
+import 'ui/viewport_stream_widget.dart';
+import 'ui/onboarding_sheet.dart';
 
 // =====================================================================
 // STATE MODELS & RIVERPOD STATE MANAGERS

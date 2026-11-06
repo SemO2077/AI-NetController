@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# CST NetController AI — 1-Click Linux Setup Launcher (v2.9.0-LTS)
+# CST NetController AI — 1-Click Linux Setup Launcher (v3.1.0-beta.3)
 # ==============================================================================
 set -e
 
 echo "============================================================================"
-echo "  CST NetController AI v2.9.0-LTS — 1-Click Linux Setup Launcher"
+echo "  CST NetController AI v3.1.0-beta.3 — 1-Click Linux Setup Launcher"
 echo "============================================================================"
 echo ""
 

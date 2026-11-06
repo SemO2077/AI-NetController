@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:cst_netcontroller/binary_protocol.dart';
-import 'package:cst_netcontroller/fragmentation_engine.dart';
+import 'package:cst_netcontroller/cst_netcontroller.dart';
+
 
 void main() {
   group('CST Mobile Binary Protocol & Fragmentation Unit Tests', () {

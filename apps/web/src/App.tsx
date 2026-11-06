@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { FloatingPillNav } from './components/FloatingPillNav';
-import { FleetDashboard } from './components/FleetDashboard';
-import { CommandOmnibar } from './components/CommandOmnibar';
-import { ModalManager } from './components/ModalManager';
-import { GlobalErrorBoundary } from './components/GlobalErrorBoundary';
-import { HitlApprovalModal } from './components/HitlApprovalModal';
+import { FloatingPillNav } from './components/layout/FloatingPillNav';
+import { FleetDashboard } from './components/fleet/FleetDashboard';
+import { CommandOmnibar } from './components/terminal/CommandOmnibar';
+import { ModalManager } from './components/modals/ModalManager';
+import { GlobalErrorBoundary } from './components/layout/GlobalErrorBoundary';
+import { HitlApprovalModal } from './components/modals/HitlApprovalModal';
 import { useWorkerEngine } from './hooks/useWorkerEngine';
 import { useFleetState } from './hooks/useFleetState';
 import { useUIStore } from './store/uiStore';
@@ -14,17 +14,17 @@ import { AlertTriangle, ShieldAlert, X } from 'lucide-react';
 import { SPRING_BUBBLY, TAB_VIEW_VARIANTS } from './utils/springPhysics';
 
 const CommandTerminal = React.lazy(() =>
-  import('./components/CommandTerminal').then((module) => ({
+  import('./components/terminal/CommandTerminal').then((module) => ({
     default: module.CommandTerminal,
   }))
 );
 const GeminiChatbot = React.lazy(() =>
-  import('./components/GeminiChatbot').then((module) => ({
+  import('./components/ai/GeminiChatbot').then((module) => ({
     default: module.GeminiChatbot,
   }))
 );
 const SettingsScreen = React.lazy(() =>
-  import('./components/SettingsScreen').then((module) => ({
+  import('./components/settings/SettingsScreen').then((module) => ({
     default: module.SettingsScreen,
   }))
 );
