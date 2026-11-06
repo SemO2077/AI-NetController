@@ -1,4 +1,4 @@
-# Contributing to CST NetController AI
+# Contributing to AI NetController
 
 Thank you for your interest in contributing!
 

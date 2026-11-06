@@ -472,7 +472,7 @@ class TestASTCommandFirewall(unittest.TestCase):
     SAFE_COMMANDS = [
         "dir", "dir C:\\Windows", "uptime", "whoami", "hostname",
         "ipconfig /all", "netstat -ano", "systeminfo", "tasklist",
-        "echo CST NetController Active", "ping 127.0.0.1 -n 4", "tracert 1.1.1.1",
+        "echo AI NetController Active", "ping 127.0.0.1 -n 4", "tracert 1.1.1.1",
         "route print", "get-date", "date /t", "ver", "type nul > test.log",
         "python --version", "git status", "winget list"
     ]

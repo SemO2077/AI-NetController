@@ -1,5 +1,5 @@
 /**
- * CST NetController AI - High-Performance Memory Pool & Fixed-Capacity Circular Ring Buffer
+ * AI NetController - High-Performance Memory Pool & Fixed-Capacity Circular Ring Buffer
  * 
  * Provides zero-allocation, pre-allocated storage for continuous telemetry samples and logs.
  * Prevents main-thread generational GC pauses and inline-cache deoptimizations.

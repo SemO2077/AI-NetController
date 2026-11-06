@@ -10,7 +10,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:cst_netcontroller/cst_netcontroller.dart';
+import 'package:ai_netcontroller/ai_netcontroller.dart';
 
 
 

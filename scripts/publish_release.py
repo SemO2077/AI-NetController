@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CST NetController AI - Unified GitHub Release Publisher
+AI NetController - Unified GitHub Release Publisher
 Publishes or updates release notes, tags, and binary artifacts on GitHub.
 
 Usage:
@@ -68,7 +68,7 @@ def get_github_token() -> Optional[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Publish CST NetController AI GitHub Release")
+    parser = argparse.ArgumentParser(description="Publish AI NetController GitHub Release")
     parser.add_argument("--tag", default=None, help="Target release tag (e.g. v3.1.0-beta.3)")
     parser.add_argument("--name", default=None, help="Release name/title")
     parser.add_argument("--draft", action="store_true", help="Publish as draft")
@@ -77,7 +77,7 @@ def main():
 
     target_tag = args.tag or get_current_version()
     is_prerelease = "beta" in target_tag.lower() or "alpha" in target_tag.lower() or "rc" in target_tag.lower()
-    target_name = args.name or f"CST NetController AI {target_tag}"
+    target_name = args.name or f"AI NetController {target_tag}"
 
     token = get_github_token()
     if not token and not args.dry_run:
@@ -99,7 +99,7 @@ def main():
 
     headers = {
         "Authorization": f"token {token}",
-        "User-Agent": "CST-Release-Bot",
+        "User-Agent": "AINetController-Release-Bot",
         "Accept": "application/vnd.github.v3+json",
     }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CST NetController AI - Full System High-Concurrency Stress & Security Fuzzing Harness
+AI NetController - Full System High-Concurrency Stress & Security Fuzzing Harness
 ====================================================================================
 Tests the entire system under peak synthetic loads:
 1. RFC 6479 Sliding Window Anti-Replay: 100,000 packets with randomized delays & replays

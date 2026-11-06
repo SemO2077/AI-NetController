@@ -158,7 +158,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-mono font-bold tracking-wider uppercase text-cyan-400 truncate">
-                  CST NetController AI
+                  AI NetController
                 </span>
                 <span className="px-2 py-0.5 rounded text-[10.5px] font-mono font-semibold bg-cyan-500/15 border border-cyan-400/30 text-cyan-300 shrink-0 shadow-[0_0_8px_rgba(0,240,255,0.2)]">
                   v3.1 Beta
@@ -208,8 +208,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   </div>
                   <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
                     {isBg
-                      ? 'Добре дошли в CST NetController AI'
-                      : 'Welcome to CST NetController AI'}
+                      ? 'Добре дошли в AI NetController'
+                      : 'Welcome to AI NetController'}
                   </h1>
                   <p className="text-white/70 max-w-lg mx-auto text-xs sm:text-sm leading-relaxed">
                     {isBg

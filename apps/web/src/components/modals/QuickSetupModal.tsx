@@ -381,13 +381,13 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <a
                           href="/api/setup/windows-launcher"
-                          download="CST_OneClick_PC_Setup.bat"
+                          download="AI_NetController_PC_Setup.bat"
                           onClick={() => triggerHapticFeedback('medium')}
                           className="min-h-[42px] px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 font-display font-bold text-xs flex items-center gap-2 transition cursor-pointer"
                         >
                           <Download className="w-4 h-4 text-cyan-300" />
                           <span>
-                            {isBg ? 'Изтегли CST_OneClick_PC_Setup.bat' : 'Download 1-Click PC Setup (.BAT)'}
+                            {isBg ? 'Изтегли AI_NetController_PC_Setup.bat' : 'Download 1-Click PC Setup (.BAT)'}
                           </span>
                         </a>
                       </div>
@@ -410,13 +410,13 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </p>
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <a
-                          href={setupInfo?.exeDownloadUrl || '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe'}
-                          download="CST_HostAgent_v3.0.0_win64.exe"
+                          href={setupInfo?.exeDownloadUrl || '/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe'}
+                          download="AI_NetController_HostAgent_v3.0.0_win64.exe"
                           onClick={() => triggerHapticFeedback('medium')}
                           className="min-h-[42px] px-4 py-2 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center gap-2 transition cursor-pointer"
                         >
                           <Download className="w-4 h-4 text-emerald-400" />
-                          <span>{isBg ? 'Изтегли CST_HostAgent_v3.0.0_win64.exe' : 'Download CST_HostAgent_v3.0.0_win64.exe'}</span>
+                          <span>{isBg ? 'Изтегли AI_NetController_HostAgent_v3.0.0_win64.exe' : 'Download AI_NetController_HostAgent_v3.0.0_win64.exe'}</span>
                         </a>
                       </div>
                     </div>
@@ -549,8 +549,8 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </button>
 
                       <a
-                        href={setupInfo?.apkDownloadUrl || '/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk'}
-                        download="CST_NetController_AI_v3.0.0_arm64-v8a.apk"
+                        href={setupInfo?.apkDownloadUrl || '/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk'}
+                        download="AI_NetController_v3.0.0_arm64-v8a.apk"
                         onClick={() => triggerHapticFeedback('medium')}
                         className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                       >

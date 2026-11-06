@@ -1,6 +1,6 @@
 @echo off
 echo =========================================================
-echo CST Mobile Controller - 1-Click Release APK Builder
+echo AI NetController Mobile - 1-Click Release APK Builder
 echo =========================================================
 echo.
 

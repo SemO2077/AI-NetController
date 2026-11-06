@@ -1,4 +1,4 @@
-# CST NetController AI
+# AI NetController
 
 [![Release](https://img.shields.io/badge/release-v3.1.0--beta.3-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v3.1.0-beta.3)
 [![Channel](https://img.shields.io/badge/channel-public%20beta-amber.svg)](https://github.com/smehmedd/AI-NetController/releases)
@@ -33,7 +33,7 @@ A self-hosted workstation fleet management platform, Wake-on-LAN orchestrator, a
 
 ## Overview
 
-CST NetController AI is designed for system administrators, IT lab operators, and homelab users who need reliable workstation discovery, power management, remote execution, and screen monitoring over a local network.
+AI NetController is designed for system administrators, IT lab operators, and homelab users who need reliable workstation discovery, power management, remote execution, and screen monitoring over a local network.
 
 All core functionality operates entirely within the local area network:
 - No mandatory cloud dependencies or third-party relay servers.
@@ -118,10 +118,10 @@ All releases are provided under the public beta channel. Binaries are pre-compil
 
 | Artifact | Platform | Size | Direct Download |
 | :--- | :--- | :---: | :---: |
-| **`CST_HostAgent_v3.1.0_win64.exe`** | Windows 10 / 11 x64 (GUI + Service) | 35.3 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/CST_HostAgent_v3.1.0_win64.exe) |
-| **`CST_HostAgent_v3.1.0_win64_portable.zip`** | Windows 10 / 11 x64 (Portable Bundle) | 35.0 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/CST_HostAgent_v3.1.0_win64_portable.zip) |
-| **`CST_NetController_AI_v3.1.0_arm64-v8a.apk`** | Android 7.0 – 15 (`arm64-v8a`) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/CST_NetController_AI_v3.1.0_arm64-v8a.apk) |
-| **`CST_NetController_AI_v3.1.0.apk`** | Android 7.0 – 15 (Universal) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/CST_NetController_AI_v3.1.0.apk) |
+| **`AI_NetController_HostAgent_v3.1.0_win64.exe`** | Windows 10 / 11 x64 (GUI + Service) | 35.3 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/AI_NetController_HostAgent_v3.1.0_win64.exe) |
+| **`AI_NetController_HostAgent_v3.1.0_win64_portable.zip`** | Windows 10 / 11 x64 (Portable Bundle) | 35.0 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/AI_NetController_HostAgent_v3.1.0_win64_portable.zip) |
+| **`AI_NetController_v3.1.0_arm64-v8a.apk`** | Android 7.0 – 15 (`arm64-v8a`) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/AI_NetController_v3.1.0_arm64-v8a.apk) |
+| **`AI_NetController_v3.1.0.apk`** | Android 7.0 – 15 (Universal) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/AI_NetController_v3.1.0.apk) |
 | **`SHA256SUMS.txt`** | Checksums | 413 B | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/SHA256SUMS.txt) |
 | **`RELEASE_MANIFEST.json`** | Metadata Manifest | 1.9 KB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/RELEASE_MANIFEST.json) |
 
@@ -134,12 +134,12 @@ Previous beta releases (`v3.1.0-beta.1`, `v3.0.0`, `v2.9.0`, `v2.8.0`, `v2.7.1`,
 ### Option 1: Using Pre-Compiled Binaries
 
 1. **On Target Windows Workstations**:
-   - Download [`CST_HostAgent_v3.1.0_win64.exe`](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.1/CST_HostAgent_v3.1.0_win64.exe).
+   - Download [`AI_NetController_HostAgent_v3.1.0_win64.exe`](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.1/AI_NetController_HostAgent_v3.1.0_win64.exe).
    - Launch the executable. The desktop GUI will display your local IP, port (`8765`), and pairing token.
    - Click **Allow** if Windows Defender Firewall prompts for network access on private networks.
 
 2. **On Android Devices**:
-   - Download [`CST_NetController_AI_v3.1.0_arm64-v8a.apk`](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.1/CST_NetController_AI_v3.1.0_arm64-v8a.apk).
+   - Download [`AI_NetController_v3.1.0_arm64-v8a.apk`](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.1/AI_NetController_v3.1.0_arm64-v8a.apk).
    - Install the package on your device.
    - Connect to the same Wi-Fi subnet. The app will discover managed workstations automatically.
 
@@ -212,19 +212,19 @@ Ensure these ports are allowed on your router or local firewall across the priva
 | **`3000`** | TCP | Inbound | Web Console | HTTP web interface and REST / WebSocket API |
 | **`8765`** | TCP | Inbound | Host Agent | Workstation control socket, telemetry, and screen streaming |
 | **`9` / `7`** | UDP | Outbound | WoL Broadcaster | IEEE 802.3 and SecureOn Wake-on-LAN packets |
-| **`5353`** | UDP | Multicast | mDNS | RFC 6762 local service discovery (`_cst-agent._tcp.local.`) |
+| **`5353`** | UDP | Multicast | mDNS | RFC 6762 local service discovery (`_ai-netcontroller-agent._tcp.local.`) |
 
 #### Quick Firewall Configuration
 
 ```powershell
 # Windows (Run as Administrator)
-New-NetFirewallRule -DisplayName "CST Host Agent (TCP 8765)" -Direction Inbound -LocalPort 8765 -Protocol TCP -Action Allow -Profile Private
+New-NetFirewallRule -DisplayName "AI NetController Host Agent (TCP 8765)" -Direction Inbound -LocalPort 8765 -Protocol TCP -Action Allow -Profile Private
 New-NetFirewallRule -DisplayName "CST Web Console (TCP 3000)" -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow -Profile Private
 ```
 
 ```bash
 # Linux (UFW)
-sudo ufw allow 8765/tcp comment 'CST Host Agent'
+sudo ufw allow 8765/tcp comment 'AI NetController Host Agent'
 sudo ufw allow 3000/tcp comment 'CST Web Console'
 ```
 
@@ -290,7 +290,7 @@ AI-NetController/
 │   ├── mobile/                    # Companion Android Application (Flutter / Native)
 │   │   ├── lib/
 │   │   │   ├── main.dart          # Mobile app entry point
-│   │   │   ├── cst_netcontroller.dart # Library export barrel
+│   │   │   ├── ai_netcontroller.dart # Library export barrel
 │   │   │   ├── protocol/          # Wire framing & fragmentation engine
 │   │   │   ├── security/          # Biometrics & cryptographic channel
 │   │   │   ├── services/          # Video pipeline & OS integrations

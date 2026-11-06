@@ -1,6 +1,6 @@
-/// CST NetController AI — Mobile Core Library
+/// AI NetController — Mobile Core Library
 /// Unified export for binary protocol, security, services, theme, and UI.
-library cst_netcontroller;
+library ai_netcontroller;
 
 export 'protocol/binary_protocol.dart';
 export 'protocol/fragmentation_engine.dart';

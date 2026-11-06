@@ -28,7 +28,7 @@ export interface UIState {
 
 const getInitialOnboardingStatus = (): boolean => {
   try {
-    return localStorage.getItem('cst_onboarding_completed') === 'true';
+    return localStorage.getItem('ai_netcontroller_onboarding_completed') === 'true' || localStorage.getItem('cst_onboarding_completed') === 'true';
   } catch {
     return false;
   }
@@ -80,8 +80,10 @@ export const useUIStore = create<UIState>((set) => ({
   setOmnibarOpen: (isOpen) => set({ isOmnibarOpen: isOpen }),
   setCompletedOnboarding: () => {
     try {
-      localStorage.setItem('cst_onboarding_completed', 'true');
-      localStorage.setItem('cst_onboarding_banner_dismissed', 'true');
+      localStorage.setItem('ai_netcontroller_onboarding_completed', 'true');
+    localStorage.setItem('cst_onboarding_completed', 'true');
+      localStorage.setItem('ai_netcontroller_onboarding_banner_dismissed', 'true');
+    localStorage.setItem('cst_onboarding_banner_dismissed', 'true');
     } catch {}
     set({ hasCompletedOnboarding: true });
   },

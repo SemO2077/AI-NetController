@@ -1,5 +1,5 @@
 """
-Autonomous CST Host Agent & AI OS Bridge
+Autonomous AI NetController Host Agent & OS Bridge
 Ultra-Low Latency Binary Daemon (Windows & Linux)
 ---------------------------------------------------------------------
 Security & Architecture Hardening:
@@ -114,7 +114,7 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
     datefmt='%H:%M:%S'
 )
-logger = logging.getLogger("CST-Agent")
+logger = logging.getLogger("AI-NetController-Agent")
 
 # =====================================================================
 # PROTOCOL DEFINITION & CONSTANTS
@@ -142,7 +142,7 @@ OP_ERR = 0xEE             # 238: Structured Error Packet
 
 # Pre-shared secret key for HMAC-SHA256 authentication
 # In production, this can be loaded from an encrypted environment variable or config.json
-SHARED_SECRET = os.environ.get("CST_AGENT_SECRET", "cst_autonomous_lan_secret_2025").encode('utf-8')
+SHARED_SECRET = os.environ.get("AI_AGENT_SECRET", os.environ.get("CST_AGENT_SECRET", "ai_netcontroller_secret_2025")).encode('utf-8')
 
 # High-risk command keywords requiring Human-In-The-Loop confirmation
 CRITICAL_COMMAND_PATTERNS = {
@@ -171,7 +171,7 @@ class WindowsJobSupervisor:
         try:
             self.kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
             # Create a single persistent job object for this agent
-            self.job_handle = self.kernel32.CreateJobObjectW(None, f"CST_Sandbox_Job_{os.getpid()}")
+            self.job_handle = self.kernel32.CreateJobObjectW(None, f"AI_Sandbox_Job_{os.getpid()}")
             if not self.job_handle:
                 logger.warning("Failed to create Windows Job Object")
                 return
@@ -517,14 +517,14 @@ class HostAgentDaemon:
         self.pending_approvals: Dict[str, asyncio.Future] = {}
         self.tray_icon = None
         self.file_writer = HostFileWriter() if HostFileWriter else None
-        chaos_enabled = os.environ.get("CST_CHAOS_MODE", "0") == "1"
+        chaos_enabled = os.environ.get("AI_CHAOS_MODE", os.environ.get("CST_CHAOS_MODE", "0")) == "1"
         self.chaos_shield = NetworkFuzzerShield(ChaosProfile(enabled=chaos_enabled)) if NetworkFuzzerShield else None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread_id: Optional[int] = None
 
     def _get_current_secret(self) -> bytes:
         """Dynamically retrieves active shared secret allowing live rotation."""
-        return os.environ.get("CST_AGENT_SECRET", "cst_autonomous_lan_secret_2025").encode('utf-8')
+        return os.environ.get("AI_AGENT_SECRET", os.environ.get("CST_AGENT_SECRET", "ai_netcontroller_secret_2025")).encode('utf-8')
 
     def _get_valid_secrets(self) -> List[bytes]:
         """Returns all valid pairing secrets/tokens for HMAC and JSON authentication."""
@@ -546,7 +546,7 @@ class HostAgentDaemon:
         """Bootstraps mDNS advertisement, system tray icon, and WebSocket server."""
         self.loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
-        logger.info("Initializing CST Host Agent & AI OS Bridge...")
+        logger.info("Initializing AI NetController Host Agent & OS Bridge...")
         await self._start_mdns()
         self._start_system_tray()
 
@@ -729,7 +729,7 @@ class HostAgentDaemon:
             draw.point((32, 32), fill=(138, 43, 226, 255))
 
             menu = pystray.Menu(
-                pystray.MenuItem("CST Host Agent: Online (v2.9.0-LTS)", lambda: None, enabled=False),
+                pystray.MenuItem("AI NetController Host Agent: Online (v3.1.0-beta.3)", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
                 pystray.MenuItem(f"Port: {self.port}", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
@@ -738,7 +738,7 @@ class HostAgentDaemon:
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Exit Agent", lambda: self.stop())
             )
-            self.tray_icon = pystray.Icon("CST_Agent", img, "CST Host Agent", menu)
+            self.tray_icon = pystray.Icon("AI_NetController_Agent", img, "AI NetController Host Agent", menu)
             self.tray_icon.run()
 
         tray_thread = threading.Thread(target=run_tray, daemon=True, name="TrayThread")
@@ -836,7 +836,7 @@ class HostAgentDaemon:
                                 await ws.send(json.dumps({
                                     "event": "AUTHENTICATED",
                                     "status": "OK",
-                                    "protocol": "CST/3.0-SECURE",
+                                    "protocol": "AI-NET/3.0-SECURE",
                                     "timestamp": time.time()
                                 }))
                                 logger.info(f"Client {client_id} authenticated via JSON AUTHENTICATE handshake.")
@@ -1560,7 +1560,7 @@ class HostAgentDaemon:
 
     def stop(self):
         """Clean shutdown hook for OS signals."""
-        logger.info("Stopping CST Host Agent Daemon...")
+        logger.info("Stopping AI NetController Host Agent Daemon...")
         self.is_running = False
         self.screen_pipeline.close()
         JOB_SUPERVISOR.close()
@@ -1611,7 +1611,7 @@ def main():
                     finally:
                         loop.close()
 
-                bg_thread = threading.Thread(target=_run_ws_daemon, daemon=True, name="CST_WsDaemonThread")
+                bg_thread = threading.Thread(target=_run_ws_daemon, daemon=True, name="AI_WsDaemonThread")
                 bg_thread.start()
 
                 gui = HostDaemonDesktopGUI(

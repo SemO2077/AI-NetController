@@ -1,5 +1,5 @@
-name: cst_netcontroller
-description: Autonomous LAN PC Inspector & Agentic OS Bridge
+name: ai_netcontroller
+description: AI NetController - Workstation Fleet Manager & Remote Diagnostics
 publish_to: 'none'
 version: 3.0.0+31
 

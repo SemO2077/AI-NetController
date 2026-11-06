@@ -44,7 +44,8 @@ interface TerminalHistoryEntry extends AgentExecutionResponse {
   exitCode?: number;
 }
 
-const PINNED_COMMANDS_KEY = 'cst_pinned_terminal_commands_v1';
+const PINNED_COMMANDS_KEY = 'ai_pinned_terminal_commands_v1';
+const LEGACY_PINNED_COMMANDS_KEY = 'cst_pinned_terminal_commands_v1';
 
 const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
   hosts,

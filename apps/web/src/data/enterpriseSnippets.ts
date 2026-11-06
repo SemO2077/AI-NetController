@@ -117,7 +117,7 @@ class CommandASTFirewall:
     "category": "backend",
     "description": "Native Tkinter/TTK PC Daemon Desktop Control Center GUI (Telemetry, Pairing Key, View-Only Lock, NIC Check & AV Transparency)",
     "code": `"""
-CST NetController AI - Native PC Daemon Desktop GUI Control Center (v2.7.0-LTS)
+AI NetController - Native PC Daemon Desktop GUI Control Center (v2.7.0-LTS)
 Provides a visible HWND desktop window so Windows Defender & SmartScreen classify
 the binary as an interactive administrative tool rather than a hidden listener.
 """
@@ -140,7 +140,7 @@ class HostDaemonState:
         self.is_paused = False
         self.view_only_mode = False
         self.require_hitl_approval = True
-        self.pairing_token = f"CST-{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}"
+        self.pairing_token = f"AI-{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}"
         self.cpu_percent = 0.0
         self.ram_percent = 0.0
         self.disk_percent = 0.0
@@ -156,10 +156,10 @@ class HostDaemonState:
     "category": "backend",
     "description": "Windows Authenticode SHA-256 Code Signing & Windows Defender MpCmdRun Verification Script",
     "code": `param(
-    [string]$BinaryPath = "dist\\CST_HostAgent\\CST_HostAgent.exe"
+    [string]$BinaryPath = "dist\\CST_HostAgent\\AI_NetController_HostAgent.exe"
 )
 $ErrorActionPreference = "Stop"
-$CertSubject = "CN=CST NetController AI, O=Department of Computer Systems and Technologies, C=BG"
+$CertSubject = "CN=AI NetController, O=AI NetController, C=BG"
 $Cert = Get-ChildItem Cert:\\CurrentUser\\My -CodeSigningCert | Where-Object { $_.Subject -eq $CertSubject } | Select-Object -First 1
 if (-not $Cert) {
     $Cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $CertSubject -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -CertStoreLocation "Cert:\\CurrentUser\\My"
@@ -172,11 +172,11 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "language": "markdown",
     "category": "docs",
     "description": "v2.7.0 Release Patch Notes — PC Daemon Desktop GUI, AV False-Positive Hardening & Native APK/EXE Releases",
-    "code": `# Patch Notes — CST NetController AI v2.7.0
+    "code": `# Patch Notes — AI NetController v2.7.0
 
 **Release Date:** October 24, 2026
 **Version:** v2.7.0-LTS
-**Protocol Version:** CST/3.0-SECURE
+**Protocol Version:** AI-NET/3.0-SECURE
 
 ## 1. Native PC Daemon Control Center GUI (agent_gui.py & PcDaemonGuiModal.tsx)
 - Interactive Desktop Control Center with live CPU/RAM/Disk/FPS telemetry, 1-click WebSocket URI & Pairing Key copy/rotate, Start/Pause toggle, View-Only Mode (remote input lock), HITL approval gate, native NIC & WoL check, Panic Disconnect All, and live event console.

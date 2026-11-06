@@ -5,7 +5,8 @@ import {
   WolPacketTriggerSource,
 } from '../types';
 
-export const STORAGE_KEY_WOL_HISTORY = 'cst_wol_packet_history_v1';
+export const STORAGE_KEY_WOL_HISTORY = 'ai_wol_packet_history_v1';
+export const LEGACY_STORAGE_KEY_WOL_HISTORY = 'cst_wol_packet_history_v1';
 
 export function formatWolTimestamp(date: Date = new Date()): string {
   const yyyy = date.getFullYear();
@@ -120,7 +121,7 @@ class WolHistoryStore {
       return createInitialSeedEntries();
     }
     try {
-      const raw = localStorage.getItem(STORAGE_KEY_WOL_HISTORY);
+      const raw = localStorage.getItem(STORAGE_KEY_WOL_HISTORY) || localStorage.getItem(LEGACY_STORAGE_KEY_WOL_HISTORY);
       if (!raw) {
         return [];
       }

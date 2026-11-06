@@ -1,6 +1,6 @@
 # UTF-8
 #
-# Windows Version Resource Information for CST_HostAgent.exe
+# Windows Version Resource Information for AI_NetController_HostAgent.exe
 VSVersionInfo(
   ffi=FixedFileInfo(
     filevers=(3, 1, 0, 0),
@@ -18,13 +18,13 @@ VSVersionInfo(
         StringTable(
           '040904B0',
           [
-            StringStruct('CompanyName', 'Computer Systems & Technologies (CST)'),
-            StringStruct('FileDescription', 'CST Host Agent Daemon (v3.1.0-beta.3)'),
+            StringStruct('CompanyName', 'AI NetController'),
+            StringStruct('FileDescription', 'AI NetController Host Agent Daemon (v3.1.0-beta.3)'),
             StringStruct('FileVersion', '3.1.0.0'),
-            StringStruct('InternalName', 'CST_HostAgent'),
-            StringStruct('LegalCopyright', 'Copyright (C) 2026 CST Systems. All rights reserved.'),
-            StringStruct('OriginalFilename', 'CST_HostAgent.exe'),
-            StringStruct('ProductName', 'CST NetController AI'),
+            StringStruct('InternalName', 'AI_NetController_HostAgent'),
+            StringStruct('LegalCopyright', 'Copyright (C) 2026 AI NetController. All rights reserved.'),
+            StringStruct('OriginalFilename', 'AI_NetController_HostAgent.exe'),
+            StringStruct('ProductName', 'AI NetController'),
             StringStruct('ProductVersion', '3.1.0.0')
           ]
         )

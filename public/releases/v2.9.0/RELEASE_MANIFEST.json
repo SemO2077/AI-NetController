@@ -1,45 +1,45 @@
 {
   "version": "v2.9.0",
   "tag": "v2.9.0-LTS",
-  "releaseName": "CST NetController AI v2.9.0 \u2014 Resilient Fallbacks, Direct AI Control & Stream Overhaul",
+  "releaseName": "AI NetController v2.9.0 \u2014 Resilient Fallbacks, Direct AI Control & Stream Overhaul",
   "publishedAt": "2026-10-27T10:58:20.384829+00:00",
-  "protocol": "CST/3.0-SECURE",
+  "protocol": "AI-NET/3.0-SECURE",
   "artifacts": [
     {
-      "filename": "CST_HostAgent_v2.9.0_win64.exe",
+      "filename": "AI_NetController_HostAgent_v2.9.0_win64.exe",
       "kind": "exe",
       "platform": "Windows 10/11 x64 (Standalone Host Agent .EXE)",
       "sizeBytes": 37006440,
       "sizeFormatted": "35.3 MB",
       "sha256": "ab33d3b4ea79e0bf89483221cfdba9dd86ffb29893d18a773f28ffde4aab09b3",
-      "downloadUrl": "/releases/v2.9.0/CST_HostAgent_v2.9.0_win64.exe"
+      "downloadUrl": "/releases/v2.9.0/AI_NetController_HostAgent_v2.9.0_win64.exe"
     },
     {
-      "filename": "CST_HostAgent_v2.9.0_win64_portable.zip",
+      "filename": "AI_NetController_HostAgent_v2.9.0_win64_portable.zip",
       "kind": "zip",
       "platform": "Windows Portable Agent Bundle + Internal Runtime (.ZIP)",
       "sizeBytes": 36720291,
       "sizeFormatted": "35.0 MB",
       "sha256": "ef0c21dd241e0dfea30c7ad7c0efab3b44a38b4b3618e8d34fd43edbc0535c95",
-      "downloadUrl": "/releases/v2.9.0/CST_HostAgent_v2.9.0_win64_portable.zip"
+      "downloadUrl": "/releases/v2.9.0/AI_NetController_HostAgent_v2.9.0_win64_portable.zip"
     },
     {
-      "filename": "CST_NetController_AI_v2.9.0_arm64-v8a.apk",
+      "filename": "AI_NetController_v2.9.0_arm64-v8a.apk",
       "kind": "apk",
       "platform": "Android 10\u201315 arm64-v8a (Mobile Controller .APK)",
       "sizeBytes": 1034894,
       "sizeFormatted": "1.0 MB",
       "sha256": "1364fe9cc55bf0d3ba0ed97544150f6c60c5a620d43a6242cb8e241629e45128",
-      "downloadUrl": "/releases/v2.9.0/CST_NetController_AI_v2.9.0_arm64-v8a.apk"
+      "downloadUrl": "/releases/v2.9.0/AI_NetController_v2.9.0_arm64-v8a.apk"
     },
     {
-      "filename": "CST_NetController_AI_v2.9.0.apk",
+      "filename": "AI_NetController_v2.9.0.apk",
       "kind": "apk",
       "platform": "Android 10\u201315 Universal Package (Mobile Controller .APK)",
       "sizeBytes": 1034894,
       "sizeFormatted": "1.0 MB",
       "sha256": "1364fe9cc55bf0d3ba0ed97544150f6c60c5a620d43a6242cb8e241629e45128",
-      "downloadUrl": "/releases/v2.9.0/CST_NetController_AI_v2.9.0.apk"
+      "downloadUrl": "/releases/v2.9.0/AI_NetController_v2.9.0.apk"
     }
   ]
 }

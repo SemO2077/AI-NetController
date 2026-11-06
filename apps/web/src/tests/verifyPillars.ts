@@ -1,5 +1,5 @@
 /**
- * CST NetController AI - 14 Core Pillars Automated Verification Test Suite
+ * AI NetController - 14 Core Pillars Automated Verification Test Suite
  * Production-grade functional verification and mock network harness
  */
 
@@ -26,7 +26,7 @@ function assert(condition: boolean, pillarName: string, detail: string) {
 }
 
 console.log('================================================================');
-console.log('  CST NetController AI - Automated 14-Pillar Verification Harness');
+console.log('  AI NetController - Automated 14-Pillar Verification Harness');
 console.log('================================================================\n');
 
 // Pillar 1: Binary Wire Protocol Framing (0xC5 0x71 magic bytes & DataView)

@@ -1,5 +1,5 @@
 /**
- * CST NetController AI - Comprehensive System-Wide Stress & Benchmark Suite (v2.6.0)
+ * AI NetController - Comprehensive System-Wide Stress & Benchmark Suite (v2.6.0)
  * Stress tests & Quantitative Benchmarks:
  * 1. High-throughput CST/3.0 Binary Protocol Framing (100,000 packets via zero-alloc DataView)
  * 2. Float64RingBuffer vs Legacy Array.shift() Zero-Allocation Benchmark (100,000 iterations)
@@ -43,7 +43,7 @@ function assert(condition: boolean, description: string) {
 
 async function runStressTestSuite() {
   console.log('========================================================================');
-  console.log('  CST NetController AI v2.6.0 - Deep Stress & Quantitative Benchmark Suite');
+  console.log('  AI NetController - Deep Stress & Quantitative Benchmark Suite');
   console.log('========================================================================\n');
 
   // -------------------------------------------------------------

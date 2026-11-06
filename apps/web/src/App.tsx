@@ -214,10 +214,10 @@ export default function App() {
           window.history.replaceState({}, document.title, window.location.pathname);
         } else {
           // Auto-prompt first-time users with interactive onboarding walkthrough only once
-          const hasCompletedOnboarding = localStorage.getItem('cst_onboarding_completed') === 'true';
+          const hasCompletedOnboarding = (localStorage.getItem('ai_netcontroller_onboarding_completed') === 'true' || localStorage.getItem('cst_onboarding_completed') === 'true');
           if (!hasCompletedOnboarding) {
             const timer = setTimeout(() => {
-              if (localStorage.getItem('cst_onboarding_completed') !== 'true') {
+              if ((localStorage.getItem('ai_netcontroller_onboarding_completed') !== 'true' && localStorage.getItem('cst_onboarding_completed') !== 'true')) {
                 openModal('onboarding');
               }
             }, 600);

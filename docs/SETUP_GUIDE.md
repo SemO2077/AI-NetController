@@ -1,7 +1,7 @@
-# CST NetController AI — Comprehensive Setup & Deployment Guide
+# AI NetController — Comprehensive Setup & Deployment Guide
 
 **Version:** `v2.9.0-LTS`  
-**Protocol:** `CST/3.0-SECURE`  
+**Protocol:** `AI-NET/3.0-SECURE`  
 **Target Environments:** Windows 10/11 (Host Agent), Android 10–15 (Mobile Client), Linux / macOS (Web Console & Headless Agent)
 
 ---
@@ -40,7 +40,7 @@
 ## 1. Hardware & Network Architecture Requirements
 
 ### Network Architecture
-CST NetController AI operates on an autonomous **Zero-Trust Local Area Network (LAN)**:
+AI NetController operates on an autonomous **Zero-Trust Local Area Network (LAN)**:
 - **No external cloud dependency required**: Screen streaming, telemetry, and command execution function 100% offline.
 - **Optional Internet Access**: Only required if using Google Gemini AI Copilot for natural language diagnostics.
 
@@ -48,9 +48,9 @@ CST NetController AI operates on an autonomous **Zero-Trust Local Area Network (
 | Port | Protocol | Direction | Description |
 | :--- | :---: | :---: | :--- |
 | **`3000`** | TCP | Inbound | Web Console UI & REST/WebSocket API |
-| **`8765`** | TCP | Inbound | Host Agent WebSocket (`CST/3.0-SECURE`) |
+| **`8765`** | TCP | Inbound | Host Agent WebSocket (`AI-NET/3.0-SECURE`) |
 | **`9` / `7`** | UDP | Outbound / Broadcast | Wake-on-LAN IEEE 802.3 Magic Packet |
-| **`5353`** | UDP | Multicast | mDNS Zero-Config Discovery (`_cst-agent._tcp.local.`) |
+| **`5353`** | UDP | Multicast | mDNS Zero-Config Discovery (`_ai-netcontroller-agent._tcp.local.`) |
 
 ---
 
@@ -59,10 +59,10 @@ CST NetController AI operates on an autonomous **Zero-Trust Local Area Network (
 ### Method A: Standalone Executable (Zero-Install)
 The standalone executable bundle requires **no Python installation**, no external compilers, and no admin privileges to run.
 
-1. Download **[`CST_HostAgent_v2.9.0_win64.exe`](https://github.com/smehmedd/AI-NetController/releases/download/v2.9.0/CST_HostAgent_v2.9.0_win64.exe)**.
-2. Place it in a dedicated directory (e.g. `C:\Tools\CST_HostAgent\`).
+1. Download **[`AI_NetController_HostAgent_v2.9.0_win64.exe`](https://github.com/smehmedd/AI-NetController/releases/download/v2.9.0/AI_NetController_HostAgent_v2.9.0_win64.exe)**.
+2. Place it in a dedicated directory (e.g. `C:\Tools\AI_NetController_HostAgent\`).
 3. Double-click the file to launch.
-4. The **CST Host Agent — Control Center** dark-slate window will appear on the desktop and register an icon in the Windows Notification Area (System Tray).
+4. The **AI NetController Host Agent — Control Center** dark-slate window will appear on the desktop and register an icon in the Windows Notification Area (System Tray).
 5. The window displays:
    - **Local IPv4 & Hostname**
    - **WebSocket URI**: e.g., `ws://192.168.1.100:8765`
@@ -96,15 +96,15 @@ To ensure the Host Agent starts automatically when Windows boots:
 
 #### Option 1: User Startup Folder
 1. Press `Win + R`, type `shell:startup`, and press Enter.
-2. Create a shortcut to `CST_HostAgent_v2.9.0_win64.exe` inside this folder.
+2. Create a shortcut to `AI_NetController_HostAgent_v2.9.0_win64.exe` inside this folder.
 
 #### Option 2: Windows Task Scheduler (Runs at Boot without Login)
 Run PowerShell as Administrator:
 ```powershell
-$action = New-ScheduledTaskAction -Execute "C:\Tools\CST_HostAgent\CST_HostAgent_v2.9.0_win64.exe" -Argument "--headless"
+$action = New-ScheduledTaskAction -Execute "C:\Tools\AI_NetController_HostAgent\AI_NetController_HostAgent_v2.9.0_win64.exe" -Argument "--headless"
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-Register-ScheduledTask -TaskName "CST_HostAgent_Daemon" -Action $action -Trigger $trigger -Principal $principal
+Register-ScheduledTask -TaskName "AI_NetController_HostAgent_Daemon" -Action $action -Trigger $trigger -Principal $principal
 ```
 
 ### Windows Firewall Configuration
@@ -113,7 +113,7 @@ If Windows Defender Firewall prompts to allow network access, select **Private N
 To manually create inbound firewall rules via Administrator PowerShell:
 ```powershell
 # Allow TCP Port 8765 (Agent WebSocket Listener)
-New-NetFirewallRule -DisplayName "CST Host Agent Daemon (TCP 8765)" `
+New-NetFirewallRule -DisplayName "AI NetController Host Agent Daemon (TCP 8765)" `
     -Direction Inbound `
     -LocalPort 8765 `
     -Protocol TCP `
@@ -121,7 +121,7 @@ New-NetFirewallRule -DisplayName "CST Host Agent Daemon (TCP 8765)" `
     -Profile Private,Domain
 
 # Allow UDP Port 5353 (mDNS Discovery)
-New-NetFirewallRule -DisplayName "CST Host Agent mDNS (UDP 5353)" `
+New-NetFirewallRule -DisplayName "AI NetController Host Agent mDNS (UDP 5353)" `
     -Direction Inbound `
     -LocalPort 5353 `
     -Protocol UDP `
@@ -150,9 +150,9 @@ For remote wake to function reliably when the workstation is powered down, all f
    ```
 
 ### Windows SmartScreen & Authenticode Certificate Trust
-The binary is signed with Authenticode certificate `O=CST_RU-AK`. To import this certificate into the Windows Root Certificate Authority store on managed domain/lab machines, run:
+The binary is signed with Authenticode certificate `O=AI_NetController`. To import this certificate into the Windows Root Certificate Authority store on managed domain/lab machines, run:
 ```powershell
-powershell -ExecutionPolicy Bypass -File agent\sign_binary.ps1 -ExePath public\releases\v2.9.0\CST_HostAgent_v2.9.0_win64.exe
+powershell -ExecutionPolicy Bypass -File agent\sign_binary.ps1 -ExePath public\releases\v2.9.0\AI_NetController_HostAgent_v2.9.0_win64.exe
 ```
 
 ---
@@ -175,17 +175,17 @@ pip install -r requirements.txt
 ### Headless Systemd Service Configuration
 On Linux servers or lab machines, configure the daemon as a systemd service:
 
-Create `/etc/systemd/system/cst-agent.service`:
+Create `/etc/systemd/system/ai-netcontroller-agent.service`:
 ```ini
 [Unit]
-Description=CST NetController AI Host Agent Daemon
+Description=AI NetController Host Agent Daemon
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/cst-agent
-ExecStart=/opt/cst-agent/venv/bin/python /opt/cst-agent/agent.py --headless --port 8765
+WorkingDirectory=/opt/ai-netcontroller-agent
+ExecStart=/opt/ai-netcontroller-agent/venv/bin/python /opt/ai-netcontroller-agent/agent.py --headless --port 8765
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -197,9 +197,9 @@ WantedBy=multi-user.target
 Enable and start the service:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable cst-agent
-sudo systemctl start cst-agent
-sudo systemctl status cst-agent
+sudo systemctl enable ai-netcontroller-agent
+sudo systemctl start ai-netcontroller-agent
+sudo systemctl status ai-netcontroller-agent
 ```
 
 ### Linux Wake-on-LAN (ethtool) Configuration
@@ -246,7 +246,7 @@ NODE_ENV=production
 GEMINI_API_KEY=AIzaSy...
 
 # Optional: Default target daemon port override
-CST_DAEMON_PORT=8765
+AI_DAEMON_PORT=8765
 ```
 
 ### Development Mode
@@ -269,7 +269,7 @@ npm test
 
 # 3. Start with PM2 Process Manager for 24/7 uptime
 npm install -g pm2
-pm2 start dist/server.js --name "cst-web-console"
+pm2 start dist/server.js --name "ai-netcontroller-web-console"
 pm2 save
 pm2 startup
 ```
@@ -279,9 +279,9 @@ pm2 startup
 ## 5. Android Mobile Client Setup
 
 ### Installing the Pre-Compiled APK
-1. Download **[`CST_NetController_AI_v2.9.0_arm64-v8a.apk`](https://github.com/smehmedd/AI-NetController/releases/download/v2.9.0/CST_NetController_AI_v2.9.0_arm64-v8a.apk)** on your smartphone (or previous releases [`v2.8.0`](https://github.com/smehmedd/AI-NetController/releases/tag/v2.8.0), [`v2.7.1`](https://github.com/smehmedd/AI-NetController/releases/tag/v2.7.1), [`v2.7.0`](https://github.com/smehmedd/AI-NetController/releases/tag/v2.7.0)).
+1. Download **[`AI_NetController_v2.9.0_arm64-v8a.apk`](https://github.com/smehmedd/AI-NetController/releases/download/v2.9.0/AI_NetController_v2.9.0_arm64-v8a.apk)** on your smartphone (or previous releases [`v2.8.0`](https://github.com/smehmedd/AI-NetController/releases/tag/v2.8.0), [`v2.7.1`](https://github.com/smehmedd/AI-NetController/releases/tag/v2.7.1), [`v2.7.0`](https://github.com/smehmedd/AI-NetController/releases/tag/v2.7.0)).
 2. Open the downloaded file. When prompted, permit your browser to install unknown applications.
-3. Tap **Install** and open **CST NetController**.
+3. Tap **Install** and open **AI NetController**.
 
 ### 120Hz Display Verification & Optimization
 The app includes native display mode switching:
@@ -290,7 +290,7 @@ The app includes native display mode switching:
 
 ### mDNS Auto-Discovery & Pairing
 1. Ensure your smartphone is connected to the same Wi-Fi network subnet as the target PC.
-2. Open the CST Mobile app. Within ~500ms, all active hosts running the daemon will appear in the **Fleet Discovery** list.
+2. Open the AI NetController Mobile app. Within ~500ms, all active hosts running the daemon will appear in the **Fleet Discovery** list.
 3. Tap a discovered host. Enter the **Pairing Token** shown in the PC Daemon GUI (`CST-XXXX-XXXX`) to complete authentication.
 
 ---
@@ -318,7 +318,7 @@ Commands executed through the Web Console or Mobile Controller pass through the 
 
 | Problem / Symptom | Probable Cause | Diagnostic & Resolution Steps |
 | :--- | :--- | :--- |
-| **PC shows "Offline" in Web Console** | Host Agent daemon not running or blocked by firewall. | Launch `CST_HostAgent_v2.9.0_win64.exe` (or `v2.7.1` / `v2.7.0`) on PC. Run `Test-NetConnection -ComputerName <ip> -Port 8765` from another machine to verify port. |
+| **PC shows "Offline" in Web Console** | Host Agent daemon not running or blocked by firewall. | Launch `AI_NetController_HostAgent_v2.9.0_win64.exe` (or `v2.7.1` / `v2.7.0`) on PC. Run `Test-NetConnection -ComputerName <ip> -Port 8765` from another machine to verify port. |
 | **Wake-on-LAN packet sends (`200 OK`) but PC stays off** | BIOS `Power on PCI-E` disabled, or Windows Fast Startup enabled. | 1. Disable Windows Fast Startup (`HiberbootEnabled = 0`).<br>2. Enable `Power On By PCI-E` in BIOS.<br>3. Verify wired Ethernet is connected. |
 | **Remote mouse/keyboard clicks do not register** | View-Only Mode is enabled. | In the PC Daemon GUI, uncheck **View-Only Mode (Block Remote Mouse/Keyboard)**. |
 | **Mobile app does not discover PC** | mDNS multicast blocked by Wi-Fi AP client isolation. | Check Wi-Fi router settings: disable **AP Client Isolation** or connect mobile device to the same VLAN. Alternatively, enter PC IP manually. |

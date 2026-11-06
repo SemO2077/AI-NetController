@@ -1,5 +1,5 @@
 """
-CST NetController AI — Native Desktop GUI for PC Host Daemon (v2.9.0-LTS)
+AI NetController — Native Desktop GUI for PC Host Daemon (v2.9.0-LTS)
 ================================================================================
 Provides a clean, transparent, user-facing desktop control panel built on Python's
 standard library (tkinter / ttk) with zero third-party native GUI DLLs.
@@ -43,7 +43,7 @@ try:
 except ImportError:
     psutil = None
 
-logger = logging.getLogger("CST-AgentGUI")
+logger = logging.getLogger("AI-NetController-GUI")
 
 
 class HostDaemonState:
@@ -54,7 +54,7 @@ class HostDaemonState:
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.lock = threading.Lock()
         self.version = "3.1.0-beta.1"
-        self.protocol = "CST/3.0-SECURE"
+        self.protocol = "AI-NET/3.0-SECURE"
         self.hostname = socket.gethostname()
         self.os_name = f"{platform.system()} {platform.release()}"
         self.local_ip = self._detect_local_ip()
@@ -76,7 +76,7 @@ class HostDaemonState:
         self.security_profile = "balanced"
         self.setup_completed = True
         self.pairing_pin = f"{secrets.randbelow(900000) + 100000}"
-        self.pairing_token = os.environ.get("CST_AGENT_SECRET", "cst_autonomous_lan_secret_2025")
+        self.pairing_token = os.environ.get("AI_AGENT_SECRET", os.environ.get("CST_AGENT_SECRET", "ai_netcontroller_secret_2025"))
 
         # Live metrics
         self.cpu_percent: float = 0.0
@@ -104,7 +104,7 @@ class HostDaemonState:
         # Recent event logs (capped at 200 entries)
         self.logs: List[Dict[str, Any]] = []
         self._log_seq: int = 0
-        self.add_log("INFO", f"CST Host Daemon GUI v{self.version} initialized on {self.local_ip}:{self.port}")
+        self.add_log("INFO", f"AI NetController Host Agent GUI v{self.version} initialized on {self.local_ip}:{self.port}")
         self.add_log("SECURITY", "AV-Safe Mode active: Native HWND window, UPX disabled, zero hidden shell spawns.")
 
     @staticmethod
@@ -311,10 +311,11 @@ class HostDaemonState:
         return summary
 
     def rotate_pairing_token(self) -> str:
-        new_token = f"cst_sec_{secrets.token_hex(12)}"
+        new_token = f"ai_sec_{secrets.token_hex(12)}"
         with self.lock:
             self.pairing_token = new_token
             self.pairing_pin = f"{secrets.randbelow(900000) + 100000}"
+        os.environ["AI_AGENT_SECRET"] = new_token
         os.environ["CST_AGENT_SECRET"] = new_token
         self.add_log("SECURITY", f"Pairing token & 6-digit PIN ({self.pairing_pin}) rotated by operator.")
         return new_token
@@ -365,7 +366,7 @@ class HostDaemonState:
 
 class HostDaemonDesktopGUI:
     """
-    Native Tkinter/TTK Desktop Control Center for the CST PC Host Daemon.
+    Native Tkinter/TTK Desktop Control Center for the AI NetController Host Agent Daemon.
     Includes dedicated sub-windows for:
     - All Connected Devices & Firewall Blacklist Manager
     - Guided 4-Step Setup & Security Hardening Wizard
@@ -398,7 +399,7 @@ class HostDaemonDesktopGUI:
                 pass
 
         self.root = tk.Tk()
-        self.root.title(f"CST Host Agent Control Center — {self.state.hostname} (v{self.state.version})")
+        self.root.title(f"AI NetController — Host Control Center ({self.state.hostname})")
         self.root.geometry("860x660")
         self.root.minsize(760, 560)
         self.root.configure(bg="#070c18")
@@ -453,7 +454,7 @@ class HostDaemonDesktopGUI:
 
         tk.Label(
             title_col,
-            text="CST NETCONTROLLER — PC HOST DAEMON",
+            text="AI NETCONTROLLER — PC HOST DAEMON",
             bg="#0b1324",
             fg="#f8fafc",
             font=("Segoe UI", 13, "bold"),
@@ -995,7 +996,7 @@ class HostDaemonDesktopGUI:
             return
 
         win = tk.Toplevel(self.root)
-        win.title(f"CST Guided Setup & Security Hardening Wizard — {self.state.hostname}")
+        win.title(f"AI NetController Setup & Security Wizard — {self.state.hostname}")
         win.geometry("680x480")
         win.configure(bg="#070c18")
         self._setup_win = win
@@ -1249,7 +1250,7 @@ def launch_gui_with_background_daemon(daemon_runner: Optional[Callable[[HostDaem
             logger.info(f"Background DaemonServer auto-link omitted: {exc}")
 
     if daemon_runner is not None:
-        t = threading.Thread(target=daemon_runner, args=(state,), daemon=True, name="CST_AsyncDaemonThread")
+        t = threading.Thread(target=daemon_runner, args=(state,), daemon=True, name="AI_AsyncDaemonThread")
         t.start()
 
     if HAS_TKINTER and ("--headless" not in sys.argv):

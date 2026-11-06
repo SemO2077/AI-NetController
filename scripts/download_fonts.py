@@ -60,6 +60,6 @@ for subset, body in blocks:
 
 fonts_css_path = os.path.abspath('apps/web/src/fonts.css')
 with open(fonts_css_path, 'w', encoding='utf-8') as f:
-    f.write("/* Offline Self-Hosted Typography Engine for CST NetController AI */\n\n" + "\n\n".join(local_css_rules) + "\n")
+    f.write("/* Offline Self-Hosted Typography Engine for AI NetController */\n\n" + "\n\n".join(local_css_rules) + "\n")
 
 print(f"SUCCESS: Downloaded {downloaded} font files into {FONTS_DIR} and created {fonts_css_path}")

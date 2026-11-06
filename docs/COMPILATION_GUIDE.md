@@ -1,14 +1,14 @@
-# CST NetController AI — 1-Click Binary Compilation & Deployment Guide
+# AI NetController — 1-Click Binary Compilation & Deployment Guide
 
 **Version:** `v2.9.0-LTS` (Previous `v2.8.0-LTS`, `v2.7.1-LTS`, and `v2.7.0-LTS` preserved in releases)  
-**Protocol:** `CST/3.0-SECURE`  
+**Protocol:** `AI-NET/3.0-SECURE`  
 **Platform Targets:** Windows 10/11 x64 PE32+ (`.EXE`), Android 10–15 (`.APK`)
 
 This guide details the procedure for producing the standalone native binaries (`.exe` and `.apk`) for the Computer Systems & Technologies (CST) system.
 
 ---
 
-## 1. Windows Host Agent Daemon (`CST_HostAgent_v2.9.0_win64.exe`)
+## 1. Windows Host Agent Daemon (`AI_NetController_HostAgent_v2.9.0_win64.exe`)
 
 ### Security & Antivirus False-Positive Hardening
 The compilation pipeline is specifically configured to pass Windows Defender and EDR heuristic analysis cleanly (`0/72` clean):
@@ -16,7 +16,7 @@ The compilation pipeline is specifically configured to pass Windows Defender and
 - **Foreground Desktop Window (`HWND`)**: Bundles standard Tkinter GUI runtime so the binary registers as a visible desktop utility rather than a headless background service.
 - **Pure-Python System Inspection**: Eliminates hidden `powershell.exe` subprocesses on launch.
 - **Embedded PE Version Info & UAC Manifest**: Official version resource metadata and `asInvoker` execution level.
-- **Authenticode SHA-256 Code Signing**: Signed with `CN=Computer Systems and Technologies (CST), O=CST_RU-AK, C=BG`.
+- **Authenticode SHA-256 Code Signing**: Signed with `CN=AI NetController, O=AI_NetController, C=BG`.
 
 ### Automated CLI Compilation Method
 ```powershell
@@ -33,16 +33,16 @@ pip install -r requirements.txt
 pyinstaller --clean build_agent.spec
 
 # 4. Sign binary with Authenticode certificate and run Defender scan check:
-powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath dist\CST_HostAgent\CST_HostAgent.exe
+powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe
 ```
 
 Output:
-- Standalone Executable: `agent/dist/CST_HostAgent/CST_HostAgent.exe` (or `CST_HostAgent_v2.9.0_win64.exe`)
-- Portable ZIP: Packaged via `Compress-Archive` into `CST_HostAgent_v2.9.0_win64_portable.zip`.
+- Standalone Executable: `agent/dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe` (or `AI_NetController_HostAgent_v2.9.0_win64.exe`)
+- Portable ZIP: Packaged via `Compress-Archive` into `AI_NetController_HostAgent_v2.9.0_win64_portable.zip`.
 
 ---
 
-## 2. Android Mobile Application (`CST_NetController_AI_v2.9.0_arm64-v8a.apk`)
+## 2. Android Mobile Application (`AI_NetController_v2.9.0_arm64-v8a.apk`)
 
 ### 120Hz Zero-Jitter Display Pipeline
 The Android client is compiled with:
@@ -72,8 +72,8 @@ Output files in `apps/mobile/build/app/outputs/flutter-apk/`:
 ---
 
 ## 3. Physical LAN Verification Checklist
-1. Launch `CST_HostAgent_v2.9.0_win64.exe` (or `v2.7.1` / `v2.7.0`) on target Windows PC. Confirm the Control Center window displays the local IP and pairing key.
+1. Launch `AI_NetController_HostAgent_v2.9.0_win64.exe` (or `v2.7.1` / `v2.7.0`) on target Windows PC. Confirm the Control Center window displays the local IP and pairing key.
 2. Connect Android phone to the same Wi-Fi subnet.
-3. Open the installed CST Mobile app:
+3. Open the installed AI NetController Mobile app:
    - mDNS will discover the Windows PC host automatically within ~500ms.
    - Remote screen view, telemetry, and HITL security gating are operational immediately.

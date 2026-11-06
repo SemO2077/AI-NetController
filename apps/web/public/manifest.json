@@ -1,6 +1,6 @@
 {
-  "name": "CST NetController AI",
-  "short_name": "NetController",
+  "name": "AI NetController",
+  "short_name": "AI NetController",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#050811",

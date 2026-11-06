@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CST NetController AI - Native Android Application Builder
+AI NetController - Native Android Application Builder
 Compiles a hardware-accelerated Android APK embedding the exact React/Tailwind/D3 Web Console
 using official Android SDK build-tools and JDK 25.
 """
@@ -116,7 +116,7 @@ def create_android_manifest():
 def create_resources():
     strings_content = """<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">CST NetController AI</string>
+    <string name="app_name">AI NetController</string>
 </resources>"""
     with open(os.path.join(STAGE_DIR, "res", "values", "strings.xml"), "w", encoding="utf-8") as f:
         f.write(strings_content)
@@ -284,7 +284,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-    private static final String TAG = "CST_Mobile";
+    private static final String TAG = "AINetController";
     private WebView webView;
     private ServerSocket localServer;
     private int localPort = 0;
@@ -486,7 +486,7 @@ public class MainActivity extends Activity {
                             try {
                                 ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                                 if (cm != null) {
-                                    ClipData clip = ClipData.newPlainText("CST NetController", text);
+                                    ClipData clip = ClipData.newPlainText("AI NetController", text);
                                     cm.setPrimaryClip(clip);
                                 }
                             } catch (Throwable ignored) {}
@@ -967,9 +967,9 @@ public class MainActivity extends Activity {
             }
         } else if (lower.contains("scan") || lower.contains("discover") || lower.contains("сканир")) {
             if (isBg) {
-                reply.append("Стартирам многонишково сканиране на локалната /24 подмрежа за активни компютри и CST агенти. [ACTION:SCAN]");
+                reply.append("Стартирам многонишково сканиране на локалната /24 подмрежа за активни компютри и AI NetController агенти. [ACTION:SCAN]");
             } else {
-                reply.append("Launching multi-threaded /24 LAN subnet discovery for active workstations and CST Host Agents. [ACTION:SCAN]");
+                reply.append("Launching multi-threaded /24 LAN subnet discovery for active workstations and AI NetController Host Agents. [ACTION:SCAN]");
             }
         } else if (lower.contains("screen") || lower.contains("desktop") || lower.contains("екран")) {
             if (isBg) {
@@ -989,7 +989,7 @@ public class MainActivity extends Activity {
             if (isBg) {
                 reply.append("Автономният Android контролер (v3.0.0, IP: ").append(lanIp).append(") е активен. Можете да сканирате локалната мрежа [ACTION:SCAN], да събудите компютър чрез Wake-on-LAN или да управлявате екрана и терминала в реално време.");
             } else {
-                reply.append("CST Autonomous Android Controller (v3.0.0, LAN IP: ").append(lanIp).append(") is online. You can scan your local subnet [ACTION:SCAN], wake sleeping workstations via UDP Magic Packets, or stream live desktop & terminal sessions.");
+                reply.append("AI NetController Android Companion (v3.0.0, LAN IP: ").append(lanIp).append(") is online. You can scan your local subnet [ACTION:SCAN], wake sleeping workstations via UDP Magic Packets, or stream live desktop & terminal sessions.");
             }
         }
 
@@ -1150,7 +1150,7 @@ public class MainActivity extends Activity {
                     // 4. Quick Setup Info
                     if (rawPath.equals("/api/setup/info")) {
                         String lanIp = detectDeviceLanIp();
-                        String setupObj = "{\"version\":\"3.0.0\",\"localIp\":\"" + lanIp + "\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"osName\":\"Android\",\"os\":\"android\",\"mac\":\"\",\"daemonPort\":8765,\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"exeDownloadUrl\":\"/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe\",\"apkDownloadUrl\":\"/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk\",\"launcherDownloadUrl\":\"/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe\"}";
+                        String setupObj = "{\"version\":\"3.0.0\",\"localIp\":\"" + lanIp + "\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"osName\":\"Android\",\"os\":\"android\",\"mac\":\"\",\"daemonPort\":8765,\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"exeDownloadUrl\":\"/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe\",\"apkDownloadUrl\":\"/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk\",\"launcherDownloadUrl\":\"/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe\"}";
                         String json = "{\"success\":true,\"setup\":" + setupObj + "}";
                         sendJsonResponse(out, 200, json);
                         socket.close();
@@ -1189,9 +1189,9 @@ public class MainActivity extends Activity {
                                 "\"144Hz Poppy & Vibrant Cyber-Glass UI across all aspect ratios\"" +
                             "]," +
                             "\"assets\":[" +
-                                "{\"name\":\"CST_NetController_AI_v3.0.0_arm64-v8a.apk\",\"size\":\"5.9 MB\",\"platform\":\"Android 8.0–15 (ARM64)\",\"url\":\"/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk\",\"verified\":true}," +
-                                "{\"name\":\"CST_HostAgent_v3.0.0_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe\",\"verified\":true}," +
-                                "{\"name\":\"CST_HostAgent_v3.0.0_win64_portable.zip\",\"size\":\"15.0 MB\",\"platform\":\"Windows 10/11 x64 Portable\",\"url\":\"/releases/v3.0.0/CST_HostAgent_v3.0.0_win64_portable.zip\",\"verified\":true}" +
+                                "{\"name\":\"AI_NetController_v3.0.0_arm64-v8a.apk\",\"size\":\"5.9 MB\",\"platform\":\"Android 8.0–15 (ARM64)\",\"url\":\"/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk\",\"verified\":true}," +
+                                "{\"name\":\"AI_NetController_HostAgent_v3.0.0_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe\",\"verified\":true}," +
+                                "{\"name\":\"AI_NetController_HostAgent_v3.0.0_win64_portable.zip\",\"size\":\"15.0 MB\",\"platform\":\"Windows 10/11 x64 Portable\",\"url\":\"/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64_portable.zip\",\"verified\":true}" +
                             "]" +
                         "}";
                         sendJsonResponse(out, 200, json);
@@ -1217,7 +1217,7 @@ public class MainActivity extends Activity {
 
                     if (rawPath.equals("/api/update/ai-analyze")) {
                         String json = "{" +
-                            "\"analysis\":\"All installed CST NetController AI v3.0.0 components (Android Native Engine, Binary WebSocket Worker, and UDP WoL Broadcaster) match the latest cryptographic SHA-256 release signatures.\"," +
+                            "\"analysis\":\"All installed AI NetController v3.0.0 components (Android Native Engine, Binary WebSocket Worker, and UDP WoL Broadcaster) match the latest cryptographic SHA-256 release signatures.\"," +
                             "\"recommendation\":\"Keep current v3.0.0-LTS build active. No breaking changes or security vulnerabilities detected.\"," +
                             "\"riskLevel\":\"low\"," +
                             "\"compatibilityScore\":100" +
@@ -1262,7 +1262,7 @@ public class MainActivity extends Activity {
                         String json = "{\"models\":[" +
                             "{\"id\":\"gemini-3.8-flash\",\"name\":\"Gemini 3.8 Flash\",\"provider\":\"Google DeepMind\",\"latencyMs\":38,\"status\":\"ready\"}," +
                             "{\"id\":\"gemini-3.8-pro\",\"name\":\"Gemini 3.8 Pro\",\"provider\":\"Google DeepMind\",\"latencyMs\":84,\"status\":\"ready\"}," +
-                            "{\"id\":\"local-edge-v3\",\"name\":\"CST Local Edge Heuristic\",\"provider\":\"On-Device Native\",\"latencyMs\":4,\"status\":\"ready\"}" +
+                            "{\"id\":\"local-edge-v3\",\"name\":\"AI NetController Edge Heuristic\",\"provider\":\"On-Device Native\",\"latencyMs\":4,\"status\":\"ready\"}" +
                         "]}";
                         sendJsonResponse(out, 200, json);
                         socket.close();
@@ -1472,7 +1472,7 @@ def zipalign_and_sign():
     bin_dir = os.path.join(STAGE_DIR, "bin")
     unaligned_apk = os.path.join(bin_dir, "unaligned.apk")
     aligned_apk = os.path.join(bin_dir, "aligned.apk")
-    signed_apk = os.path.join(bin_dir, "CST_NetController_AI_v3.0.0_arm64-v8a.apk")
+    signed_apk = os.path.join(bin_dir, "AI_NetController_v3.0.0_arm64-v8a.apk")
 
     print("[*] Aligning APK with zipalign (4-byte alignment)...")
     if os.path.exists(aligned_apk):
@@ -1510,8 +1510,8 @@ def distribute_apk(signed_apk):
     for rel_tag, apk_tag in [("v3.1.0-beta.3", "v3.1.0"), ("v3.1.0-beta.2", "v3.1.0"), ("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
         rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
         os.makedirs(rel_dir, exist_ok=True)
-        dest_arm64 = os.path.join(rel_dir, f"CST_NetController_AI_{apk_tag}_arm64-v8a.apk")
-        dest_univ = os.path.join(rel_dir, f"CST_NetController_AI_{apk_tag}.apk")
+        dest_arm64 = os.path.join(rel_dir, f"AI_NetController_{apk_tag}_arm64-v8a.apk")
+        dest_univ = os.path.join(rel_dir, f"AI_NetController_{apk_tag}.apk")
         shutil.copy2(signed_apk, dest_arm64)
         shutil.copy2(signed_apk, dest_univ)
 
@@ -1519,9 +1519,9 @@ def distribute_apk(signed_apk):
     os.makedirs(mobile_out, exist_ok=True)
     dest_flutter = os.path.join(mobile_out, "app-arm64-v8a-release.apk")
     shutil.copy2(signed_apk, dest_flutter)
-    shutil.copy2(signed_apk, os.path.join(ROOT_DIR, "CST_NetController_AI_v3.1.0_arm64-v8a.apk"))
+    shutil.copy2(signed_apk, os.path.join(ROOT_DIR, "AI_NetController_v3.1.0_arm64-v8a.apk"))
 
-    dest_arm64_main = os.path.join(ROOT_DIR, "public", "releases", "v3.1.0-beta.3", "CST_NetController_AI_v3.1.0_arm64-v8a.apk")
+    dest_arm64_main = os.path.join(ROOT_DIR, "public", "releases", "v3.1.0-beta.3", "AI_NetController_v3.1.0_arm64-v8a.apk")
     size_mb = os.path.getsize(dest_arm64_main) / (1024 * 1024)
     sha_hash = sha256_file(dest_arm64_main)
     print(f"\n[SUCCESS] APK Published to:\n  - {dest_arm64_main}\n  - Size: {size_mb:.2f} MB\n  - SHA256: {sha_hash}")

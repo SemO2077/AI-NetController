@@ -13,7 +13,7 @@ from crypto_handshake import PurePythonX25519, FastX25519, AuthenticatedCipher, 
 from command_ast_firewall import CommandASTFirewall
 
 print("=========================================================================")
-print("  CST NETCONTROLLER AI - QUANTITATIVE PERFORMANCE BENCHMARK SUITE")
+print("  AI NETCONTROLLER - QUANTITATIVE PERFORMANCE BENCHMARK SUITE")
 print("=========================================================================\n")
 
 # -------------------------------------------------------------
@@ -62,7 +62,7 @@ print(f"[Benchmark 2] ChaCha20-Poly1305 AEAD ({aead_rounds:,} telemetry frames).
 salt = os.urandom(16)
 key = derive_session_key(h_sec, salt)
 cipher = AuthenticatedCipher(key)
-payload = b"CST-TELEMETRY-PAYLOAD-SAMPLE-FRAME-DATA-CPU-RAM-120HZ"
+payload = b"AI-NETCONTROLLER-TELEMETRY-PAYLOAD-SAMPLE-FRAME-DATA-CPU-RAM-120HZ"
 nonce = os.urandom(12)
 aad = b"HEADER_AAD_METADATA"
 

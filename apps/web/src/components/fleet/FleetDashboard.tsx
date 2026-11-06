@@ -226,7 +226,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
   const [pinnedHostIds, setPinnedHostIds] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('cst_pinned_hosts_v1');
+      const saved = localStorage.getItem('ai_pinned_hosts_v1') || localStorage.getItem('cst_pinned_hosts_v1');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) return parsed;
@@ -239,7 +239,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     setPinnedHostIds((prev) => {
       const next = prev.includes(hostId) ? prev.filter((id) => id !== hostId) : [...prev, hostId];
       try {
-        localStorage.setItem('cst_pinned_hosts_v1', JSON.stringify(next));
+        localStorage.setItem('ai_pinned_hosts_v1', JSON.stringify(next));
       } catch {}
       return next;
     });
@@ -258,8 +258,8 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
   const [showOnboardingBanner, setShowOnboardingBanner] = useState<boolean>(() => {
     try {
-      const completed = localStorage.getItem('cst_onboarding_completed') === 'true';
-      const dismissed = localStorage.getItem('cst_onboarding_banner_dismissed') === 'true';
+      const completed = localStorage.getItem('ai_netcontroller_onboarding_completed') === 'true' || localStorage.getItem('cst_onboarding_completed') === 'true';
+      const dismissed = localStorage.getItem('ai_netcontroller_onboarding_banner_dismissed') === 'true' || localStorage.getItem('cst_onboarding_banner_dismissed') === 'true';
       return !completed && !dismissed;
     } catch {
       return false;
@@ -710,7 +710,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               <div className="space-y-0.5 w-full min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs sm:text-sm font-bold text-white tracking-tight">
-                    {language === 'bg' ? 'Добре дошли в CST NetController AI' : 'Welcome to CST NetController AI'}
+                    {language === 'bg' ? 'Добре дошли в AI NetController' : 'Welcome to AI NetController'}
                   </span>
                   <span className="px-2.5 py-0.5 rounded-full text-[10.5px] font-mono font-bold bg-violet-500/25 text-violet-200 border border-violet-400/30 shrink-0">
                     {language === 'bg' ? 'Първи стъпки' : 'Quick Start'}

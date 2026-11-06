@@ -14,10 +14,10 @@ MANIFEST_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <assemblyIdentity
     version="3.0.0.0"
     processorArchitecture="amd64"
-    name="CST.NetController.HostAgent"
+    name="AI.NetController.HostAgent"
     type="win32"
   />
-  <description>CST NetController AI - PC Host Agent &amp; Desktop Control Center</description>
+  <description>AI NetController - PC Host Agent &amp; Desktop Control Center</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
@@ -97,7 +97,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='CST_HostAgent',
+    name='AI_NetController_HostAgent',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -117,6 +117,6 @@ coll = COLLECT(
     strip=False,
     upx=False,  # Strictly disabled on all collected DLLs/PYDs to preserve Authenticode & AV trust
     upx_exclude=[],
-    name='CST_HostAgent'
+    name='AI_NetController_HostAgent'
 )
 

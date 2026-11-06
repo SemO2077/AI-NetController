@@ -1,5 +1,5 @@
 /**
- * CST NetController AI - Binary Protocol Framer (0xC5 0x71)
+ * AI NetController - Binary Protocol Framer (0xC5 0x71)
  * 
  * Strict 12-byte binary protocol framing for zero-allocation wire communication.
  * Header layout:

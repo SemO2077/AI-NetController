@@ -1,4 +1,4 @@
-# CST NetController AI (`v2.9.0-LTS`) — Complete Project & Operations Guide
+# AI NetController (`v2.9.0-LTS`) — Complete Project & Operations Guide
 
 > **Technical University of Varna (ТУ-Варна)** • Department of Computer Science and Technologies (КСТ)  
 > **Architecture**: Zero-Trust Distributed Fleet Management, Wake-on-LAN, 120 FPS Screen Streaming & Agentic AI Diagnostics  
@@ -9,7 +9,7 @@
 
 ## Table of Contents
 
-1. [What is CST NetController AI?](#1-what-is-cst-netcontroller-ai)
+1. [What is AI NetController?](#1-what-is-cst-netcontroller-ai)
 2. [How the 3-Tier Architecture Works](#2-how-the-3-tier-architecture-works)
 3. [Quick-Start: Getting Everything Running in 3 Minutes](#3-quick-start-getting-everything-running-in-3-minutes)
 4. [Complete Feature Guide](#4-complete-feature-guide)
@@ -32,11 +32,11 @@
 
 ---
 
-## 1. What is CST NetController AI?
+## 1. What is AI NetController?
 
-**CST NetController AI** is an enterprise and university-lab remote fleet orchestrator built for system administrators, lab managers, and power users. It allows you to monitor, wake, control, diagnose, and automate dozens of Windows, Linux, and macOS workstations from a single glassmorphic web console or mobile phone.
+**AI NetController** is an enterprise and university-lab remote fleet orchestrator built for system administrators, lab managers, and power users. It allows you to monitor, wake, control, diagnose, and automate dozens of Windows, Linux, and macOS workstations from a single glassmorphic web console or mobile phone.
 
-Unlike traditional remote desktop tools that require heavy background services or cloud relays, CST NetController AI operates **100% locally on your LAN** with **Zero-Trust cryptographic framing (`CST/3.0-SECURE`)** and optional **Agentic AI troubleshooting** powered by Gemini.
+Unlike traditional remote desktop tools that require heavy background services or cloud relays, AI NetController operates **100% locally on your LAN** with **Zero-Trust cryptographic framing (`AI-NET/3.0-SECURE`)** and optional **Agentic AI troubleshooting** powered by Gemini.
 
 ---
 
@@ -50,13 +50,13 @@ The project is organized as a polyglot monorepo with three primary layers:
 │    • Web Console & PWA (apps/web/) — React 19.3 + Vite + Express Backend    │
 │    • Android / iOS Client (apps/mobile/) — Flutter 3.29 + Impeller Engine   │
 └──────────────────────┬──────────────────────────────────┬───────────────────┘
-                       │ REST / JSON (`/api/*`)           │ Binary WebSocket (`CST/3.0-SECURE`)
+                       │ REST / JSON (`/api/*`)           │ Binary WebSocket (`AI-NET/3.0-SECURE`)
                        ▼                                  ▼
 ┌──────────────────────────────────────┐   ┌──────────────────────────────────┐
 │ 2. LOCAL ORCHESTRATION SERVER        │   │ 3. HOST PC DAEMON (`agent/`)     │
 │    • Express API (`server.ts`)       │◄─►│    • Native Desktop GUI          │
 │    • UDP Port 9 WoL Broadcaster      │   │      (`agent_gui.py` Tkinter)    │
-│    • mDNS `_cst-agent._tcp.local.`   │   │    • Asyncio Telemetry & Screen  │
+│    • mDNS `_ai-netcontroller-agent._tcp.local.`   │   │    • Asyncio Telemetry & Screen  │
 │    • AST Firewall (`v2026.10-REV5`)  │   │      Encoder (`agent_daemon.py`) │
 └──────────────────────────────────────┘   └──────────────────────────────────┘
 ```
@@ -67,9 +67,9 @@ The project is organized as a polyglot monorepo with three primary layers:
   - `src/`: React 19.3 frontend featuring a **3-Tier Optical Glass Design System**, interactive D3 network topology, Recharts telemetry/energy analytics, and bilingual `EN`/`BG` localization.
 - **`agent/`**: The lightweight Python 3.12+ daemon that runs on the target PCs you want to monitor and control.
   - `agent.py`: Main entry point (launches the desktop GUI by default, or runs headless in server environments via `--headless`).
-  - `agent_gui.py`: Native dark-slate Tkinter desktop GUI (`CST Host Agent — Control Center`) giving the local PC user full visibility and control over incoming connections.
-  - `agent_daemon.py`: Core `asyncio` engine handling CPU/RAM/Disk telemetry, 120 FPS screen capture (`mss`), Adler-32 4×4 dirty-tile delta compression, and `CST/3.0-SECURE` binary packet framing.
-- **`apps/mobile/`**: The native Flutter 3.29 mobile client (`CST_NetController_AI_v2.9.0_arm64-v8a.apk`) with hardware-accelerated Impeller rendering, biometric auth gate, and tactile remote trackpad controls.
+  - `agent_gui.py`: Native dark-slate Tkinter desktop GUI (`AI NetController Host Agent — Control Center`) giving the local PC user full visibility and control over incoming connections.
+  - `agent_daemon.py`: Core `asyncio` engine handling CPU/RAM/Disk telemetry, 120 FPS screen capture (`mss`), Adler-32 4×4 dirty-tile delta compression, and `AI-NET/3.0-SECURE` binary packet framing.
+- **`apps/mobile/`**: The native Flutter 3.29 mobile client (`AI_NetController_v2.9.0_arm64-v8a.apk`) with hardware-accelerated Impeller rendering, biometric auth gate, and tactile remote trackpad controls.
 
 ---
 
@@ -87,7 +87,7 @@ Open **`http://localhost:3000`** in your browser.
 You have two ways to run the daemon on a target workstation:
 
 - **Option A — Standalone Windows Executable (Zero Python install required):**
-  Download **`CST_HostAgent_v2.9.0_win64.exe`** directly from the top navigation bar in the Web Console (click the **`PC Daemon`** or **`Download .EXE`** button) and launch it.
+  Download **`AI_NetController_HostAgent_v2.9.0_win64.exe`** directly from the top navigation bar in the Web Console (click the **`PC Daemon`** or **`Download .EXE`** button) and launch it.
 - **Option B — From Python Source (Windows / Linux / macOS):**
   ```bash
   pip install psutil
@@ -96,7 +96,7 @@ You have two ways to run the daemon on a target workstation:
   *(Use `python agent/agent.py --headless` on headless Linux servers without an X11/Wayland display).*
 
 ### Step 3: Pair or Auto-Discover
-1. When the **CST Host Agent — Control Center** window opens on the PC, it displays:
+1. When the **AI NetController Host Agent — Control Center** window opens on the PC, it displays:
    - **WebSocket Endpoint**: e.g., `ws://192.168.1.42:8765`
    - **Pairing Token**: e.g., `CST-9F4A-82B1`
 2. If your Web Console is on the same LAN subnet and **mDNS Auto-Discovery** is enabled, the host appears automatically within 5 seconds.
@@ -130,7 +130,7 @@ Every workstation running the daemon has a clean, lightweight **Native Desktop G
   - **Pause / Resume Daemon**: Temporarily suspend incoming remote connections without closing the app.
   - **View-Only Mode (Input Lock)**: Allows remote administrators to view the screen and telemetry while blocking all remote mouse, keyboard, and shell injection.
   - **Require HITL Approval**: Forces a confirmation prompt on the host PC before any high-risk remote command is executed.
-  - **mDNS Broadcast Toggle**: Controls whether the PC announces itself on `_cst-agent._tcp.local.`.
+  - **mDNS Broadcast Toggle**: Controls whether the PC announces itself on `_ai-netcontroller-agent._tcp.local.`.
   - **Panic Disconnect All**: Immediately severs all active WebSocket sessions and rotates the session nonce.
 - **NIC & Wake-on-LAN Readiness Diagnostics**: Inspects physical network adapters (`Ethernet`, `Wi-Fi`), verifies link speed and IPv4 binding, and reports whether `Wake on Magic Packet` is ready.
 
@@ -193,13 +193,13 @@ Ensure the following ports are allowed on your local LAN / Windows Defender Fire
 | Port | Protocol | Direction | Purpose |
 | :--- | :---: | :---: | :--- |
 | **`3000`** | TCP | Inbound to Server | Web Console UI & REST API (`apps/web/server.ts`) |
-| **`8765`** | TCP | Inbound to Host PC | Host Agent `CST/3.0-SECURE` WebSocket Telemetry & Screen Stream |
+| **`8765`** | TCP | Inbound to Host PC | Host Agent `AI-NET/3.0-SECURE` WebSocket Telemetry & Screen Stream |
 | **`9`** *(or `7`)* | UDP | Broadcast (`255.255.255.255`) | IEEE 802.3 Wake-on-LAN Magic Packet dispatch |
 | **`5353`** | UDP | Multicast (`224.0.0.251`) | RFC 6762 mDNS Zero-Config Host Auto-Discovery |
 
 > **Tip for Windows Host PCs**: Run this single PowerShell command (as Administrator) on target PCs to open the Agent WebSocket port on your Private/Domain LAN:
 > ```powershell
-> New-NetFirewallRule -DisplayName "CST Host Agent Daemon (TCP 8765)" -Direction Inbound -LocalPort 8765 -Protocol TCP -Action Allow -Profile Private,Domain
+> New-NetFirewallRule -DisplayName "AI NetController Host Agent Daemon (TCP 8765)" -Direction Inbound -LocalPort 8765 -Protocol TCP -Action Allow -Profile Private,Domain
 > ```
 
 ---
@@ -226,23 +226,23 @@ Wake-on-LAN works at **Layer 2 (Data Link Layer)** before the operating system e
 ---
 
 ### 5.3 Antivirus & Windows Defender: How False Positives Are Eliminated
-Unsigned Python-to-EXE binaries are frequently flagged by Windows Defender or Malwarebytes heuristics if they look like "silent background implants." **CST Host Agent (`v2.8.0-LTS`)** is specifically engineered to pass static and behavioral antivirus inspection cleanly:
+Unsigned Python-to-EXE binaries are frequently flagged by Windows Defender or Malwarebytes heuristics if they look like "silent background implants." **AI NetController Host Agent (`v2.8.0-LTS`)** is specifically engineered to pass static and behavioral antivirus inspection cleanly:
 
 1. **Zero UPX Compression (`upx=False`)**: UPX-packed executables share section entropy signatures (`UPX0`/`UPX1`) with malware packers. Our `agent/build_agent.spec` explicitly disables UPX compression so all PE sections remain uncompressed and transparent to Windows Defender.
-2. **Visible Desktop Window (`HWND`) & System Tray**: Background-only executables with no visible window (`console=False` without a GUI) trigger behavioral heuristics when capturing screens or opening sockets. Launching the visible **CST Host Agent — Control Center** Tkinter GUI establishes a legitimate foreground user application context.
+2. **Visible Desktop Window (`HWND`) & System Tray**: Background-only executables with no visible window (`console=False` without a GUI) trigger behavioral heuristics when capturing screens or opening sockets. Launching the visible **AI NetController Host Agent — Control Center** Tkinter GUI establishes a legitimate foreground user application context.
 3. **Zero Hidden Shell Subprocesses on Startup**: Instead of spawning hidden `powershell.exe -WindowStyle Hidden` or `cmd.exe /c` subprocesses to read network adapters or clipboard state (which triggers EDR "Living-off-the-Land" alerts), `agent_gui.py` uses pure Python `psutil.net_if_addrs()`, `psutil.net_if_stats()`, and native Tkinter clipboard APIs.
 4. **Embedded Windows PE Version Metadata & UAC `asInvoker` Manifest**: The binary embeds official company metadata (`Technical University of Varna — CST Dept`), product version (`2.9.0.0`), and `requestedExecutionLevel level="asInvoker"` so it never demands suspicious privilege escalation on launch.
 5. **SHA-256 Authenticode Code Signing (`agent/sign_binary.ps1`)**:
-   - Digitally signed with Authenticode certificate `CN=Computer Systems and Technologies (CST), O=CST_RU-AK, C=BG`.
+   - Digitally signed with Authenticode certificate `CN=AI NetController, O=AI_NetController, C=BG`.
    - To eliminate Windows SmartScreen "Unknown Publisher" prompts across university lab PCs, sign the `.exe` using `agent/sign_binary.ps1` and import the public certificate into each lab machine's `Cert:\LocalMachine\Root` store:
      ```powershell
-     powershell -ExecutionPolicy Bypass -File agent\sign_binary.ps1 -ExePath public\releases\v2.8.0\CST_HostAgent_v2.9.0_win64.exe
+     powershell -ExecutionPolicy Bypass -File agent\sign_binary.ps1 -ExePath public\releases\v2.8.0\AI_NetController_HostAgent_v2.9.0_win64.exe
      ```
 
 ---
 
 ### 5.4 Security Controls: View-Only Mode, HITL Gate & Panic Disconnect
-- **Cryptographic Packet Framing (`CST/3.0-SECURE`)**: Every WebSocket frame starts with the magic header `0xC5 0x71`, protocol version `0x30`, an **RFC 6479 128-bit sliding-window anti-replay sequence number**, and a **ChaCha20-Poly1305 16-byte AEAD authentication tag**. Replayed or tampered packets are dropped in `<0.2ms`.
+- **Cryptographic Packet Framing (`AI-NET/3.0-SECURE`)**: Every WebSocket frame starts with the magic header `0xC5 0x71`, protocol version `0x30`, an **RFC 6479 128-bit sliding-window anti-replay sequence number**, and a **ChaCha20-Poly1305 16-byte AEAD authentication tag**. Replayed or tampered packets are dropped in `<0.2ms`.
 - **Host Quarantine & Circuit Breaker**: Any workstation can be quarantined with 1 click (`🔒 Quarantine`) if suspicious activity is detected, immediately blocking all outbound commands and screen streams to that node.
 - **Local User Sovereignty**: The person sitting in front of the physical PC always has ultimate authority via the **PC Daemon Control Center GUI**—they can enable **View-Only Mode**, require **Local HITL Approval**, **Rotate the Pairing Token**, or click **Panic Disconnect All** at any moment.
 
@@ -272,21 +272,21 @@ Pre-compiled release binaries are served directly from the web app under `/relea
 
 | Artifact | Target Platform | Size | SHA-256 Checksum |
 | :--- | :--- | :---: | :--- |
-| **`CST_HostAgent_v2.9.0_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed `O=CST_RU-AK`) | 35.3 MB | `657a2ffe752c3e8a52c2684423e6f270daff71b50ab9fcbb1a754e3156a67403` |
-| **`CST_NetController_AI_v2.9.0_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` High-Refresh 120Hz) | 21.8 MB | `1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a` |
-| **`CST_NetController_AI_v2.8.0.apk`** | Android 10–15 (Universal Package) | 21.8 MB | `1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a` |
-| **`CST_HostAgent_v2.8.0_win64_portable.zip`** | Windows Portable Agent Bundle + Internal Runtime | 34.7 MB | `f4d239a1d04222695129d7e1a61c355bab9d2b76bdcd763ecd8df4e16a64e35c` |
+| **`AI_NetController_HostAgent_v2.9.0_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed `O=AI_NetController`) | 35.3 MB | `657a2ffe752c3e8a52c2684423e6f270daff71b50ab9fcbb1a754e3156a67403` |
+| **`AI_NetController_v2.9.0_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` High-Refresh 120Hz) | 21.8 MB | `1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a` |
+| **`AI_NetController_v2.8.0.apk`** | Android 10–15 (Universal Package) | 21.8 MB | `1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a` |
+| **`AI_NetController_HostAgent_v2.8.0_win64_portable.zip`** | Windows Portable Agent Bundle + Internal Runtime | 34.7 MB | `f4d239a1d04222695129d7e1a61c355bab9d2b76bdcd763ecd8df4e16a64e35c` |
 
 ### Previous Releases (`v2.7.1-LTS` & `v2.7.0-LTS`) — Still Available
 
 | Artifact | Target Platform | Size | SHA-256 Checksum |
 | :--- | :--- | :---: | :--- |
-| **`CST_HostAgent_v2.7.1_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed `O=CST_RU-AK`) | 35.3 MB | `fb64a8f8d609fccf37582e78914c810ee488b78d28ffb6d49602c6b851d4f90f` |
-| **`CST_NetController_AI_v2.7.1_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` High-Refresh 120Hz) | 22.8 MB | `54dcabd909c03bb282c9fa28f2c8c95a2378491c49c30ac9b157399016b89751` |
-| **`CST_HostAgent_v2.7.0_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed) | 33.7 MB | `484467fccf3c2605a1ce180420db437707a80c095526404473d591b415b55c89` |
-| **`CST_NetController_AI_v2.7.0_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` 120Hz) | 22.5 MB | `b0be786f11ef95b46322bf9da8b93e4664fb8504e525fd682da8be310e95abb6` |
+| **`AI_NetController_HostAgent_v2.7.1_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed `O=AI_NetController`) | 35.3 MB | `fb64a8f8d609fccf37582e78914c810ee488b78d28ffb6d49602c6b851d4f90f` |
+| **`AI_NetController_v2.7.1_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` High-Refresh 120Hz) | 22.8 MB | `54dcabd909c03bb282c9fa28f2c8c95a2378491c49c30ac9b157399016b89751` |
+| **`AI_NetController_HostAgent_v2.7.0_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed) | 33.7 MB | `484467fccf3c2605a1ce180420db437707a80c095526404473d591b415b55c89` |
+| **`AI_NetController_v2.7.0_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` 120Hz) | 22.5 MB | `b0be786f11ef95b46322bf9da8b93e4664fb8504e525fd682da8be310e95abb6` |
 
-- **To rebuild the Windows `.EXE` from source**: Run `pyinstaller --clean build_agent.spec` inside `agent/` and sign via `powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath dist\CST_HostAgent\CST_HostAgent.exe`.
+- **To rebuild the Windows `.EXE` from source**: Run `pyinstaller --clean build_agent.spec` inside `agent/` and sign via `powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe`.
 - **To rebuild the Android `.APK` from source**: Run `flutter build apk --release --split-per-abi` inside `apps/mobile/`.
 - See **[docs/COMPILATION_GUIDE.md](./COMPILATION_GUIDE.md)** and **[docs/SETUP_GUIDE.md](./SETUP_GUIDE.md)** for full step-by-step instructions.
 
@@ -296,7 +296,7 @@ Pre-compiled release binaries are served directly from the web app under `/relea
 
 | Symptom | Cause | Solution |
 | :--- | :--- | :--- |
-| **Host shows `Sleeping` even though the PC is turned on** | Daemon is not running on the PC or port `8765` is blocked by Windows Firewall. | Launch `CST_HostAgent_v2.9.0_win64.exe` (or `v2.7.1` / `v2.7.0`, or `python agent/agent.py`) on the PC and allow TCP port `8765` on your Private LAN firewall profile. |
+| **Host shows `Sleeping` even though the PC is turned on** | Daemon is not running on the PC or port `8765` is blocked by Windows Firewall. | Launch `AI_NetController_HostAgent_v2.9.0_win64.exe` (or `v2.7.1` / `v2.7.0`, or `python agent/agent.py`) on the PC and allow TCP port `8765` on your Private LAN firewall profile. |
 | **Clicking `Wake Host` succeeds (`UDP Port 9 Dispatched`) but PC does not power on** | BIOS `Wake on PCI-E/LAN` is disabled, or Windows `Fast Startup` is intercepting the NIC shutdown state. | Follow the 4 steps in [Section 5.2](#52-hardware--os-checklist-for-wake-on-lan-why-pcs-fail-to-wake) (especially disabling Windows Fast Startup via `HiberbootEnabled=0`). |
 | **Remote mouse/keyboard clicks do not move the cursor on the target PC** | **View-Only Mode (Input Lock)** is enabled on the target PC's Daemon Control Center. | Uncheck **`View-Only Mode (Block Remote Mouse/Keyboard)`** in the PC Daemon GUI or inside the Web Console's `PC Daemon` modal. |
 | **Command execution is blocked with `SECURITY POLICY VIOLATION`** | The command matched a destructive pattern in the **AST Security Firewall (`v2026.10-REV5`)**, or the host is currently **Quarantined**. | Inspect the command syntax or un-quarantine the host in the Fleet Dashboard (`Unlock Host`). |

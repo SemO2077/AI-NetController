@@ -313,7 +313,7 @@ export const translations: Record<Language, Translations> = {
     host_copy_ip: 'Копирай IP адрес',
     host_ip_label: 'IP АДРЕС',
     host_mac_label: 'MAC АДРЕС',
-    host_port_label: 'CST АГЕНТ ПОРТ',
+    host_port_label: 'AI NETCONTROLLER АГЕНТ ПОРТ',
     host_os_label: 'ОПЕРАЦИОННА СИСТЕМА',
     host_disk_label: 'ДИСКОВО ПРОСТРАНСТВО',
     host_session_label: 'СТАТУС НА СЕСИЯТА',
@@ -401,7 +401,7 @@ export const translations: Record<Language, Translations> = {
     calc_trees_equivalent: 'еквивалент засадени дървета',
 
     // Gemini Chatbot
-    chat_welcome: 'Здравейте. Аз съм Вашият CST мрежов асистент с Gemini AI. Мога да управлявам флот от работни станции, да изпращам Wake-on-LAN пакети и да анализирам телеметрия на протокол CST/3.0-SECURE.',
+    chat_welcome: 'Здравейте. Аз съм Вашият AI NetController асистент с Gemini AI. Мога да управлявам флот от работни станции, да изпращам Wake-on-LAN пакети и да анализирам телеметрия.',
     chat_fleet_role: 'Флот',
     chat_security_role: 'Сигурност',
     chat_shell_role: 'Shell',
@@ -550,7 +550,7 @@ export const translations: Record<Language, Translations> = {
     host_copy_ip: 'Copy IP address',
     host_ip_label: 'IP ADDRESS',
     host_mac_label: 'MAC ADDRESS',
-    host_port_label: 'CST AGENT PORT',
+    host_port_label: 'AI NETCONTROLLER AGENT PORT',
     host_os_label: 'OPERATING SYSTEM',
     host_disk_label: 'STORAGE DRIVE',
     host_session_label: 'SESSION STATUS',
@@ -638,7 +638,7 @@ export const translations: Record<Language, Translations> = {
     calc_trees_equivalent: 'equivalent mature trees planted',
 
     // Gemini Chatbot
-    chat_welcome: 'Hello. I am your CST fleet copilot powered by Gemini AI. I can orchestrate workstations, dispatch Wake-on-LAN packets, and inspect CST/3.0-SECURE telemetry.',
+    chat_welcome: 'Hello. I am your AI NetController fleet copilot powered by Gemini AI. I can orchestrate workstations, dispatch Wake-on-LAN packets, and inspect telemetry.',
     chat_fleet_role: 'Fleet',
     chat_security_role: 'Security',
     chat_shell_role: 'Shell',
@@ -681,7 +681,7 @@ export const translations: Record<Language, Translations> = {
     ws_modal_subtitle: 'CST/3.0-SECURE Protocol with Anti-Replay Guard',
     ws_status_label: 'Connection Status:',
     ws_connected_host: 'Connected to Host Agent',
-    ws_lab_mode: 'CST Simulation Lab',
+    ws_lab_mode: 'AI NetController Simulation Lab',
     ws_endpoint_label: 'WebSocket Endpoint',
     ws_btn_connect: 'Connect',
     ws_btn_connecting: 'Connecting...',

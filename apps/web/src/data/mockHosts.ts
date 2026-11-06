@@ -111,7 +111,7 @@ export const TEST_MOCK_HOSTS: CyberHostDevice[] = [
     ramUsage: 82,
     diskUsage: '3.4 TB / 8.0 TB (42%)',
     persistentInstructions: [
-      'NFS storage partition mounted at /mnt/cst_backups',
+      'NFS storage partition mounted at /mnt/ai_backups',
       'Never stop sshd.service without explicit secondary confirmation'
     ],
     sessionInstructions: [

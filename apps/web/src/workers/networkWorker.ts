@@ -1,7 +1,7 @@
 /**
- * CST Network Worker (Off-Main-Thread WebSocket Engine)
+ * AI NetController Network Worker (Off-Main-Thread WebSocket Engine)
  * - Zero-copy binary framing (0xC5 0x71 magic bytes) via Transferable ArrayBuffers
- * - Dual-protocol support: Native CST Binary + JSON Fallback
+ * - Dual-protocol support: Native AI NetController Binary + JSON Fallback
  * - Instant connection ping (<1ms initial RTT measurement)
  * - Anti-Replay Protection (Monotonic sequence & timestamp verification)
  * - Authenticated Handshake (Token / Pre-Shared Key negotiation)
@@ -301,9 +301,9 @@ function establishConnection(url: string, token: string = currentToken) {
             JSON.stringify({
               action: 'AUTHENTICATE',
               token: currentToken,
-              protocolVersion: 'CST/3.0-SECURE',
+              protocolVersion: 'AI-NET/3.0-SECURE',
               clientTimestamp: Date.now(),
-              capabilities: ['cst_binary_v3', 'tls1_3', 'secure_on', 'hitl_v2', 'panic_kill', 'gemini_multiturn_agent'],
+              capabilities: ['ai_binary_v3', 'cst_binary_v3', 'tls1_3', 'secure_on', 'hitl_v2', 'panic_kill', 'gemini_multiturn_agent'],
             })
           );
         } catch {
@@ -483,7 +483,7 @@ function hmacSha256Pure(key: Uint8Array, message: Uint8Array): Uint8Array {
 
 async function respondToBinaryAuthChallenge(nonceBytes: Uint8Array, seq: number) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  const secretStr = currentToken || 'cst_autonomous_lan_secret_2025';
+  const secretStr = currentToken || 'ai_netcontroller_secret_2025';
   const keyData = new TextEncoder().encode(secretStr);
   let sigBytes: Uint8Array;
   if (typeof self !== 'undefined' && self.crypto && self.crypto.subtle) {

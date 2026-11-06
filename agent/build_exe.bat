@@ -1,6 +1,6 @@
 @echo off
 echo =========================================================
-echo CST Autonomous Host Agent - 1-Click Windows EXE Builder
+echo AI NetController Host Agent - 1-Click Windows EXE Builder
 echo (AV-Safe Desktop GUI Edition • Zero UPX • Authenticode)
 echo =========================================================
 echo.
@@ -27,15 +27,15 @@ pip install -r requirements.txt
 echo [3/4] Compiling AV-Safe Desktop GUI Executable (No UPX)...
 pyinstaller --clean build_agent.spec
 
-if exist "dist\CST_HostAgent\CST_HostAgent.exe" (
+if exist "dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe" (
     echo [4/4] Applying Authenticode Digital Signature & Defender Check...
-    powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath "dist\CST_HostAgent\CST_HostAgent.exe"
+    powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath "dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe"
     echo.
     echo =========================================================
     echo [SUCCESS] Standalone GUI Executable Created!
-    echo Location: %cd%\dist\CST_HostAgent\CST_HostAgent.exe
+    echo Location: %cd%\dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe
     echo.
-    echo Double-click CST_HostAgent.exe to open the Desktop Control
+    echo Double-click AI_NetController_HostAgent.exe to open the Desktop Control
     echo Center GUI with live telemetry, security toggles, and mDNS.
     echo =========================================================
 ) else (

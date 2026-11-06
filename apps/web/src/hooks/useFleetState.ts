@@ -5,12 +5,13 @@ import { logStore } from '../store/logStore';
 import { wolHistoryStore } from '../store/wolHistoryStore';
 import { triggerHapticFeedback } from '../services/hapticService';
 
-const STORAGE_KEY = 'cst_netcontroller_hosts';
+const STORAGE_KEY = 'ai_netcontroller_hosts';
+const LEGACY_STORAGE_KEY = 'cst_netcontroller_hosts';
 
 function loadInitialHosts(): HostDevice[] {
   if (typeof window === 'undefined') return [];
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed)) {

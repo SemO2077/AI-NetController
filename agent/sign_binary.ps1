@@ -1,13 +1,13 @@
-# CST NetController AI - Windows Authenticode Signing and Defender Verification Script
-# Purpose: Signs CST_HostAgent.exe with an Authenticode certificate and runs
+# AI NetController - Windows Authenticode Signing and Defender Verification Script
+# Purpose: Signs AI_NetController_HostAgent.exe with an Authenticode certificate and runs
 # a Windows Defender scan check to guarantee zero false-positive heuristic detections.
 
 param(
-    [string]$ExePath = ".\dist\CST_HostAgent\CST_HostAgent.exe"
+    [string]$ExePath = ".\dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe"
 )
 
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host " CST Host Agent -- Authenticode Signing and AV Verification Pipeline" -ForegroundColor Cyan
+Write-Host " AI NetController Host Agent -- Authenticode Signing and AV Verification Pipeline" -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 
 if (-Not (Test-Path $ExePath)) {
@@ -16,10 +16,10 @@ if (-Not (Test-Path $ExePath)) {
 }
 
 # 1. Check for existing CST_RU-AK code-signing certificate or generate a new one
-$subject = "CN=Computer Systems and Technologies (CST), O=CST_RU-AK, C=BG"
-$cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.Subject -like "*O=CST_RU-AK*" } | Select-Object -First 1
+$subject = "CN=AI NetController, O=AI_NetController, C=BG"
+$cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.Subject -like "*O=AI_NetController*" } | Select-Object -First 1
 if (-Not $cert) {
-    Write-Host "[1/3] Creating local Authenticode Code-Signing Certificate (O=CST_RU-AK)..." -ForegroundColor Cyan
+    Write-Host "[1/3] Creating local Authenticode Code-Signing Certificate (O=AI_NetController)..." -ForegroundColor Cyan
     $cert = New-SelfSignedCertificate `
         -Type CodeSigningCert `
         -Subject $subject `

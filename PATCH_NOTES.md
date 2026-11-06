@@ -1,4 +1,4 @@
-# CST NetController AI — v3.1.0-beta.3 Release Notes
+# AI NetController — v3.1.0-beta.3 Release Notes
 
 [![Version](https://img.shields.io/badge/version-v3.1.0--beta.3-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v3.1.0-beta.3)
 [![Channel](https://img.shields.io/badge/channel-public%20beta-amber.svg)](https://github.com/smehmedd/AI-NetController/releases)
@@ -8,7 +8,7 @@
 - **Release Version**: `v3.1.0-beta.3`
 - **Release Channel**: Public Beta
 - **Release Date**: November 5, 2026
-- **Protocol**: `CST/3.0-SECURE`
+- **Protocol**: `AI-NET/3.0-SECURE`
 - **Compatibility**: Windows 10 / 11 x64, Linux (kernel 5.15+), Android 7.0–15
 
 ---
@@ -50,7 +50,7 @@ The `v3.1.0-beta.3` release delivers persistent onboarding suppression, deep cyb
 
 ---
 
-# CST NetController AI — v3.1.0-beta.2 Release Notes
+# AI NetController — v3.1.0-beta.2 Release Notes
 
 [![Version](https://img.shields.io/badge/version-v3.1.0--beta.2-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v3.1.0-beta.2)
 [![Channel](https://img.shields.io/badge/channel-public%20beta-amber.svg)](https://github.com/smehmedd/AI-NetController/releases)
@@ -60,7 +60,7 @@ The `v3.1.0-beta.3` release delivers persistent onboarding suppression, deep cyb
 - **Release Version**: `v3.1.0-beta.2`
 - **Release Channel**: Public Beta
 - **Release Date**: November 5, 2026
-- **Protocol**: `CST/3.0-SECURE`
+- **Protocol**: `AI-NET/3.0-SECURE`
 - **Compatibility**: Windows 10 / 11 x64, Linux (kernel 5.15+), Android 7.0–15
 
 ---
@@ -138,16 +138,16 @@ All test suites passed with zero errors prior to release:
 
 | Artifact | Target Platform | File Size | Direct Download |
 | :--- | :--- | :---: | :---: |
-| **`CST_HostAgent_v3.1.0_win64.exe`** | Windows 10 / 11 x64 | 35.3 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/CST_HostAgent_v3.1.0_win64.exe) |
-| **`CST_HostAgent_v3.1.0_win64_portable.zip`** | Windows 10 / 11 x64 (Portable) | 35.0 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/CST_HostAgent_v3.1.0_win64_portable.zip) |
-| **`CST_NetController_AI_v3.1.0_arm64-v8a.apk`** | Android 7.0–15 (`arm64-v8a`) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/CST_NetController_AI_v3.1.0_arm64-v8a.apk) |
-| **`CST_NetController_AI_v3.1.0.apk`** | Android 7.0–15 (Universal) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/CST_NetController_AI_v3.1.0.apk) |
+| **`AI_NetController_HostAgent_v3.1.0_win64.exe`** | Windows 10 / 11 x64 | 35.3 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/AI_NetController_HostAgent_v3.1.0_win64.exe) |
+| **`AI_NetController_HostAgent_v3.1.0_win64_portable.zip`** | Windows 10 / 11 x64 (Portable) | 35.0 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/AI_NetController_HostAgent_v3.1.0_win64_portable.zip) |
+| **`AI_NetController_v3.1.0_arm64-v8a.apk`** | Android 7.0–15 (`arm64-v8a`) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/AI_NetController_v3.1.0_arm64-v8a.apk) |
+| **`AI_NetController_v3.1.0.apk`** | Android 7.0–15 (Universal) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/AI_NetController_v3.1.0.apk) |
 | **`SHA256SUMS.txt`** | Checksums | 413 B | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/SHA256SUMS.txt) |
 | **`RELEASE_MANIFEST.json`** | Metadata Manifest | 1.9 KB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/RELEASE_MANIFEST.json) |
 
 ```text
-6e90065c056934ca777452bcba97bfcf50e27cd333709cf69d0033cd2cbd4969  CST_HostAgent_v3.1.0_win64.exe
-5db218345f47a2aa746d8e9aaf9fb6c20643543bddaef8a04816b581b3c4f348  CST_HostAgent_v3.1.0_win64_portable.zip
-e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3  CST_NetController_AI_v3.1.0_arm64-v8a.apk
-e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3  CST_NetController_AI_v3.1.0.apk
+6e90065c056934ca777452bcba97bfcf50e27cd333709cf69d0033cd2cbd4969  AI_NetController_HostAgent_v3.1.0_win64.exe
+5db218345f47a2aa746d8e9aaf9fb6c20643543bddaef8a04816b581b3c4f348  AI_NetController_HostAgent_v3.1.0_win64_portable.zip
+e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3  AI_NetController_v3.1.0_arm64-v8a.apk
+e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3  AI_NetController_v3.1.0.apk
 ```

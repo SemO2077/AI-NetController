@@ -87,16 +87,16 @@ void main() async {
     return true;
   };
 
-  runApp(const ProviderScope(child: CSTControllerApp()));
+  runApp(const ProviderScope(child: AINetControllerApp()));
 }
 
-class CSTControllerApp extends StatelessWidget {
-  const CSTControllerApp({super.key});
+class AINetControllerApp extends StatelessWidget {
+  const AINetControllerApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'CST Agentic Controller',
+      title: 'AI NetController',
       debugShowCheckedModeBanner: false,
       theme: CyberTheme.themeData,
       builder: (context, child) {
@@ -209,7 +209,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     );
 
     return AdaptiveScaffold(
-      title: 'CST AUTONOMOUS BRIDGE',
+      title: 'AI NETCONTROLLER',
       navItems: _navDestinations,
       selectedIndex: _currentTabIndex,
       onIndexChanged: (idx) => setState(() => _currentTabIndex = idx),
@@ -576,7 +576,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     'PS C:\\Windows\\system32> Get-Process | Sort-Object CPU\n'
                     ' NPM(K)    PM(M)    WS(M)     CPU(s)      Id  ProcessName\n'
                     ' ------    -----    -----     ------      --  -----------\n'
-                    '     45    85.23   112.54      42.12    4102  CST_HostAgent\n'
+                    '     45    85.23   112.54      42.12    4102  AI_NetController_HostAgent\n'
                     '     98   312.45   489.12      24.08    1184  explorer\n'
                     '     22    45.10    62.30       8.15    8912  svchost\n'
                     '     14    12.40    18.90       1.20    7210  dwmd\n'
@@ -610,7 +610,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           icon: Icons.wifi_tethering_rounded,
           title: 'ZeroConf mDNS Discovery',
           subtitle:
-              'RFC 6762 multicast service listening on _cst-agent._tcp.local',
+              'RFC 6762 multicast service listening on _ai-netcontroller._tcp.local',
           trailing: const Text('PORT 8765',
               style: TextStyle(
                   color: CyberColors.primary, fontFamily: 'monospace')),
@@ -644,9 +644,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         ),
         _buildSettingsTile(
           icon: Icons.verified_rounded,
-          title: 'CST Mobile Controller (v2.9.0-LTS)',
+          title: 'AI NetController Mobile',
           subtitle:
-              'Impeller 120Hz Hardware Engine • CST/3.0-SECURE Protocol',
+              'Impeller 120Hz Hardware Engine • AI-NETCONTROLLER/3.0-SECURE Protocol',
           trailing: const Text('BUILD 29',
               style: TextStyle(
                   color: CyberColors.success,

@@ -27,7 +27,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
 
   final List<Map<String, dynamic>> _steps = [
     {
-      'title': 'Добре дошли в CST NetController',
+      'title': 'Добре дошли в AI NetController',
       'subtitle': 'Автономно Управление на Локална Компютърна Инфраструктура',
       'icon': Icons.bolt_rounded,
       'color': CyberColors.primary,

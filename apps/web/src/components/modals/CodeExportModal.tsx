@@ -144,17 +144,17 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
 
   const ghReleaseCommands = `# 1. Tag and push v3.0.0 (triggers .github/workflows/release.yml automatically)
 git add .
-git commit -m "release: CST NetController AI v3.0.0 (APK + EXE + Patch Notes)"
-git tag -a v3.0.0 -m "CST NetController AI v3.0.0-LTS"
+git commit -m "release: AI NetController v3.0.0 (APK + EXE + Patch Notes)"
+git tag -a v3.0.0 -m "AI NetController v3.0.0-LTS"
 git push origin main --tags
 
 # 2. Or publish pre-built binaries directly with GitHub CLI (gh):
 gh release create v3.0.0 \\
-  public/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe \\
-  public/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk \\
-  public/releases/v3.0.0/CST_HostAgent_v3.0.0_win64_portable.zip \\
+  public/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe \\
+  public/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk \\
+  public/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64_portable.zip \\
   public/releases/v3.0.0/SHA256SUMS.txt \\
-  --title "CST NetController AI v3.0.0 — QoL & Usability Refinement Release" \\
+  --title "AI NetController v3.0.0 — QoL & Usability Refinement Release" \\
   --notes-file PATCH_NOTES.md`;
 
   const handleCopyGhCommands = () => {
@@ -190,7 +190,7 @@ gh release create v3.0.0 \\
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'cst_netcontroller_ai_v3.0.0_source_and_builders.zip';
+      a.download = 'ai_netcontroller_v3.0.0_source_and_builders.zip';
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -202,31 +202,31 @@ gh release create v3.0.0 \\
 
   const artifacts: ReleaseArtifact[] = manifest?.artifacts || [
     {
-      filename: 'CST_HostAgent_v3.0.0_win64.exe',
+      filename: 'AI_NetController_HostAgent_v3.0.0_win64.exe',
       kind: 'exe',
       platform: 'Windows 10/11 x64 (Standalone Host Agent .EXE)',
       sizeBytes: 35330608,
       sizeFormatted: '33.7 MB',
       sha256: 'pending_build',
-      downloadUrl: '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe',
+      downloadUrl: '/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe',
     },
     {
-      filename: 'CST_NetController_AI_v3.0.0_arm64-v8a.apk',
+      filename: 'AI_NetController_v3.0.0_arm64-v8a.apk',
       kind: 'apk',
       platform: 'Android 10–15 arm64-v8a (120Hz Mobile Controller .APK)',
       sizeBytes: 22817627,
       sizeFormatted: '21.8 MB',
       sha256: 'pending_build',
-      downloadUrl: '/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk',
+      downloadUrl: '/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk',
     },
     {
-      filename: 'CST_HostAgent_v3.0.0_win64_portable.zip',
+      filename: 'AI_NetController_HostAgent_v3.0.0_win64_portable.zip',
       kind: 'zip',
       platform: 'Windows Portable Agent Bundle + Internal Runtime (.ZIP)',
       sizeBytes: 36558735,
       sizeFormatted: '34.9 MB',
       sha256: 'pending_build',
-      downloadUrl: '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64_portable.zip',
+      downloadUrl: '/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64_portable.zip',
     },
   ];
 

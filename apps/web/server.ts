@@ -177,7 +177,7 @@ function getGenAI() {
 
 // Role-specific System Instructions with Full PC Control, Daemon Security & System Update Capabilities
 const SYSTEM_INSTRUCTIONS: Record<string, string> = {
-  commander: `You are CST Fleet Commander AI, the autonomous fleet orchestrator, PC controller, and system update copilot for CST NetController AI v3.0.0-LTS.
+  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system update copilot for AI NetController v3.0.0-LTS.
 You manage heterogeneous Windows and Linux hosts across local subnets and possess direct remote control over PC mouse, keyboard, media keys, shell commands, Wake-on-LAN, PC Daemon security profiles, and System/AI Model Updates.
 
 Your Executable Action Directives (include these exact tags whenever the user asks to perform an action or when an action is helpful):
@@ -205,7 +205,7 @@ Your Executable Action Directives (include these exact tags whenever the user as
 Always include the matching [ACTION:...] tag(s) when asked to control the PC, click, move the mouse, type, press shortcuts, run shell commands, wake a host, or check/install system & AI updates.
 Be authoritative, concise, and helpful. Format output cleanly in Markdown.`,
 
-  diagnostics: `You are CST Protocol & Security Architect AI, a deep-reasoning network security and cryptographic engineer specialized in the CST/3.0-SECURE protocol.
+  diagnostics: `You are AI NetController Protocol & Security Architect, a deep-reasoning network security and cryptographic engineer specialized in the CST/3.0-SECURE protocol.
 Your areas of expertise:
 - CST/3.0-SECURE Binary Wire Protocol (0xC5 0x71 magic header, 12-byte network-endian header, zero-allocation buffers).
 - Anti-Replay Guard with RFC 6479 128-bit sliding bitmap window, monotonic outbound/inbound sequence counters, and timestamp verification.
@@ -214,7 +214,7 @@ Your areas of expertise:
 - You can also emit executable tags such as [ACTION:DAEMON_CONTROL command=diagnostics], [ACTION:SHELL_EXEC target=HOST_ID command="netstat -ano"], or [ACTION:SYSTEM_UPDATE target=ast-security-rules].
 Provide in-depth architectural reasoning, packet hex breakdowns, and rigorous diagnostics.`,
 
-  fast_triage: `You are CST Quick Triage AI, an ultra-fast and low-latency network & PC control assistant.
+  fast_triage: `You are AI NetController Quick Triage, an ultra-fast and low-latency network & PC control assistant.
 You provide instant, high-speed answers and immediate executable action tags for sysadmins and operators:
 - Emit [ACTION:MOUSE_CLICK ...], [ACTION:KEYBOARD_HOTKEY ...], [ACTION:KEYBOARD_TYPE ...], [ACTION:SHELL_EXEC ...], [ACTION:WOL ...], or [ACTION:SYSTEM_UPDATE target=ALL] directly.
 Keep responses concise, direct, and fast with minimal prose.`,
@@ -899,11 +899,11 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
         pairingToken: snap.pairingToken,
         webOrigin,
         mobilePairUrl,
-        exeDownloadUrl: '/releases/v3.1.0-beta.1/CST_HostAgent_v3.1.0_win64.exe',
-        apkDownloadUrl: '/releases/v3.1.0-beta.1/CST_NetController_AI_v3.1.0_arm64-v8a.apk',
-        portableZipUrl: '/releases/v3.1.0-beta.1/CST_HostAgent_v3.1.0_win64_portable.zip',
-        legacyExeDownloadUrl: '/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe',
-        legacyApkDownloadUrl: '/releases/v3.0.0/CST_NetController_AI_v3.0.0_arm64-v8a.apk',
+        exeDownloadUrl: '/releases/v3.1.0-beta.1/AI_NetController_HostAgent_v3.1.0_win64.exe',
+        apkDownloadUrl: '/releases/v3.1.0-beta.1/AI_NetController_v3.1.0_arm64-v8a.apk',
+        portableZipUrl: '/releases/v3.1.0-beta.1/AI_NetController_HostAgent_v3.1.0_win64_portable.zip',
+        legacyExeDownloadUrl: '/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe',
+        legacyApkDownloadUrl: '/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk',
         launcherDownloadUrl: '/api/setup/windows-launcher',
       },
     });
@@ -917,10 +917,10 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
   const snap = getDaemonSnapshot();
   const batLines = [
     '@echo off',
-    'title CST NetController AI — 1-Click PC & Phone Setup',
+    'title AI NetController — 1-Click PC & Phone Setup',
     'color 0B',
     'echo ============================================================================',
-    'echo   CST NetController AI v3.0.0-LTS - Automatic PC ^& Phone Setup Wizard',
+    'echo   AI NetController v3.0.0-LTS - Automatic PC ^& Phone Setup Wizard',
     'echo ============================================================================',
     'echo.',
     `set CST_AGENT_SECRET=${snap.pairingToken}`,
@@ -935,30 +935,30 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     '        python -m pip install -r agent\\requirements.txt --quiet',
     '    )',
     ') else (',
-    '    echo [!] Python not found in PATH. Looking for standalone CST_HostAgent_v3.0.0_win64.exe...',
+    '    echo [!] Python not found in PATH. Looking for standalone AI_NetController_HostAgent_v3.0.0_win64.exe...',
     ')',
     '',
     'echo [2/4] Configuring Windows Private LAN Firewall rules (Ports 8765 ^& 3000)...',
-    'netsh advfirewall firewall show rule name="CST NetController Daemon" >nul 2>nul',
+    'netsh advfirewall firewall show rule name="AI NetController Daemon" >nul 2>nul',
     'if %ERRORLEVEL% NEQ 0 (',
-    `    netsh advfirewall firewall add rule name="CST NetController Daemon" dir=in action=allow protocol=TCP localport=${snap.port} profile=private >nul 2>nul`,
-    '    netsh advfirewall firewall add rule name="CST NetController Web" dir=in action=allow protocol=TCP localport=3000 profile=private >nul 2>nul',
-    '    netsh advfirewall firewall add rule name="CST NetController WoL" dir=in action=allow protocol=UDP localport=9 profile=private >nul 2>nul',
+    `    netsh advfirewall firewall add rule name="AI NetController Daemon" dir=in action=allow protocol=TCP localport=${snap.port} profile=private >nul 2>nul`,
+    '    netsh advfirewall firewall add rule name="AI NetController Web" dir=in action=allow protocol=TCP localport=3000 profile=private >nul 2>nul',
+    '    netsh advfirewall firewall add rule name="AI NetController WoL" dir=in action=allow protocol=UDP localport=9 profile=private >nul 2>nul',
     ')',
     '',
     'echo [3/4] Launching CST PC Host Daemon Desktop Control Center...',
-    'if exist "public\\releases\\v3.0.0\\CST_HostAgent_v3.0.0_win64.exe" (',
-    '    start "CST PC Daemon" "public\\releases\\v3.0.0\\CST_HostAgent_v3.0.0_win64.exe"',
-    ') else if exist "public\\releases\\v2.7.1\\CST_HostAgent_v2.7.1_win64.exe" (',
-    '    start "CST PC Daemon" "public\\releases\\v2.7.1\\CST_HostAgent_v2.7.1_win64.exe"',
-    ') else if exist "public\\releases\\v2.7.0\\CST_HostAgent_v2.7.0_win64.exe" (',
-    '    start "CST PC Daemon" "public\\releases\\v2.7.0\\CST_HostAgent_v2.7.0_win64.exe"',
-    ') else if exist "CST_HostAgent_v3.0.0_win64.exe" (',
-    '    start "CST PC Daemon" "CST_HostAgent_v3.0.0_win64.exe"',
-    ') else if exist "CST_HostAgent_v2.7.1_win64.exe" (',
-    '    start "CST PC Daemon" "CST_HostAgent_v2.7.1_win64.exe"',
-    ') else if exist "CST_HostAgent_v2.7.0_win64.exe" (',
-    '    start "CST PC Daemon" "CST_HostAgent_v2.7.0_win64.exe"',
+    'if exist "public\\releases\\v3.0.0\\AI_NetController_HostAgent_v3.0.0_win64.exe" (',
+    '    start "CST PC Daemon" "public\\releases\\v3.0.0\\AI_NetController_HostAgent_v3.0.0_win64.exe"',
+    ') else if exist "public\\releases\\v2.7.1\\AI_NetController_HostAgent_v2.7.1_win64.exe" (',
+    '    start "CST PC Daemon" "public\\releases\\v2.7.1\\AI_NetController_HostAgent_v2.7.1_win64.exe"',
+    ') else if exist "public\\releases\\v2.7.0\\AI_NetController_HostAgent_v2.7.0_win64.exe" (',
+    '    start "CST PC Daemon" "public\\releases\\v2.7.0\\AI_NetController_HostAgent_v2.7.0_win64.exe"',
+    ') else if exist "AI_NetController_HostAgent_v3.0.0_win64.exe" (',
+    '    start "CST PC Daemon" "AI_NetController_HostAgent_v3.0.0_win64.exe"',
+    ') else if exist "AI_NetController_HostAgent_v2.7.1_win64.exe" (',
+    '    start "CST PC Daemon" "AI_NetController_HostAgent_v2.7.1_win64.exe"',
+    ') else if exist "AI_NetController_HostAgent_v2.7.0_win64.exe" (',
+    '    start "CST PC Daemon" "AI_NetController_HostAgent_v2.7.0_win64.exe"',
     ') else if exist "agent\\dist\\CST_Agent_Daemon\\CST_Agent_Daemon.exe" (',
     '    start "CST PC Daemon" "agent\\dist\\CST_Agent_Daemon\\CST_Agent_Daemon.exe"',
     ') else if exist "agent\\agent_gui.py" (',
@@ -982,7 +982,7 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
 
   const content = batLines.join('\r\n');
   res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename="CST_OneClick_PC_Setup.bat"');
+  res.setHeader('Content-Disposition', 'attachment; filename="AI_NetController_OneClick_Setup.bat"');
   return res.send(content);
 });
 
@@ -1197,11 +1197,11 @@ app.post('/api/update/ai-analyze', async (req: Request, res: Response) => {
         const ai = getGenAI();
         const prompt =
           language === 'bg'
-            ? `Анализирай следното състояние на компонентите на CST NetController AI (Node ${process.version}, Протокол CST/3.0-SECURE).
+            ? `Анализирай следното състояние на компонентите на AI NetController (Node ${process.version}, Протокол CST/3.0-SECURE).
 Налични обновления (${pending.length}): ${pending.map((p) => `${p.name}: ${p.currentVersion} -> ${p.latestVersion} (${p.changelog})`).join('; ') || 'Няма'}.
 Обновени компоненти (${upToDate.length}): ${upToDate.map((u) => `${u.name} (${u.currentVersion})`).join(', ')}.
 Дай кратък, структуриран инженерен доклад в 3 точки: 1) Оценка на съвместимостта и сигурността, 2) Приоритетни обновления, 3) Препоръчано действие.`
-            : `Analyze the following CST NetController AI component state (Node ${process.version}, Protocol CST/3.0-SECURE).
+            : `Analyze the following AI NetController component state (Node ${process.version}, Protocol CST/3.0-SECURE).
 Pending updates (${pending.length}): ${pending.map((p) => `${p.name}: ${p.currentVersion} -> ${p.latestVersion} (${p.changelog})`).join('; ') || 'None'}.
 Up-to-date components (${upToDate.length}): ${upToDate.map((u) => `${u.name} (${u.currentVersion})`).join(', ')}.
 Provide a concise, high-signal 3-point engineering advisory: 1) Security & Protocol Compatibility Impact, 2) Priority Upgrade Order, 3) Recommended Action.`;
@@ -1417,7 +1417,7 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
         requiresConfirmation: false,
         riskLevel: 'CRITICAL',
         sanitizedCmd: deobfuscatedCmd,
-        reason: 'Command permanently blocked by CST AST Security Firewall',
+        reason: 'Command permanently blocked by AI NetController AST Security Firewall',
       };
     }
   }
@@ -2089,7 +2089,7 @@ function generateSmartLocalFallbackReply(userText: string, targetHost: string): 
 
   if (lower.includes('update') || lower.includes('upgrade') || lower.includes('обнов') || lower.includes('ъпдейт')) {
     const pending = systemUpdateRegistry.filter((c) => c.status === 'available');
-    return `### 🔄 AI System & Model Update Orchestrator\nI inspected the **CST Update Registry**:\n- **Pending Updates**: **${pending.length}** component(s) (${pending.map((p) => `${p.name} → \`${p.latestVersion}\``).join(', ') || 'All components are up to date'})\n- **Host Daemon**: \`${pcDaemonState.version}\` on \`${pcDaemonState.localIp}:${pcDaemonState.port}\`\n\nExecuting atomic update synchronization now:\n[ACTION:SYSTEM_UPDATE target=ALL]`;
+    return `### 🔄 AI System & Model Update Orchestrator\nI inspected the **AI NetController Update Registry**:\n- **Pending Updates**: **${pending.length}** component(s) (${pending.map((p) => `${p.name} → \`${p.latestVersion}\``).join(', ') || 'All components are up to date'})\n- **Host Daemon**: \`${pcDaemonState.version}\` on \`${pcDaemonState.localIp}:${pcDaemonState.port}\`\n\nExecuting atomic update synchronization now:\n[ACTION:SYSTEM_UPDATE target=ALL]`;
   }
 
   if (lower.includes('task manager') || lower.includes('диспечер') || lower.includes('задачи')) {
@@ -2190,7 +2190,7 @@ function generateSmartLocalFallbackReply(userText: string, targetHost: string): 
     return `### 🛡️ PC Host Daemon Security Control\nExecuting daemon control action **\`${cmd.toUpperCase()}\`** on \`${pcDaemonState.hostname}\`:\n[ACTION:DAEMON_CONTROL command=${cmd}]`;
   }
 
-  return `### 🤖 CST Fleet Commander AI\nReceived your request for **${targetHost}**: \`${userText.slice(0, 80)}\`.\nUse one of the quick PC Control actions or specify a command to execute on the connected host.`;
+  return `### 🤖 AI NetController Fleet Commander\nReceived your request for **${targetHost}**: \`${userText.slice(0, 80)}\`.\nUse one of the quick PC Control actions or specify a command to execute on the connected host.`;
 }
 
 // Multi-turn Gemini & AI Chat Endpoint with Real PC Control & Update Execution
@@ -2348,7 +2348,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[CST NetController Server] Running on http://0.0.0.0:${PORT} (Node: ${process.version})`);
+    console.log(`[AI NetController Server] Running on http://0.0.0.0:${PORT} (Node: ${process.version})`);
   });
 }
 

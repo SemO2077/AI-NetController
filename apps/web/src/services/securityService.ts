@@ -1,5 +1,5 @@
 /**
- * CST NetController Security & Failsafe Engine
+ * AI NetController Security & Failsafe Engine
  * - Zero-Trust Pre-Flight Command Inspection (AST/Regex Pattern Analysis)
  * - Anti-Replay Protection (Monotonic Nonces & Timestamp Verification)
  * - Host Circuit Breaker (Prevents cascade failures and command storms)

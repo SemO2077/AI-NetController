@@ -102,7 +102,7 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
 
   // Construct Topology Graph Data (Nodes + Links)
   const graphData = useMemo(() => {
-    // Central CST NetController Gateway Node
+    // Central AI NetController Gateway Node
     const controllerNode: TopologyNode = {
       id: 'cst-gateway',
       name: 'CST Core Gateway (L3 Switch)',
