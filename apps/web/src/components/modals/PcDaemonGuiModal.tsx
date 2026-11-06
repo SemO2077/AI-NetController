@@ -468,8 +468,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href="/releases/v3.0.0/CST_HostAgent_v3.0.0_win64.exe"
-              download="CST_HostAgent_v3.0.0_win64.exe"
+              href="/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe"
+              download="AI_NetController_HostAgent_v0.31.3_win64.exe"
               onClick={() => triggerHapticFeedback('medium')}
               className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-mono text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(34,211,238,0.3)] transition"
             >

@@ -177,7 +177,7 @@ function getGenAI() {
 
 // Role-specific System Instructions with Full PC Control, Daemon Security & System Update Capabilities
 const SYSTEM_INSTRUCTIONS: Record<string, string> = {
-  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system update copilot for AI NetController v3.0.0-LTS.
+  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system update copilot for AI NetController v0.31.3.
 You manage heterogeneous Windows and Linux hosts across local subnets and possess direct remote control over PC mouse, keyboard, media keys, shell commands, Wake-on-LAN, PC Daemon security profiles, and System/AI Model Updates.
 
 Your Executable Action Directives (include these exact tags whenever the user asks to perform an action or when an action is helpful):
@@ -225,7 +225,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'online',
     protocol: 'CST/3.0-SECURE',
-    version: '3.0.0',
+    version: '0.31.3',
     timestamp: new Date().toISOString(),
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
     models: DYNAMIC_MODELS,
@@ -235,12 +235,12 @@ app.get('/api/health', (_req: Request, res: Response) => {
 // Release Binaries (.EXE & .APK) & Patch Notes Endpoint
 app.get('/api/releases', (_req: Request, res: Response) => {
   try {
-    const v310Path = path.join(RELEASES_PUBLIC_DIR, 'v3.1.0-beta.1', 'RELEASE_MANIFEST.json');
-    const v300Path = path.join(RELEASES_PUBLIC_DIR, 'v3.0.0', 'RELEASE_MANIFEST.json');
-    const v290Path = path.join(RELEASES_PUBLIC_DIR, 'v2.9.0', 'RELEASE_MANIFEST.json');
-    const v280Path = path.join(RELEASES_PUBLIC_DIR, 'v2.8.0', 'RELEASE_MANIFEST.json');
-    const v271Path = path.join(RELEASES_PUBLIC_DIR, 'v2.7.1', 'RELEASE_MANIFEST.json');
-    const v270Path = path.join(RELEASES_PUBLIC_DIR, 'v2.7.0', 'RELEASE_MANIFEST.json');
+    const v310Path = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
+    const v300Path = path.join(RELEASES_PUBLIC_DIR, 'v0.30.0', 'RELEASE_MANIFEST.json');
+    const v290Path = path.join(RELEASES_PUBLIC_DIR, 'v0.29.0', 'RELEASE_MANIFEST.json');
+    const v280Path = path.join(RELEASES_PUBLIC_DIR, 'v0.28.0', 'RELEASE_MANIFEST.json');
+    const v271Path = path.join(RELEASES_PUBLIC_DIR, 'v0.27.1', 'RELEASE_MANIFEST.json');
+    const v270Path = path.join(RELEASES_PUBLIC_DIR, 'v0.27.0', 'RELEASE_MANIFEST.json');
     const patchNotesPath = path.join(ROOT_DIR, 'PATCH_NOTES.md');
     const manifest = fs.existsSync(v310Path)
       ? JSON.parse(fs.readFileSync(v310Path, 'utf-8'))
@@ -263,7 +263,7 @@ app.get('/api/releases', (_req: Request, res: Response) => {
       success: true,
       manifest,
       legacyManifest,
-      availableVersions: ['v3.1.0-beta.1', 'v3.0.0', 'v2.9.0', 'v2.8.0', 'v2.7.1', 'v2.7.0'],
+      availableVersions: ['v0.31.3', 'v0.31.2', 'v0.31.1', 'v0.30.0', 'v0.29.0', 'v0.28.0', 'v0.27.1', 'v0.27.0'],
       patchNotes,
     });
   } catch (err: any) {
@@ -282,9 +282,9 @@ app.post('/api/releases/rebuild', (_req: Request, res: Response) => {
         error: stderr || err.message,
       });
     }
-    const manifestPath = path.join(RELEASES_PUBLIC_DIR, 'v3.0.0', 'RELEASE_MANIFEST.json');
-    const fallbackPath = path.join(RELEASES_PUBLIC_DIR, 'v2.7.1', 'RELEASE_MANIFEST.json');
-    const legacyPath = path.join(RELEASES_PUBLIC_DIR, 'v2.7.0', 'RELEASE_MANIFEST.json');
+    const manifestPath = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
+    const fallbackPath = path.join(RELEASES_PUBLIC_DIR, 'v0.27.1', 'RELEASE_MANIFEST.json');
+    const legacyPath = path.join(RELEASES_PUBLIC_DIR, 'v0.27.0', 'RELEASE_MANIFEST.json');
     const manifest = fs.existsSync(manifestPath)
       ? JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
       : fs.existsSync(fallbackPath)
@@ -509,7 +509,7 @@ interface BlacklistedDeviceEntry {
 }
 
 const pcDaemonState = {
-  version: '3.0.0-LTS',
+  version: '0.31.3',
   protocol: 'CST/3.0-SECURE',
   hostname: os.hostname() || 'LOCALHOST',
   osName: `${os.type()} ${os.release()} (${os.arch()})`,
@@ -899,11 +899,11 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
         pairingToken: snap.pairingToken,
         webOrigin,
         mobilePairUrl,
-        exeDownloadUrl: '/releases/v3.1.0-beta.1/AI_NetController_HostAgent_v3.1.0_win64.exe',
-        apkDownloadUrl: '/releases/v3.1.0-beta.1/AI_NetController_v3.1.0_arm64-v8a.apk',
-        portableZipUrl: '/releases/v3.1.0-beta.1/AI_NetController_HostAgent_v3.1.0_win64_portable.zip',
-        legacyExeDownloadUrl: '/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe',
-        legacyApkDownloadUrl: '/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk',
+        exeDownloadUrl: '/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe',
+        apkDownloadUrl: '/releases/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk',
+        portableZipUrl: '/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64_portable.zip',
+        legacyExeDownloadUrl: '/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64.exe',
+        legacyApkDownloadUrl: '/releases/v0.30.0/AI_NetController_v0.30.0_arm64-v8a.apk',
         launcherDownloadUrl: '/api/setup/windows-launcher',
       },
     });
@@ -920,7 +920,7 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     'title AI NetController — 1-Click PC & Phone Setup',
     'color 0B',
     'echo ============================================================================',
-    'echo   AI NetController v3.0.0-LTS - Automatic PC ^& Phone Setup Wizard',
+    'echo   AI NetController v0.31.3 - Automatic PC ^& Phone Setup Wizard',
     'echo ============================================================================',
     'echo.',
     `set CST_AGENT_SECRET=${snap.pairingToken}`,
@@ -935,7 +935,7 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     '        python -m pip install -r agent\\requirements.txt --quiet',
     '    )',
     ') else (',
-    '    echo [!] Python not found in PATH. Looking for standalone AI_NetController_HostAgent_v3.0.0_win64.exe...',
+    '    echo [!] Python not found in PATH. Looking for standalone AI_NetController_HostAgent_v0.31.3_win64.exe...',
     ')',
     '',
     'echo [2/4] Configuring Windows Private LAN Firewall rules (Ports 8765 ^& 3000)...',
@@ -947,22 +947,22 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     ')',
     '',
     'echo [3/4] Launching CST PC Host Daemon Desktop Control Center...',
-    'if exist "public\\releases\\v3.0.0\\AI_NetController_HostAgent_v3.0.0_win64.exe" (',
-    '    start "CST PC Daemon" "public\\releases\\v3.0.0\\AI_NetController_HostAgent_v3.0.0_win64.exe"',
-    ') else if exist "public\\releases\\v2.7.1\\AI_NetController_HostAgent_v2.7.1_win64.exe" (',
-    '    start "CST PC Daemon" "public\\releases\\v2.7.1\\AI_NetController_HostAgent_v2.7.1_win64.exe"',
-    ') else if exist "public\\releases\\v2.7.0\\AI_NetController_HostAgent_v2.7.0_win64.exe" (',
-    '    start "CST PC Daemon" "public\\releases\\v2.7.0\\AI_NetController_HostAgent_v2.7.0_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v3.0.0_win64.exe" (',
-    '    start "CST PC Daemon" "AI_NetController_HostAgent_v3.0.0_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v2.7.1_win64.exe" (',
-    '    start "CST PC Daemon" "AI_NetController_HostAgent_v2.7.1_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v2.7.0_win64.exe" (',
-    '    start "CST PC Daemon" "AI_NetController_HostAgent_v2.7.0_win64.exe"',
+    'if exist "public\\releases\\v0.31.3\\AI_NetController_HostAgent_v0.31.3_win64.exe" (',
+    '    start "AI NetController Host Agent" "public\\releases\\v0.31.3\\AI_NetController_HostAgent_v0.31.3_win64.exe"',
+    ') else if exist "public\\releases\\v0.27.1\\AI_NetController_HostAgent_v0.27.1_win64.exe" (',
+    '    start "AI NetController Host Agent" "public\\releases\\v0.27.1\\AI_NetController_HostAgent_v0.27.1_win64.exe"',
+    ') else if exist "public\\releases\\v0.27.0\\AI_NetController_HostAgent_v0.27.0_win64.exe" (',
+    '    start "AI NetController Host Agent" "public\\releases\\v0.27.0\\AI_NetController_HostAgent_v0.27.0_win64.exe"',
+    ') else if exist "AI_NetController_HostAgent_v0.31.3_win64.exe" (',
+    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.31.3_win64.exe"',
+    ') else if exist "AI_NetController_HostAgent_v0.27.1_win64.exe" (',
+    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.27.1_win64.exe"',
+    ') else if exist "AI_NetController_HostAgent_v0.27.0_win64.exe" (',
+    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.27.0_win64.exe"',
     ') else if exist "agent\\dist\\CST_Agent_Daemon\\CST_Agent_Daemon.exe" (',
-    '    start "CST PC Daemon" "agent\\dist\\CST_Agent_Daemon\\CST_Agent_Daemon.exe"',
+    '    start "AI NetController Host Agent" "agent\\dist\\CST_Agent_Daemon\\CST_Agent_Daemon.exe"',
     ') else if exist "agent\\agent_gui.py" (',
-    '    start "CST PC Daemon" python "agent\\agent_gui.py"',
+    '    start "AI NetController Host Agent" python "agent\\agent_gui.py"',
     ')',
     '',
     'echo [4/4] Starting Web ^& Phone Controller Server on Port 3000...',
@@ -1037,12 +1037,12 @@ const systemUpdateRegistry: SystemUpdateComponentState[] = [
     id: 'cst-host-agent',
     name: 'CST Host Daemon (Python + Native Win32 GUI)',
     category: 'agent',
-    currentVersion: 'v3.0.0 (Beta)',
-    latestVersion: 'v3.1.0-beta.1',
+    currentVersion: 'v0.30.0',
+    latestVersion: 'v0.31.3',
     status: 'available',
     size: '18.4 MB',
     lastChecked: 'Just now',
-    changelog: 'v3.1.0-beta.1: Direct 144Hz compositor integration, dynamic HTML5 viewport calibration, and zero-overflow multi-aspect layout.',
+    changelog: 'v0.31.3: Direct 144Hz compositor integration, dynamic HTML5 viewport calibration, and zero-overflow multi-aspect layout.',
   },
   {
     id: 'ast-security-rules',
@@ -1130,7 +1130,7 @@ app.get('/api/update/status', async (_req: Request, res: Response) => {
       nodeVersion,
       pythonVersion: pythonCheck,
       aiModels: DYNAMIC_MODELS.map((m) => m.id),
-      agentVersion: hostAgent?.currentVersion || 'v3.0.0-LTS',
+      agentVersion: hostAgent?.currentVersion || 'v0.31.3',
       components: systemUpdateRegistry,
       updatesAvailableCount: systemUpdateRegistry.filter((c) => c.status === 'available').length,
       status: 'ready',

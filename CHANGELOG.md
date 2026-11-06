@@ -4,14 +4,14 @@ All notable changes, architectural upgrades, security hardening passes, and UI/U
 
 ---
 
-## [v2.9.0] — 2026-10-25 (Resilient Fallbacks, Direct AI Control & Stream Overhaul)
+## [v0.29.0] — 2026-10-25 (Resilient Fallbacks, Direct AI Control & Stream Overhaul)
 
 ### 📦 Release Binaries & Multi-Version Distribution
-- **New Release Artifacts (`public/releases/v2.9.0/`)**:
-  - `AI_NetController_HostAgent_v2.9.0_win64.exe`: Standalone 64-bit Windows PE32+ Host Agent Daemon with embedded Python 3.12 runtime, Tkinter GUI, Authenticode signature `O=AI_NetController`, and zero false-positive heuristic detection.
-  - `AI_NetController_v2.9.0_arm64-v8a.apk`: Native Flutter 3.47 / Dart 3.13 release APK with 120Hz display mode selector, haptic feedback, and double-buffered zero-GC video pipeline.
-  - `AI_NetController_HostAgent_v2.9.0_win64_portable.zip` & `SHA256SUMS.txt`: Complete portable bundle and cryptographic verification digests.
-- **Multi-Version Availability**: Maintained concurrent availability of all previous releases (`v2.8.0`, `v2.7.1`, and `v2.7.0`) in the Releases tab and web server endpoints (`/api/releases`).
+- **New Release Artifacts (`public/releases/v0.29.0/`)**:
+  - `AI_NetController_HostAgent_v0.29.0_win64.exe`: Standalone 64-bit Windows PE32+ Host Agent Daemon with embedded Python 3.12 runtime, Tkinter GUI, Authenticode signature `O=AI_NetController`, and zero false-positive heuristic detection.
+  - `AI_NetController_v0.29.0_arm64-v8a.apk`: Native Flutter 3.47 / Dart 3.13 release APK with 120Hz display mode selector, haptic feedback, and double-buffered zero-GC video pipeline.
+  - `AI_NetController_HostAgent_v0.29.0_win64_portable.zip` & `SHA256SUMS.txt`: Complete portable bundle and cryptographic verification digests.
+- **Multi-Version Availability**: Maintained concurrent availability of all previous releases (`v0.28.0`, `v0.27.1`, and `v0.27.0`) in the Releases tab and web server endpoints (`/api/releases`).
 
 ### 🛡️ Resilient Dependency Fallbacks & Path Resolution
 - **Graceful Import Guards**: Conditional imports for core graphic and capture dependencies (`mss`, `PIL`, `pystray`, `zeroconf`) allow the daemon to run safely and inform the operator rather than crashing when optional modules are absent.
@@ -27,14 +27,14 @@ All notable changes, architectural upgrades, security hardening passes, and UI/U
 
 ---
 
-## [v2.8.0] — 2026-10-25 (QoL, Stream HUD, Usability & Polishing Release)
+## [v0.28.0] — 2026-10-25 (QoL, Stream HUD, Usability & Polishing Release)
 
 ### 📦 Release Binaries & Multi-Version Distribution
-- **New Release Artifacts (`public/releases/v2.8.0/`)**:
-  - `AI_NetController_HostAgent_v2.8.0_win64.exe`: Standalone 64-bit Windows PE32+ Host Agent Daemon with embedded Python 3.12 runtime, Tkinter GUI, Authenticode signature `O=AI_NetController`, and zero false-positive heuristic detection.
-  - `AI_NetController_v2.8.0_arm64-v8a.apk`: Native Flutter 3.47 / Dart 3.13 release APK with 120Hz display mode selector, haptic feedback, and double-buffered zero-GC video pipeline.
-  - `AI_NetController_HostAgent_v2.8.0_win64_portable.zip` & `SHA256SUMS.txt`: Complete portable bundle and cryptographic verification digests.
-- **Multi-Version Availability**: Preserved concurrent availability of all previous stable releases (`v2.7.1` and `v2.7.0`) in the Releases tab and web server endpoints (`/api/releases`).
+- **New Release Artifacts (`public/releases/v0.28.0/`)**:
+  - `AI_NetController_HostAgent_v0.28.0_win64.exe`: Standalone 64-bit Windows PE32+ Host Agent Daemon with embedded Python 3.12 runtime, Tkinter GUI, Authenticode signature `O=AI_NetController`, and zero false-positive heuristic detection.
+  - `AI_NetController_v0.28.0_arm64-v8a.apk`: Native Flutter 3.47 / Dart 3.13 release APK with 120Hz display mode selector, haptic feedback, and double-buffered zero-GC video pipeline.
+  - `AI_NetController_HostAgent_v0.28.0_win64_portable.zip` & `SHA256SUMS.txt`: Complete portable bundle and cryptographic verification digests.
+- **Multi-Version Availability**: Preserved concurrent availability of all previous stable releases (`v0.27.1` and `v0.27.0`) in the Releases tab and web server endpoints (`/api/releases`).
 
 ### ✨ Quality of Life (QoL) & Usability Polish
 - **Remote Stream HUD & Fullscreen (`F` & `I`)**:
@@ -52,7 +52,7 @@ All notable changes, architectural upgrades, security hardening passes, and UI/U
 - **Native Host Agent GUI Polishing (`agent_gui.py`)**:
   - Added animated `✓ URI COPIED TO CLIPBOARD` and `✓ PAIRING KEY COPIED` banner notifications with automatic 2.2s restore timer.
   - Added color-coded status badges and view-only mode indicator.
-- **Flutter Mobile Client (`2.8.0+29`)**:
+- **Flutter Mobile Client (`0.28.0+29`)**:
   - Integrated tactile haptic feedback on card selection, trackpad taps, and quick keys.
   - Added verified build tile confirming 120Hz Impeller acceleration in Settings.
 
@@ -69,14 +69,14 @@ All notable changes, architectural upgrades, security hardening passes, and UI/U
 
 ---
 
-## [v2.7.1] — 2026-10-25 (Feature Verification, Quality Maintenance & Dual-Release Publishing)
+## [v0.27.1] — 2026-10-25 (Feature Verification, Quality Maintenance & Dual-Release Publishing)
 
 ### 📦 Release Binaries & Multi-Version Distribution
-- **New Release Artifacts (`public/releases/v2.7.1/`)**:
-  - `AI_NetController_HostAgent_v2.7.1_win64.exe`: Standalone 64-bit Windows PE32+ Host Agent Daemon with embedded Python 3.12 runtime, Tkinter GUI, Authenticode signature `O=AI_NetController`, and zero false-positive heuristic detection.
-  - `AI_NetController_v2.7.1_arm64-v8a.apk`: Native Flutter 3.47 / Dart 3.13 release APK with 120Hz display mode selector and double-buffered zero-GC video pipeline.
-  - `AI_NetController_HostAgent_v2.7.1_win64_portable.zip` & `SHA256SUMS.txt`: Complete portable bundle and cryptographic verification digests.
-- **Dual Version Availability**: Maintained concurrent availability of both `v2.7.0` and `v2.7.1` in the Releases tab and web server endpoints.
+- **New Release Artifacts (`public/releases/v0.27.1/`)**:
+  - `AI_NetController_HostAgent_v0.27.1_win64.exe`: Standalone 64-bit Windows PE32+ Host Agent Daemon with embedded Python 3.12 runtime, Tkinter GUI, Authenticode signature `O=AI_NetController`, and zero false-positive heuristic detection.
+  - `AI_NetController_v0.27.1_arm64-v8a.apk`: Native Flutter 3.47 / Dart 3.13 release APK with 120Hz display mode selector and double-buffered zero-GC video pipeline.
+  - `AI_NetController_HostAgent_v0.27.1_win64_portable.zip` & `SHA256SUMS.txt`: Complete portable bundle and cryptographic verification digests.
+- **Dual Version Availability**: Maintained concurrent availability of both `v0.27.0` and `v0.27.1` in the Releases tab and web server endpoints.
 
 ### 🧪 System-Wide Feature & Stress Audit (137/137 Tests Passing)
 - Verified all 9 automated test harnesses across Python Agent, React Web Console, and Flutter Mobile:
@@ -91,13 +91,13 @@ All notable changes, architectural upgrades, security hardening passes, and UI/U
 
 ---
 
-## [v2.7.0] — 2026-10-24 (Native APK & EXE Binary Release, Multi-Resolution Scaling & Power-User QoL)
+## [v0.27.0] — 2026-10-24 (Native APK & EXE Binary Release, Multi-Resolution Scaling & Power-User QoL)
 
 ### 📦 Native Release Binaries & Automated GitHub Release Pipeline
-- **Packaged Release Artifacts (`public/releases/v2.7.0/`)**:
-  - `AI_NetController_HostAgent_v2.7.0_win64.exe`: Standalone 64-bit Windows PE32+ Host Agent Daemon executable with embedded Python 3.12 runtime payload, System Tray integration, ZeroConf mDNS discovery, and AST Command Firewall (`v2026.10-REV5`).
-  - `AI_NetController_v2.7.0_arm64-v8a.apk`: Signed ZIP-aligned Android release APK package (`arm64-v8a`) containing the Flutter 3.29 / Dart 3.7 mobile client, Liquid Glass UI, and zero-GC live screen trackpad.
-  - `AI_NetController_HostAgent_v2.7.0_win64_portable.zip` & `SHA256SUMS.txt`: Portable Windows Agent bundle and cryptographic SHA-256 checksums.
+- **Packaged Release Artifacts (`public/releases/v0.27.0/`)**:
+  - `AI_NetController_HostAgent_v0.27.0_win64.exe`: Standalone 64-bit Windows PE32+ Host Agent Daemon executable with embedded Python 3.12 runtime payload, System Tray integration, ZeroConf mDNS discovery, and AST Command Firewall (`v2026.10-REV5`).
+  - `AI_NetController_v0.27.0_arm64-v8a.apk`: Signed ZIP-aligned Android release APK package (`arm64-v8a`) containing the Flutter 3.29 / Dart 3.7 mobile client, Liquid Glass UI, and zero-GC live screen trackpad.
+  - `AI_NetController_HostAgent_v0.27.0_win64_portable.zip` & `SHA256SUMS.txt`: Portable Windows Agent bundle and cryptographic SHA-256 checksums.
 - **GitHub Actions Release Workflow (`.github/workflows/release.yml`)**: Multi-OS CI/CD pipeline building the Windows `.exe` on `windows-latest` and Android `.apk` on `ubuntu-latest`, generating `SHA256SUMS.txt`, and publishing official GitHub Releases with `PATCH_NOTES.md`.
 - **In-App Release & Binary Download Center (`CodeExportModal.tsx` & `/api/releases`)**: Added 1-click downloads for `.exe`, `.apk`, `.zip`, and `SHA256SUMS.txt` plus GitHub Release publishing commands right inside the Web Console.
 

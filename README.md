@@ -1,6 +1,6 @@
 # AI NetController
 
-[![Release](https://img.shields.io/badge/release-v3.1.0--beta.3-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v3.1.0-beta.3)
+[![Release](https://img.shields.io/badge/release-v0.31.3-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v0.31.3)
 [![Channel](https://img.shields.io/badge/channel-public%20beta-amber.svg)](https://github.com/smehmedd/AI-NetController/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-116%20passed%2C%200%20failed-brightgreen.svg)](https://github.com/smehmedd/AI-NetController)
@@ -118,14 +118,14 @@ All releases are provided under the public beta channel. Binaries are pre-compil
 
 | Artifact | Platform | Size | Direct Download |
 | :--- | :--- | :---: | :---: |
-| **`AI_NetController_HostAgent_v3.1.0_win64.exe`** | Windows 10 / 11 x64 (GUI + Service) | 35.3 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/AI_NetController_HostAgent_v3.1.0_win64.exe) |
-| **`AI_NetController_HostAgent_v3.1.0_win64_portable.zip`** | Windows 10 / 11 x64 (Portable Bundle) | 35.0 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/AI_NetController_HostAgent_v3.1.0_win64_portable.zip) |
-| **`AI_NetController_v3.1.0_arm64-v8a.apk`** | Android 7.0 – 15 (`arm64-v8a`) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/AI_NetController_v3.1.0_arm64-v8a.apk) |
-| **`AI_NetController_v3.1.0.apk`** | Android 7.0 – 15 (Universal) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/AI_NetController_v3.1.0.apk) |
-| **`SHA256SUMS.txt`** | Checksums | 413 B | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/SHA256SUMS.txt) |
-| **`RELEASE_MANIFEST.json`** | Metadata Manifest | 1.9 KB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.3/RELEASE_MANIFEST.json) |
+| **`AI_NetController_HostAgent_v0.31.3_win64.exe`** | Windows 10 / 11 x64 (GUI + Service) | 35.3 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe) |
+| **`AI_NetController_HostAgent_v0.31.3_win64_portable.zip`** | Windows 10 / 11 x64 (Portable Bundle) | 35.0 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64_portable.zip) |
+| **`AI_NetController_v0.31.3_arm64-v8a.apk`** | Android 7.0 – 15 (`arm64-v8a`) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk) |
+| **`AI_NetController_v0.31.3.apk`** | Android 7.0 – 15 (Universal) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.3/AI_NetController_v0.31.3.apk) |
+| **`SHA256SUMS.txt`** | Checksums | 413 B | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.3/SHA256SUMS.txt) |
+| **`RELEASE_MANIFEST.json`** | Metadata Manifest | 1.9 KB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.3/RELEASE_MANIFEST.json) |
 
-Previous beta releases (`v3.1.0-beta.1`, `v3.0.0`, `v2.9.0`, `v2.8.0`, `v2.7.1`, `v2.7.0`) are cataloged on the [Releases Page](https://github.com/smehmedd/AI-NetController/releases).
+Previous beta releases (`v0.31.1`, `v0.30.0`, `v0.29.0`, `v0.28.0`, `v0.27.1`, `v0.27.0`) are cataloged on the [Releases Page](https://github.com/smehmedd/AI-NetController/releases).
 
 ---
 
@@ -134,12 +134,12 @@ Previous beta releases (`v3.1.0-beta.1`, `v3.0.0`, `v2.9.0`, `v2.8.0`, `v2.7.1`,
 ### Option 1: Using Pre-Compiled Binaries
 
 1. **On Target Windows Workstations**:
-   - Download [`AI_NetController_HostAgent_v3.1.0_win64.exe`](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.1/AI_NetController_HostAgent_v3.1.0_win64.exe).
+   - Download [`AI_NetController_HostAgent_v0.31.3_win64.exe`](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.1/AI_NetController_HostAgent_v0.31.3_win64.exe).
    - Launch the executable. The desktop GUI will display your local IP, port (`8765`), and pairing token.
    - Click **Allow** if Windows Defender Firewall prompts for network access on private networks.
 
 2. **On Android Devices**:
-   - Download [`AI_NetController_v3.1.0_arm64-v8a.apk`](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.1/AI_NetController_v3.1.0_arm64-v8a.apk).
+   - Download [`AI_NetController_v0.31.3_arm64-v8a.apk`](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.1/AI_NetController_v0.31.3_arm64-v8a.apk).
    - Install the package on your device.
    - Connect to the same Wi-Fi subnet. The app will discover managed workstations automatically.
 
@@ -199,7 +199,7 @@ python agent.py --headless --port 8765
 ```powershell
 python scripts/build_android_app.py
 ```
-The compiled, aligned, and signed APK will be output to `public/releases/v3.1.0-beta.1/`.
+The compiled, aligned, and signed APK will be output to `public/releases/v0.31.1/`.
 
 ---
 
@@ -316,7 +316,7 @@ AI-NetController/
 │       │   ├── services/          # WoL, security & haptic services
 │       │   └── tests/             # 14-pillar verification & stress test suite
 ├── public/releases/               # Distribution binaries, checksums & manifests
-│   └── v3.1.0-beta.3/             # Current public beta artifacts
+│   └── v0.31.3/             # Current public beta artifacts
 ├── scripts/                       # Build and release automation scripts
 │   ├── build_android_app.py       # Standalone APK compiler and packager
 │   ├── build_release_binaries.py  # Windows launcher & release asset builder
@@ -325,7 +325,7 @@ AI-NetController/
 │   └── publish_release.py         # Unified GitHub release publisher
 ├── docs/                          # Architecture & security documentation
 ├── CHANGELOG.md                   # Full version history
-├── PATCH_NOTES.md                 # Detailed v3.1.0-beta.3 release notes
+├── PATCH_NOTES.md                 # Detailed v0.31.3 release notes
 ├── LICENSE                        # MIT License
 └── package.json                   # Project metadata & npm scripts
 ```

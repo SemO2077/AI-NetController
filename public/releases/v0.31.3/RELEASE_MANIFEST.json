@@ -1,35 +1,35 @@
 {
-  "version": "v3.1.0-beta.3",
-  "tag": "v3.1.0-beta.3",
-  "releaseName": "AI NetController v3.1.0-beta.3",
+  "version": "v0.31.3",
+  "tag": "v0.31.3",
+  "releaseName": "AI NetController v0.31.3",
   "publishedAt": "2026-11-06T17:56:04.749715+00:00",
   "artifacts": [
     {
-      "filename": "AI_NetController_HostAgent_v3.1.0-beta.3_win64.exe",
+      "filename": "AI_NetController_HostAgent_v0.31.3_win64.exe",
       "kind": "exe",
       "platform": "Windows 10/11 x64 (Standalone Host Agent .EXE)",
       "sizeBytes": 70026,
       "sizeFormatted": "68.4 KB",
       "sha256": "139f608cd32990b589a1b5a654660abe572bbc835e387e7c8f0e534b5c6b9186",
-      "downloadUrl": "/releases/v3.1.0-beta.3/AI_NetController_HostAgent_v3.1.0-beta.3_win64.exe"
+      "downloadUrl": "/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe"
     },
     {
-      "filename": "AI_NetController_v3.1.0-beta.3_arm64-v8a.apk",
+      "filename": "AI_NetController_v0.31.3_arm64-v8a.apk",
       "kind": "apk",
       "platform": "Android 10\u201315 arm64-v8a (Mobile Companion .APK)",
       "sizeBytes": 72231,
       "sizeFormatted": "70.5 KB",
       "sha256": "360ba5a586eca59937a82081ece764e81036af40784b8a94104986bc85386760",
-      "downloadUrl": "/releases/v3.1.0-beta.3/AI_NetController_v3.1.0-beta.3_arm64-v8a.apk"
+      "downloadUrl": "/releases/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk"
     },
     {
-      "filename": "AI_NetController_HostAgent_v3.1.0-beta.3_win64_portable.zip",
+      "filename": "AI_NetController_HostAgent_v0.31.3_win64_portable.zip",
       "kind": "zip",
       "platform": "Windows Portable Agent Bundle + PyInstaller Spec (.ZIP)",
       "sizeBytes": 142302,
       "sizeFormatted": "139.0 KB",
       "sha256": "4cb0750c4aaff7a9a7f9ca8b28ef859bc34808023023b15d1131310589c4a124",
-      "downloadUrl": "/releases/v3.1.0-beta.3/AI_NetController_HostAgent_v3.1.0-beta.3_win64_portable.zip"
+      "downloadUrl": "/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64_portable.zip"
     }
   ]
 }

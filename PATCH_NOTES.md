@@ -1,11 +1,11 @@
-# AI NetController — v3.1.0-beta.3 Release Notes
+# AI NetController — v0.31.3 Release Notes
 
-[![Version](https://img.shields.io/badge/version-v3.1.0--beta.3-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v3.1.0-beta.3)
+[![Version](https://img.shields.io/badge/version-v0.31.3-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v0.31.3)
 [![Channel](https://img.shields.io/badge/channel-public%20beta-amber.svg)](https://github.com/smehmedd/AI-NetController/releases)
 [![Tests](https://img.shields.io/badge/tests-116%20passed%2C%200%20failed-brightgreen.svg)](https://github.com/smehmedd/AI-NetController)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-- **Release Version**: `v3.1.0-beta.3`
+- **Release Version**: `v0.31.3`
 - **Release Channel**: Public Beta
 - **Release Date**: November 5, 2026
 - **Protocol**: `AI-NET/3.0-SECURE`
@@ -15,7 +15,7 @@
 
 ## Summary
 
-The `v3.1.0-beta.3` release delivers persistent onboarding suppression, deep cyber-neon visual vibrancy across all core screens, and enhanced mobile telemetry readability. Once finished or dismissed, the onboarding modal never reappears automatically while remaining readily accessible on demand. All cards, telemetry meters, and control decks have been supercharged with luminous glass specular highlights, animated beacon rings, and high-contrast color-coded action chips.
+The `v0.31.3` release delivers persistent onboarding suppression, deep cyber-neon visual vibrancy across all core screens, and enhanced mobile telemetry readability. Once finished or dismissed, the onboarding modal never reappears automatically while remaining readily accessible on demand. All cards, telemetry meters, and control decks have been supercharged with luminous glass specular highlights, animated beacon rings, and high-contrast color-coded action chips.
 
 ---
 
@@ -50,14 +50,14 @@ The `v3.1.0-beta.3` release delivers persistent onboarding suppression, deep cyb
 
 ---
 
-# AI NetController — v3.1.0-beta.2 Release Notes
+# AI NetController — v0.31.2 Release Notes
 
-[![Version](https://img.shields.io/badge/version-v3.1.0--beta.2-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v3.1.0-beta.2)
+[![Version](https://img.shields.io/badge/version-v0.31.2-blue.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v0.31.2)
 [![Channel](https://img.shields.io/badge/channel-public%20beta-amber.svg)](https://github.com/smehmedd/AI-NetController/releases)
 [![Tests](https://img.shields.io/badge/tests-116%20passed%2C%200%20failed-brightgreen.svg)](https://github.com/smehmedd/AI-NetController)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-- **Release Version**: `v3.1.0-beta.2`
+- **Release Version**: `v0.31.2`
 - **Release Channel**: Public Beta
 - **Release Date**: November 5, 2026
 - **Protocol**: `AI-NET/3.0-SECURE`
@@ -67,7 +67,7 @@ The `v3.1.0-beta.3` release delivers persistent onboarding suppression, deep cyb
 
 ## Summary
 
-The `v3.1.0-beta.2` release brings comprehensive mobile ergonomics and visual refinement to the Android native application. Every core view has undergone line-by-line inspection to eliminate all tiny font sizes (< 10px), enforce mobile touch target standards (>= 36px–42px), and enhance the cyber-neon glass aesthetic with rich contrast and luminous accents.
+The `v0.31.2` release brings comprehensive mobile ergonomics and visual refinement to the Android native application. Every core view has undergone line-by-line inspection to eliminate all tiny font sizes (< 10px), enforce mobile touch target standards (>= 36px–42px), and enhance the cyber-neon glass aesthetic with rich contrast and luminous accents.
 
 ---
 
@@ -138,16 +138,16 @@ All test suites passed with zero errors prior to release:
 
 | Artifact | Target Platform | File Size | Direct Download |
 | :--- | :--- | :---: | :---: |
-| **`AI_NetController_HostAgent_v3.1.0_win64.exe`** | Windows 10 / 11 x64 | 35.3 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/AI_NetController_HostAgent_v3.1.0_win64.exe) |
-| **`AI_NetController_HostAgent_v3.1.0_win64_portable.zip`** | Windows 10 / 11 x64 (Portable) | 35.0 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/AI_NetController_HostAgent_v3.1.0_win64_portable.zip) |
-| **`AI_NetController_v3.1.0_arm64-v8a.apk`** | Android 7.0–15 (`arm64-v8a`) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/AI_NetController_v3.1.0_arm64-v8a.apk) |
-| **`AI_NetController_v3.1.0.apk`** | Android 7.0–15 (Universal) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/AI_NetController_v3.1.0.apk) |
-| **`SHA256SUMS.txt`** | Checksums | 413 B | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/SHA256SUMS.txt) |
-| **`RELEASE_MANIFEST.json`** | Metadata Manifest | 1.9 KB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v3.1.0-beta.2/RELEASE_MANIFEST.json) |
+| **`AI_NetController_HostAgent_v0.31.3_win64.exe`** | Windows 10 / 11 x64 | 35.3 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.2/AI_NetController_HostAgent_v0.31.3_win64.exe) |
+| **`AI_NetController_HostAgent_v0.31.3_win64_portable.zip`** | Windows 10 / 11 x64 (Portable) | 35.0 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.2/AI_NetController_HostAgent_v0.31.3_win64_portable.zip) |
+| **`AI_NetController_v0.31.3_arm64-v8a.apk`** | Android 7.0–15 (`arm64-v8a`) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.2/AI_NetController_v0.31.3_arm64-v8a.apk) |
+| **`AI_NetController_v0.31.3.apk`** | Android 7.0–15 (Universal) | 1.31 MB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.2/AI_NetController_v0.31.3.apk) |
+| **`SHA256SUMS.txt`** | Checksums | 413 B | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.2/SHA256SUMS.txt) |
+| **`RELEASE_MANIFEST.json`** | Metadata Manifest | 1.9 KB | [Download](https://github.com/smehmedd/AI-NetController/releases/download/v0.31.2/RELEASE_MANIFEST.json) |
 
 ```text
-6e90065c056934ca777452bcba97bfcf50e27cd333709cf69d0033cd2cbd4969  AI_NetController_HostAgent_v3.1.0_win64.exe
-5db218345f47a2aa746d8e9aaf9fb6c20643543bddaef8a04816b581b3c4f348  AI_NetController_HostAgent_v3.1.0_win64_portable.zip
-e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3  AI_NetController_v3.1.0_arm64-v8a.apk
-e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3  AI_NetController_v3.1.0.apk
+6e90065c056934ca777452bcba97bfcf50e27cd333709cf69d0033cd2cbd4969  AI_NetController_HostAgent_v0.31.3_win64.exe
+5db218345f47a2aa746d8e9aaf9fb6c20643543bddaef8a04816b581b3c4f348  AI_NetController_HostAgent_v0.31.3_win64_portable.zip
+e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3  AI_NetController_v0.31.3_arm64-v8a.apk
+e8f9f5e818b93a5f9b4fdb71028fff1fcb29b6c8f58c684b0208d491f5d7e0e3  AI_NetController_v0.31.3.apk
 ```

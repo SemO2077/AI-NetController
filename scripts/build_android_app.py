@@ -59,11 +59,11 @@ def setup_staging():
 
     # Copy web dist into assets/dist
     shutil.copytree(WEB_DIST, os.path.join(STAGE_DIR, "assets", "dist"), dirs_exist_ok=True)
-    # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/v3.1.0-beta.1
-    rel_src = os.path.join(ROOT_DIR, "public", "releases", "v3.1.0-beta.1")
+    # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/v0.31.1
+    rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.31.1")
     if not os.path.exists(rel_src):
-        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v3.0.0")
-    rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", "v3.1.0-beta.1")
+        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.30.0")
+    rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", "v0.31.1")
     os.makedirs(rel_dst, exist_ok=True)
     for meta_file in ("RELEASE_MANIFEST.json", "SHA256SUMS.txt", "PATCH_NOTES.md"):
         src_p = os.path.join(rel_src, meta_file)
@@ -987,9 +987,9 @@ public class MainActivity extends Activity {
         } else {
             String lanIp = detectDeviceLanIp();
             if (isBg) {
-                reply.append("Автономният Android контролер (v3.0.0, IP: ").append(lanIp).append(") е активен. Можете да сканирате локалната мрежа [ACTION:SCAN], да събудите компютър чрез Wake-on-LAN или да управлявате екрана и терминала в реално време.");
+                reply.append("Автономният Android контролер (v0.30.0, IP: ").append(lanIp).append(") е активен. Можете да сканирате локалната мрежа [ACTION:SCAN], да събудите компютър чрез Wake-on-LAN или да управлявате екрана и терминала в реално време.");
             } else {
-                reply.append("AI NetController Android Companion (v3.0.0, LAN IP: ").append(lanIp).append(") is online. You can scan your local subnet [ACTION:SCAN], wake sleeping workstations via UDP Magic Packets, or stream live desktop & terminal sessions.");
+                reply.append("AI NetController Android Companion (v0.30.0, LAN IP: ").append(lanIp).append(") is online. You can scan your local subnet [ACTION:SCAN], wake sleeping workstations via UDP Magic Packets, or stream live desktop & terminal sessions.");
             }
         }
 
@@ -1150,7 +1150,7 @@ public class MainActivity extends Activity {
                     // 4. Quick Setup Info
                     if (rawPath.equals("/api/setup/info")) {
                         String lanIp = detectDeviceLanIp();
-                        String setupObj = "{\"version\":\"3.0.0\",\"localIp\":\"" + lanIp + "\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"osName\":\"Android\",\"os\":\"android\",\"mac\":\"\",\"daemonPort\":8765,\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"exeDownloadUrl\":\"/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe\",\"apkDownloadUrl\":\"/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk\",\"launcherDownloadUrl\":\"/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe\"}";
+                        String setupObj = "{\"version\":\"3.0.0\",\"localIp\":\"" + lanIp + "\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"osName\":\"Android\",\"os\":\"android\",\"mac\":\"\",\"daemonPort\":8765,\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"exeDownloadUrl\":\"/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64.exe\",\"apkDownloadUrl\":\"/releases/v0.30.0/AI_NetController_v0.30.0_arm64-v8a.apk\",\"launcherDownloadUrl\":\"/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64.exe\"}";
                         String json = "{\"success\":true,\"setup\":" + setupObj + "}";
                         sendJsonResponse(out, 200, json);
                         socket.close();
@@ -1159,12 +1159,12 @@ public class MainActivity extends Activity {
 
                     // 5. Releases Manifest
                     if (rawPath.equals("/api/releases")) {
-                        String manifestJson = readAssetText("dist/releases/v3.0.0/RELEASE_MANIFEST.json");
+                        String manifestJson = readAssetText("dist/releases/v0.30.0/RELEASE_MANIFEST.json");
                         if (manifestJson != null && !manifestJson.trim().isEmpty()) {
                             String wrapped = "{\"currentVersion\":\"3.0.0\",\"releases\":[" + manifestJson + "]}";
                             sendJsonResponse(out, 200, wrapped);
                         } else {
-                            String fallback = "{\"currentVersion\":\"3.0.0\",\"releases\":[{\"version\":\"3.0.0\",\"tag\":\"v3.0.0\",\"codename\":\"Poppy & Vibrant 144Hz Native Edition\",\"publishedAt\":\"2026-10-27T12:00:00Z\",\"artifacts\":[]}]}";
+                            String fallback = "{\"currentVersion\":\"3.0.0\",\"releases\":[{\"version\":\"3.0.0\",\"tag\":\"v0.30.0\",\"codename\":\"Poppy & Vibrant 144Hz Native Edition\",\"publishedAt\":\"2026-10-27T12:00:00Z\",\"artifacts\":[]}]}";
                             sendJsonResponse(out, 200, fallback);
                         }
                         socket.close();
@@ -1181,7 +1181,7 @@ public class MainActivity extends Activity {
                             "\"status\":\"up-to-date\"," +
                             "\"channel\":\"stable\"," +
                             "\"lastChecked\":\"" + new java.util.Date().toString() + "\"," +
-                            "\"releaseUrl\":\"https://github.com/smehmedd/AI-NetController/releases/tag/v3.0.0\"," +
+                            "\"releaseUrl\":\"https://github.com/smehmedd/AI-NetController/releases/tag/v0.30.0\"," +
                             "\"changelog\":[" +
                                 "\"Native Android 1:1 Viewport & WindowInsets Edge-to-Edge Engine\"," +
                                 "\"Multi-Threaded /24 LAN Subnet Discovery & Directed Broadcast WoL\"," +
@@ -1189,9 +1189,9 @@ public class MainActivity extends Activity {
                                 "\"144Hz Poppy & Vibrant Cyber-Glass UI across all aspect ratios\"" +
                             "]," +
                             "\"assets\":[" +
-                                "{\"name\":\"AI_NetController_v3.0.0_arm64-v8a.apk\",\"size\":\"5.9 MB\",\"platform\":\"Android 8.0–15 (ARM64)\",\"url\":\"/releases/v3.0.0/AI_NetController_v3.0.0_arm64-v8a.apk\",\"verified\":true}," +
-                                "{\"name\":\"AI_NetController_HostAgent_v3.0.0_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64.exe\",\"verified\":true}," +
-                                "{\"name\":\"AI_NetController_HostAgent_v3.0.0_win64_portable.zip\",\"size\":\"15.0 MB\",\"platform\":\"Windows 10/11 x64 Portable\",\"url\":\"/releases/v3.0.0/AI_NetController_HostAgent_v3.0.0_win64_portable.zip\",\"verified\":true}" +
+                                "{\"name\":\"AI_NetController_v0.30.0_arm64-v8a.apk\",\"size\":\"5.9 MB\",\"platform\":\"Android 8.0–15 (ARM64)\",\"url\":\"/releases/v0.30.0/AI_NetController_v0.30.0_arm64-v8a.apk\",\"verified\":true}," +
+                                "{\"name\":\"AI_NetController_HostAgent_v0.30.0_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64.exe\",\"verified\":true}," +
+                                "{\"name\":\"AI_NetController_HostAgent_v0.30.0_win64_portable.zip\",\"size\":\"15.0 MB\",\"platform\":\"Windows 10/11 x64 Portable\",\"url\":\"/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64_portable.zip\",\"verified\":true}" +
                             "]" +
                         "}";
                         sendJsonResponse(out, 200, json);
@@ -1204,11 +1204,11 @@ public class MainActivity extends Activity {
                             "\"success\":true," +
                             "\"version\":\"3.0.0\"," +
                             "\"steps\":[" +
-                                "{\"step\":\"Verify GitHub Release v3.0.0 manifest\",\"status\":\"completed\",\"durationMs\":45}," +
+                                "{\"step\":\"Verify GitHub Release v0.30.0 manifest\",\"status\":\"completed\",\"durationMs\":45}," +
                                 "{\"step\":\"Validate SHA-256 binary signatures\",\"status\":\"completed\",\"durationMs\":62}," +
-                                "{\"step\":\"Confirm Android APK & Web Bundle v3.0.0 parity\",\"status\":\"completed\",\"durationMs\":38}" +
+                                "{\"step\":\"Confirm Android APK & Web Bundle v0.30.0 parity\",\"status\":\"completed\",\"durationMs\":38}" +
                             "]," +
-                            "\"message\":\"System is running the latest verified v3.0.0 release.\"" +
+                            "\"message\":\"System is running the latest verified v0.30.0 release.\"" +
                         "}";
                         sendJsonResponse(out, 200, json);
                         socket.close();
@@ -1217,8 +1217,8 @@ public class MainActivity extends Activity {
 
                     if (rawPath.equals("/api/update/ai-analyze")) {
                         String json = "{" +
-                            "\"analysis\":\"All installed AI NetController v3.0.0 components (Android Native Engine, Binary WebSocket Worker, and UDP WoL Broadcaster) match the latest cryptographic SHA-256 release signatures.\"," +
-                            "\"recommendation\":\"Keep current v3.0.0-LTS build active. No breaking changes or security vulnerabilities detected.\"," +
+                            "\"analysis\":\"All installed AI NetController v0.30.0 components (Android Native Engine, Binary WebSocket Worker, and UDP WoL Broadcaster) match the latest cryptographic SHA-256 release signatures.\"," +
+                            "\"recommendation\":\"Keep current v0.30.0-LTS build active. No breaking changes or security vulnerabilities detected.\"," +
                             "\"riskLevel\":\"low\"," +
                             "\"compatibilityScore\":100" +
                         "}";
@@ -1472,7 +1472,7 @@ def zipalign_and_sign():
     bin_dir = os.path.join(STAGE_DIR, "bin")
     unaligned_apk = os.path.join(bin_dir, "unaligned.apk")
     aligned_apk = os.path.join(bin_dir, "aligned.apk")
-    signed_apk = os.path.join(bin_dir, "AI_NetController_v3.0.0_arm64-v8a.apk")
+    signed_apk = os.path.join(bin_dir, "AI_NetController_v0.30.0_arm64-v8a.apk")
 
     print("[*] Aligning APK with zipalign (4-byte alignment)...")
     if os.path.exists(aligned_apk):
@@ -1506,8 +1506,8 @@ def zipalign_and_sign():
     return signed_apk
 
 def distribute_apk(signed_apk):
-    # Distribute to v3.1.0-beta.3, v3.1.0-beta.2, v3.1.0-beta.1 and v3.0.0
-    for rel_tag, apk_tag in [("v3.1.0-beta.3", "v3.1.0"), ("v3.1.0-beta.2", "v3.1.0"), ("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
+    # Distribute to v0.31.3, v0.31.2, v0.31.1 and v0.30.0
+    for rel_tag, apk_tag in [("v0.31.3", "v0.31.3"), ("v0.31.2", "v0.31.2"), ("v0.31.1", "v0.31.1"), ("v0.30.0", "v0.30.0")]:
         rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
         os.makedirs(rel_dir, exist_ok=True)
         dest_arm64 = os.path.join(rel_dir, f"AI_NetController_{apk_tag}_arm64-v8a.apk")
@@ -1519,15 +1519,15 @@ def distribute_apk(signed_apk):
     os.makedirs(mobile_out, exist_ok=True)
     dest_flutter = os.path.join(mobile_out, "app-arm64-v8a-release.apk")
     shutil.copy2(signed_apk, dest_flutter)
-    shutil.copy2(signed_apk, os.path.join(ROOT_DIR, "AI_NetController_v3.1.0_arm64-v8a.apk"))
+    shutil.copy2(signed_apk, os.path.join(ROOT_DIR, "AI_NetController_v0.31.3_arm64-v8a.apk"))
 
-    dest_arm64_main = os.path.join(ROOT_DIR, "public", "releases", "v3.1.0-beta.3", "AI_NetController_v3.1.0_arm64-v8a.apk")
+    dest_arm64_main = os.path.join(ROOT_DIR, "public", "releases", "v0.31.3", "AI_NetController_v0.31.3_arm64-v8a.apk")
     size_mb = os.path.getsize(dest_arm64_main) / (1024 * 1024)
     sha_hash = sha256_file(dest_arm64_main)
     print(f"\n[SUCCESS] APK Published to:\n  - {dest_arm64_main}\n  - Size: {size_mb:.2f} MB\n  - SHA256: {sha_hash}")
 
     # Update manifest & checksums
-    for rel_tag, apk_tag in [("v3.1.0-beta.3", "v3.1.0"), ("v3.1.0-beta.2", "v3.1.0"), ("v3.1.0-beta.1", "v3.1.0"), ("v3.0.0", "v3.0.0")]:
+    for rel_tag, apk_tag in [("v0.31.3", "v0.31.3"), ("v0.31.2", "v0.31.2"), ("v0.31.1", "v0.31.1"), ("v0.30.0", "v0.30.0")]:
         rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
         manifest_path = os.path.join(rel_dir, "RELEASE_MANIFEST.json")
         if os.path.exists(manifest_path):

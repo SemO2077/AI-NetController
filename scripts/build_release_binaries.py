@@ -25,7 +25,7 @@ def get_package_version() -> str:
         with open(pkg_json, "r", encoding="utf-8") as f:
             v = json.load(f).get("version", "3.1.0-beta.3")
             return f"v{v}" if not v.startswith("v") else v
-    return "v3.1.0-beta.3"
+    return "v0.31.3"
 
 RELEASE_VERSION = get_package_version()
 RELEASE_DIR = os.path.join(ROOT_DIR, "public", "releases", RELEASE_VERSION)

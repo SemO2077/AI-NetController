@@ -729,7 +729,7 @@ class HostAgentDaemon:
             draw.point((32, 32), fill=(138, 43, 226, 255))
 
             menu = pystray.Menu(
-                pystray.MenuItem("AI NetController Host Agent: Online (v3.1.0-beta.3)", lambda: None, enabled=False),
+                pystray.MenuItem("AI NetController Host Agent: Online (v0.31.3)", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
                 pystray.MenuItem(f"Port: {self.port}", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,

@@ -1,45 +1,45 @@
 {
-  "version": "v2.8.0",
-  "tag": "v2.8.0",
-  "releaseName": "AI NetController v2.8.0 \u2014 QoL, Stream HUD, Usability & Polishing Release",
+  "version": "v0.28.0",
+  "tag": "v0.28.0",
+  "releaseName": "AI NetController v0.28.0 \u2014 QoL, Stream HUD, Usability & Polishing Release",
   "publishedAt": "2026-10-25T12:00:26.152101+00:00",
   "protocol": "AI-NET/3.0-SECURE",
   "artifacts": [
     {
-      "filename": "AI_NetController_HostAgent_v2.8.0_win64.exe",
+      "filename": "AI_NetController_HostAgent_v0.28.0_win64.exe",
       "kind": "exe",
       "platform": "Windows 10/11 x64 (Standalone Host Agent .EXE)",
       "sizeBytes": 37002984,
       "sizeFormatted": "35.3 MB",
       "sha256": "657a2ffe752c3e8a52c2684423e6f270daff71b50ab9fcbb1a754e3156a67403",
-      "downloadUrl": "/releases/v2.8.0/AI_NetController_HostAgent_v2.8.0_win64.exe"
+      "downloadUrl": "/releases/v0.28.0/AI_NetController_HostAgent_v0.28.0_win64.exe"
     },
     {
-      "filename": "AI_NetController_v2.8.0_arm64-v8a.apk",
+      "filename": "AI_NetController_v0.28.0_arm64-v8a.apk",
       "kind": "apk",
       "platform": "Android 10\u201315 arm64-v8a (120Hz Mobile Controller .APK)",
       "sizeBytes": 22883271,
       "sizeFormatted": "21.8 MB",
       "sha256": "1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a",
-      "downloadUrl": "/releases/v2.8.0/AI_NetController_v2.8.0_arm64-v8a.apk"
+      "downloadUrl": "/releases/v0.28.0/AI_NetController_v0.28.0_arm64-v8a.apk"
     },
     {
-      "filename": "AI_NetController_v2.8.0.apk",
+      "filename": "AI_NetController_v0.28.0.apk",
       "kind": "apk",
       "platform": "Android 10\u201315 Universal (120Hz Mobile Controller .APK)",
       "sizeBytes": 22883271,
       "sizeFormatted": "21.8 MB",
       "sha256": "1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a",
-      "downloadUrl": "/releases/v2.8.0/AI_NetController_v2.8.0.apk"
+      "downloadUrl": "/releases/v0.28.0/AI_NetController_v0.28.0.apk"
     },
     {
-      "filename": "AI_NetController_HostAgent_v2.8.0_win64_portable.zip",
+      "filename": "AI_NetController_HostAgent_v0.28.0_win64_portable.zip",
       "kind": "zip",
       "platform": "Windows Portable Agent Bundle + Internal Runtime (.ZIP)",
       "sizeBytes": 36400938,
       "sizeFormatted": "34.7 MB",
       "sha256": "f4d239a1d04222695129d7e1a61c355bab9d2b76bdcd763ecd8df4e16a64e35c",
-      "downloadUrl": "/releases/v2.8.0/AI_NetController_HostAgent_v2.8.0_win64_portable.zip"
+      "downloadUrl": "/releases/v0.28.0/AI_NetController_HostAgent_v0.28.0_win64_portable.zip"
     }
   ]
 }

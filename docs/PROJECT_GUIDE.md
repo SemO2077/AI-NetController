@@ -1,9 +1,9 @@
-# AI NetController (`v2.9.0-LTS`) — Complete Project & Operations Guide
+# AI NetController (`v0.29.0-LTS`) — Complete Project & Operations Guide
 
 > **Technical University of Varna (ТУ-Варна)** • Department of Computer Science and Technologies (КСТ)  
 > **Architecture**: Zero-Trust Distributed Fleet Management, Wake-on-LAN, 120 FPS Screen Streaming & Agentic AI Diagnostics  
 > **Languages Supported**: 100% Bilingual Parity (English `EN` / Bulgarian `BG`)  
-> **Current Release**: `v2.9.0-LTS` *(Previous releases `v2.8.0`, `v2.7.1`, and `v2.7.0` remain available in the GitHub Releases tab)*
+> **Current Release**: `v0.29.0-LTS` *(Previous releases `v0.28.0`, `v0.27.1`, and `v0.27.0` remain available in the GitHub Releases tab)*
 
 ---
 
@@ -69,7 +69,7 @@ The project is organized as a polyglot monorepo with three primary layers:
   - `agent.py`: Main entry point (launches the desktop GUI by default, or runs headless in server environments via `--headless`).
   - `agent_gui.py`: Native dark-slate Tkinter desktop GUI (`AI NetController Host Agent — Control Center`) giving the local PC user full visibility and control over incoming connections.
   - `agent_daemon.py`: Core `asyncio` engine handling CPU/RAM/Disk telemetry, 120 FPS screen capture (`mss`), Adler-32 4×4 dirty-tile delta compression, and `AI-NET/3.0-SECURE` binary packet framing.
-- **`apps/mobile/`**: The native Flutter 3.29 mobile client (`AI_NetController_v2.9.0_arm64-v8a.apk`) with hardware-accelerated Impeller rendering, biometric auth gate, and tactile remote trackpad controls.
+- **`apps/mobile/`**: The native Flutter 3.29 mobile client (`AI_NetController_v0.29.0_arm64-v8a.apk`) with hardware-accelerated Impeller rendering, biometric auth gate, and tactile remote trackpad controls.
 
 ---
 
@@ -87,7 +87,7 @@ Open **`http://localhost:3000`** in your browser.
 You have two ways to run the daemon on a target workstation:
 
 - **Option A — Standalone Windows Executable (Zero Python install required):**
-  Download **`AI_NetController_HostAgent_v2.9.0_win64.exe`** directly from the top navigation bar in the Web Console (click the **`PC Daemon`** or **`Download .EXE`** button) and launch it.
+  Download **`AI_NetController_HostAgent_v0.29.0_win64.exe`** directly from the top navigation bar in the Web Console (click the **`PC Daemon`** or **`Download .EXE`** button) and launch it.
 - **Option B — From Python Source (Windows / Linux / macOS):**
   ```bash
   pip install psutil
@@ -226,17 +226,17 @@ Wake-on-LAN works at **Layer 2 (Data Link Layer)** before the operating system e
 ---
 
 ### 5.3 Antivirus & Windows Defender: How False Positives Are Eliminated
-Unsigned Python-to-EXE binaries are frequently flagged by Windows Defender or Malwarebytes heuristics if they look like "silent background implants." **AI NetController Host Agent (`v2.8.0-LTS`)** is specifically engineered to pass static and behavioral antivirus inspection cleanly:
+Unsigned Python-to-EXE binaries are frequently flagged by Windows Defender or Malwarebytes heuristics if they look like "silent background implants." **AI NetController Host Agent (`v0.28.0-LTS`)** is specifically engineered to pass static and behavioral antivirus inspection cleanly:
 
 1. **Zero UPX Compression (`upx=False`)**: UPX-packed executables share section entropy signatures (`UPX0`/`UPX1`) with malware packers. Our `agent/build_agent.spec` explicitly disables UPX compression so all PE sections remain uncompressed and transparent to Windows Defender.
 2. **Visible Desktop Window (`HWND`) & System Tray**: Background-only executables with no visible window (`console=False` without a GUI) trigger behavioral heuristics when capturing screens or opening sockets. Launching the visible **AI NetController Host Agent — Control Center** Tkinter GUI establishes a legitimate foreground user application context.
 3. **Zero Hidden Shell Subprocesses on Startup**: Instead of spawning hidden `powershell.exe -WindowStyle Hidden` or `cmd.exe /c` subprocesses to read network adapters or clipboard state (which triggers EDR "Living-off-the-Land" alerts), `agent_gui.py` uses pure Python `psutil.net_if_addrs()`, `psutil.net_if_stats()`, and native Tkinter clipboard APIs.
-4. **Embedded Windows PE Version Metadata & UAC `asInvoker` Manifest**: The binary embeds official company metadata (`Technical University of Varna — CST Dept`), product version (`2.9.0.0`), and `requestedExecutionLevel level="asInvoker"` so it never demands suspicious privilege escalation on launch.
+4. **Embedded Windows PE Version Metadata & UAC `asInvoker` Manifest**: The binary embeds official company metadata (`Technical University of Varna — CST Dept`), product version (`0.29.0.0`), and `requestedExecutionLevel level="asInvoker"` so it never demands suspicious privilege escalation on launch.
 5. **SHA-256 Authenticode Code Signing (`agent/sign_binary.ps1`)**:
    - Digitally signed with Authenticode certificate `CN=AI NetController, O=AI_NetController, C=BG`.
    - To eliminate Windows SmartScreen "Unknown Publisher" prompts across university lab PCs, sign the `.exe` using `agent/sign_binary.ps1` and import the public certificate into each lab machine's `Cert:\LocalMachine\Root` store:
      ```powershell
-     powershell -ExecutionPolicy Bypass -File agent\sign_binary.ps1 -ExePath public\releases\v2.8.0\AI_NetController_HostAgent_v2.9.0_win64.exe
+     powershell -ExecutionPolicy Bypass -File agent\sign_binary.ps1 -ExePath public\releases\v0.28.0\AI_NetController_HostAgent_v0.29.0_win64.exe
      ```
 
 ---
@@ -266,25 +266,25 @@ When working in the Web Console (outside of text inputs), use these global hotke
 
 ## 6. Building from Source & Verifying Releases
 
-Pre-compiled release binaries are served directly from the web app under `/releases/v2.9.0/` (with `/releases/v2.7.1/` and `/releases/v2.7.0/` also permanently preserved) and can be downloaded from the top navigation bar or **Settings → Native Release Downloads**:
+Pre-compiled release binaries are served directly from the web app under `/releases/v0.29.0/` (with `/releases/v0.27.1/` and `/releases/v0.27.0/` also permanently preserved) and can be downloaded from the top navigation bar or **Settings → Native Release Downloads**:
 
-### Latest Release (`v2.8.0-LTS`)
-
-| Artifact | Target Platform | Size | SHA-256 Checksum |
-| :--- | :--- | :---: | :--- |
-| **`AI_NetController_HostAgent_v2.9.0_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed `O=AI_NetController`) | 35.3 MB | `657a2ffe752c3e8a52c2684423e6f270daff71b50ab9fcbb1a754e3156a67403` |
-| **`AI_NetController_v2.9.0_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` High-Refresh 120Hz) | 21.8 MB | `1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a` |
-| **`AI_NetController_v2.8.0.apk`** | Android 10–15 (Universal Package) | 21.8 MB | `1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a` |
-| **`AI_NetController_HostAgent_v2.8.0_win64_portable.zip`** | Windows Portable Agent Bundle + Internal Runtime | 34.7 MB | `f4d239a1d04222695129d7e1a61c355bab9d2b76bdcd763ecd8df4e16a64e35c` |
-
-### Previous Releases (`v2.7.1-LTS` & `v2.7.0-LTS`) — Still Available
+### Latest Release (`v0.28.0-LTS`)
 
 | Artifact | Target Platform | Size | SHA-256 Checksum |
 | :--- | :--- | :---: | :--- |
-| **`AI_NetController_HostAgent_v2.7.1_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed `O=AI_NetController`) | 35.3 MB | `fb64a8f8d609fccf37582e78914c810ee488b78d28ffb6d49602c6b851d4f90f` |
-| **`AI_NetController_v2.7.1_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` High-Refresh 120Hz) | 22.8 MB | `54dcabd909c03bb282c9fa28f2c8c95a2378491c49c30ac9b157399016b89751` |
-| **`AI_NetController_HostAgent_v2.7.0_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed) | 33.7 MB | `484467fccf3c2605a1ce180420db437707a80c095526404473d591b415b55c89` |
-| **`AI_NetController_v2.7.0_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` 120Hz) | 22.5 MB | `b0be786f11ef95b46322bf9da8b93e4664fb8504e525fd682da8be310e95abb6` |
+| **`AI_NetController_HostAgent_v0.29.0_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed `O=AI_NetController`) | 35.3 MB | `657a2ffe752c3e8a52c2684423e6f270daff71b50ab9fcbb1a754e3156a67403` |
+| **`AI_NetController_v0.29.0_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` High-Refresh 120Hz) | 21.8 MB | `1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a` |
+| **`AI_NetController_v0.28.0.apk`** | Android 10–15 (Universal Package) | 21.8 MB | `1280ded4104225baadf68ecfb3f627d42871b6d9488a9513e37e786776708c2a` |
+| **`AI_NetController_HostAgent_v0.28.0_win64_portable.zip`** | Windows Portable Agent Bundle + Internal Runtime | 34.7 MB | `f4d239a1d04222695129d7e1a61c355bab9d2b76bdcd763ecd8df4e16a64e35c` |
+
+### Previous Releases (`v0.27.1-LTS` & `v0.27.0-LTS`) — Still Available
+
+| Artifact | Target Platform | Size | SHA-256 Checksum |
+| :--- | :--- | :---: | :--- |
+| **`AI_NetController_HostAgent_v0.27.1_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed `O=AI_NetController`) | 35.3 MB | `fb64a8f8d609fccf37582e78914c810ee488b78d28ffb6d49602c6b851d4f90f` |
+| **`AI_NetController_v0.27.1_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` High-Refresh 120Hz) | 22.8 MB | `54dcabd909c03bb282c9fa28f2c8c95a2378491c49c30ac9b157399016b89751` |
+| **`AI_NetController_HostAgent_v0.27.0_win64.exe`** | Windows 10/11 (`x86_64` PE32+ Signed) | 33.7 MB | `484467fccf3c2605a1ce180420db437707a80c095526404473d591b415b55c89` |
+| **`AI_NetController_v0.27.0_arm64-v8a.apk`** | Android 10–15 (`arm64-v8a` 120Hz) | 22.5 MB | `b0be786f11ef95b46322bf9da8b93e4664fb8504e525fd682da8be310e95abb6` |
 
 - **To rebuild the Windows `.EXE` from source**: Run `pyinstaller --clean build_agent.spec` inside `agent/` and sign via `powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe`.
 - **To rebuild the Android `.APK` from source**: Run `flutter build apk --release --split-per-abi` inside `apps/mobile/`.
@@ -296,7 +296,7 @@ Pre-compiled release binaries are served directly from the web app under `/relea
 
 | Symptom | Cause | Solution |
 | :--- | :--- | :--- |
-| **Host shows `Sleeping` even though the PC is turned on** | Daemon is not running on the PC or port `8765` is blocked by Windows Firewall. | Launch `AI_NetController_HostAgent_v2.9.0_win64.exe` (or `v2.7.1` / `v2.7.0`, or `python agent/agent.py`) on the PC and allow TCP port `8765` on your Private LAN firewall profile. |
+| **Host shows `Sleeping` even though the PC is turned on** | Daemon is not running on the PC or port `8765` is blocked by Windows Firewall. | Launch `AI_NetController_HostAgent_v0.29.0_win64.exe` (or `v0.27.1` / `v0.27.0`, or `python agent/agent.py`) on the PC and allow TCP port `8765` on your Private LAN firewall profile. |
 | **Clicking `Wake Host` succeeds (`UDP Port 9 Dispatched`) but PC does not power on** | BIOS `Wake on PCI-E/LAN` is disabled, or Windows `Fast Startup` is intercepting the NIC shutdown state. | Follow the 4 steps in [Section 5.2](#52-hardware--os-checklist-for-wake-on-lan-why-pcs-fail-to-wake) (especially disabling Windows Fast Startup via `HiberbootEnabled=0`). |
 | **Remote mouse/keyboard clicks do not move the cursor on the target PC** | **View-Only Mode (Input Lock)** is enabled on the target PC's Daemon Control Center. | Uncheck **`View-Only Mode (Block Remote Mouse/Keyboard)`** in the PC Daemon GUI or inside the Web Console's `PC Daemon` modal. |
 | **Command execution is blocked with `SECURITY POLICY VIOLATION`** | The command matched a destructive pattern in the **AST Security Firewall (`v2026.10-REV5`)**, or the host is currently **Quarantined**. | Inspect the command syntax or un-quarantine the host in the Fleet Dashboard (`Unlock Host`). |

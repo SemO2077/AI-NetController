@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to publish (e.g. v2.7.0)'
+        description: 'Release tag to publish (e.g. v0.27.0)'
         required: true
-        default: 'v2.7.0'
+        default: 'v0.27.0'
 
 permissions:
   contents: write
@@ -43,10 +43,10 @@ jobs:
         run: |
           pyinstaller --clean build_agent.spec
           if (Test-Path "dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe") {
-            Copy-Item "dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe" "../AI_NetController_HostAgent_v2.7.0_win64.exe"
-            Compress-Archive -Path "dist/AI_NetController_HostAgent/*" -DestinationPath "../AI_NetController_HostAgent_v2.7.0_win64_portable.zip" -Force
+            Copy-Item "dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe" "../AI_NetController_HostAgent_v0.27.0_win64.exe"
+            Compress-Archive -Path "dist/AI_NetController_HostAgent/*" -DestinationPath "../AI_NetController_HostAgent_v0.27.0_win64_portable.zip" -Force
           } elseif (Test-Path "dist/AI_NetController_HostAgent.exe") {
-            Copy-Item "dist/AI_NetController_HostAgent.exe" "../AI_NetController_HostAgent_v2.7.0_win64.exe"
+            Copy-Item "dist/AI_NetController_HostAgent.exe" "../AI_NetController_HostAgent_v0.27.0_win64.exe"
           }
 
       - name: Upload Windows EXE Artifact
@@ -54,8 +54,8 @@ jobs:
         with:
           name: windows-exe-release
           path: |
-            AI_NetController_HostAgent_v2.7.0_win64.exe
-            AI_NetController_HostAgent_v2.7.0_win64_portable.zip
+            AI_NetController_HostAgent_v0.27.0_win64.exe
+            AI_NetController_HostAgent_v0.27.0_win64_portable.zip
 
   build-android-apk:
     name: Build Release Android Mobile Client (.APK)
@@ -81,13 +81,13 @@ jobs:
         run: |
           flutter pub get
           flutter build apk --release --split-per-abi
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../../AI_NetController_v2.7.0_arm64-v8a.apk
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../../AI_NetController_v0.27.0_arm64-v8a.apk
 
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-release
-          path: AI_NetController_v2.7.0_arm64-v8a.apk
+          path: AI_NetController_v0.27.0_arm64-v8a.apk
 
   publish-github-release:
     name: Publish Official GitHub Release with Patch Notes
@@ -118,13 +118,13 @@ jobs:
       - name: Create GitHub Release & Upload Binaries
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v2.7.0' }}
-          name: "AI NetController ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v3.1.0' }} — Native APK & EXE Release"
+          tag_name: ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.27.0' }}
+          name: "AI NetController ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.31.3' }} — Native APK & EXE Release"
           body_path: PATCH_NOTES.md
           draft: false
           prerelease: false
           files: |
-            release-assets/AI_NetController_HostAgent_v2.7.0_win64.exe
-            release-assets/AI_NetController_HostAgent_v2.7.0_win64_portable.zip
-            release-assets/AI_NetController_v2.7.0_arm64-v8a.apk
+            release-assets/AI_NetController_HostAgent_v0.27.0_win64.exe
+            release-assets/AI_NetController_HostAgent_v0.27.0_win64_portable.zip
+            release-assets/AI_NetController_v0.27.0_arm64-v8a.apk
             release-assets/SHA256SUMS.txt

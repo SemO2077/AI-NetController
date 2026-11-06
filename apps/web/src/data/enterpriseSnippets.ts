@@ -117,7 +117,7 @@ class CommandASTFirewall:
     "category": "backend",
     "description": "Native Tkinter/TTK PC Daemon Desktop Control Center GUI (Telemetry, Pairing Key, View-Only Lock, NIC Check & AV Transparency)",
     "code": `"""
-AI NetController - Native PC Daemon Desktop GUI Control Center (v2.7.0-LTS)
+AI NetController - Native PC Daemon Desktop GUI Control Center (v0.27.0)
 Provides a visible HWND desktop window so Windows Defender & SmartScreen classify
 the binary as an interactive administrative tool rather than a hidden listener.
 """
@@ -171,11 +171,11 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "filename": "PATCH_NOTES.md",
     "language": "markdown",
     "category": "docs",
-    "description": "v2.7.0 Release Patch Notes — PC Daemon Desktop GUI, AV False-Positive Hardening & Native APK/EXE Releases",
-    "code": `# Patch Notes — AI NetController v2.7.0
+    "description": "v0.27.0 Release Patch Notes — PC Daemon Desktop GUI, AV False-Positive Hardening & Native APK/EXE Releases",
+    "code": `# Patch Notes — AI NetController v0.27.0
 
 **Release Date:** October 24, 2026
-**Version:** v2.7.0-LTS
+**Version:** v0.27.0
 **Protocol Version:** AI-NET/3.0-SECURE
 
 ## 1. Native PC Daemon Control Center GUI (agent_gui.py & PcDaemonGuiModal.tsx)

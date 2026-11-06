@@ -1,11 +1,11 @@
 {
-  "version": "3.1.0-beta.2",
+  "version": "0.31.2",
   "channel": "public-beta",
-  "releaseTag": "v3.1.0-beta.2",
+  "releaseTag": "v0.31.2",
   "publishedAt": "2026-11-05T16:49:24.939262+00:00",
   "artifacts": [
     {
-      "filename": "AI_NetController_HostAgent_v3.1.0_win64.exe",
+      "filename": "AI_NetController_HostAgent_v0.31.2_win64.exe",
       "platform": "Windows x64 Installer",
       "sizeBytes": 37032882,
       "sizeFormatted": "35.3 MB",
@@ -13,7 +13,7 @@
       "description": "Self-contained executable installer for Windows 10/11 x64 systems with integrated background service manager."
     },
     {
-      "filename": "AI_NetController_HostAgent_v3.1.0_win64_portable.zip",
+      "filename": "AI_NetController_HostAgent_v0.31.2_win64_portable.zip",
       "platform": "Windows x64 Portable",
       "sizeBytes": 36751368,
       "sizeFormatted": "35.0 MB",
@@ -21,7 +21,7 @@
       "description": "Zero-install portable package containing the daemon binary, config templates, and launcher scripts."
     },
     {
-      "filename": "AI_NetController_v3.1.0_arm64-v8a.apk",
+      "filename": "AI_NetController_v0.31.2_arm64-v8a.apk",
       "platform": "Android arm64-v8a",
       "sizeBytes": 1374274,
       "sizeFormatted": "1.3 MB",
@@ -29,7 +29,7 @@
       "description": "Hardware-accelerated mobile native companion for Android (144Hz compositor, full LAN parity)."
     },
     {
-      "filename": "AI_NetController_v3.1.0.apk",
+      "filename": "AI_NetController_v0.31.2.apk",
       "platform": "Android Universal",
       "sizeBytes": 1374274,
       "sizeFormatted": "1.3 MB",
