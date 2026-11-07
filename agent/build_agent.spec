@@ -49,6 +49,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('crypto_vault.py', '.'),
+        ('daemon_config.py', '.'),
         ('windows_integration.py', '.'),
         ('agent_gui.py', '.'),
         ('agent.py', '.'),
@@ -64,6 +65,8 @@ a = Analysis(
     hiddenimports=[
         'crypto_vault',
         'agent.crypto_vault',
+        'daemon_config',
+        'agent.daemon_config',
         'agent_gui',
         'agent.agent_gui',
         'agent',

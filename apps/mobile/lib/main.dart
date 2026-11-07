@@ -261,25 +261,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             final parts = addr.address.split('.');
             if (parts.length == 4) {
               final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
-              for (final octet in [
-                1,
-                2,
-                3,
-                4,
-                5,
-                10,
-                20,
-                50,
-                100,
-                101,
-                102,
-                105,
-                110,
-                120,
-                150,
-                200,
-                250
-              ]) {
+              for (int octet = 1; octet <= 254; octet++) {
                 candidateIps.add('$prefix.$octet');
               }
               candidateIps.add(addr.address);
@@ -290,36 +272,41 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         debugPrint('Interface list notice: $e');
       }
 
-      // Probing TCP Port 8765: ONLY real PCs that accept socket connections on port 8765 qualify!
-      await Future.wait(
-        candidateIps.map((ip) async {
-          try {
-            final socket = await Socket.connect(
-              ip,
-              8765,
-              timeout: const Duration(milliseconds: 350),
-            );
-            socket.destroy();
+      // Probing TCP Port 8765 in parallel chunks: ONLY real PCs that accept socket connections on port 8765 qualify!
+      final ipList = candidateIps.toList();
+      const chunkSize = 40;
+      for (int i = 0; i < ipList.length; i += chunkSize) {
+        final chunk = ipList.sublist(i, (i + chunkSize > ipList.length) ? ipList.length : i + chunkSize);
+        await Future.wait(
+          chunk.map((ip) async {
+            try {
+              final socket = await Socket.connect(
+                ip,
+                8765,
+                timeout: const Duration(milliseconds: 300),
+              );
+              socket.destroy();
 
-            final String hostName = (ip == '127.0.0.1' || ip == '10.0.2.2')
-                ? 'Host PC (Local)'
-                : 'Host PC ($ip)';
-            final String hostId = 'PC-${ip.replaceAll('.', '-')}';
+              final String hostName = (ip == '127.0.0.1' || ip == '10.0.2.2')
+                  ? 'Host PC (Local)'
+                  : 'Host PC ($ip)';
+              final String hostId = 'PC-${ip.replaceAll('.', '-')}';
 
-            foundPcs.add(
-              HostState(
-                id: hostId,
-                name: hostName,
-                ip: ip,
-                mac: '00:00:00:00:00:00',
-                isOnline: true,
-              ),
-            );
-          } catch (_) {
-            // Port closed: not an active AI NetController host PC
-          }
-        }),
-      );
+              foundPcs.add(
+                HostState(
+                  id: hostId,
+                  name: hostName,
+                  ip: ip,
+                  mac: '00:00:00:00:00:00',
+                  isOnline: true,
+                ),
+              );
+            } catch (_) {
+              // Port closed or unreachable: not an active AI NetController host PC
+            }
+          }),
+        );
+      }
 
       if (mounted) {
         if (foundPcs.isNotEmpty) {

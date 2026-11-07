@@ -206,6 +206,62 @@ class TestAndroidAppConnectionAndControl(unittest.IsolatedAsyncioTestCase):
             s_fake.close()
         self.assertFalse(fake_detected, "Closed port must NOT be detected as an active PC")
 
+    async def test_04_json_pairing_with_pin_and_token(self):
+        """Verifies JSON PAIR and AUTH actions using PIN and persistent pairing token."""
+        uri = f"ws://127.0.0.1:{self.port}"
+        # 1. Test pairing using 6-digit PIN
+        async with websockets.connect(uri) as ws:
+            # Drain initial binary challenge
+            _ = await ws.recv()
+            pin = self.daemon.pairing_pin
+            await ws.send(json.dumps({"action": "PAIR", "pin": pin, "device": "Android Test Phone"}))
+            resp = json.loads(await ws.recv())
+            self.assertEqual(resp.get("event"), "AUTHENTICATED")
+            self.assertEqual(resp.get("status"), "OK")
+            self.assertTrue(resp.get("pairingToken"))
+
+        # 2. Test pairing using pairingToken
+        async with websockets.connect(uri) as ws:
+            _ = await ws.recv()
+            tok = self.daemon.pairing_token
+            await ws.send(json.dumps({"action": "AUTHENTICATE", "token": tok, "device": "Android QR Scan"}))
+            resp = json.loads(await ws.recv())
+            self.assertEqual(resp.get("event"), "AUTHENTICATED")
+            self.assertEqual(resp.get("status"), "OK")
+
+    async def test_05_dual_protocol_handshake_race_free(self):
+        """Verifies client sending both JSON AUTH and binary OP_AUTH does not trigger false auto-ban."""
+        uri = f"ws://127.0.0.1:{self.port}"
+        # Case A: JSON arrives first, then binary OP_AUTH
+        async with websockets.connect(uri) as ws:
+            challenge = await ws.recv()
+            _, _, _, seq, _, nonce = unpack_packet(challenge)
+            # Send JSON AUTH
+            await ws.send(json.dumps({"action": "AUTHENTICATE", "token": self.daemon.pairing_token}))
+            json_ack = json.loads(await ws.recv())
+            self.assertEqual(json_ack.get("event"), "AUTHENTICATED")
+            # Immediately follow with binary OP_AUTH
+            digest = hmac.new(SHARED_SECRET, nonce, hashlib.sha256).digest()
+            await ws.send(pack_packet(OP_AUTH, digest, seq=seq))
+            bin_ack = await ws.recv()
+            _, op, _, _, _, payload = unpack_packet(bin_ack)
+            self.assertEqual(op, OP_AUTH)
+            self.assertIn(b"OK", payload)
+
+        # Case B: Binary arrives first, then JSON AUTH
+        async with websockets.connect(uri) as ws:
+            challenge = await ws.recv()
+            _, _, _, seq, _, nonce = unpack_packet(challenge)
+            digest = hmac.new(SHARED_SECRET, nonce, hashlib.sha256).digest()
+            await ws.send(pack_packet(OP_AUTH, digest, seq=seq))
+            bin_ack = await ws.recv()
+            _, op, _, _, _, payload = unpack_packet(bin_ack)
+            self.assertEqual(op, OP_AUTH)
+            # Follow with JSON AUTH
+            await ws.send(json.dumps({"action": "AUTHENTICATE", "token": self.daemon.pairing_token}))
+            json_ack = json.loads(await ws.recv())
+            self.assertEqual(json_ack.get("event"), "AUTHENTICATED")
+
 
 if __name__ == "__main__":
     unittest.main()
