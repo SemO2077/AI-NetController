@@ -43,11 +43,13 @@ jobs:
         run: |
           $tag = "${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.35.0' }}"
           pyinstaller --clean build_agent.spec
-          if (Test-Path "dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe") {
-            Copy-Item "dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe" "../AI_NetController_HostAgent_${tag}_win64.exe"
+          if (Test-Path "dist/AI_NetController_HostAgent_standalone.exe") {
+            powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath "dist/AI_NetController_HostAgent_standalone.exe"
+            Copy-Item "dist/AI_NetController_HostAgent_standalone.exe" "../AI_NetController_HostAgent_${tag}_win64.exe"
+          }
+          if (Test-Path "dist/AI_NetController_HostAgent") {
+            powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath "dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe"
             Compress-Archive -Path "dist/AI_NetController_HostAgent/*" -DestinationPath "../AI_NetController_HostAgent_${tag}_win64_portable.zip" -Force
-          } elseif (Test-Path "dist/AI_NetController_HostAgent.exe") {
-            Copy-Item "dist/AI_NetController_HostAgent.exe" "../AI_NetController_HostAgent_${tag}_win64.exe"
           }
 
       - name: Upload Windows EXE Artifact

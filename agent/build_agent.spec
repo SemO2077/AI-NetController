@@ -120,3 +120,22 @@ coll = COLLECT(
     name='AI_NetController_HostAgent'
 )
 
+exe_onefile = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='AI_NetController_HostAgent_standalone',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,
+    disable_windowed_traceback=False,
+    manifest='app_manifest.xml',
+    version='version_info.txt',
+    icon=None
+)
+

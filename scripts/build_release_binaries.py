@@ -12,7 +12,11 @@ import hashlib
 import io
 import json
 import os
+import platform
+import shutil
 import struct
+import subprocess
+import sys
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -39,84 +43,46 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def build_pe32_plus_stub() -> bytes:
-    """
-    Constructs a valid 64-bit Windows PE32+ (MZ + PE\\0\\0) header stub so that
-    Windows recognizes the executable as a valid x86_64 Windows GUI executable.
-    """
-    dos_header = bytearray(64)
-    dos_header[0:2] = b"MZ"
-    struct.pack_into("<H", dos_header, 2, 0x90)
-    struct.pack_into("<H", dos_header, 4, 3)
-    struct.pack_into("<H", dos_header, 8, 4)
-    struct.pack_into("<H", dos_header, 10, 0)
-    struct.pack_into("<H", dos_header, 12, 0xFFFF)
-    struct.pack_into("<H", dos_header, 24, 0x40)
-    struct.pack_into("<I", dos_header, 60, 0x80)
-
-    dos_stub = (
-        b"\x0e\x1f\xba\x0e\x00\xb4\x09\xcd\x21\xb8\x01\x4c\xcd\x21"
-        b"AI NetController Host Agent Daemon (Win64).\r\r\n$"
-    )
-    dos_stub = dos_stub.ljust(0x80 - 64, b"\x00")
-
-    pe_sig = b"PE\x00\x00"
-    coff_header = struct.pack(
-        "<HHIIIHH",
-        0x8664,
-        1,
-        int(time.time()),
-        0,
-        0,
-        240,
-        0x0022,
-    )
-
-    opt_header = bytearray(240)
-    struct.pack_into("<H", opt_header, 0, 0x20B)
-    struct.pack_into("<BB", opt_header, 2, 14, 30)
-    struct.pack_into("<I", opt_header, 4, 512)
-    struct.pack_into("<I", opt_header, 16, 0x1000)
-    struct.pack_into("<I", opt_header, 20, 0x1000)
-    struct.pack_into("<Q", opt_header, 24, 0x140000000)
-    struct.pack_into("<I", opt_header, 32, 0x1000)
-    struct.pack_into("<I", opt_header, 36, 0x200)
-    struct.pack_into("<HH", opt_header, 40, 10, 0)
-    struct.pack_into("<HH", opt_header, 44, 3, 1)
-    struct.pack_into("<HH", opt_header, 48, 10, 0)
-    struct.pack_into("<I", opt_header, 56, 0x2000)
-    struct.pack_into("<I", opt_header, 60, 0x200)
-    struct.pack_into("<H", opt_header, 68, 2)
-    struct.pack_into("<H", opt_header, 70, 0x8160)
-    struct.pack_into("<I", opt_header, 108, 16)
-
-    section_header = struct.pack(
-        "<8sIIIIIIHHI",
-        b".text\x00\x00\x00",
-        512,
-        0x1000,
-        512,
-        0x200,
-        0,
-        0,
-        0,
-        0,
-        0x60000020,
-    )
-
-    headers = bytes(dos_header) + dos_stub + pe_sig + coff_header + bytes(opt_header) + section_header
-    headers = headers.ljust(0x200, b"\x00")
-
-    code_section = (
-        b"\x48\x31\xc0\xc3"
-        b"AI_NETCONTROLLER_HOST_AGENT_PE32_PLUS_X86_64_BINARY\x00"
-    ).ljust(512, b"\x00")
-
-    return headers + code_section
-
-
 def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
     agent_dir = os.path.join(ROOT_DIR, "agent")
+    dist_dir = os.path.join(agent_dir, "dist")
+    standalone_exe = os.path.join(dist_dir, "AI_NetController_HostAgent_standalone.exe")
+    onedir_folder = os.path.join(dist_dir, "AI_NetController_HostAgent")
+
+    # Compile with PyInstaller if standalone exe or onedir bundle is missing
+    if not (os.path.exists(standalone_exe) and os.path.exists(onedir_folder)):
+        print("[INFO] Compiling Windows Host Agent binaries with PyInstaller...")
+        spec_path = os.path.join(agent_dir, "build_agent.spec")
+        cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", spec_path]
+        subprocess.run(cmd, cwd=agent_dir, check=True)
+
+    # Apply Authenticode SHA-256 signature & run Defender verification
+    sign_script = os.path.join(agent_dir, "sign_binary.ps1")
+    if platform.system() == "Windows" and os.path.exists(sign_script):
+        try:
+            print("[INFO] Applying Authenticode code-signing & running Defender verification...")
+            if os.path.exists(standalone_exe):
+                subprocess.run(
+                    ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-ExePath", standalone_exe],
+                    cwd=agent_dir,
+                    check=False
+                )
+            onedir_exe = os.path.join(onedir_folder, "AI_NetController_HostAgent.exe")
+            if os.path.exists(onedir_exe):
+                subprocess.run(
+                    ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-ExePath", onedir_exe],
+                    cwd=agent_dir,
+                    check=False
+                )
+        except Exception as e:
+            print(f"[WARN] Code-signing / Defender scan notice: {e}")
+
+    # Copy real standalone executable to destination release path
+    shutil.copy2(standalone_exe, output_exe_path)
+    exe_size = os.path.getsize(output_exe_path)
+    print(f"[SUCCESS] Packaged Real Windows Standalone Executable: {output_exe_path} ({exe_size} bytes)")
+
+    # Build the full portable bundle ZIP
     agent_files = [
         "agent.py",
         "agent_daemon.py",
@@ -134,43 +100,13 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
         "version_info.txt",
     ]
 
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        main_boot = (
-            "# -*- coding: utf-8 -*-\n"
-            "# AI NetController Host Agent Entry Bootstrapper\n"
-            "from agent_daemon import main\n"
-            "if __name__ == '__main__':\n"
-            "    main()\n"
-        )
-        zf.writestr("__main__.py", main_boot)
-        zf.writestr(
-            "BUILD_METADATA.json",
-            json.dumps(
-                {
-                    "product": "AI NetController - Host Agent & Desktop GUI",
-                    "version": RELEASE_VERSION,
-                    "architecture": "win64 (x86_64)",
-                    "guiEngine": "Tkinter/TTK Native HWND Control Center",
-                    "avSafeProfile": "Zero-UPX • PerMonitorV2 Manifest • No Hidden PowerShell",
-                    "pythonTarget": "3.12",
-                    "builtAt": datetime.now(timezone.utc).isoformat(),
-                },
-                indent=2,
-            ),
-        )
-        for fname in agent_files:
-            fpath = os.path.join(agent_dir, fname)
-            if os.path.exists(fpath):
-                zf.write(fpath, arcname=fname)
-
-    pe_stub = build_pe32_plus_stub()
-    with open(output_exe_path, "wb") as f:
-        f.write(pe_stub)
-        f.write(zip_buffer.getvalue())
-
     with zipfile.ZipFile(output_zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as pzf:
-        pzf.write(output_exe_path, arcname="AI_NetController_HostAgent/AI_NetController_HostAgent.exe")
+        if os.path.exists(onedir_folder):
+            for root, dirs, files in os.walk(onedir_folder):
+                for f in files:
+                    full_p = os.path.join(root, f)
+                    rel_p = os.path.relpath(full_p, dist_dir)
+                    pzf.write(full_p, arcname=rel_p.replace("\\", "/"))
         for fname in agent_files:
             fpath = os.path.join(agent_dir, fname)
             if os.path.exists(fpath):
@@ -178,6 +114,9 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
         readme_path = os.path.join(ROOT_DIR, "PATCH_NOTES.md")
         if os.path.exists(readme_path):
             pzf.write(readme_path, arcname="AI_NetController_HostAgent/PATCH_NOTES.md")
+
+    zip_size = os.path.getsize(output_zip_path)
+    print(f"[SUCCESS] Packaged Windows Portable Bundle ZIP: {output_zip_path} ({zip_size} bytes)")
 
 
 def build_android_apk(output_apk_path: str) -> None:

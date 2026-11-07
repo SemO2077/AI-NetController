@@ -138,6 +138,12 @@ class HostDaemonState:
             ]
         if target:
             self.add_log("WARN", f"DISCONNECTED DEVICE: {target['device']} ({target['ip']}) session terminated.")
+        cb = getattr(self, "on_disconnect_callback", None)
+        if callable(cb):
+            try:
+                cb(client_id)
+            except Exception as e:
+                logger.debug(f"Disconnect callback error: {e}")
         return target
 
     def blacklist_client(
@@ -173,6 +179,12 @@ class HostDaemonState:
                 self.blacklisted_devices.insert(0, entry)
 
         self.add_log("ALERT", f"BLACKLISTED DEVICE: {ban_dev} (IP: {ban_ip}, MAC: {ban_mac}) permanently blocked.")
+        cb = getattr(self, "on_disconnect_callback", None)
+        if callable(cb):
+            try:
+                cb(ban_ip)
+            except Exception as e:
+                logger.debug(f"Blacklist disconnect callback error: {e}")
         return entry
 
     def unban_device(self, ban_id_or_ip: str) -> None:

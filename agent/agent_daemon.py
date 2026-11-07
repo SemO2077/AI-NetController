@@ -107,6 +107,16 @@ class WindowsJobObjectGuard:
         self.job_handle = None
         if IS_WINDOWS:
             try:
+                kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+                kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+                kernel32.SetInformationJobObject.restype = wintypes.BOOL
+                kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD]
+                kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+                kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+                kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+                kernel32.CloseHandle.restype = wintypes.BOOL
+                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
                 self.job_handle = kernel32.CreateJobObjectW(None, None)
                 if self.job_handle:
                     info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
@@ -529,6 +539,9 @@ class DaemonServer:
         logger.info("Host daemon shutdown complete.")
 
 def main():
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     job_guard = WindowsJobObjectGuard()
     ws_daemon = None
     try:
@@ -551,20 +564,27 @@ def main():
                 gui_state = HostDaemonState(host="0.0.0.0", port=8765)
                 if ws_daemon:
                     ws_daemon.gui_state = gui_state
+                    if hasattr(ws_daemon, "force_disconnect_client"):
+                        gui_state.on_disconnect_callback = ws_daemon.force_disconnect_client
 
                 def _run_async_daemon():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     try:
-                        if ws_daemon:
-                            loop.run_until_complete(ws_daemon.start())
-                        loop.run_until_complete(daemon.run())
+                        async def _run_services():
+                            tasks = []
+                            if ws_daemon:
+                                tasks.append(asyncio.create_task(ws_daemon.start()))
+                            tasks.append(asyncio.create_task(daemon.run()))
+                            await asyncio.gather(*tasks, return_exceptions=True)
+
+                        loop.run_until_complete(_run_services())
                     except Exception as exc:
                         logger.error(f"Daemon thread error: {exc}")
                     finally:
                         loop.close()
 
-                daemon_thread = threading.Thread(target=_run_async_daemon, daemon=True, name="CST_DaemonReactor")
+                daemon_thread = threading.Thread(target=_run_async_daemon, daemon=True, name="AI_DaemonReactor")
                 daemon_thread.start()
 
                 gui = HostDaemonDesktopGUI(
@@ -579,9 +599,11 @@ def main():
 
     try:
         async def _run_both():
+            tasks = []
             if ws_daemon:
-                await ws_daemon.start()
-            await daemon.run()
+                tasks.append(asyncio.create_task(ws_daemon.start()))
+            tasks.append(asyncio.create_task(daemon.run()))
+            await asyncio.gather(*tasks, return_exceptions=True)
         asyncio.run(_run_both())
     except KeyboardInterrupt:
         _stop_all()

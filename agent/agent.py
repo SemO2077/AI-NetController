@@ -31,8 +31,17 @@ import threading
 import time
 import zlib
 import base64
+import ipaddress
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Set, Tuple, Any, Callable
+
+def is_local_or_private_ip(ip_str: str) -> bool:
+    """Returns True if IP is localhost, link-local, or private RFC1918 LAN address."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return ip.is_loopback or ip.is_private or ip.is_link_local
+    except ValueError:
+        return False
 
 # Ensure sibling modules in agent/ directory are always importable
 _AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -170,6 +179,19 @@ class WindowsJobSupervisor:
 
         try:
             self.kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            self.kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+            self.kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+            self.kernel32.OpenProcess.restype = wintypes.HANDLE
+            self.kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            self.kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+            self.kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+            self.kernel32.CloseHandle.restype = wintypes.BOOL
+            self.kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            self.kernel32.SetInformationJobObject.restype = wintypes.BOOL
+            self.kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD]
+            self.kernel32.TerminateJobObject.restype = wintypes.BOOL
+            self.kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+
             # Create a single persistent job object for this agent
             self.job_handle = self.kernel32.CreateJobObjectW(None, f"AI_Sandbox_Job_{os.getpid()}")
             if not self.job_handle:
@@ -523,6 +545,42 @@ class HostAgentDaemon:
         self.chaos_shield = NetworkFuzzerShield(ChaosProfile(enabled=chaos_enabled)) if NetworkFuzzerShield else None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread_id: Optional[int] = None
+        self._failed_auth_attempts: Dict[str, List[float]] = {}
+
+    def force_disconnect_client(self, client_id_or_ip: str):
+        """Forcefully disconnects active client socket by id or IP in real time."""
+        def _close_matching():
+            for ws in list(self.clients):
+                peer = getattr(ws, "remote_address", None)
+                peer_ip = peer[0] if peer else ""
+                peer_port = str(peer[1]) if peer and len(peer) > 1 else ""
+                cid = f"{peer_ip}:{peer_port}"
+                if client_id_or_ip in (cid, peer_ip, f"{peer_ip}:*"):
+                    try:
+                        asyncio.create_task(ws.close(code=1008, reason="Disconnected by host operator"))
+                    except Exception:
+                        pass
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(_close_matching)
+        else:
+            _close_matching()
+
+    def _record_auth_failure(self, client_ip: str, client_id: str):
+        """Records authentication failure, logging alerts and triggering auto-ban if threshold exceeded."""
+        now = time.time()
+        failures = self._failed_auth_attempts.setdefault(client_ip, [])
+        failures = [t for t in failures if now - t < 60.0]
+        failures.append(now)
+        self._failed_auth_attempts[client_ip] = failures
+        if self.gui_state is not None:
+            self.gui_state.add_log("ALERT", f"Failed authentication attempt from {client_id}")
+            if len(failures) >= 3 and getattr(self.gui_state, "auto_ban_intrusion", True):
+                self.gui_state.blacklist_client(
+                    client_ip,
+                    device_name=f"Intruder ({client_ip})",
+                    reason="Auto-ban: 3+ failed authentication attempts within 60s"
+                )
+                logger.warning(f"AUTO-BAN TRIGGERED: Blacklisted {client_ip} due to 3+ failed auth attempts.")
 
     def _get_current_secret(self) -> bytes:
         """Dynamically retrieves active shared secret allowing live rotation."""
@@ -784,6 +842,10 @@ class HostAgentDaemon:
                 logger.warning(f"Rejected connection from blacklisted IP: {client_ip}")
                 await ws.close(code=1008, reason="IP address is blacklisted")
                 return
+            if getattr(self.gui_state, "subnet_geofence_only", False) and not is_local_or_private_ip(client_ip):
+                logger.warning(f"Rejected connection from non-local IP {client_ip} by Subnet Geofencing.")
+                await ws.close(code=1008, reason="Subnet geofence policy violation")
+                return
 
         self.clients.add(ws)
         logger.info(f"Client connected from {client_id}")
@@ -800,6 +862,15 @@ class HostAgentDaemon:
 
         try:
             async for message in ws:
+                if self.gui_state is not None:
+                    if getattr(self.gui_state, "is_paused", False):
+                        await self._send_error(ws, "Daemon paused by host operator")
+                        await ws.close(code=1013, reason="Daemon is paused by host operator")
+                        break
+                    if hasattr(self.gui_state, "is_ip_blacklisted") and self.gui_state.is_ip_blacklisted(client_ip):
+                        await self._send_error(ws, "IP address is blacklisted")
+                        await ws.close(code=1008, reason="IP address is blacklisted")
+                        break
                 if not isinstance(message, bytes):
                     # Proactively handle JSON ping heartbeat, web authentication, and JSON command frames
                     try:
@@ -844,8 +915,7 @@ class HostAgentDaemon:
                                 logger.info(f"Client {client_id} authenticated via JSON AUTHENTICATE handshake.")
                             else:
                                 logger.warning(f"JSON Authentication failed from {client_id}")
-                                if self.gui_state is not None:
-                                    self.gui_state.add_log("ALERT", f"Failed JSON authentication attempt from {client_id}")
+                                self._record_auth_failure(client_ip, client_id)
                                 await ws.send(json.dumps({
                                     "event": "ERROR",
                                     "error": "Invalid authentication token",
@@ -877,7 +947,7 @@ class HostAgentDaemon:
                                 }))
                                 continue
                             elif action in ("INPUT_EVENT", "PC_CONTROL"):
-                                await self._process_virtual_input(message.encode('utf-8'))
+                                await self._process_virtual_input(message.encode('utf-8'), ws)
                                 continue
                             elif action == "CLIPBOARD_SYNC":
                                 clip_text = str(text_data.get("text") or "").encode('utf-8')
@@ -946,7 +1016,7 @@ class HostAgentDaemon:
                     await self._process_clipboard(ws, payload)
 
                 elif opcode == OP_INPUT:
-                    await self._process_virtual_input(payload)
+                    await self._process_virtual_input(payload, ws)
 
                 elif opcode == OP_AUDIO:
                     # Distinguish between Audio Control and legacy Viewport Resize
@@ -1052,8 +1122,7 @@ class HostAgentDaemon:
             logger.info(f"Client {resolved_client_id} authenticated successfully.")
         else:
             logger.warning(f"HMAC Authentication failed from {ws.remote_address}")
-            if self.gui_state is not None:
-                self.gui_state.add_log("ALERT", f"Failed HMAC authentication from {ws.remote_address}")
+            self._record_auth_failure(client_ip, resolved_client_id)
             await self._send_error(ws, "Invalid HMAC signature")
             await ws.close(code=1008, reason="Authentication failed")
 
@@ -1062,6 +1131,17 @@ class HostAgentDaemon:
     # =================================================================
     async def _process_json_shell_command(self, ws: WebSocketServerProtocol, cmd_str: str, command_id: str):
         """Executes JSON EXECUTE_PROMPT commands with HITL safety gate and returns JSON EXECUTION_RESULT."""
+        if self.view_only_mode or (self.gui_state is not None and getattr(self.gui_state, "view_only_mode", False)):
+            await ws.send(json.dumps({
+                "event": "EXECUTION_RESULT",
+                "command_id": command_id,
+                "status": "rejected",
+                "output": "Shell execution forbidden while host is in View-Only Mode.",
+                "exit_code": -1,
+                "timestamp": int(time.time())
+            }))
+            return
+
         is_dangerous, reason = AstCommandInspector.inspect(cmd_str)
         if is_dangerous:
             fut = asyncio.get_running_loop().create_future()
@@ -1126,6 +1206,19 @@ class HostAgentDaemon:
 
     async def _process_shell_command(self, ws: WebSocketServerProtocol, payload: bytes, seq: int):
         """Executes shell commands inside sandbox Job Object with strict execution timeout."""
+        if self.view_only_mode or (self.gui_state is not None and getattr(self.gui_state, "view_only_mode", False)):
+            resp = json.dumps({
+                "event": "EXECUTION_RESULT",
+                "command_id": f"cmd-{seq or int(time.time() * 1000)}",
+                "status": "rejected",
+                "output": "Shell execution forbidden while host is in View-Only Mode.",
+                "exit_code": -1,
+                "is_terminal": True,
+                "timestamp": int(time.time())
+            }).encode('utf-8')
+            await ws.send(pack_packet(OP_SHELL, resp, seq=seq))
+            return
+
         cmd_str = payload.decode('utf-8', errors='replace').strip()
         if not cmd_str:
             return
@@ -1256,7 +1349,7 @@ class HostAgentDaemon:
         except Exception as e:
             logger.debug(f"Clipboard sync error: {e}")
 
-    async def _process_virtual_input(self, payload: bytes):
+    async def _process_virtual_input(self, payload: bytes, ws: Optional[WebSocketServerProtocol] = None):
         """
         Opcode 0x08: Remote Virtual Input (Trackpad, Mouse & Keystroke Forwarding).
         Supports both compact 6-byte binary struct (Flutter/mobile) and JSON payloads (Web console).
@@ -1268,6 +1361,15 @@ class HostAgentDaemon:
             if self.view_only_mode or (self.gui_state is not None and getattr(self.gui_state, "view_only_mode", False)):
                 logger.info("Remote input ignored: Host is in View-Only Mode.")
                 return
+
+            if self.gui_state is not None and ws is not None:
+                peer = getattr(ws, "remote_address", None)
+                p_ip = peer[0] if peer else ""
+                with self.gui_state.lock:
+                    client_entry = next((c for c in self.gui_state.connected_clients if c.get("ip") == p_ip), None)
+                    if client_entry and not client_entry.get("inputAllowed", True):
+                        logger.info(f"Remote input ignored: Device {client_entry.get('device')} ({p_ip}) input is locked.")
+                        return
 
             if not pyautogui:
                 logger.debug("pyautogui not installed - input forwarding skipped")
@@ -1603,6 +1705,9 @@ class HostAgentDaemon:
 # ENTRY POINT
 # =====================================================================
 def main():
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     daemon = HostAgentDaemon()
     if "--headless" not in sys.argv:
         try:
@@ -1610,6 +1715,7 @@ def main():
             if HAS_TKINTER:
                 gui_state = HostDaemonState(host=daemon.host, port=daemon.port)
                 daemon.gui_state = gui_state
+                gui_state.on_disconnect_callback = daemon.force_disconnect_client
 
                 def _run_ws_daemon():
                     loop = asyncio.new_event_loop()
