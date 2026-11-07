@@ -1,79 +1,72 @@
-# AI NetController — 1-Click Binary Compilation & Deployment Guide
+# Compilation Guide
 
-**Version:** `v0.29.0-LTS` (Previous `v0.28.0-LTS`, `v0.27.1-LTS`, and `v0.27.0-LTS` preserved in releases)  
-**Protocol:** `AI-NET/3.0-SECURE`  
-**Platform Targets:** Windows 10/11 x64 PE32+ (`.EXE`), Android 10–15 (`.APK`)
-
-This guide details the procedure for producing the standalone native binaries (`.exe` and `.apk`) for the Computer Systems & Technologies (CST) system.
+This guide explains how to compile all **AI NetController** (`v0.32.0`) artifacts from source: the web bundle, the standalone Windows Host Agent executable, and the signed Android APK.
 
 ---
 
-## 1. Windows Host Agent Daemon (`AI_NetController_HostAgent_v0.29.0_win64.exe`)
+## 1. Web Dashboard & Control Server Bundle
 
-### Security & Antivirus False-Positive Hardening
-The compilation pipeline is specifically configured to pass Windows Defender and EDR heuristic analysis cleanly (`0/72` clean):
-- **Zero UPX Compression (`upx=False`)**: Disabled in `agent/build_agent.spec` to avoid packed entropy flags (`Win32/Wacatac.B!ml`).
-- **Foreground Desktop Window (`HWND`)**: Bundles standard Tkinter GUI runtime so the binary registers as a visible desktop utility rather than a headless background service.
-- **Pure-Python System Inspection**: Eliminates hidden `powershell.exe` subprocesses on launch.
-- **Embedded PE Version Info & UAC Manifest**: Official version resource metadata and `asInvoker` execution level.
-- **Authenticode SHA-256 Code Signing**: Signed with `CN=AI NetController, O=AI_NetController, C=BG`.
+### Build Requirements
+- Node.js 20+
+- npm 10+
 
-### Automated CLI Compilation Method
-```powershell
-# 1. Navigate to agent directory
-cd agent
-
-# 2. Activate Python environment
-python -m venv venv
-.\venv\Scripts\activate
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# 3. Compile standalone executable with PyInstaller
-pyinstaller --clean build_agent.spec
-
-# 4. Sign binary with Authenticode certificate and run Defender scan check:
-powershell -ExecutionPolicy Bypass -File sign_binary.ps1 -ExePath dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe
-```
-
-Output:
-- Standalone Executable: `agent/dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe` (or `AI_NetController_HostAgent_v0.29.0_win64.exe`)
-- Portable ZIP: Packaged via `Compress-Archive` into `AI_NetController_HostAgent_v0.29.0_win64_portable.zip`.
-
----
-
-## 2. Android Mobile Application (`AI_NetController_v0.29.0_arm64-v8a.apk`)
-
-### 120Hz Zero-Jitter Display Pipeline
-The Android client is compiled with:
-- **Flutter 3.29 / Dart 3.7** with Impeller engine.
-- **Dynamic 120Hz Refresh Rate Selector**: In `MainActivity.kt`, queries `display.supportedModes` to automatically set the hardware's maximum refresh rate (120Hz / 90Hz) via `preferredDisplayModeId`.
-- **Hardware Acceleration**: `FLAG_HARDWARE_ACCELERATED` on the main window surface and `android.hardware.render_ahead = true` in `AndroidManifest.xml`.
-- **Double-Buffered Pre-Allocated Ring Buffer**: `_DoubleFrameRingBuffer` in `zero_gc_video_pipeline.dart` eliminates heap garbage collection churn during desktop streaming.
-
-### Compilation Method
+### Build Steps
 ```bash
-# 1. Navigate to mobile app directory
-cd apps/mobile
-
-# 2. Clean and get dependencies
-flutter clean
-flutter pub get
-
-# 3. Build optimized release APK with split ABIs
-flutter build apk --release --split-per-abi
+npm install
+npm run lint
+npm run build
 ```
-
-Output files in `apps/mobile/build/app/outputs/flutter-apk/`:
-- **`app-arm64-v8a-release.apk`** (Recommended for modern 64-bit Android smartphones)
-- **`app-armeabi-v7a-release.apk`** (Legacy 32-bit ARM hardware)
-- **`app-x86_64-release.apk`** (Emulators and ChromeOS)
+The production frontend assets are output to `dist/` and served automatically by `apps/web/server.ts`.
 
 ---
 
-## 3. Physical LAN Verification Checklist
-1. Launch `AI_NetController_HostAgent_v0.29.0_win64.exe` (or `v0.27.1` / `v0.27.0`) on target Windows PC. Confirm the Control Center window displays the local IP and pairing key.
-2. Connect Android phone to the same Wi-Fi subnet.
-3. Open the installed AI NetController Mobile app:
-   - mDNS will discover the Windows PC host automatically within ~500ms.
-   - Remote screen view, telemetry, and HITL security gating are operational immediately.
+## 2. Windows Host Agent (`.exe` & Portable `.zip`)
+
+### Build Requirements
+- Windows 10 or Windows 11 (x64)
+- Python 3.11+
+- PyInstaller (`pip install pyinstaller`)
+
+### Automated Build Script
+Run the release binary builder from the repository root:
+```bash
+python scripts/build_release_binaries.py
+```
+
+This script packages `agent/net_agent.py` and `agent/core/*` into:
+- `public/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64.exe`
+- `public/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64_portable.zip`
+
+---
+
+## 3. Native Android APK (`arm64-v8a` & Universal)
+
+### Build Requirements
+- Java Development Kit (JDK 17+)
+- Android SDK (`platforms/android-34` and `build-tools/34.0.0`)
+- Production web assets built (`npm run build`)
+
+### Automated Build Script
+Run the Android builder script from the repository root:
+```bash
+python scripts/build_android_app.py
+```
+
+### What the Script Does
+1. Syncs the latest production web bundle (`dist/`) into the Android WebView asset directory (`apps/mobile/android_native/assets/www`).
+2. Compiles the native Java sources (`apps/mobile/android_native/src/com/ainetcontroller/app/MainActivity.java`) against `android-34`.
+3. Converts bytecode to DEX format with `d8`, packages resources with `aapt2`, `zipalign`s on 4-byte boundaries, and signs the APK with `apksigner` (V1 + V2 + V3 signatures).
+4. Outputs the signed binaries to `public/releases/v0.32.0/`:
+   - `AI_NetController_v0.32.0_arm64-v8a.apk`
+   - `AI_NetController_v0.32.0.apk`
+
+---
+
+## 4. Generating Checksums & Release Manifest
+
+Both `scripts/build_release_binaries.py` and `scripts/build_android_app.py` update `SHA256SUMS.txt` and `RELEASE_MANIFEST.json` inside `public/releases/v0.32.0/`.
+
+To verify checksums on Windows PowerShell:
+```powershell
+Get-FileHash public/releases/v0.32.0/* -Algorithm SHA256
+```

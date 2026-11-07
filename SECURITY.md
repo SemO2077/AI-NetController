@@ -2,24 +2,31 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 2.5.x   | :white_check_mark: |
-| 1.0.x   | :white_check_mark: |
+Security fixes are applied to the latest beta release branch (`0.32.x`).
+
+| Version | Supported |
+| :--- | :--- |
+| `0.32.x` | Yes |
+| `0.31.x` | Security fixes only |
+| `< 0.31.0` | No |
+
+---
+
+## Security Architecture
+
+- **Command Execution Whitelisting**: The Windows Host Agent (`agent/net_agent.py`) validates all incoming control commands against a strict allowlist and executes system tools (`netsh`, `powershell`, `tshark`) via parameterized argument lists (`shell=False`).
+- **Privilege Separation**: When launched without Administrator privileges, the Host Agent automatically disables QoS mutation and raw socket capture, operating in read-only telemetry mode.
+- **Local-First AI Privacy**: Network diagnostics can be run entirely offline via a local Ollama instance (`http://localhost:11434`). When cloud LLM providers are used, sensitive local identifiers are redacted before outbound requests.
+
+---
 
 ## Reporting a Vulnerability
 
-We take the security of AI NetController seriously. If you discover a vulnerability or security issue:
+If you discover a security vulnerability, please **do not open a public GitHub issue**.
 
-1. **Do NOT open a public GitHub issue.**
-2. Send an email describing the issue, impact, and reproduction steps to `security@ai-netcontroller.com`.
-3. You will receive an acknowledgment within 24 hours.
-4. Valid issues will be addressed with a patch released within 7 days.
+Instead, report it privately via [GitHub Security Advisories](https://github.com/smehmedd/AI-NetController/security/advisories/new) with:
+1. A description of the vulnerability and affected component (`agent/`, `apps/web/`, or `apps/mobile/`).
+2. Steps or proof-of-concept code to reproduce the issue.
+3. The potential impact (e.g., privilege escalation, unauthorized LAN access).
 
-## Security Architecture Highlights
-
-* **Wire Protocol**: AI-NET/3.0-SECURE binary protocol with constant-time HMAC-SHA256 authentication (`0xC5 0x71`).
-* **Anti-Replay**: RFC 6479 128-bit sliding window sequence verification.
-* **AST Command Firewall**: Pre-compiled regex AST analyzer preventing command injection and shell escape vectors.
-* **Human-in-the-Loop (HITL)**: Risk gate for high-risk system commands requiring explicit confirmation or biometric WebAuthn verification.
-* **Sandbox Execution**: Windows Kernel Job Object memory containment (256MB hard cap) with escalating termination supervision (`SIGINT -> SIGTERM -> SIGKILL`).
+We aim to acknowledge reports within 48 hours and publish a fix in the next point release.

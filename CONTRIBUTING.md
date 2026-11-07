@@ -1,39 +1,55 @@
 # Contributing to AI NetController
 
-Thank you for your interest in contributing!
+Contributions, bug reports, and feature requests are welcome. This guide covers how to set up your development environment and submit changes.
 
-## Development Workflow
+---
 
-1. Fork the repository and create a feature branch:
-   ```bash
-   git checkout -b feature/my-cool-feature
-   ```
+## Development Setup
 
-2. Install Node.js dependencies for the web console:
-   ```bash
-   npm install
-   ```
+### Prerequisites
+- **Node.js**: v20.x or newer
+- **Python**: v3.11 or newer
+- **Android SDK** (optional): Build-Tools 34.0.0 and Platform 34 for building the Android `.apk`
 
-3. Run verification test suites before opening a Pull Request:
-   ```bash
-   # Web Verification & Stress Suites
-   npm test
+### Install Dependencies
+```bash
+git clone https://github.com/smehmedd/AI-NetController.git
+cd AI-NetController
+npm install
+pip install -r requirements.txt
+```
 
-   # TypeScript Linting & Type Checks
-   npm run lint
+---
 
-   # Python Agent Test Harnesses
-   python agent/tests/test_all_edge_cases.py
-   python agent/tests/test_host_diagnostics.py
-   ```
+## Project Layout
 
-## Code Conventions
+- `agent/` — Python Windows Host Agent (`net_agent.py`, `core/`, `tests/`)
+- `apps/web/` — Express server (`server.ts`) and React 19 frontend (`src/`)
+- `apps/mobile/` — Native Android wrapper (`android_native/`) and Flutter client (`lib/`)
+- `scripts/` — Build and verification scripts
 
-* **TypeScript / React**: Use functional components, Zustand store state slices, and Tailwind CSS v4 styling.
-* **Python**: Follow PEP 8 style guidelines and type annotations.
-* **Flutter**: Adhere to official Dart style guidelines and Riverpod state patterns.
+---
+
+## Running Checks Before Submitting a PR
+
+Please make sure all checks pass locally before opening a pull request:
+
+```bash
+# 1. TypeScript compiler check
+npm run lint
+
+# 2. Frontend & server test suites
+npm test
+
+# 3. Python Host Agent unit tests
+python -m unittest discover -s agent/tests
+```
+
+---
 
 ## Pull Request Guidelines
 
-* Ensure all 34 Verification Pillars and 13 Stress Tests pass with zero errors.
-* Include clear PR descriptions highlighting architectural changes or bug fixes.
+1. Create a feature branch from `main` (e.g., `git checkout -b feat/qos-presets` or `fix/wifi-parser`).
+2. Keep commits focused and write clear commit messages (`feat: ...`, `fix: ...`, `docs: ...`, `refactor: ...`).
+3. Do not commit API keys, `.env` files, or local SQLite database files (`*.db`).
+4. Update relevant tests if you modify telemetry parsing, QoS commands, or API routes.
