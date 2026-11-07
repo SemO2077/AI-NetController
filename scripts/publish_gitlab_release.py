@@ -2,7 +2,7 @@
 """
 AI NetController - GitLab Release & Package Publisher
 Uploads standalone release binaries to GitLab Generic Packages and creates or updates
-a GitLab Release with asset links.
+a GitLab Release with permanent direct asset download links.
 
 Usage:
     python scripts/publish_gitlab_release.py [--project-id <id|group/project>] [--tag v0.35.0] [--dry-run]
@@ -40,8 +40,16 @@ def get_gitlab_token() -> Optional[str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Publish AI NetController to GitLab Releases")
-    parser.add_argument("--project", default=os.environ.get("CI_PROJECT_ID"), help="GitLab project ID or path (e.g. user/AI-NetController)")
-    parser.add_argument("--host", default=os.environ.get("CI_SERVER_URL", "https://gitlab.com"), help="GitLab host base URL")
+    parser.add_argument(
+        "--project",
+        default=os.environ.get("CI_PROJECT_ID", "88645417"),
+        help="GitLab project ID or path (e.g. ryu-group7483245/ai-netcontroller or 88645417)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("CI_SERVER_URL", "https://gitlab.com"),
+        help="GitLab host base URL",
+    )
     parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.35.0)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate release publication")
     args = parser.parse_args()
@@ -50,7 +58,7 @@ def main():
     token = get_gitlab_token()
 
     if not args.project and not args.dry_run:
-        print("[!] No GitLab project specified. Pass --project <username/AI-NetController> or set CI_PROJECT_ID.")
+        print("[!] No GitLab project specified. Pass --project <project_id> or set CI_PROJECT_ID.")
         sys.exit(1)
 
     encoded_project = urllib.parse.quote(str(args.project), safe="") if args.project else "unknown"
@@ -64,10 +72,18 @@ def main():
         with open(patch_notes_path, "r", encoding="utf-8") as f:
             notes_body = f.read()
 
+    # Locate release assets
     assets_dir = os.path.join(REPO_DIR, "public", "releases", target_tag)
     if not os.path.exists(assets_dir):
-        print(f"[!] Local assets directory {assets_dir} not found.")
-        sys.exit(1)
+        # Fallback check
+        alt_assets_dir = os.path.join(
+            r"C:\Users\Lenovo\Documents\antigravity\Ai NetConroller", "public", "releases", target_tag
+        )
+        if os.path.exists(alt_assets_dir):
+            assets_dir = alt_assets_dir
+        else:
+            print(f"[!] Local assets directory {assets_dir} not found.")
+            sys.exit(1)
 
     if args.dry_run:
         print(f"    [DRY-RUN] Target tag: {target_tag}")
@@ -88,11 +104,34 @@ def main():
     }
 
     uploaded_links = []
-    for fname in sorted(os.listdir(assets_dir)):
-        fpath = os.path.join(assets_dir, fname)
-        if not os.path.isfile(fpath):
-            continue
+    # Sort files so executables and packages come first
+    priority_order = [
+        "AI_NetController_HostAgent_v0.35.0_win64.exe",
+        "AI_NetController_HostAgent_v0.35.0_win64_portable.zip",
+        "AI_NetController_v0.35.0.apk",
+        "AI_NetController_v0.35.0_arm64-v8a.apk",
+        "SHA256SUMS.txt",
+        "RELEASE_MANIFEST.json",
+        "PATCH_NOTES.md",
+    ]
 
+    files_to_upload = [f for f in priority_order if os.path.exists(os.path.join(assets_dir, f))]
+    for extra in sorted(os.listdir(assets_dir)):
+        if extra not in files_to_upload and os.path.isfile(os.path.join(assets_dir, extra)):
+            files_to_upload.append(extra)
+
+    labels = {
+        "AI_NetController_HostAgent_v0.35.0_win64.exe": "Windows Host Agent (Standalone .EXE)",
+        "AI_NetController_HostAgent_v0.35.0_win64_portable.zip": "Windows Host Agent (Portable .ZIP)",
+        "AI_NetController_v0.35.0.apk": "Android Universal Companion (.APK)",
+        "AI_NetController_v0.35.0_arm64-v8a.apk": "Android arm64-v8a Companion (.APK)",
+        "SHA256SUMS.txt": "SHA-256 Checksums",
+        "RELEASE_MANIFEST.json": "Release Manifest (JSON)",
+        "PATCH_NOTES.md": "Patch Notes (Markdown)",
+    }
+
+    for fname in files_to_upload:
+        fpath = os.path.join(assets_dir, fname)
         size_mb = os.path.getsize(fpath) / (1024 * 1024)
         print(f"[*] Uploading {fname} ({size_mb:.2f} MB) to GitLab Generic Packages...")
 
@@ -110,20 +149,36 @@ def main():
             with urllib.request.urlopen(req) as resp:
                 if resp.status in (200, 201):
                     print(f"    [OK] Uploaded {fname}")
+                    link_name = labels.get(fname, fname)
                     uploaded_links.append({
-                        "name": fname,
+                        "name": link_name,
                         "url": package_url,
-                        "link_type": "package"
+                        "link_type": "package",
+                        "direct_asset_path": f"/downloads/{fname}"
                     })
         except urllib.error.HTTPError as e:
             print(f"    [WARN] Package upload status for {fname}: {e.code} {e.reason}")
+
+    # Build markdown asset table to append to release body
+    table_lines = [
+        "",
+        "---",
+        "## Release Downloads & Direct Artifacts",
+        "",
+        "| Artifact | Type | Direct Download |",
+        "| :--- | :--- | :--- |",
+    ]
+    for item in uploaded_links:
+        table_lines.append(f"| **{item['name']}** | `{item['link_type']}` | [{item['name'].split()[0]}]({item['url']}) |")
+
+    full_description = notes_body + "\n" + "\n".join(table_lines) + "\n"
 
     # Create / update release in GitLab
     print(f"[*] Registering GitLab Release for tag {target_tag}...")
     release_payload = {
         "name": f"AI NetController {target_tag}",
         "tag_name": target_tag,
-        "description": notes_body,
+        "description": full_description,
         "assets": {"links": uploaded_links} if uploaded_links else {}
     }
 
@@ -136,9 +191,14 @@ def main():
     try:
         with urllib.request.urlopen(release_req) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            print(f"[SUCCESS] GitLab Release created: {data.get('_links', {}).get('self', '')}")
+            rel_url = data.get("_links", {}).get("self", "") or f"{args.host}/ryu-group7483245/ai-netcontroller/-/releases/{target_tag}"
+            print(f"\n[SUCCESS] GitLab Release successfully created!")
+            print(f"  - Release URL: {rel_url}")
+            print(f"  - Tag: {target_tag}")
+            print(f"  - Total Assets Linked: {len(uploaded_links)}")
     except urllib.error.HTTPError as e:
-        if e.code == 409:  # Already exists, try PATCH/PUT
+        if e.code == 409:  # Already exists, update release
+            print(f"[*] Release {target_tag} already exists. Updating...")
             update_req = urllib.request.Request(
                 f"{api_base}/releases/{target_tag}",
                 data=json.dumps(release_payload).encode("utf-8"),
@@ -148,7 +208,8 @@ def main():
             with urllib.request.urlopen(update_req) as resp:
                 print(f"[SUCCESS] GitLab Release updated for {target_tag}")
         else:
-            print(f"[ERROR] Failed to create release: {e.code} - {e.read().decode('utf-8', errors='ignore')}")
+            err_body = e.read().decode("utf-8", errors="ignore")
+            print(f"[ERROR] Failed to create release: {e.code} - {err_body}")
             sys.exit(1)
 
 
