@@ -117,6 +117,25 @@ try:
 except ImportError:
     pyperclip = None
 
+try:
+    from windows_integration import (
+        SingleInstanceGuard,
+        check_port_available,
+        create_desktop_shortcut,
+        create_start_menu_shortcut,
+        show_uninstall_dialog,
+        perform_full_uninstall,
+        register_windows_uninstaller,
+    )
+except ImportError:
+    SingleInstanceGuard = None
+    check_port_available = None
+    create_desktop_shortcut = None
+    create_start_menu_shortcut = None
+    show_uninstall_dialog = None
+    perform_full_uninstall = None
+    register_windows_uninstaller = None
+
 # Configure logging with high-performance minimal formatter
 logging.basicConfig(
     level=logging.INFO,
@@ -776,29 +795,91 @@ class HostAgentDaemon:
         return ip
 
     def _start_system_tray(self):
-        """Initializes silent background Windows system tray icon."""
+        """Initializes high-visibility background Windows system tray icon with rich controls."""
         if not pystray or not Image:
             return
 
         def run_tray():
-            # Create a 64x64 neon cyber tray icon
-            img = Image.new('RGBA', (64, 64), (4, 8, 18, 255))
+            # Create a 64x64 high-visibility cyber icon
+            img = Image.new('RGBA', (64, 64), (7, 12, 24, 255))
             from PIL import ImageDraw
             draw = ImageDraw.Draw(img)
-            draw.ellipse([8, 8, 56, 56], outline=(0, 240, 255, 255), width=4)
-            draw.point((32, 32), fill=(138, 43, 226, 255))
+            # Outer cyan circular boundary
+            draw.ellipse([4, 4, 60, 60], outline=(34, 211, 238, 255), width=3)
+            # Inner neon emerald core
+            draw.ellipse([16, 16, 48, 48], fill=(5, 150, 105, 255), outline=(52, 211, 153, 255), width=2)
+            # Center bright dot
+            draw.ellipse([26, 26, 38, 38], fill=(110, 231, 183, 255))
+
+            def _show_gui():
+                if self.gui_state and hasattr(self.gui_state, "request_show_window"):
+                    self.gui_state.request_show_window()
+
+            def _toggle_view_only():
+                self.view_only_mode = not self.view_only_mode
+                if self.gui_state:
+                    self.gui_state.view_only_mode = self.view_only_mode
+                    state_txt = "ENABLED (Remote Input Locked)" if self.view_only_mode else "DISABLED (Remote Input Allowed)"
+                    self.gui_state.add_log("SECURITY", f"View-Only Mode from System Tray: {state_txt}")
+
+            def _toggle_pause():
+                if self.gui_state:
+                    self.gui_state.is_paused = not getattr(self.gui_state, "is_paused", False)
+                    status = "PAUSED" if self.gui_state.is_paused else "RESUMED"
+                    self.gui_state.add_log("WARN" if self.gui_state.is_paused else "INFO", f"Daemon {status} from System Tray.")
+
+            def _add_desktop_shortcut():
+                if create_desktop_shortcut:
+                    ok1, msg1 = create_desktop_shortcut()
+                    if create_start_menu_shortcut:
+                        create_start_menu_shortcut()
+                    if self.gui_state:
+                        self.gui_state.add_log("SUCCESS", f"Desktop shortcut created: {msg1}")
+
+            def _uninstall():
+                if self.gui_state and hasattr(self.gui_state, "request_uninstall"):
+                    self.gui_state.request_uninstall()
+                elif show_uninstall_dialog:
+                    show_uninstall_dialog(on_exit=self.stop)
+                elif perform_full_uninstall:
+                    perform_full_uninstall(interactive=False, on_complete=self.stop)
+
+            def _exit_agent():
+                if self.gui_state and hasattr(self.gui_state, "request_full_exit"):
+                    self.gui_state.request_full_exit()
+                self.stop()
 
             menu = pystray.Menu(
-                pystray.MenuItem("AI NetController Host Agent: Online (v0.35.0)", lambda: None, enabled=False),
-                pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
-                pystray.MenuItem(f"Port: {self.port}", lambda: None, enabled=False),
+                pystray.MenuItem("🖥️ Open Control Center", _show_gui, default=True),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Toggle View-Only Input Lock", lambda: setattr(self, 'view_only_mode', not self.view_only_mode)),
-                pystray.MenuItem("Panic: Kill All AI Tasks", lambda: self.kill_all_tasks()),
+                pystray.MenuItem("AI NetController v0.35.0", lambda: None, enabled=False),
+                pystray.MenuItem(lambda text: f"● Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
+                pystray.MenuItem(lambda text: f"🌐 Port: {self.port} (WebSocket)", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Exit Agent", lambda: self.stop())
+                pystray.MenuItem(lambda text: "▶ Resume Daemon" if getattr(self.gui_state, "is_paused", False) else "⏸ Pause Daemon", _toggle_pause),
+                pystray.MenuItem(lambda text: "🔓 Allow Remote Input" if self.view_only_mode else "🔒 Lock Input (View-Only)", _toggle_view_only),
+                pystray.MenuItem("⚡ Panic: Disconnect All", lambda: self.kill_all_tasks()),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("📌 Add Desktop Shortcut", _add_desktop_shortcut),
+                pystray.MenuItem("🗑️ Uninstall AI NetController...", _uninstall),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("❌ Exit & Shut Down", _exit_agent)
             )
-            self.tray_icon = pystray.Icon("AI_NetController_Agent", img, "AI NetController Host Agent", menu)
+            self.tray_icon = pystray.Icon(
+                "AI_NetController_Agent",
+                img,
+                f"AI NetController — Port: {self.port} (Online)",
+                menu
+            )
+            try:
+                if hasattr(self.tray_icon, "notify"):
+                    self.tray_icon.notify(
+                        "AI NetController Host Agent is active and listening for remote connections.",
+                        "AI NetController"
+                    )
+            except Exception:
+                pass
+
             self.tray_icon.run()
 
         tray_thread = threading.Thread(target=run_tray, daemon=True, name="TrayThread")
@@ -1708,48 +1789,84 @@ def main():
     import multiprocessing
     multiprocessing.freeze_support()
 
+    # CLI Command Flags: Uninstaller & Shortcut creation
+    if "--uninstall" in sys.argv:
+        if show_uninstall_dialog:
+            show_uninstall_dialog()
+        elif perform_full_uninstall:
+            res = perform_full_uninstall(interactive=False)
+            print(res.get("message", "Uninstalled successfully."))
+        sys.exit(0)
+
+    if "--create-shortcut" in sys.argv:
+        if create_desktop_shortcut:
+            ok1, msg1 = create_desktop_shortcut()
+            ok2, msg2 = create_start_menu_shortcut() if create_start_menu_shortcut else (False, "")
+            print(f"Desktop shortcut: {msg1}")
+            print(f"Start Menu shortcut: {msg2}")
+        sys.exit(0)
+
+    # Checks & Balances: Single-instance mutex lock
+    guard = None
+    if SingleInstanceGuard:
+        guard = SingleInstanceGuard()
+        if not guard.acquire():
+            logger.warning("Another instance of AI NetController Host Agent is already running. Existing window activated.")
+            sys.exit(0)
+
     daemon = HostAgentDaemon()
-    if "--headless" not in sys.argv:
-        try:
-            from agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
-            if HAS_TKINTER:
-                gui_state = HostDaemonState(host=daemon.host, port=daemon.port)
-                daemon.gui_state = gui_state
-                gui_state.on_disconnect_callback = daemon.force_disconnect_client
 
-                def _run_ws_daemon():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(daemon.start())
-                        loop.run_forever()
-                    except Exception as exc:
-                        logger.error(f"Async daemon loop error: {exc}")
-                    finally:
-                        loop.close()
-
-                bg_thread = threading.Thread(target=_run_ws_daemon, daemon=True, name="AI_WsDaemonThread")
-                bg_thread.start()
-
-                gui = HostDaemonDesktopGUI(
-                    state=gui_state,
-                    on_disconnect_all=daemon.kill_all_tasks,
-                    on_stop_daemon=daemon.stop,
-                )
-                gui.run()
-                return
-        except Exception as e:
-            logger.info(f"Desktop GUI fallback to console mode: {e}")
+    # Pre-flight port availability verification
+    if check_port_available:
+        is_avail, port_msg = check_port_available(daemon.port, daemon.host)
+        if not is_avail:
+            logger.warning(f"Port pre-flight notice: {port_msg}")
 
     try:
-        async def _run_headless():
-            await daemon.start()
-            while daemon.is_running:
-                await asyncio.sleep(1.0)
-        asyncio.run(_run_headless())
-    except (KeyboardInterrupt, SystemExit):
-        daemon.stop()
-        logger.info("Agent daemon terminated.")
+        if "--headless" not in sys.argv:
+            try:
+                from agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
+                if HAS_TKINTER:
+                    gui_state = HostDaemonState(host=daemon.host, port=daemon.port)
+                    daemon.gui_state = gui_state
+                    gui_state.on_disconnect_callback = daemon.force_disconnect_client
+
+                    def _run_ws_daemon():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(daemon.start())
+                            loop.run_forever()
+                        except Exception as exc:
+                            logger.error(f"Async daemon loop error: {exc}")
+                        finally:
+                            loop.close()
+
+                    bg_thread = threading.Thread(target=_run_ws_daemon, daemon=True, name="AI_WsDaemonThread")
+                    bg_thread.start()
+
+                    gui = HostDaemonDesktopGUI(
+                        state=gui_state,
+                        on_disconnect_all=daemon.kill_all_tasks,
+                        on_stop_daemon=daemon.stop,
+                    )
+                    gui.run()
+                    return
+            except Exception as e:
+                logger.info(f"Desktop GUI fallback to console mode: {e}")
+
+        try:
+            async def _run_headless():
+                await daemon.start()
+                while daemon.is_running:
+                    await asyncio.sleep(1.0)
+            asyncio.run(_run_headless())
+        except (KeyboardInterrupt, SystemExit):
+            daemon.stop()
+            logger.info("Agent daemon terminated.")
+    finally:
+        if guard:
+            guard.release()
 
 if __name__ == "__main__":
     main()

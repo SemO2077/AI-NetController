@@ -39,6 +39,25 @@ if _AGENT_DIR not in sys.path:
 
 from crypto_vault import HostCryptoVault, scrub_memory
 
+try:
+    from windows_integration import (
+        SingleInstanceGuard,
+        check_port_available,
+        create_desktop_shortcut,
+        create_start_menu_shortcut,
+        show_uninstall_dialog,
+        perform_full_uninstall,
+        register_windows_uninstaller,
+    )
+except ImportError:
+    SingleInstanceGuard = None
+    check_port_available = None
+    create_desktop_shortcut = None
+    create_start_menu_shortcut = None
+    show_uninstall_dialog = None
+    perform_full_uninstall = None
+    register_windows_uninstaller = None
+
 # Logging Configuration
 logging.basicConfig(
     level=logging.INFO,
@@ -542,6 +561,31 @@ def main():
     import multiprocessing
     multiprocessing.freeze_support()
 
+    # CLI Command Flags: Uninstaller & Shortcut creation
+    if "--uninstall" in sys.argv:
+        if show_uninstall_dialog:
+            show_uninstall_dialog()
+        elif perform_full_uninstall:
+            res = perform_full_uninstall(interactive=False)
+            print(res.get("message", "Uninstalled successfully."))
+        sys.exit(0)
+
+    if "--create-shortcut" in sys.argv:
+        if create_desktop_shortcut:
+            ok1, msg1 = create_desktop_shortcut()
+            ok2, msg2 = create_start_menu_shortcut() if create_start_menu_shortcut else (False, "")
+            print(f"Desktop shortcut: {msg1}")
+            print(f"Start Menu shortcut: {msg2}")
+        sys.exit(0)
+
+    # Checks & Balances: Single-instance mutex lock
+    guard = None
+    if SingleInstanceGuard:
+        guard = SingleInstanceGuard()
+        if not guard.acquire():
+            logger.warning("Another instance of AI NetController Host Agent is already running. Existing window activated.")
+            sys.exit(0)
+
     job_guard = WindowsJobObjectGuard()
     ws_daemon = None
     try:
@@ -557,56 +601,60 @@ def main():
             ws_daemon.stop()
         daemon.stop()
 
-    if "--headless" not in sys.argv:
-        try:
-            from agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
-            if HAS_TKINTER:
-                gui_state = HostDaemonState(host="0.0.0.0", port=8765)
-                if ws_daemon:
-                    ws_daemon.gui_state = gui_state
-                    if hasattr(ws_daemon, "force_disconnect_client"):
-                        gui_state.on_disconnect_callback = ws_daemon.force_disconnect_client
-
-                def _run_async_daemon():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        async def _run_services():
-                            tasks = []
-                            if ws_daemon:
-                                tasks.append(asyncio.create_task(ws_daemon.start()))
-                            tasks.append(asyncio.create_task(daemon.run()))
-                            await asyncio.gather(*tasks, return_exceptions=True)
-
-                        loop.run_until_complete(_run_services())
-                    except Exception as exc:
-                        logger.error(f"Daemon thread error: {exc}")
-                    finally:
-                        loop.close()
-
-                daemon_thread = threading.Thread(target=_run_async_daemon, daemon=True, name="AI_DaemonReactor")
-                daemon_thread.start()
-
-                gui = HostDaemonDesktopGUI(
-                    state=gui_state,
-                    on_disconnect_all=ws_daemon.kill_all_tasks if ws_daemon else (lambda: gui_state.add_log("ALERT", "Disconnected all active peers.")),
-                    on_stop_daemon=_stop_all,
-                )
-                gui.run()
-                return
-        except Exception as e:
-            logger.info(f"GUI mode fallback to console reactor: {e}")
-
     try:
-        async def _run_both():
-            tasks = []
-            if ws_daemon:
-                tasks.append(asyncio.create_task(ws_daemon.start()))
-            tasks.append(asyncio.create_task(daemon.run()))
-            await asyncio.gather(*tasks, return_exceptions=True)
-        asyncio.run(_run_both())
-    except KeyboardInterrupt:
-        _stop_all()
+        if "--headless" not in sys.argv:
+            try:
+                from agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
+                if HAS_TKINTER:
+                    gui_state = HostDaemonState(host="0.0.0.0", port=8765)
+                    if ws_daemon:
+                        ws_daemon.gui_state = gui_state
+                        if hasattr(ws_daemon, "force_disconnect_client"):
+                            gui_state.on_disconnect_callback = ws_daemon.force_disconnect_client
+
+                    def _run_async_daemon():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            async def _run_services():
+                                tasks = []
+                                if ws_daemon:
+                                    tasks.append(asyncio.create_task(ws_daemon.start()))
+                                tasks.append(asyncio.create_task(daemon.run()))
+                                await asyncio.gather(*tasks, return_exceptions=True)
+
+                            loop.run_until_complete(_run_services())
+                        except Exception as exc:
+                            logger.error(f"Daemon thread error: {exc}")
+                        finally:
+                            loop.close()
+
+                    daemon_thread = threading.Thread(target=_run_async_daemon, daemon=True, name="AI_DaemonReactor")
+                    daemon_thread.start()
+
+                    gui = HostDaemonDesktopGUI(
+                        state=gui_state,
+                        on_disconnect_all=ws_daemon.kill_all_tasks if ws_daemon else (lambda: gui_state.add_log("ALERT", "Disconnected all active peers.")),
+                        on_stop_daemon=_stop_all,
+                    )
+                    gui.run()
+                    return
+            except Exception as e:
+                logger.info(f"GUI mode fallback to console reactor: {e}")
+
+        try:
+            async def _run_both():
+                tasks = []
+                if ws_daemon:
+                    tasks.append(asyncio.create_task(ws_daemon.start()))
+                tasks.append(asyncio.create_task(daemon.run()))
+                await asyncio.gather(*tasks, return_exceptions=True)
+            asyncio.run(_run_both())
+        except KeyboardInterrupt:
+            _stop_all()
+    finally:
+        if guard:
+            guard.release()
 
 
 if __name__ == "__main__":

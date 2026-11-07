@@ -43,6 +43,29 @@ try:
 except ImportError:
     psutil = None
 
+try:
+    from windows_integration import (
+        create_desktop_shortcut,
+        create_start_menu_shortcut,
+        register_windows_uninstaller,
+        show_uninstall_dialog,
+        perform_full_uninstall,
+        check_port_available,
+        SingleInstanceGuard,
+        APP_NAME,
+        APP_VERSION,
+    )
+except ImportError:
+    create_desktop_shortcut = None
+    create_start_menu_shortcut = None
+    register_windows_uninstaller = None
+    show_uninstall_dialog = None
+    perform_full_uninstall = None
+    check_port_available = None
+    SingleInstanceGuard = None
+    APP_NAME = "AI NetController"
+    APP_VERSION = "0.35.0"
+
 logger = logging.getLogger("AI-NetController-GUI")
 
 
@@ -101,11 +124,37 @@ class HostDaemonState:
             "sandbox_job_object": platform.system() == "Windows",
         }
 
+        # Cross-thread GUI signals from System Tray & Background Worker threads
+        self._show_window_requested: bool = False
+        self._hide_window_requested: bool = False
+        self._uninstall_requested: bool = False
+        self._exit_requested: bool = False
+
         # Recent event logs (capped at 200 entries)
         self.logs: List[Dict[str, Any]] = []
         self._log_seq: int = 0
         self.add_log("INFO", f"AI NetController Host Agent GUI v{self.version} initialized on {self.local_ip}:{self.port}")
         self.add_log("SECURITY", "AV-Safe Mode active: Native HWND window, UPX disabled, zero hidden shell spawns.")
+
+    def request_show_window(self) -> None:
+        """Signals the GUI main thread to un-hide/deiconify and focus the window."""
+        with self.lock:
+            self._show_window_requested = True
+
+    def request_hide_window(self) -> None:
+        """Signals the GUI main thread to minimize the window to system tray."""
+        with self.lock:
+            self._hide_window_requested = True
+
+    def request_uninstall(self) -> None:
+        """Signals the GUI main thread to display the interactive uninstaller dialog."""
+        with self.lock:
+            self._uninstall_requested = True
+
+    def request_full_exit(self) -> None:
+        """Signals the GUI main thread to completely terminate the daemon and GUI."""
+        with self.lock:
+            self._exit_requested = True
 
     @staticmethod
     def _detect_local_ip() -> str:
@@ -419,6 +468,21 @@ class HostDaemonDesktopGUI:
         self._configure_styles()
         self._build_layout()
         self.root.protocol("WM_DELETE_WINDOW", self._handle_close)
+
+        # Auto-register uninstaller in Windows Settings and ensure Desktop shortcut exists
+        try:
+            if register_windows_uninstaller:
+                register_windows_uninstaller()
+            user_desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+            desktop_lnk = os.path.join(user_desktop, f"{APP_NAME}.lnk")
+            if not os.path.exists(desktop_lnk) and create_desktop_shortcut:
+                create_desktop_shortcut()
+                if create_start_menu_shortcut:
+                    create_start_menu_shortcut()
+                self.state.add_log("SUCCESS", f"Desktop & Start Menu shortcuts initialized on startup: {desktop_lnk}")
+        except Exception as e:
+            logger.debug(f"Auto-shortcut registration notice: {e}")
+
         self._schedule_refresh()
 
     def _configure_styles(self) -> None:
@@ -735,6 +799,69 @@ class HostDaemonDesktopGUI:
             pady=5,
             cursor="hand2",
         ).pack(side=tk.RIGHT)
+
+        # Row 2: Windows System Integration, Desktop Shortcut, Tray & Uninstaller
+        sys_row = tk.Frame(ctrl_card, bg="#0b1324")
+        sys_row.pack(fill=tk.X, pady=(6, 0))
+
+        tk.Button(
+            sys_row,
+            text="📌 Add Desktop Shortcut",
+            command=self._create_shortcuts_action,
+            bg="#1e293b",
+            fg="#38bdf8",
+            activebackground="#0284c7",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            font=("Segoe UI", 8, "bold"),
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(
+            sys_row,
+            text="📥 Minimize to Tray",
+            command=self.hide_to_tray,
+            bg="#1e293b",
+            fg="#cbd5e1",
+            activebackground="#334155",
+            relief=tk.FLAT,
+            font=("Segoe UI", 8, "bold"),
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(
+            sys_row,
+            text="🗑️ Uninstall App...",
+            command=self._prompt_uninstall,
+            bg="#450a0a",
+            fg="#f87171",
+            activebackground="#7f1d1d",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            font=("Segoe UI", 8, "bold"),
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.RIGHT)
+
+        tk.Button(
+            sys_row,
+            text="❌ Exit Server",
+            command=self._handle_full_exit,
+            bg="#1e293b",
+            fg="#94a3b8",
+            activebackground="#dc2626",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            font=("Segoe UI", 8, "bold"),
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.RIGHT, padx=(0, 6))
 
         # 4. Live Activity & Security Audit Log
         log_card = tk.Frame(self.root, bg="#0b1324", padx=14, pady=10, highlightthickness=1, highlightbackground="#1e293b")
@@ -1221,13 +1348,47 @@ class HostDaemonDesktopGUI:
             self.log_text.see(tk.END)
             self.log_text.configure(state=tk.DISABLED)
 
-    def _schedule_refresh(self) -> None:
-        if not self.state.is_running:
-            return
-        self._refresh_ui()
-        self.root.after(250, self._schedule_refresh)  # 250ms smooth fluid telemetry refresh
+    def _create_shortcuts_action(self) -> None:
+        """Handles manual Desktop & Start Menu shortcut creation request from GUI."""
+        if create_desktop_shortcut:
+            ok1, msg1 = create_desktop_shortcut()
+            ok2, msg2 = create_start_menu_shortcut() if create_start_menu_shortcut else (False, "")
+            if ok1 or ok2:
+                self.state.add_log("SUCCESS", f"Shortcuts created: {msg1}")
+                messagebox.showinfo(
+                    "Desktop Shortcut Created",
+                    f"✓ AI NetController shortcuts successfully created!\n\n• {msg1}\n• {msg2}",
+                    parent=self.root,
+                )
+            else:
+                self.state.add_log("WARN", f"Failed to create shortcuts: {msg1}")
+                messagebox.showwarning("Notice", f"Could not create shortcut: {msg1}", parent=self.root)
+        else:
+            messagebox.showerror("Error", "Shortcut manager is not available on this platform.", parent=self.root)
 
-    def _handle_close(self) -> None:
+    def _prompt_uninstall(self) -> None:
+        """Opens the full interactive uninstaller dialog."""
+        if show_uninstall_dialog:
+            show_uninstall_dialog(parent_root=self.root, on_exit=self._handle_full_exit)
+        else:
+            res = perform_full_uninstall(interactive=False, on_complete=self._handle_full_exit) if perform_full_uninstall else None
+            msg = res["message"] if res else "Uninstaller module unavailable."
+            messagebox.showinfo("Uninstall", msg, parent=self.root)
+
+    def hide_to_tray(self) -> None:
+        """Minimizes window to background system tray."""
+        self.root.withdraw()
+        self.state.add_log("INFO", "Control Center minimized to background tray. Remote clients remain connected.")
+
+    def show_window(self) -> None:
+        """Restores and focuses window from system tray."""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+        self.state.add_log("INFO", "Control Center restored from background tray.")
+
+    def _handle_full_exit(self) -> None:
+        """Terminates GUI and signals daemon stop."""
         self.state.is_running = False
         if self.on_stop_daemon:
             try:
@@ -1235,6 +1396,41 @@ class HostDaemonDesktopGUI:
             except Exception:
                 pass
         self.root.destroy()
+
+    def _handle_close(self) -> None:
+        """
+        Intercepts window close ('X') button.
+        Minimizes to tray so background remote sessions are NOT accidentally terminated.
+        """
+        self.hide_to_tray()
+
+    def _schedule_refresh(self) -> None:
+        if not self.state.is_running:
+            return
+
+        # Check cross-thread actions requested by System Tray / Background workers
+        with self.state.lock:
+            show_req = self.state._show_window_requested
+            self.state._show_window_requested = False
+            hide_req = self.state._hide_window_requested
+            self.state._hide_window_requested = False
+            uninst_req = self.state._uninstall_requested
+            self.state._uninstall_requested = False
+            exit_req = self.state._exit_requested
+            self.state._exit_requested = False
+
+        if show_req:
+            self.show_window()
+        if hide_req:
+            self.hide_to_tray()
+        if uninst_req:
+            self._prompt_uninstall()
+        if exit_req:
+            self._handle_full_exit()
+            return
+
+        self._refresh_ui()
+        self.root.after(250, self._schedule_refresh)  # 250ms smooth fluid telemetry refresh
 
     def run(self) -> None:
         self.root.mainloop()

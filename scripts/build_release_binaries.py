@@ -49,12 +49,11 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
     standalone_exe = os.path.join(dist_dir, "AI_NetController_HostAgent_standalone.exe")
     onedir_folder = os.path.join(dist_dir, "AI_NetController_HostAgent")
 
-    # Compile with PyInstaller if standalone exe or onedir bundle is missing
-    if not (os.path.exists(standalone_exe) and os.path.exists(onedir_folder)):
-        print("[INFO] Compiling Windows Host Agent binaries with PyInstaller...")
-        spec_path = os.path.join(agent_dir, "build_agent.spec")
-        cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", spec_path]
-        subprocess.run(cmd, cwd=agent_dir, check=True)
+    # Compile with PyInstaller to produce fresh production binaries
+    print("[INFO] Compiling Windows Host Agent binaries with PyInstaller...")
+    spec_path = os.path.join(agent_dir, "build_agent.spec")
+    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", spec_path]
+    subprocess.run(cmd, cwd=agent_dir, check=True)
 
     # Apply Authenticode SHA-256 signature & run Defender verification
     sign_script = os.path.join(agent_dir, "sign_binary.ps1")
@@ -93,6 +92,7 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
         "host_file_writer.py",
         "multi_monitor_streamer.py",
         "network_fuzzer_shield.py",
+        "windows_integration.py",
         "requirements.txt",
         "build_agent.spec",
         "build_exe.bat",

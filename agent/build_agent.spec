@@ -72,6 +72,7 @@ a = Analysis(
         'command_ast_firewall',
         'multi_monitor_streamer',
         'host_file_writer',
+        'windows_integration',
     ],
     hookspath=[],
     hooksconfig={},
