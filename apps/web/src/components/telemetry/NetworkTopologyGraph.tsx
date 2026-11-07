@@ -105,7 +105,7 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
     // Central AI NetController Gateway Node
     const controllerNode: TopologyNode = {
       id: 'cst-gateway',
-      name: 'CST Core Gateway (L3 Switch)',
+      name: 'AI NetController Gateway (L3 Switch)',
       ip: '192.168.1.1',
       mac: '00:00:C5:71:00:01',
       os: 'controller',
@@ -196,7 +196,7 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
     const svg = d3.select(svgRef.current);
 
     svg.selectAll('.node-latency-badge').text((d: any) => {
-      if (d.isController) return `CST GATEWAY`;
+      if (d.isController) return `AI GATEWAY`;
       const host = hosts.find(h => h.id === d.id);
       if (!host || !host.isOnline) return `OFFLINE • ${d.ip}`;
       return `${host.ping ?? 0}ms • ${d.ip}`;

@@ -760,7 +760,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
               </div>
             </button>
 
-            {/* Update Center (Clean v0.32.0 version indicator, no hardcoded fake count) */}
+            {/* Update Center (Clean v0.33.0 version indicator, no hardcoded fake count) */}
             <button
               type="button"
               onClick={() => {
@@ -785,7 +785,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
 
               <div className="flex items-center gap-2 shrink-0">
                 <span className="text-[11px] font-mono text-cyan-300 bg-cyan-500/10 border border-cyan-400/25 px-2 py-0.5 rounded">
-                  v0.32.0
+                  v0.33.0
                 </span>
                 <ChevronRight className="w-4 h-4 text-slate-400" />
               </div>

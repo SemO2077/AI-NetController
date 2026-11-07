@@ -161,7 +161,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   AI NetController
                 </span>
                 <span className="px-2 py-0.5 rounded text-[10.5px] font-mono font-semibold bg-cyan-500/15 border border-cyan-400/30 text-cyan-300 shrink-0 shadow-[0_0_8px_rgba(0,240,255,0.2)]">
-                  v0.32.0
+                  v0.33.0
                 </span>
               </div>
               <h2 className="text-sm font-semibold text-white/90 truncate">
@@ -315,8 +315,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   </span>
                   <h3 className="text-lg font-bold text-white">
                     {isBg
-                      ? 'Как CST AI защитава вашите системи'
-                      : 'How CST AI Protects Your Machines'}
+                      ? 'Как AI NetController защитава вашите системи'
+                      : 'How AI NetController Protects Your Machines'}
                   </h3>
                   <p className="text-white/60 text-xs leading-relaxed">
                     {isBg
@@ -433,8 +433,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       </h4>
                       <p className="text-[11.5px] text-white/60 leading-normal">
                         {isBg
-                          ? 'Стартирайте START_HERE_WINDOWS.bat или cst_host_daemon.exe. Демонът се стартира автоматично на порт 8765 с mDNS.'
-                          : 'Run START_HERE_WINDOWS.bat or cst_host_daemon.exe. The daemon listens on port 8765 with zero-config mDNS.'}
+                          ? 'Стартирайте START_HERE_WINDOWS.bat или AI_NetController_HostAgent.exe. Демонът се стартира автоматично на порт 8765 с mDNS.'
+                          : 'Run START_HERE_WINDOWS.bat or AI_NetController_HostAgent.exe. The daemon listens on port 8765 with zero-config mDNS.'}
                       </p>
                     </div>
 

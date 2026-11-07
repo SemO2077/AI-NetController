@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# CST Autonomous LAN PC Inspector - Production PyInstaller Specification
+# AI NetController Host Agent - Production PyInstaller Specification
 # Configured for --onedir, visible Tkinter GUI, and zero UPX packing to eliminate
 # Windows Defender / heuristic antivirus false positives.
 

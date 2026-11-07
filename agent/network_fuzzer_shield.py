@@ -237,7 +237,9 @@ class NetworkFuzzerShield:
         if len(raw_packet) < HEADER_SIZE:
             return raw_packet
 
-        # Parse header
+        # Parse header (with fast-path bypass when chaos injection is disabled)
+        if not self.profile.enabled and raw_packet[2] != OP_FRAME_SYNC:
+            return raw_packet
         magic, opcode, flags, seq, length = HEADER_STRUCT.unpack_from(raw_packet, 0)
         if magic != MAGIC:
             return raw_packet

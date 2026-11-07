@@ -1,20 +1,26 @@
-# AI NetController v0.32.0 — Release Notes
+# AI NetController v0.33.0 — Release Notes
 
-**AI NetController v0.32.0** overhauls the mobile application experience with a native Android layout, hardware-accelerated telemetry rendering, and streamlined documentation across the repository.
+**AI NetController v0.33.0** delivers a comprehensive performance, security, and reliability upgrade across the Windows Host Agent, Express Control Server, React Web Console, and Native Android Companion App.
 
 ---
 
-## What's New in v0.32.0
+## What's New in v0.33.0
 
-### Mobile App Overhaul
-- **Adaptive Navigation**: Dedicated 4-tab bottom navigation bar on phones and an automatic side navigation rail on tablets, foldables, and landscape viewports.
-- **Native Android Integration**: True edge-to-edge rendering with Android system bar inset handling, native touch haptics via `AndroidBridge.vibrate()`, and hardware back-button navigation for drawers and sheets.
-- **Touch-First Telemetry Controls**: Redesigned the Wi-Fi spectrum analyzer, packet capture inspector, and QoS profile selector for one-handed mobile operation without horizontal scrolling or hover-only tooltips.
-- **Smooth Frame Pacing**: Scoped CSS transitions and GPU-composited animations (`transform`, `opacity`) for jitter-free scrolling on 60 Hz and 120 Hz mobile displays.
+### Speed & Runtime Optimizations
+- **Low-Overhead Host Telemetry (`agent/agent.py`)**: Cached static OS and hostname descriptors at startup and streamlined the 2-second heartbeat loop.
+- **Fast-Path Binary Packet Shield (`agent/network_fuzzer_shield.py`)**: Added an O(1) bypass path for production binary frames when simulation fault injection is disabled.
+- **Backend I/O Caching (`apps/web/server.ts`)**: Added a 30-second in-memory cache for `/api/releases` (invalidated automatically on binary rebuilds), 5-second TTL caching for disk (`fs.statfsSync`) and network adapter (`os.networkInterfaces`) snapshots, and cached Python runtime version detection.
+- **120 Hz Mobile Animation Tuning (`CommandOmnibar.tsx`)**: Critically damped spring physics (`stiffness: 520, damping: 36`) and solid dark surfaces eliminate scroll and modal jitter on high-refresh mobile screens.
 
-### Documentation & Repository Cleanup
-- Removed redundant documentation files and standardized all release notes and changelogs around the `v0.xx.x` beta versioning scheme.
-- Updated `docs/SETUP_GUIDE.md` and `docs/COMPILATION_GUIDE.md` with clear, step-by-step instructions for Windows, Linux, and Android builds.
+### Security Hardening
+- **Windows LOLBin Protection (`securityService.ts` & `server.ts`)**: Blocked living-off-the-land remote payload download/execution patterns (`certutil -urlcache`, `bitsadmin /transfer`, `mshta http`, `regsvr32 /i:http`).
+- **Child-Process Secret Scrubbing (`command_ast_firewall.py` & `server.ts`)**: Sanitized child process environments (`createSafeChildEnv`) to strip API keys and pairing tokens (`GEMINI_API_KEY`, `AI_AGENT_SECRET`, `GITHUB_TOKEN`, etc.) before executing shell commands.
+- **Android Local Server Hardening (`scripts/build_android_app.py`)**: Added path traversal (`..`) protection and CSPRNG token generation (`SecureRandom`) in `MainActivity.java`.
+
+### Bug Fixes & Feature Completeness
+- **Fixed Android Daemon State JSON**: Resolved a missing quote in `MainActivity.buildDaemonStateJson()` so `/api/daemon/state` and `/api/daemon/action` return valid JSON on Android.
+- **Full SecureOn Wake-on-LAN Parity**: Added 6-byte hexadecimal SecureOn password support (108-byte magic packets) to the Express `/api/wol` endpoint.
+- **Live GUI Telemetry Counters**: Connected `commands_executed` and `frames_broadcast` counters in `agent/agent.py` to the native Tkinter Control Center GUI.
 
 ---
 
@@ -22,9 +28,9 @@
 
 | File | Platform | Description |
 | :--- | :--- | :--- |
-| `AI_NetController_HostAgent_v0.32.0_win64.exe` | Windows x64 | Standalone Windows Host Agent executable |
-| `AI_NetController_HostAgent_v0.32.0_win64_portable.zip` | Windows x64 | Portable archive containing Host Agent and checksums |
-| `AI_NetController_v0.32.0_arm64-v8a.apk` | Android ARM64 | Signed Android package optimized for `arm64-v8a` devices |
-| `AI_NetController_v0.32.0.apk` | Android Universal | Universal Android installation package |
+| `AI_NetController_HostAgent_v0.33.0_win64.exe` | Windows x64 | Standalone Windows Host Agent executable |
+| `AI_NetController_HostAgent_v0.33.0_win64_portable.zip` | Windows x64 | Portable archive containing Host Agent and launchers |
+| `AI_NetController_v0.33.0_arm64-v8a.apk` | Android ARM64 | Signed Android package optimized for `arm64-v8a` devices |
+| `AI_NetController_v0.33.0.apk` | Android Universal | Universal Android installation package |
 | `RELEASE_MANIFEST.json` | All | Build metadata and asset manifest |
 | `SHA256SUMS.txt` | All | SHA-256 checksums for all release binaries |

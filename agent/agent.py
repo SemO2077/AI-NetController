@@ -497,13 +497,15 @@ class AstCommandInspector:
         return False, "Command passed security policy"
 
 # =====================================================================
-# MAIN CST HOST AGENT DAEMON
+# MAIN AI NETCONTROLLER HOST AGENT DAEMON
 # =====================================================================
 class HostAgentDaemon:
     def __init__(self, host: str = "0.0.0.0", port: int = 8765, gui_state: Any = None):
         self.host = host
         self.port = port
         self.gui_state = gui_state
+        self._hostname = socket.gethostname()
+        self._os_name = platform.system()
         self.clients: Set[WebSocketServerProtocol] = set()
         self.authenticated_clients: Set[WebSocketServerProtocol] = set()
         # Per-connection nonce tracking: ws -> (nonce_bytes, timestamp)
@@ -686,7 +688,7 @@ class HostAgentDaemon:
 
             desc = {
                 'os': platform.system(),
-                'version': '2.4.0',
+                'version': '0.33.0',
                 'ai': 'ollama-bridge',
                 'hostname': hostname
             }
@@ -729,7 +731,7 @@ class HostAgentDaemon:
             draw.point((32, 32), fill=(138, 43, 226, 255))
 
             menu = pystray.Menu(
-                pystray.MenuItem("AI NetController Host Agent: Online (v0.32.0)", lambda: None, enabled=False),
+                pystray.MenuItem("AI NetController Host Agent: Online (v0.33.0)", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
                 pystray.MenuItem(f"Port: {self.port}", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
@@ -1098,6 +1100,9 @@ class HostAgentDaemon:
         try:
             t0 = time.perf_counter()
             exec_res = await CommandASTFirewall.execute_sandboxed(cmd_str, timeout_sec=15.0)
+            if self.gui_state is not None:
+                with self.gui_state.lock:
+                    self.gui_state.commands_executed += 1
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
             await ws.send(json.dumps({
                 "event": "EXECUTION_RESULT",
@@ -1172,6 +1177,9 @@ class HostAgentDaemon:
         # Delegate execution safely to CommandASTFirewall with AST inspection and escalating timeout
         try:
             exec_res = await CommandASTFirewall.execute_sandboxed(cmd_str, timeout_sec=15.0)
+            if self.gui_state is not None:
+                with self.gui_state.lock:
+                    self.gui_state.commands_executed += 1
             result = {
                 "event": "EXECUTION_RESULT",
                 "command_id": f"cmd-{seq or int(time.time() * 1000)}",
@@ -1486,6 +1494,9 @@ class HostAgentDaemon:
 
             frame = await self.screen_pipeline.get_next_frame()
             if frame:
+                if self.gui_state is not None:
+                    with self.gui_state.lock:
+                        self.gui_state.frames_broadcast += 1
                 packet = pack_packet(OP_FRAME, frame)
                 # Send to authenticated clients concurrently to prevent slow-client head-of-line blocking
                 clients_snapshot = list(self.authenticated_clients)
@@ -1530,10 +1541,10 @@ class HostAgentDaemon:
                 cpu = psutil.cpu_percent(interval=None) if psutil else 0.0
                 ram = psutil.virtual_memory().percent if psutil else 0.0
                 telemetry = {
-                    "hostname": socket.gethostname(),
+                    "hostname": self._hostname,
                     "cpu_percent": cpu,
                     "ram_percent": ram,
-                    "os": platform.system(),
+                    "os": self._os_name,
                     "status": "ready"
                 }
                 payload = json.dumps(telemetry).encode('utf-8')

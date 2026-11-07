@@ -258,10 +258,10 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
             initial={{ opacity: 0, y: -28, scale: 0.94 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -18, scale: 0.96, transition: { duration: 0.13 } }}
-            transition={{ type: 'spring', stiffness: 480, damping: 24, mass: 0.6 }}
+            transition={{ type: 'spring', stiffness: 520, damping: 36, mass: 0.7 }}
             className="
               relative z-10 w-full max-w-2xl mx-auto
-              bg-[#091020]/95 backdrop-blur-3xl
+              bg-[#091020]
               border border-white/15 border-t-white/25
               shadow-[0_24px_64px_rgba(0,0,0,0.85)]
               transform-gpu

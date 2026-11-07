@@ -31,6 +31,7 @@ const BLOCKED_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
   { regex: /\b(?:powershell|pwsh).*-e(nc(odedcommand)?)?\s+[a-z0-9+/=]{8,}/i, reason: 'Obfuscated base64 PowerShell payload blocked' },
   { regex: /nc(\.exe)?\s+(-e|-c)\s+(\/bin\/(ba)?sh|cmd\.exe|powershell)/i, reason: 'Unencrypted reverse shell payload blocked' },
   { regex: /%[a-z0-9_]+:~\d+,\d+%/i, reason: 'Environment variable substring slicing evasion blocked' },
+  { regex: /\b(?:certutil\s+.*-urlcache|bitsadmin\s+.*\/transfer|mshta\s+https?:|regsvr32\s+.*\/i:https?:)/i, reason: 'Windows LOLBin remote payload download/execution blocked' },
 ];
 
 // Critical destructive patterns that require explicit double-key / hold confirmation

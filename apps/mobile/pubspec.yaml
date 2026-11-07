@@ -1,7 +1,7 @@
 name: ai_netcontroller
 description: AI NetController - Workstation Fleet Manager & Remote Diagnostics
 publish_to: 'none'
-version: 0.32.0+32
+version: 0.33.0+330
 
 environment:
   sdk: '>=3.7.0 <4.0.0'

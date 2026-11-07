@@ -1,43 +1,43 @@
 # AI NetController
 
-[![Version](https://img.shields.io/badge/version-v0.32.0-00e5ff.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.33.0-00e5ff.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v0.33.0)
 [![Build](https://img.shields.io/badge/build-passing-10b981.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**AI NetController** is a cross-platform network telemetry, QoS orchestration, and wireless diagnostics toolkit for Windows and Android. It pairs a native Python Windows Host Agent (`psutil`, `scapy`, `netsh`, `tshark`) with a React/Express control dashboard and a native Android companion app.
+**AI NetController** is a cross-platform network telemetry, remote desktop streaming, Wake-on-LAN, and AI-assisted system administration toolkit for Windows and Android. It pairs a native Python Windows Host Agent (`agent/agent.py` & `agent/agent_gui.py`) with a React 19 / Express control server and a hardware-accelerated native Android companion app.
 
 ---
 
-## Downloads (v0.32.0)
+## Downloads (v0.33.0)
 
-Grab the prebuilt binaries from the [GitHub Releases page](https://github.com/smehmedd/AI-NetController/releases/tag/v0.32.0):
+Download the prebuilt binaries from [GitHub Releases](https://github.com/smehmedd/AI-NetController/releases/tag/v0.33.0):
 
 | Platform | Package | Description |
 | :--- | :--- | :--- |
-| **Windows (x64)** | `AI_NetController_HostAgent_v0.32.0_win64.exe` | Standalone Windows Host Agent executable |
-| **Windows (x64)** | `AI_NetController_HostAgent_v0.32.0_win64_portable.zip` | Portable archive with Host Agent and checksums |
-| **Android (ARM64)** | `AI_NetController_v0.32.0_arm64-v8a.apk` | Signed Android app (`arm64-v8a`) |
-| **Android (Universal)** | `AI_NetController_v0.32.0.apk` | Standard Android installation package |
+| **Windows (x64)** | `AI_NetController_HostAgent_v0.33.0_win64.exe` | Standalone Windows Host Agent executable with Desktop GUI |
+| **Windows (x64)** | `AI_NetController_HostAgent_v0.33.0_win64_portable.zip` | Portable archive with Host Agent source and launchers |
+| **Android (ARM64)** | `AI_NetController_v0.33.0_arm64-v8a.apk` | Signed Android app (`arm64-v8a`) |
+| **Android (Universal)** | `AI_NetController_v0.33.0.apk` | Standard Android installation package |
 
 ---
 
 ## Core Features
 
-### Telemetry & Diagnostics
-- **Live Interface Metrics**: Real-time upload/download throughput, packet rates, jitter, and latency monitoring.
-- **Process Network Attribution**: Per-process socket inspection mapping active connections and bandwidth usage to local PIDs and executables.
-- **Wireless Environment Scanner**: 2.4 GHz, 5 GHz, and 6 GHz channel congestion analysis, BSSID signal mapping, and co-channel interference detection.
-- **Deep Packet Inspection**: Live protocol breakdown (`TCP`, `UDP`, `TLSv1.3`, `QUIC`, `DNS`, `HTTP/3`) and Flow/Sequence diagrams with `.pcap` and `.csv` export.
+### Telemetry, Remote Control & Wake-on-LAN
+- **Live System & Network Telemetry**: Real-time CPU, RAM, disk, interface throughput, latency, and active adapter monitoring over binary WebSockets (`ws://<host>:8765`).
+- **120 Hz Desktop Streaming & Remote Input**: Low-latency delta-hashed JPEG screen streaming with virtual trackpad, keyboard shortcuts, and clipboard sync.
+- **Directed Wake-on-LAN (WoL)**: Native UDP Magic Packet broadcaster (`FF*6 + MAC*16`) with optional 6-byte SecureOn password support, cron scheduling, and fleet energy estimation.
+- **Interactive L2/L3 Topology Graph**: Force-directed D3 network topology visualization with live node health, latency badges, and quarantine controls.
 
-### Traffic Control & Optimization
-- **QoS Policy Profiles**: Automated DSCP packet tagging and Windows `netsh` TCP parameter tuning for Gaming, Streaming, VoIP, and Bulk transfer workloads.
-- **Per-Application Bandwidth Rules**: Priority queueing and rate-limiting rules managed directly from the desktop dashboard or mobile app.
-- **AI Diagnostics Assistant**: Local-first network troubleshooting powered by Ollama (`Llama-3`, `Mistral`, `Qwen-2.5`) or optional cloud providers (`Gemini`, `OpenAI`, `Claude`).
+### Zero-Trust Security & AI Diagnostics
+- **AST Command Firewall**: Pre-execution command de-obfuscation (`^`, backticks, environment slices), Windows LOLBin blocking (`certutil`, `bitsadmin`, `mshta`, `regsvr32`), and child-process secret scrubbing.
+- **Human-in-the-Loop (HITL) Approval Gate**: High-risk system operations require explicit operator confirmation before execution.
+- **Packet Fuzzer & Replay Shield**: Binary frame validation (`0xC5 0x71`), RFC 6479 sliding-window replay protection, and token-bucket rate limiting.
+- **AI SysAdmin Assistant**: Natural-language diagnostics and fleet triage powered by local Ollama models (`DeepSeek-R1`, `Llama-3.3`, `Qwen-2.5`) or Google Gemini.
 
 ### Native Android App
-- **Responsive Mobile Dashboard**: Adaptive navigation (bottom bar on phones, navigation rail on tablets/foldables) with hardware-accelerated telemetry charts and 60–120 Hz frame pacing.
-- **LAN Host Discovery**: Automatic mDNS/UDP subnet scanning and manual pairing with the Windows Host Agent over WebSockets (`ws://<host>:3000`).
-- **Remote Policy Switching**: Apply QoS profiles, inspect active sockets, and run latency checks from your phone.
+- **Adaptive Mobile UI**: Responsive 4-tab bottom navigation bar on phones and an automatic side navigation rail on tablets and foldables.
+- **Embedded Local Asset & LAN Bridge**: Multi-threaded `/24` LAN subnet scanner, native UDP Wake-on-LAN broadcaster, edge-to-edge system bar integration, and hardware back-navigation handling.
 
 ---
 
@@ -45,19 +45,21 @@ Grab the prebuilt binaries from the [GitHub Releases page](https://github.com/sm
 
 ```text
 AI-NetController/
-├── agent/                  # Windows Host Agent (Python, Scapy, psutil)
-│   ├── net_agent.py        # Main privilege-aware daemon and WebSocket client
-│   ├── core/               # Telemetry, Wi-Fi scanning, DPI, and QoS modules
-│   └── tests/              # Unit test suite for agent modules
+├── agent/                          # Windows/Linux Python Host Agent
+│   ├── agent.py                    # Core WebSocket daemon, screen streamer & telemetry loop
+│   ├── agent_gui.py                # Native Tkinter Desktop Control Center GUI
+│   ├── command_ast_firewall.py     # AST command verifier & Windows Job Object sandbox
+│   ├── network_fuzzer_shield.py    # Binary wire-protocol verifier & token-bucket shield
+│   ├── zero_trust_pairing.py       # Ephemeral X25519 / ChaCha20-Poly1305 & RFC 6479 anti-replay
+│   └── tests/                      # Unit test suite for agent security & protocol modules
 ├── apps/
-│   ├── web/                # React 19 + TypeScript + Express control server
-│   │   ├── server.ts       # Express API & WebSocket bridge (port 3000)
-│   │   └── src/            # Dashboard UI components, state, and telemetry views
-│   └── mobile/             # Native Android app & Flutter project
-│       └── android_native/ # Native Android WebView shell + LAN bridge
-├── docs/                   # Setup and compilation guides
-├── scripts/                # Build, verification, and release automation scripts
-└── tests/                  # Integration and stress tests
+│   ├── web/                        # React 19 + TypeScript + Express control server
+│   │   ├── server.ts               # Express API & LAN control server (port 3000)
+│   │   └── src/                    # Dashboard UI components, state stores, and workers
+│   └── mobile/                     # Flutter & Native Android companion project
+├── docs/                           # Setup, compilation, and architecture guides
+├── scripts/                        # Reproducible binary & APK build scripts
+└── tests/                          # Architecture and stress test suites
 ```
 
 ---
@@ -75,25 +77,23 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` in your browser.
+Open `http://localhost:3000` in your browser, or run `START_HERE_WINDOWS.bat` on Windows (`./START_HERE_LINUX.sh` on Linux/macOS).
 
 ### 2. Run the Windows Host Agent
 
-Run the prebuilt `AI_NetController_HostAgent_v0.32.0_win64.exe` as Administrator, or launch it from source:
+Run the prebuilt `AI_NetController_HostAgent_v0.33.0_win64.exe`, or launch the desktop agent from source:
 
 ```bash
-pip install -r requirements.txt
-python agent/net_agent.py --server http://localhost:3000
+pip install -r agent/requirements.txt
+python agent/agent.py
 ```
-
-> **Note**: Running as Administrator enables Windows QoS policy creation (`New-NetQosPolicy`), raw socket capture, and `netsh int tcp` tuning. Without elevation, the agent runs in read-only telemetry mode.
 
 ---
 
 ## Testing & Verification
 
 ```bash
-# Run TypeScript typecheck and lint
+# Run TypeScript compiler verification
 npm run lint
 
 # Run architecture and stress test suites

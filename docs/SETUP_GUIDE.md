@@ -1,6 +1,6 @@
 # Setup Guide
 
-This guide walks through setting up and running **AI NetController** (`v0.32.0`) on Windows, Linux/macOS (dashboard server), and Android.
+This guide walks through setting up and running **AI NetController** (`v0.33.0`) on Windows, Linux/macOS, and Android.
 
 ---
 
@@ -9,8 +9,7 @@ This guide walks through setting up and running **AI NetController** (`v0.32.0`)
 | Component | Requirement | Notes |
 | :--- | :--- | :--- |
 | **Node.js** | v20.0+ | Required for the Express server and React dashboard |
-| **Python** | v3.11+ | Required only if running the Host Agent from source |
-| **Npcap / Wireshark** | Optional | Enables deep packet inspection (`scapy` / `tshark`) on Windows |
+| **Python** | v3.11+ | Required if running the Host Agent from source |
 | **Ollama** | Optional | Enables local offline LLM diagnostics (`http://localhost:11434`) |
 
 ---
@@ -24,13 +23,13 @@ This guide walks through setting up and running **AI NetController** (`v0.32.0`)
    npm install
    ```
 
-2. (Optional) Configure environment variables by copying `.env.example` to `.env`:
+2. (Optional) Configure environment variables in `.env`:
    ```ini
    PORT=3000
    GEMINI_API_KEY=your_optional_api_key
    ```
 
-3. Start the server:
+3. Start the server (or double-click `START_HERE_WINDOWS.bat` on Windows):
    ```bash
    npm run dev
    ```
@@ -41,28 +40,28 @@ This guide walks through setting up and running **AI NetController** (`v0.32.0`)
 
 ## 3. Running the Windows Host Agent
 
-The Host Agent collects system network metrics, Wi-Fi spectrum data, and per-process bandwidth usage, and applies Windows QoS policies.
+The Host Agent streams live system telemetry, 120 Hz desktop frames, and executes sandboxed remote administration commands on port `8765`.
 
 ### Option A: Prebuilt Executable (Recommended)
-1. Download `AI_NetController_HostAgent_v0.32.0_win64.exe` from [GitHub Releases](https://github.com/smehmedd/AI-NetController/releases/tag/v0.32.0).
-2. Right-click the executable and select **Run as administrator**.
-3. The agent automatically connects to `http://localhost:3000` (or you can pass `--server http://<LAN_IP>:3000`).
+1. Download `AI_NetController_HostAgent_v0.33.0_win64.exe` from [GitHub Releases](https://github.com/smehmedd/AI-NetController/releases/tag/v0.33.0).
+2. Launch the executable to open the native **AI NetController Desktop Control Center GUI** and start the WebSocket daemon on `ws://0.0.0.0:8765`.
 
 ### Option B: Run from Python Source
 ```bash
-pip install -r requirements.txt
-python agent/net_agent.py --server http://localhost:3000
+pip install -r agent/requirements.txt
+python agent/agent.py
 ```
+Pass `--headless` to run without the desktop GUI window.
 
 ---
 
 ## 4. Connecting the Android App
 
-1. Download and install `AI_NetController_v0.32.0_arm64-v8a.apk` on your Android device.
-2. Connect your phone to the same Wi-Fi / LAN network as the computer running the Control Server.
+1. Download and install `AI_NetController_v0.33.0_arm64-v8a.apk` on your Android device.
+2. Connect your phone to the same Wi-Fi / LAN network as your computer.
 3. Open **AI NetController** on Android:
-   - The app automatically scans the local subnet for an active server on port `3000`.
-   - You can also enter your host PC's LAN IP address manually (e.g., `192.168.1.50:3000`) in the connection sheet.
+   - Tap **Scan LAN** or scan the QR code shown in the PC Quick Setup modal for instant zero-typing pairing.
+   - You can also enter your PC's LAN IP address manually (e.g., `192.168.1.50:8765`).
 
 ---
 
@@ -72,6 +71,6 @@ To use local AI diagnostics without external API keys:
 
 1. Install [Ollama](https://ollama.com) and pull a model:
    ```bash
-   ollama run llama3
+   ollama run deepseek-r1:latest
    ```
-2. In the AI NetController dashboard, open **Settings -> AI Engine** and select **Local (Ollama)**.
+2. In the AI NetController dashboard, open **Settings -> AI Engine** and select **DeepSeek-R1 (Local / Ollama)**.

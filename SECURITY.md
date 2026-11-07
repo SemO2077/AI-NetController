@@ -2,21 +2,22 @@
 
 ## Supported Versions
 
-Security fixes are applied to the latest beta release branch (`0.32.x`).
+Security fixes are applied to the latest beta release branch (`0.33.x`).
 
 | Version | Supported |
 | :--- | :--- |
-| `0.32.x` | Yes |
-| `0.31.x` | Security fixes only |
-| `< 0.31.0` | No |
+| `0.33.x` | Yes |
+| `0.32.x` | Security fixes only |
+| `< 0.32.0` | No |
 
 ---
 
 ## Security Architecture
 
-- **Command Execution Whitelisting**: The Windows Host Agent (`agent/net_agent.py`) validates all incoming control commands against a strict allowlist and executes system tools (`netsh`, `powershell`, `tshark`) via parameterized argument lists (`shell=False`).
-- **Privilege Separation**: When launched without Administrator privileges, the Host Agent automatically disables QoS mutation and raw socket capture, operating in read-only telemetry mode.
-- **Local-First AI Privacy**: Network diagnostics can be run entirely offline via a local Ollama instance (`http://localhost:11434`). When cloud LLM providers are used, sensitive local identifiers are redacted before outbound requests.
+- **AST Command Firewall & De-Obfuscation**: Both the Windows Host Agent (`agent/command_ast_firewall.py`) and the Express Control Server (`apps/web/server.ts`, `apps/web/src/services/securityService.ts`) normalize shell obfuscation tricks (`^`, backticks, env slices) and block destructive commands and LOLBin payload downloads prior to execution.
+- **Secret Scrubbing & Process Sandboxing**: Child processes spawned by the Host Agent or Control Server strip sensitive environment variables (`GEMINI_API_KEY`, `AI_AGENT_SECRET`, `GITHUB_TOKEN`, etc.) and run inside memory-capped Windows Job Objects (`256 MB` limit, `KILL_ON_JOB_CLOSE`).
+- **Zero-Trust Wire Protocol**: Sessions support ephemeral X25519 key exchange, ChaCha20-Poly1305 AEAD encryption, and RFC 6479 128-bit sliding-window anti-replay bitmaps (`agent/zero_trust_pairing.py`).
+- **Local-First AI Privacy**: Network diagnostics can run entirely offline via a local Ollama instance (`http://localhost:11434`).
 
 ---
 

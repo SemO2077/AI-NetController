@@ -177,7 +177,7 @@ function getGenAI() {
 
 // Role-specific System Instructions with Full PC Control, Daemon Security & System Update Capabilities
 const SYSTEM_INSTRUCTIONS: Record<string, string> = {
-  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system update copilot for AI NetController v0.32.0.
+  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system update copilot for AI NetController v0.33.0.
 You manage heterogeneous Windows and Linux hosts across local subnets and possess direct remote control over PC mouse, keyboard, media keys, shell commands, Wake-on-LAN, PC Daemon security profiles, and System/AI Model Updates.
 
 Your Executable Action Directives (include these exact tags whenever the user asks to perform an action or when an action is helpful):
@@ -225,16 +225,24 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'online',
     protocol: 'CST/3.0-SECURE',
-    version: '0.32.0',
+    version: '0.33.0',
     timestamp: new Date().toISOString(),
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
     models: DYNAMIC_MODELS,
   });
 });
 
+let cachedReleasesPayload: { data: any; timestamp: number } | null = null;
+const RELEASES_CACHE_TTL_MS = 30_000;
+
 // Release Binaries (.EXE & .APK) & Patch Notes Endpoint
 app.get('/api/releases', (_req: Request, res: Response) => {
   try {
+    const now = Date.now();
+    if (cachedReleasesPayload && now - cachedReleasesPayload.timestamp < RELEASES_CACHE_TTL_MS) {
+      return res.json(cachedReleasesPayload.data);
+    }
+    const v330Path = path.join(RELEASES_PUBLIC_DIR, 'v0.33.0', 'RELEASE_MANIFEST.json');
     const v320Path = path.join(RELEASES_PUBLIC_DIR, 'v0.32.0', 'RELEASE_MANIFEST.json');
     const v310Path = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
     const v300Path = path.join(RELEASES_PUBLIC_DIR, 'v0.30.0', 'RELEASE_MANIFEST.json');
@@ -243,7 +251,9 @@ app.get('/api/releases', (_req: Request, res: Response) => {
     const v271Path = path.join(RELEASES_PUBLIC_DIR, 'v0.27.1', 'RELEASE_MANIFEST.json');
     const v270Path = path.join(RELEASES_PUBLIC_DIR, 'v0.27.0', 'RELEASE_MANIFEST.json');
     const patchNotesPath = path.join(ROOT_DIR, 'PATCH_NOTES.md');
-    const manifest = fs.existsSync(v320Path)
+    const manifest = fs.existsSync(v330Path)
+      ? JSON.parse(fs.readFileSync(v330Path, 'utf-8'))
+      : fs.existsSync(v320Path)
       ? JSON.parse(fs.readFileSync(v320Path, 'utf-8'))
       : fs.existsSync(v310Path)
       ? JSON.parse(fs.readFileSync(v310Path, 'utf-8'))
@@ -256,19 +266,21 @@ app.get('/api/releases', (_req: Request, res: Response) => {
       : fs.existsSync(v271Path)
       ? JSON.parse(fs.readFileSync(v271Path, 'utf-8'))
       : (fs.existsSync(v270Path) ? JSON.parse(fs.readFileSync(v270Path, 'utf-8')) : null);
-    const legacyManifest = fs.existsSync(v310Path)
-      ? JSON.parse(fs.readFileSync(v310Path, 'utf-8'))
-      : (fs.existsSync(v300Path) ? JSON.parse(fs.readFileSync(v300Path, 'utf-8')) : null);
+    const legacyManifest = fs.existsSync(v320Path)
+      ? JSON.parse(fs.readFileSync(v320Path, 'utf-8'))
+      : (fs.existsSync(v310Path) ? JSON.parse(fs.readFileSync(v310Path, 'utf-8')) : null);
     const patchNotes = fs.existsSync(patchNotesPath)
       ? fs.readFileSync(patchNotesPath, 'utf-8')
       : '';
-    return res.json({
+    const payload = {
       success: true,
       manifest,
       legacyManifest,
-      availableVersions: ['v0.32.0', 'v0.31.3', 'v0.31.2', 'v0.31.1', 'v0.30.0', 'v0.29.0', 'v0.28.0', 'v0.27.1', 'v0.27.0'],
+      availableVersions: ['v0.33.0', 'v0.32.0', 'v0.31.3', 'v0.31.2', 'v0.31.1', 'v0.30.0', 'v0.29.0', 'v0.28.0', 'v0.27.1', 'v0.27.0'],
       patchNotes,
-    });
+    };
+    cachedReleasesPayload = { data: payload, timestamp: now };
+    return res.json(payload);
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to read release manifest' });
   }
@@ -279,15 +291,16 @@ app.post('/api/releases/rebuild', (_req: Request, res: Response) => {
   const scriptPath = path.join(ROOT_DIR, 'scripts', 'build_release_binaries.py');
   const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
   exec(`"${pythonCmd}" "${scriptPath}"`, { timeout: 25000 }, (err, stdout, stderr) => {
+    cachedReleasesPayload = null;
     if (err) {
       return res.status(500).json({
         success: false,
         error: stderr || err.message,
       });
     }
-    const manifestPath = path.join(RELEASES_PUBLIC_DIR, 'v0.32.0', 'RELEASE_MANIFEST.json');
-    const fallbackPath = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
-    const legacyPath = path.join(RELEASES_PUBLIC_DIR, 'v0.27.0', 'RELEASE_MANIFEST.json');
+    const manifestPath = path.join(RELEASES_PUBLIC_DIR, 'v0.33.0', 'RELEASE_MANIFEST.json');
+    const fallbackPath = path.join(RELEASES_PUBLIC_DIR, 'v0.32.0', 'RELEASE_MANIFEST.json');
+    const legacyPath = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
     const manifest = fs.existsSync(manifestPath)
       ? JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
       : fs.existsSync(fallbackPath)
@@ -471,7 +484,17 @@ function sampleRealCpuPercent(): number {
   return lastCpuPercent;
 }
 
+let cachedDiskPercent = 0;
+let lastDiskSampleTime = 0;
+let cachedActiveAdapters: Array<{ name: string; ipv4: string; mac: string }> = [];
+let lastAdapterSampleTime = 0;
+
 function sampleRealDiskPercent(): number {
+  const now = Date.now();
+  if (now - lastDiskSampleTime < 5000) {
+    return cachedDiskPercent;
+  }
+  lastDiskSampleTime = now;
   try {
     if (typeof fs.statfsSync === 'function') {
       const rootPath = path.parse(process.cwd()).root || '/';
@@ -479,13 +502,34 @@ function sampleRealDiskPercent(): number {
       const totalBlocks = Number(stat.blocks || 0);
       const freeBlocks = Number(stat.bfree || 0);
       if (totalBlocks > 0) {
-        return Number((((totalBlocks - freeBlocks) / totalBlocks) * 100).toFixed(1));
+        cachedDiskPercent = Number((((totalBlocks - freeBlocks) / totalBlocks) * 100).toFixed(1));
+        return cachedDiskPercent;
       }
     }
   } catch {
     // Ignore statfs errors
   }
-  return 0;
+  return cachedDiskPercent;
+}
+
+function sampleActiveAdapters(): Array<{ name: string; ipv4: string; mac: string }> {
+  const now = Date.now();
+  if (now - lastAdapterSampleTime < 5000 && cachedActiveAdapters.length > 0) {
+    return cachedActiveAdapters;
+  }
+  lastAdapterSampleTime = now;
+  const nets = os.networkInterfaces();
+  const activeAdapters: Array<{ name: string; ipv4: string; mac: string }> = [];
+  for (const [name, list] of Object.entries(nets)) {
+    for (const net of list || []) {
+      if (net.family === 'IPv4' && !net.internal) {
+        const cleanMac = net.mac && net.mac !== '00:00:00:00:00:00' ? net.mac.toUpperCase() : '';
+        activeAdapters.push({ name, ipv4: net.address, mac: cleanMac });
+      }
+    }
+  }
+  cachedActiveAdapters = activeAdapters;
+  return activeAdapters;
 }
 
 interface DaemonConnectedClient {
@@ -512,7 +556,7 @@ interface BlacklistedDeviceEntry {
 }
 
 const pcDaemonState = {
-  version: '0.32.0',
+  version: '0.33.0',
   protocol: 'CST/3.0-SECURE',
   hostname: os.hostname() || 'LOCALHOST',
   osName: `${os.type()} ${os.release()} (${os.arch()})`,
@@ -571,16 +615,7 @@ function getDaemonSnapshot() {
   const mins = String(Math.floor((elapsedSec % 3600) / 60)).padStart(2, '0');
   const secs = String(elapsedSec % 60).padStart(2, '0');
 
-  const nets = os.networkInterfaces();
-  const activeAdapters: Array<{ name: string; ipv4: string; mac: string }> = [];
-  for (const [name, list] of Object.entries(nets)) {
-    for (const net of list || []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        const cleanMac = net.mac && net.mac !== '00:00:00:00:00:00' ? net.mac.toUpperCase() : '';
-        activeAdapters.push({ name, ipv4: net.address, mac: cleanMac });
-      }
-    }
-  }
+  const activeAdapters = sampleActiveAdapters();
 
   return {
     ...pcDaemonState,
@@ -902,11 +937,11 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
         pairingToken: snap.pairingToken,
         webOrigin,
         mobilePairUrl,
-        exeDownloadUrl: '/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64.exe',
-        apkDownloadUrl: '/releases/v0.32.0/AI_NetController_v0.32.0_arm64-v8a.apk',
-        portableZipUrl: '/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64_portable.zip',
-        legacyExeDownloadUrl: '/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe',
-        legacyApkDownloadUrl: '/releases/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk',
+        exeDownloadUrl: '/releases/v0.33.0/AI_NetController_HostAgent_v0.33.0_win64.exe',
+        apkDownloadUrl: '/releases/v0.33.0/AI_NetController_v0.33.0_arm64-v8a.apk',
+        portableZipUrl: '/releases/v0.33.0/AI_NetController_HostAgent_v0.33.0_win64_portable.zip',
+        legacyExeDownloadUrl: '/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64.exe',
+        legacyApkDownloadUrl: '/releases/v0.32.0/AI_NetController_v0.32.0_arm64-v8a.apk',
         launcherDownloadUrl: '/api/setup/windows-launcher',
       },
     });
@@ -923,9 +958,10 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     'title AI NetController — 1-Click PC & Phone Setup',
     'color 0B',
     'echo ============================================================================',
-    'echo   AI NetController v0.32.0 - Automatic PC ^& Phone Setup Wizard',
+    'echo   AI NetController v0.33.0 - Automatic PC ^& Phone Setup Wizard',
     'echo ============================================================================',
     'echo.',
+    `set AI_AGENT_SECRET=${snap.pairingToken}`,
     `set CST_AGENT_SECRET=${snap.pairingToken}`,
     `set CST_AGENT_PORT=${snap.port}`,
     'cd /d "%~dp0"',
@@ -938,7 +974,7 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     '        python -m pip install -r agent\\requirements.txt --quiet',
     '    )',
     ') else (',
-    '    echo [!] Python not found in PATH. Looking for standalone AI_NetController_HostAgent_v0.32.0_win64.exe...',
+    '    echo [!] Python not found in PATH. Looking for standalone AI_NetController_HostAgent_v0.33.0_win64.exe...',
     ')',
     '',
     'echo [2/4] Configuring Windows Private LAN Firewall rules (Ports 8765 ^& 3000)...',
@@ -949,25 +985,19 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     '    netsh advfirewall firewall add rule name="AI NetController WoL" dir=in action=allow protocol=UDP localport=9 profile=private >nul 2>nul',
     ')',
     '',
-    'echo [3/4] Launching CST PC Host Daemon Desktop Control Center...',
-    'if exist "public\\releases\\v0.32.0\\AI_NetController_HostAgent_v0.32.0_win64.exe" (',
+    'echo [3/4] Launching AI NetController Host Agent Desktop Control Center...',
+    'if exist "public\\releases\\v0.33.0\\AI_NetController_HostAgent_v0.33.0_win64.exe" (',
+    '    start "AI NetController Host Agent" "public\\releases\\v0.33.0\\AI_NetController_HostAgent_v0.33.0_win64.exe"',
+    ') else if exist "public\\releases\\v0.32.0\\AI_NetController_HostAgent_v0.32.0_win64.exe" (',
     '    start "AI NetController Host Agent" "public\\releases\\v0.32.0\\AI_NetController_HostAgent_v0.32.0_win64.exe"',
     ') else if exist "public\\releases\\v0.31.3\\AI_NetController_HostAgent_v0.31.3_win64.exe" (',
     '    start "AI NetController Host Agent" "public\\releases\\v0.31.3\\AI_NetController_HostAgent_v0.31.3_win64.exe"',
-    ') else if exist "public\\releases\\v0.27.1\\AI_NetController_HostAgent_v0.27.1_win64.exe" (',
-    '    start "AI NetController Host Agent" "public\\releases\\v0.27.1\\AI_NetController_HostAgent_v0.27.1_win64.exe"',
-    ') else if exist "public\\releases\\v0.27.0\\AI_NetController_HostAgent_v0.27.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "public\\releases\\v0.27.0\\AI_NetController_HostAgent_v0.27.0_win64.exe"',
+    ') else if exist "AI_NetController_HostAgent_v0.33.0_win64.exe" (',
+    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.33.0_win64.exe"',
     ') else if exist "AI_NetController_HostAgent_v0.32.0_win64.exe" (',
     '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.32.0_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v0.31.3_win64.exe" (',
-    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.31.3_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v0.27.1_win64.exe" (',
-    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.27.1_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v0.27.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.27.0_win64.exe"',
-    ') else if exist "agent\\dist\\CST_Agent_Daemon\\CST_Agent_Daemon.exe" (',
-    '    start "AI NetController Host Agent" "agent\\dist\\CST_Agent_Daemon\\CST_Agent_Daemon.exe"',
+    ') else if exist "agent\\dist\\AI_NetController_HostAgent\\AI_NetController_HostAgent.exe" (',
+    '    start "AI NetController Host Agent" "agent\\dist\\AI_NetController_HostAgent\\AI_NetController_HostAgent.exe"',
     ') else if exist "agent\\agent_gui.py" (',
     '    start "AI NetController Host Agent" python "agent\\agent_gui.py"',
     ')',
@@ -982,7 +1012,7 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     '    call npm run dev',
     ') else (',
     '    echo.',
-    '    echo [OK] PC Daemon is running! Open the CST app on your phone and scan the QR code.',
+    '    echo [OK] PC Daemon is running! Open the AI NetController app on your phone and scan the QR code.',
     '    pause',
     ')',
   ];
@@ -1042,14 +1072,14 @@ const systemUpdateRegistry: SystemUpdateComponentState[] = [
   },
   {
     id: 'cst-host-agent',
-    name: 'CST Host Daemon (Python + Native Win32 GUI)',
+    name: 'AI NetController Host Agent (Python + Native Win32 GUI)',
     category: 'agent',
-    currentVersion: 'v0.31.3',
-    latestVersion: 'v0.32.0',
+    currentVersion: 'v0.32.0',
+    latestVersion: 'v0.33.0',
     status: 'available',
     size: '18.4 MB',
     lastChecked: 'Just now',
-    changelog: 'v0.32.0: Redesigned mobile & tablet UI, edge-to-edge native Android shell, and streamlined repository documentation.',
+    changelog: 'v0.33.0: End-to-end performance optimization, hardened AST & LOLBin firewall, 120Hz UI smoothness, and full Android/Web API parity.',
   },
   {
     id: 'ast-security-rules',
@@ -1119,15 +1149,19 @@ async function runSystemUpdateExecution(componentId?: string, updateAll = false)
   };
 }
 
+let cachedPythonVersion: string | null = null;
+
 // System Update Status Endpoint
 app.get('/api/update/status', async (_req: Request, res: Response) => {
   try {
     const nodeVersion = process.version;
-    const pythonCheck = await new Promise<string>((resolve) => {
-      exec('python3 --version || python --version', (err, stdout) => {
-        resolve(err ? 'Python 3.12 (Embedded Runtime)' : stdout.trim());
+    if (!cachedPythonVersion) {
+      cachedPythonVersion = await new Promise<string>((resolve) => {
+        exec('python3 --version || python --version', { timeout: 3000 }, (err, stdout) => {
+          resolve(err ? 'Python 3.12 (Embedded Runtime)' : stdout.trim());
+        });
       });
-    });
+    }
 
     const hostAgent = systemUpdateRegistry.find((c) => c.id === 'cst-host-agent');
 
@@ -1135,9 +1169,9 @@ app.get('/api/update/status', async (_req: Request, res: Response) => {
       success: true,
       timestamp: new Date().toISOString(),
       nodeVersion,
-      pythonVersion: pythonCheck,
+      pythonVersion: cachedPythonVersion,
       aiModels: DYNAMIC_MODELS.map((m) => m.id),
-      agentVersion: hostAgent?.currentVersion || 'v0.32.0',
+      agentVersion: hostAgent?.currentVersion || 'v0.33.0',
       components: systemUpdateRegistry,
       updatesAvailableCount: systemUpdateRegistry.filter((c) => c.status === 'available').length,
       status: 'ready',
@@ -1256,7 +1290,7 @@ Provide a concise, high-signal 3-point engineering advisory: 1) Security & Proto
 // Real UDP Wake-on-LAN Magic Packet Dispatch
 app.post('/api/wol', async (req: Request, res: Response) => {
   try {
-    const { mac, broadcastIp = '255.255.255.255', port = 9 } = req.body;
+    const { mac, broadcastIp = '255.255.255.255', port = 9, secureOn } = req.body;
     if (!mac) {
       return res.status(400).json({ error: 'MAC address is required' });
     }
@@ -1264,6 +1298,11 @@ app.post('/api/wol', async (req: Request, res: Response) => {
     const cleanMac = String(mac).replace(/[^a-fA-F0-9]/g, '');
     if (cleanMac.length !== 12) {
       return res.status(400).json({ error: 'Invalid MAC address format (must be 12 hex characters)' });
+    }
+
+    const cleanSecureOn = secureOn ? String(secureOn).replace(/[^a-fA-F0-9]/g, '') : '';
+    if (cleanSecureOn && cleanSecureOn.length !== 12) {
+      return res.status(400).json({ error: 'Invalid SecureOn password format (must be 12 hex characters / 6 bytes)' });
     }
 
     const targetPort = Number(port);
@@ -1278,10 +1317,14 @@ app.post('/api/wol', async (req: Request, res: Response) => {
     }
 
     const macBytes = Buffer.from(cleanMac, 'hex');
-    const magicPacket = Buffer.alloc(102);
+    const packetSize = cleanSecureOn ? 108 : 102;
+    const magicPacket = Buffer.alloc(packetSize);
     magicPacket.fill(0xff, 0, 6);
     for (let i = 0; i < 16; i++) {
       macBytes.copy(magicPacket, 6 + i * 6);
+    }
+    if (cleanSecureOn) {
+      Buffer.from(cleanSecureOn, 'hex').copy(magicPacket, 102);
     }
 
     const client = dgram.createSocket('udp4');
@@ -1414,6 +1457,7 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
     /\brm\s+-[rRfF]+\s+(?:\/|\*)\b/, // Root filesystem deletion
     /%[a-zA-Z0-9_]+:~\d+,\d+%/, // Windows CMD environment variable substring slicing evasion
     /\b(?:0x[0-9a-f]{8}|0[0-7]{10,})\b/i, // Hex/octal IP encoding evasion
+    /\b(?:certutil\s+.*-urlcache|bitsadmin\s+.*\/transfer|mshta\s+https?:|regsvr32\s+.*\/i:https?:)/i, // Windows LOLBin abuse
   ];
 
   for (const pattern of criticalBlockPatterns) {
@@ -1456,7 +1500,28 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
   };
 }
 
-// Real Command Execution Endpoint (Hardened with AST Firewall Policy v2026.10-REV5)
+const SCRUBBED_CHILD_ENV_KEYS = new Set([
+  'GEMINI_API_KEY',
+  'API_KEY',
+  'CST_AGENT_SECRET',
+  'AI_AGENT_SECRET',
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+]);
+
+function createSafeChildEnv(): NodeJS.ProcessEnv {
+  const safeEnv: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!SCRUBBED_CHILD_ENV_KEYS.has(k.toUpperCase())) {
+      safeEnv[k] = v;
+    }
+  }
+  return safeEnv;
+}
+
+// Real Command Execution Endpoint (Hardened with AST Firewall Policy v2026.11-REV1)
 app.post('/api/command/execute', async (req: Request, res: Response) => {
   try {
     const { command, hostId } = req.body;
@@ -1480,7 +1545,7 @@ app.post('/api/command/execute', async (req: Request, res: Response) => {
 
     const rawCmd = inspection.sanitizedCmd;
     const startTime = Date.now();
-    exec(rawCmd, { timeout: 15000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    exec(rawCmd, { timeout: 15000, maxBuffer: 1024 * 1024, env: createSafeChildEnv() }, (error, stdout, stderr) => {
       const durationMs = Date.now() - startTime;
       return res.json({
         success: !error,
@@ -1907,7 +1972,7 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
 
       const execTargetCmd = inspection.sanitizedCmd;
       const output = await new Promise<string>((resolve) => {
-        exec(execTargetCmd, { timeout: 8000, maxBuffer: 512 * 1024 }, (err, stdout, stderr) => {
+        exec(execTargetCmd, { timeout: 8000, maxBuffer: 512 * 1024, env: createSafeChildEnv() }, (err, stdout, stderr) => {
           const out = (stdout || stderr || (err ? err.message : 'Executed (exit code 0)')).trim();
           resolve(out.slice(0, 1200));
         });
