@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 AI NetController - Standalone Binary & Release Builder
-Generates standalone packaged release artifacts for GitHub Releases and Web OTA distribution:
+Generates standalone packaged release artifacts for GitLab Releases and Web OTA distribution:
 1. AI_NetController_HostAgent_{version}_win64.exe (PE32+ Windows launcher + embedded Python 3.12 payload)
 2. AI_NetController_{version}_arm64-v8a.apk (Signed Android APK package)
 3. AI_NetController_HostAgent_{version}_win64_portable.zip (Full Windows Agent source + portable launcher)

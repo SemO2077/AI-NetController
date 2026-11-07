@@ -145,10 +145,10 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
 git add .
 git commit -m "release: AI NetController v0.35.0 (APK + EXE + Patch Notes)"
 git tag -a v0.35.0 -m "AI NetController v0.35.0"
-git push origin main --tags
+git push gitlab main --tags
 
 # 2. Or publish pre-built binaries directly with GitHub CLI (gh):
-gh release create v0.35.0 \\
+python scripts/publish_gitlab_release.py --tag v0.35.0 \\
   public/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe \\
   public/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk \\
   public/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64_portable.zip \\
@@ -496,8 +496,8 @@ gh release create v0.35.0 \\
                   <Terminal className="w-4 h-4 text-cyan-400 shrink-0" />
                   <span className="text-xs font-mono font-bold text-white uppercase break-words">
                     {isBg
-                      ? 'Публикуване в GitHub Releases (.github/workflows/release.yml & gh CLI)'
-                      : 'Publish to GitHub Releases (.github/workflows/release.yml & gh CLI)'}
+                      ? 'Публикуване в GitLab Releases (publish_gitlab_release.py)'
+                      : 'Publish to GitLab Releases (publish_gitlab_release.py)'}
                   </span>
                 </div>
                 <button

@@ -211,7 +211,7 @@ class CommandASTFirewall:
         logger.info(f"Executing sandboxed command [{risk}]: {normalized_cmd}")
 
         # Scrub sensitive daemon secrets from child environment
-        safe_env = {k: v for k, v in os.environ.items() if k.upper() not in ("AI_AGENT_SECRET", "CST_AGENT_SECRET", "GEMINI_API_KEY", "API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "GH_TOKEN")}
+        safe_env = {k: v for k, v in os.environ.items() if k.upper() not in ("AI_AGENT_SECRET", "CST_AGENT_SECRET", "GEMINI_API_KEY", "API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITLAB_TOKEN", "GL_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")}
 
         proc = None
         try:

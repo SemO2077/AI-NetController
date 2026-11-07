@@ -1,6 +1,6 @@
 # AI NetController
 
-[![Version](https://img.shields.io/badge/version-v0.35.0-00e5ff.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v0.35.0)
+[![Version](https://img.shields.io/badge/version-v0.35.0-00e5ff.svg)](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.35.0)
 [![Build](https://img.shields.io/badge/build-passing-10b981.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -10,7 +10,7 @@
 
 ## Downloads (v0.35.0)
 
-Download the prebuilt binaries from [GitHub Releases](https://github.com/smehmedd/AI-NetController/releases/tag/v0.35.0):
+Download the prebuilt binaries from [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.35.0):
 
 | Platform | Package | Description |
 | :--- | :--- | :--- |
@@ -71,7 +71,7 @@ AI-NetController/
 Prerequisites: **Node.js 20+** and **Python 3.11+**.
 
 ```bash
-git clone https://github.com/smehmedd/AI-NetController.git
+git clone https://gitlab.com/ryu-group7483245/ai-netcontroller.git
 cd AI-NetController
 npm install
 npm run dev

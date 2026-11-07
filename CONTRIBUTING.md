@@ -13,7 +13,7 @@ Contributions, bug reports, and feature requests are welcome. This guide covers 
 
 ### Install Dependencies
 ```bash
-git clone https://github.com/smehmedd/AI-NetController.git
+git clone https://gitlab.com/ryu-group7483245/ai-netcontroller.git
 cd AI-NetController
 npm install
 pip install -r agent/requirements.txt
@@ -30,9 +30,9 @@ pip install -r agent/requirements.txt
 
 ---
 
-## Running Checks Before Submitting a PR
+## Running Checks Before Submitting a MR
 
-Please make sure all checks pass locally before opening a pull request:
+Please make sure all checks pass locally before opening a merge request:
 
 ```bash
 # 1. TypeScript compiler check
@@ -47,7 +47,7 @@ python -m unittest discover -s agent/tests
 
 ---
 
-## Pull Request Guidelines
+## Merge Request Guidelines
 
 1. Create a feature branch from `main` (e.g., `git checkout -b feat/wol-schedule` or `fix/firewall-rule`).
 2. Keep commits focused and write clear commit messages (`feat: ...`, `fix: ...`, `docs: ...`, `refactor: ...`).
