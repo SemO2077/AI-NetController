@@ -142,19 +142,19 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
     }
   };
 
-  const ghReleaseCommands = `# 1. Tag and push v0.31.3 (triggers .github/workflows/release.yml automatically)
+  const ghReleaseCommands = `# 1. Tag and push v0.32.0 (triggers .github/workflows/release.yml automatically)
 git add .
-git commit -m "release: AI NetController v0.31.3 (APK + EXE + Patch Notes)"
-git tag -a v0.31.3 -m "AI NetController v0.31.3"
+git commit -m "release: AI NetController v0.32.0 (APK + EXE + Patch Notes)"
+git tag -a v0.32.0 -m "AI NetController v0.32.0"
 git push origin main --tags
 
 # 2. Or publish pre-built binaries directly with GitHub CLI (gh):
-gh release create v0.31.3 \\
-  public/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe \\
-  public/releases/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk \\
-  public/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64_portable.zip \\
-  public/releases/v0.31.3/SHA256SUMS.txt \\
-  --title "AI NetController v0.31.3 — QoL & Usability Refinement Release" \\
+gh release create v0.32.0 \\
+  public/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64.exe \\
+  public/releases/v0.32.0/AI_NetController_v0.32.0_arm64-v8a.apk \\
+  public/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64_portable.zip \\
+  public/releases/v0.32.0/SHA256SUMS.txt \\
+  --title "AI NetController v0.32.0 — QoL & Usability Refinement Release" \\
   --notes-file PATCH_NOTES.md`;
 
   const handleCopyGhCommands = () => {
@@ -190,7 +190,7 @@ gh release create v0.31.3 \\
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'ai_netcontroller_v0.31.3_source_and_builders.zip';
+      a.download = 'ai_netcontroller_v0.32.0_source_and_builders.zip';
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -202,31 +202,31 @@ gh release create v0.31.3 \\
 
   const artifacts: ReleaseArtifact[] = manifest?.artifacts || [
     {
-      filename: 'AI_NetController_HostAgent_v0.31.3_win64.exe',
+      filename: 'AI_NetController_HostAgent_v0.32.0_win64.exe',
       kind: 'exe',
       platform: 'Windows 10/11 x64 (Standalone Host Agent .EXE)',
       sizeBytes: 35330608,
       sizeFormatted: '33.7 MB',
       sha256: 'pending_build',
-      downloadUrl: '/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe',
+      downloadUrl: '/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64.exe',
     },
     {
-      filename: 'AI_NetController_v0.31.3_arm64-v8a.apk',
+      filename: 'AI_NetController_v0.32.0_arm64-v8a.apk',
       kind: 'apk',
       platform: 'Android 10–15 arm64-v8a (120Hz Mobile Controller .APK)',
       sizeBytes: 22817627,
       sizeFormatted: '21.8 MB',
       sha256: 'pending_build',
-      downloadUrl: '/releases/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk',
+      downloadUrl: '/releases/v0.32.0/AI_NetController_v0.32.0_arm64-v8a.apk',
     },
     {
-      filename: 'AI_NetController_HostAgent_v0.31.3_win64_portable.zip',
+      filename: 'AI_NetController_HostAgent_v0.32.0_win64_portable.zip',
       kind: 'zip',
       platform: 'Windows Portable Agent Bundle + Internal Runtime (.ZIP)',
       sizeBytes: 36558735,
       sizeFormatted: '34.9 MB',
       sha256: 'pending_build',
-      downloadUrl: '/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64_portable.zip',
+      downloadUrl: '/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64_portable.zip',
     },
   ];
 
@@ -245,7 +245,7 @@ gh release create v0.31.3 \\
                   {isBg ? 'БИНАРНИ РЕЛИЙЗИ (.APK / .EXE) И ИЗХОДЕН КОД' : 'RELEASE BINARIES (.APK / .EXE) & SOURCE ARCHIVE'}
                 </h2>
                 <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-[10px] font-mono font-semibold shrink-0">
-                  v0.31.3
+                  v0.32.0
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-mono truncate">
@@ -297,7 +297,7 @@ gh release create v0.31.3 \\
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>{isBg ? '🚀 v0.31.3 .APK & .EXE Релийз' : '🚀 v0.31.3 .APK & .EXE Releases'}</span>
+            <span>{isBg ? '🚀 v0.32.0 .APK & .EXE Релийз' : '🚀 v0.32.0 .APK & .EXE Releases'}</span>
           </button>
 
           <button
@@ -394,8 +394,8 @@ gh release create v0.31.3 \\
                   <ShieldCheck className="w-4 h-4 text-emerald-400" />
                   <span>
                     {isBg
-                      ? 'Официални компилирани бинарни пакети (v0.31.3)'
-                      : 'Official Packaged Release Binaries (v0.31.3)'}
+                      ? 'Официални компилирани бинарни пакети (v0.32.0)'
+                      : 'Official Packaged Release Binaries (v0.32.0)'}
                   </span>
                 </h3>
                 <p className="text-xs text-slate-400 font-mono">
@@ -417,7 +417,7 @@ gh release create v0.31.3 \\
                   <span>{isBg ? 'Отвори PC Демон GUI' : 'Open PC Daemon GUI'}</span>
                 </button>
                 <a
-                  href="/releases/v0.31.3/SHA256SUMS.txt"
+                  href="/releases/v0.32.0/SHA256SUMS.txt"
                   download="SHA256SUMS.txt"
                   className="px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-xs font-mono text-cyan-300 flex items-center gap-1.5 transition"
                 >
@@ -523,7 +523,7 @@ gh release create v0.31.3 \\
               <div className="rounded-2xl bg-[#0b1324]/70 border border-white/10 p-4 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-mono font-bold text-emerald-300 uppercase">
-                    📄 PATCH_NOTES.md (v0.31.3)
+                    📄 PATCH_NOTES.md (v0.32.0)
                   </span>
                 </div>
                 <pre className="p-3.5 rounded-xl bg-black/60 border border-white/10 font-mono text-[11px] text-slate-300 max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed">
@@ -601,8 +601,8 @@ gh release create v0.31.3 \\
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
             <span>
               {isBg
-                ? 'v0.31.3 Бинарни пакети готови (.APK & .EXE) • UTF-8'
-                : 'v0.31.3 Binaries Ready (.APK & .EXE) • UTF-8'}
+                ? 'v0.32.0 Бинарни пакети готови (.APK & .EXE) • UTF-8'
+                : 'v0.32.0 Binaries Ready (.APK & .EXE) • UTF-8'}
             </span>
           </div>
           <span>CST/3.0-SECURE</span>

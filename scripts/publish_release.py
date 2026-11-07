@@ -4,7 +4,7 @@ AI NetController - Unified GitHub Release Publisher
 Publishes or updates release notes, tags, and binary artifacts on GitHub.
 
 Usage:
-    python scripts/publish_release.py [--tag v0.31.3] [--draft]
+    python scripts/publish_release.py [--tag v0.32.0] [--draft]
 """
 
 import argparse
@@ -41,9 +41,9 @@ def get_current_version() -> str:
     if os.path.exists(pkg_json_path):
         with open(pkg_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            ver = data.get("version", "3.1.0-beta.3")
+            ver = data.get("version", "0.32.0")
             return f"v{ver}" if not ver.startswith("v") else ver
-    return "v0.31.3"
+    return "v0.32.0"
 
 
 def get_github_token() -> Optional[str]:
@@ -69,7 +69,7 @@ def get_github_token() -> Optional[str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Publish AI NetController GitHub Release")
-    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.31.3)")
+    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.32.0)")
     parser.add_argument("--name", default=None, help="Release name/title")
     parser.add_argument("--draft", action="store_true", help="Publish as draft")
     parser.add_argument("--dry-run", action="store_true", help="Simulate release without network calls")
