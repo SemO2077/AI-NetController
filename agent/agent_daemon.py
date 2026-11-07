@@ -685,6 +685,8 @@ def main():
                     gui_state = HostDaemonState(host="0.0.0.0", port=8765)
                     if ws_daemon:
                         ws_daemon.gui_state = gui_state
+                        ws_daemon.pairing_token = gui_state.pairing_token
+                        ws_daemon.pairing_pin = gui_state.pairing_pin
                         if hasattr(ws_daemon, "force_disconnect_client"):
                             gui_state.on_disconnect_callback = ws_daemon.force_disconnect_client
 

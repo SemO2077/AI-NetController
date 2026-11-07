@@ -82,6 +82,16 @@ except ImportError:
         get_icon_image = lambda size=64: None
         get_icon_ico_path = lambda: None
 
+try:
+    from daemon_config import load_config, save_config, get_config_path
+except ImportError:
+    try:
+        from agent.daemon_config import load_config, save_config, get_config_path
+    except ImportError:
+        load_config = lambda: {"pairing_pin": "847291", "pairing_token": "cst_autonomous_lan_secret_2025"}
+        save_config = lambda cfg: False
+        get_config_path = lambda: ""
+
 logger = logging.getLogger("AI-NetController-GUI")
 
 
@@ -114,8 +124,10 @@ class HostDaemonState:
         self.autostart_on_boot = True
         self.security_profile = "balanced"
         self.setup_completed = True
-        self.pairing_pin = f"{secrets.randbelow(900000) + 100000}"
-        self.pairing_token = os.environ.get("AI_AGENT_SECRET", os.environ.get("CST_AGENT_SECRET", "ai_netcontroller_secret_2025"))
+        # Load persistent configuration
+        self.config = load_config() if load_config else {}
+        self.pairing_pin = self.config.get("pairing_pin", f"{secrets.randbelow(900000) + 100000}")
+        self.pairing_token = self.config.get("pairing_token", os.environ.get("AI_AGENT_SECRET", os.environ.get("CST_AGENT_SECRET", "ai_netcontroller_secret_2025")))
 
         # Live metrics
         self.cpu_percent: float = 0.0
@@ -395,11 +407,16 @@ class HostDaemonState:
 
     def rotate_pairing_token(self) -> str:
         new_token = f"ai_sec_{secrets.token_hex(12)}"
+        new_pin = f"{secrets.randbelow(900000) + 100000}"
         with self.lock:
             self.pairing_token = new_token
-            self.pairing_pin = f"{secrets.randbelow(900000) + 100000}"
+            self.pairing_pin = new_pin
         os.environ["AI_AGENT_SECRET"] = new_token
         os.environ["CST_AGENT_SECRET"] = new_token
+        if save_config and hasattr(self, "config") and isinstance(self.config, dict):
+            self.config["pairing_token"] = new_token
+            self.config["pairing_pin"] = new_pin
+            save_config(self.config)
         self.add_log("SECURITY", f"Pairing token & 6-digit PIN ({self.pairing_pin}) rotated by operator.")
         return new_token
 

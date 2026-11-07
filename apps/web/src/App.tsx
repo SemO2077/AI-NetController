@@ -10,6 +10,7 @@ import { useWorkerEngine } from './hooks/useWorkerEngine';
 import { useFleetState } from './hooks/useFleetState';
 import { useUIStore, applyAppearanceToDocument } from './store/uiStore';
 import { triggerHapticFeedback } from './services/hapticService';
+import { saveAuthToken } from './services/securityService';
 import { AlertTriangle, ShieldAlert, X } from 'lucide-react';
 import { SPRING_BUBBLY, TAB_VIEW_VARIANTS } from './utils/springPhysics';
 
@@ -174,7 +175,12 @@ export default function App() {
         const pairName = params.get('pair_name') || `PC-${pairIp.split('.').pop() || 'HOST'}`;
         const pairMac = params.get('pair_mac') || '';
         const pairOs = params.get('pair_os') === 'linux' ? 'linux' : 'windows';
+        const pairToken = params.get('pair_token') || params.get('pair_pin') || params.get('token') || params.get('pin');
         const wsUri = `ws://${pairIp}:${pairPort}`;
+
+        if (pairToken) {
+          saveAuthToken(pairToken);
+        }
 
         fleet.addCustomHost({
           id: pairName.toUpperCase().replace(/[^A-Z0-9-]/g, '-'),

@@ -577,7 +577,7 @@ const pcDaemonState = {
   setupCompleted: true,
   securityProfile: 'balanced' as 'zero_trust' | 'balanced' | 'view_only',
   pairingPin: String(crypto.randomInt(100000, 1000000)),
-  pairingToken: process.env.CST_AGENT_SECRET || `cst_sec_${crypto.randomBytes(12).toString('hex')}`,
+  pairingToken: process.env.CST_AGENT_SECRET || process.env.AI_AGENT_SECRET || 'cst_autonomous_lan_secret_2025',
   connectedClients: [] as DaemonConnectedClient[],
   blacklistedDevices: [] as BlacklistedDeviceEntry[],
   avIntegrity: {
@@ -617,9 +617,29 @@ function getDaemonSnapshot() {
   const secs = String(elapsedSec % 60).padStart(2, '0');
 
   const activeAdapters = sampleActiveAdapters();
+  let dynamicPin = pcDaemonState.pairingPin;
+  let dynamicToken = pcDaemonState.pairingToken;
+  try {
+    const isWin = process.platform === 'win32';
+    const baseDir = isWin
+      ? (process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local'))
+      : path.join(os.homedir(), '.ai_netcontroller');
+    const cfgPath = isWin
+      ? path.join(baseDir, 'AI NetController', 'config.json')
+      : path.join(baseDir, 'config.json');
+    if (fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+      if (cfg.pairing_pin) dynamicPin = String(cfg.pairing_pin);
+      if (cfg.pairing_token) dynamicToken = String(cfg.pairing_token);
+    }
+  } catch {
+    // Ignore config read error
+  }
 
   return {
     ...pcDaemonState,
+    pairingPin: dynamicPin,
+    pairingToken: dynamicToken,
     wsUri: `ws://${pcDaemonState.localIp}:${pcDaemonState.port}`,
     uptime: `${hrs}:${mins}:${secs}`,
     cpuPercent,

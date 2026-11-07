@@ -90,6 +90,7 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
         "command_ast_firewall.py",
         "crypto_handshake.py",
         "crypto_vault.py",
+        "daemon_config.py",
         "host_file_writer.py",
         "icon_assets.py",
         "multi_monitor_streamer.py",

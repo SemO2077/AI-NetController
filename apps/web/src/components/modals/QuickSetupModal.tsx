@@ -50,6 +50,7 @@ interface QuickSetupModalProps {
     mac: string;
     os: 'windows' | 'linux';
     wsUri: string;
+    pairingToken?: string;
   }) => void;
   isConnected?: boolean;
 }
@@ -168,6 +169,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
       mac: effectiveMac,
       os: setupInfo?.osName?.toLowerCase().includes('linux') ? 'linux' : 'windows',
       wsUri: effectiveWsUri,
+      pairingToken: effectiveToken,
     });
     setIsPairedSuccess(true);
     setTimeout(() => setIsPairedSuccess(false), 3500);

@@ -146,6 +146,18 @@ except ImportError:
     except ImportError:
         get_icon_image = lambda size=64: None
 
+try:
+    from daemon_config import load_config, save_config, get_config_path, rotate_token, regenerate_pin
+except ImportError:
+    try:
+        from agent.daemon_config import load_config, save_config, get_config_path, rotate_token, regenerate_pin
+    except ImportError:
+        load_config = lambda: {"pairing_pin": "847291", "pairing_token": "cst_autonomous_lan_secret_2025"}
+        save_config = lambda cfg: False
+        get_config_path = lambda: ""
+        rotate_token = lambda: "cst_autonomous_lan_secret_2025"
+        regenerate_pin = lambda: "847291"
+
 # Configure logging with high-performance minimal formatter
 logging.basicConfig(
     level=logging.INFO,
@@ -569,6 +581,22 @@ class HostAgentDaemon:
         self._os_name = platform.system()
         self.clients: Set[WebSocketServerProtocol] = set()
         self.authenticated_clients: Set[WebSocketServerProtocol] = set()
+        # Persistent configuration (credentials, security policies, port)
+        self.config = load_config() if load_config else {}
+        self.pairing_pin = self.config.get("pairing_pin", "847291")
+        self.pairing_token = self.config.get("pairing_token", "cst_autonomous_lan_secret_2025")
+        if self.gui_state is not None:
+            # Bidirectional sync with GUI state
+            gui_pin = getattr(self.gui_state, "pairing_pin", None)
+            gui_tok = getattr(self.gui_state, "pairing_token", None)
+            if gui_pin:
+                self.pairing_pin = gui_pin
+            else:
+                self.gui_state.pairing_pin = self.pairing_pin
+            if gui_tok:
+                self.pairing_token = gui_tok
+            else:
+                self.gui_state.pairing_token = self.pairing_token
         # Per-connection nonce tracking: ws -> (nonce_bytes, timestamp)
         self.active_nonces: Dict[WebSocketServerProtocol, Tuple[bytes, float]] = {}
         self.screen_pipeline = AdaptiveScreenPipeline()
@@ -631,14 +659,27 @@ class HostAgentDaemon:
             self._get_current_secret(),
             b"cst_autonomous_lan_secret_2025",
             b"cst_thesis_2026_secret_key",
+            b"ai_netcontroller_secret_2025",
         ]
+        if getattr(self, "pairing_token", None):
+            tok_b = str(self.pairing_token).strip().encode("utf-8")
+            if tok_b and tok_b not in secrets_list:
+                secrets_list.append(tok_b)
+        if getattr(self, "pairing_pin", None):
+            pin_b = str(self.pairing_pin).strip().encode("utf-8")
+            if pin_b and pin_b not in secrets_list:
+                secrets_list.append(pin_b)
         if self.gui_state is not None:
             tok = getattr(self.gui_state, "pairing_token", None)
             pin = getattr(self.gui_state, "pairing_pin", None)
             if tok:
-                secrets_list.append(str(tok).encode("utf-8"))
+                tok_bytes = str(tok).strip().encode("utf-8")
+                if tok_bytes and tok_bytes not in secrets_list:
+                    secrets_list.append(tok_bytes)
             if pin:
-                secrets_list.append(str(pin).encode("utf-8"))
+                pin_bytes = str(pin).strip().encode("utf-8")
+                if pin_bytes and pin_bytes not in secrets_list:
+                    secrets_list.append(pin_bytes)
         return secrets_list
 
     async def start(self):
@@ -991,10 +1032,28 @@ class HostAgentDaemon:
                                 "seq": text_data.get("seq", 0)
                             }))
                             continue
-                        elif action == "AUTHENTICATE":
-                            token_bytes = str(text_data.get("token") or "").encode("utf-8", errors="replace")
+                        elif action in ("AUTHENTICATE", "PAIR", "AUTH"):
+                            if ws in self.authenticated_clients:
+                                effective_tok = getattr(self, "pairing_token", "") or (getattr(self.gui_state, "pairing_token", "") if self.gui_state else "")
+                                await ws.send(json.dumps({
+                                    "event": "AUTHENTICATED",
+                                    "status": "OK",
+                                    "protocol": "AI-NET/3.0-SECURE",
+                                    "timestamp": time.time(),
+                                    "pairingToken": effective_tok
+                                }))
+                                continue
+
+                            candidate_token = str(
+                                text_data.get("token") or
+                                text_data.get("pin") or
+                                text_data.get("pair_pin") or
+                                text_data.get("pair_token") or
+                                text_data.get("secret") or ""
+                            ).strip().encode("utf-8", errors="replace")
+
                             valid_tokens = self._get_valid_secrets()
-                            if any(hmac.compare_digest(token_bytes, vt) for vt in valid_tokens):
+                            if any(hmac.compare_digest(candidate_token, vt) for vt in valid_tokens):
                                 self.authenticated_clients.add(ws)
                                 self.active_nonces.pop(ws, None)
                                 if self.chaos_shield:
@@ -1012,20 +1071,22 @@ class HostAgentDaemon:
                                                 "isTrusted": True,
                                                 "inputAllowed": not self.view_only_mode,
                                             })
-                                    self.gui_state.add_log("SECURITY", f"Client {client_id} authenticated via JSON handshake.")
+                                    self.gui_state.add_log("SECURITY", f"Client {client_id} authenticated via JSON {action} handshake.")
+                                effective_tok = getattr(self, "pairing_token", "") or (getattr(self.gui_state, "pairing_token", "") if self.gui_state else "")
                                 await ws.send(json.dumps({
                                     "event": "AUTHENTICATED",
                                     "status": "OK",
                                     "protocol": "AI-NET/3.0-SECURE",
-                                    "timestamp": time.time()
+                                    "timestamp": time.time(),
+                                    "pairingToken": effective_tok
                                 }))
-                                logger.info(f"Client {client_id} authenticated via JSON AUTHENTICATE handshake.")
+                                logger.info(f"Client {client_id} authenticated via JSON {action} handshake.")
                             else:
                                 logger.warning(f"JSON Authentication failed from {client_id}")
                                 self._record_auth_failure(client_ip, client_id)
                                 await ws.send(json.dumps({
                                     "event": "ERROR",
-                                    "error": "Invalid authentication token",
+                                    "error": "Invalid authentication token or PIN",
                                     "code": 401
                                 }))
                                 await ws.close(code=1008, reason="Authentication failed")
@@ -1112,6 +1173,10 @@ class HostAgentDaemon:
                 # =====================================================
                 if opcode == OP_PING:
                     await ws.send(pack_packet(OP_PING, b'PONG', seq=seq))
+
+                elif opcode == OP_AUTH:
+                    # Client sent OP_AUTH packet when already authenticated (e.g. dual handshake or confirmation)
+                    await ws.send(pack_packet(OP_AUTH, b'OK_AUTHENTICATED', seq=seq))
 
                 elif opcode == OP_SHELL:
                     asyncio.create_task(self._process_shell_command(ws, payload, seq))

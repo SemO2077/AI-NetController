@@ -14,6 +14,7 @@ import { QuickSetupModal } from './QuickSetupModal';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 import { OnboardingModal } from './OnboardingModal';
 import { useTranslation } from '../../i18n/useTranslation';
+import { saveAuthToken } from '../../services/securityService';
 
 // Props passed from Root Hook state
 interface ModalManagerProps {
@@ -167,6 +168,9 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
         onClose={closeModal}
         isConnected={props.isConnected}
         onAutoPairHost={(hostData) => {
+          if (hostData.pairingToken) {
+            saveAuthToken(hostData.pairingToken);
+          }
           if (props.onAddHost) {
             props.onAddHost({
               id: hostData.id,
