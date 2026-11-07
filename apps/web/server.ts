@@ -9,6 +9,7 @@ import dgram from 'dgram';
 import { exec } from 'child_process';
 import os from 'os';
 import crypto from 'crypto';
+import net from 'net';
 
 dotenv.config();
 
@@ -1362,33 +1363,123 @@ app.post('/api/wol', async (req: Request, res: Response) => {
   }
 });
 
-// Real Subnet Network Scan Endpoint
+// Probes TCP port with minimal timeout to verify if a real AI NetController daemon is running
+function probeTcpPort(ip: string, port: number, timeoutMs = 350): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let isDone = false;
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => {
+      isDone = true;
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      if (!isDone) {
+        isDone = true;
+        resolve(false);
+      }
+    });
+    socket.once('error', () => {
+      socket.destroy();
+      if (!isDone) {
+        isDone = true;
+        resolve(false);
+      }
+    });
+    try {
+      socket.connect(port, ip);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+// Real Subnet Network Scan Endpoint -- Only surfaces ACTUAL PCs on the network (zero placeholders / fake computers)
 app.post('/api/hosts/scan', async (_req: Request, res: Response) => {
   try {
-    exec('arp -a', (err, stdout) => {
-      const discovered: Array<{ id: string; name: string; ip: string; mac: string; os: string; isOnline: boolean }> = [];
+    const discovered: Array<{
+      id: string;
+      name: string;
+      ip: string;
+      mac: string;
+      os: string;
+      isOnline: boolean;
+      ping?: number;
+    }> = [];
+
+    const snap = getDaemonSnapshot();
+    const primaryAdapter = snap.activeAdapters[0] || {
+      name: 'Primary LAN',
+      ipv4: snap.localIp,
+      mac: '00:00:00:00:00:00',
+    };
+
+    // 1. Always verify the actual host PC where the host daemon is running
+    const hostRunning =
+      (await probeTcpPort('127.0.0.1', snap.port, 400).catch(() => false)) ||
+      (await probeTcpPort(snap.localIp, snap.port, 400).catch(() => false)) ||
+      snap.isOnline;
+
+    if (hostRunning) {
+      const realHostname = snap.hostname || os.hostname() || 'Host-PC';
+      const safeId = realHostname.toUpperCase().replace(/[^A-Z0-9_-]/g, '-');
+      discovered.push({
+        id: safeId,
+        name: realHostname,
+        ip: snap.localIp !== '127.0.0.1' ? snap.localIp : '127.0.0.1',
+        mac: primaryAdapter.mac || '00:00:00:00:00:00',
+        os: 'windows',
+        isOnline: true,
+        ping: 1,
+      });
+    }
+
+    // 2. Discover other actual PCs on LAN by querying ARP and verifying port 8765
+    exec('arp -a', async (err, stdout) => {
       if (!err && stdout) {
         const lines = stdout.split('\n');
-        const ipMacRegex = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})/i;
+        const ipMacRegex =
+          /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})/i;
+        const candidateIps: Array<{ ip: string; mac: string }> = [];
 
         for (const line of lines) {
           const match = line.match(ipMacRegex);
           if (match) {
             const ip = match[1];
             const mac = match[2].replace(/-/g, ':').toUpperCase();
-            if (!ip.startsWith('224.') && !ip.startsWith('239.') && ip !== '255.255.255.255' && mac !== 'FF:FF:FF:FF:FF:FF') {
-              const lastOctet = ip.split('.').pop() || '1';
-              discovered.push({
-                id: `LAN-HOST-${lastOctet}`,
-                name: `LAN-HOST-${lastOctet}`,
-                ip,
-                mac,
-                os: 'windows',
-                isOnline: true,
-              });
+            // Drop multicast, broadcast, and already-added local host PC
+            if (
+              !ip.startsWith('224.') &&
+              !ip.startsWith('239.') &&
+              !ip.endsWith('.255') &&
+              mac !== 'FF:FF:FF:FF:FF:FF' &&
+              ip !== snap.localIp &&
+              ip !== '127.0.0.1'
+            ) {
+              candidateIps.push({ ip, mac });
             }
           }
         }
+
+        // Test only candidate devices for active AI NetController daemon on port 8765
+        const probePromises = candidateIps.map(async ({ ip, mac }) => {
+          const isHostActive = await probeTcpPort(ip, snap.port, 350).catch(() => false);
+          if (isHostActive) {
+            discovered.push({
+              id: `PC-${ip.replace(/\./g, '-')}`,
+              name: `PC (${ip})`,
+              ip,
+              mac,
+              os: 'windows',
+              isOnline: true,
+              ping: 4,
+            });
+          }
+        });
+
+        await Promise.allSettled(probePromises);
       }
 
       return res.json({

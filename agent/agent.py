@@ -320,6 +320,16 @@ def pack_packet(opcode: int, payload: bytes, seq: int = 0, flags: int = 0) -> by
     header = _HEADER_STRUCT.pack(MAGIC, opcode, flags, seq, len(payload))
     return header + payload
 
+def unpack_packet(raw: bytes) -> Optional[Tuple[bytes, int, int, int, int, bytes]]:
+    """Unpacks a raw 12-byte framed binary packet into (magic, opcode, flags, seq, length, payload)."""
+    if len(raw) < HEADER_SIZE:
+        return None
+    magic, opcode, flags, seq, length = _HEADER_STRUCT.unpack_from(raw, 0)
+    if magic != MAGIC or len(raw) < HEADER_SIZE + length:
+        return None
+    payload = raw[HEADER_SIZE:HEADER_SIZE + length]
+    return magic, opcode, flags, seq, length, payload
+
 def parse_header(raw: bytes) -> Optional[Tuple[int, int, int, int]]:
     """Validates magic bytes and extracts opcode, flags, seq, and payload length."""
     if len(raw) < HEADER_SIZE:

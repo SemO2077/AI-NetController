@@ -219,6 +219,154 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     }
   }
 
+  bool _isScanning = false;
+
+  Future<void> _scanForPcs() async {
+    if (_isScanning) return;
+    setState(() => _isScanning = true);
+
+    if (await Vibration.hasVibrator()) {
+      Vibration.vibrate(duration: 25);
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: CyberColors.surfaceElevated,
+          content: Text(
+            'Scanning local network for active PCs running AI NetController...',
+            style: TextStyle(
+                color: CyberColors.primary, fontFamily: 'monospace'),
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+
+    final List<HostState> foundPcs = [];
+
+    try {
+      final Set<String> candidateIps = {
+        '127.0.0.1',
+        '10.0.2.2', // Standard Android emulator loopback bridge to host
+      };
+
+      try {
+        final interfaces = await NetworkInterface.list(
+          type: InternetAddressType.IPv4,
+          includeLoopback: false,
+        );
+        for (final iface in interfaces) {
+          for (final addr in iface.addresses) {
+            final parts = addr.address.split('.');
+            if (parts.length == 4) {
+              final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
+              for (final octet in [
+                1,
+                2,
+                3,
+                4,
+                5,
+                10,
+                20,
+                50,
+                100,
+                101,
+                102,
+                105,
+                110,
+                120,
+                150,
+                200,
+                250
+              ]) {
+                candidateIps.add('$prefix.$octet');
+              }
+              candidateIps.add(addr.address);
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Interface list notice: $e');
+      }
+
+      // Probing TCP Port 8765: ONLY real PCs that accept socket connections on port 8765 qualify!
+      await Future.wait(
+        candidateIps.map((ip) async {
+          try {
+            final socket = await Socket.connect(
+              ip,
+              8765,
+              timeout: const Duration(milliseconds: 350),
+            );
+            socket.destroy();
+
+            final String hostName = (ip == '127.0.0.1' || ip == '10.0.2.2')
+                ? 'Host PC (Local)'
+                : 'Host PC ($ip)';
+            final String hostId = 'PC-${ip.replaceAll('.', '-')}';
+
+            foundPcs.add(
+              HostState(
+                id: hostId,
+                name: hostName,
+                ip: ip,
+                mac: '00:00:00:00:00:00',
+                isOnline: true,
+              ),
+            );
+          } catch (_) {
+            // Port closed: not an active AI NetController host PC
+          }
+        }),
+      );
+
+      if (mounted) {
+        if (foundPcs.isNotEmpty) {
+          for (final pc in foundPcs) {
+            ref.read(fleetProvider.notifier).addHost(pc);
+          }
+          ref.read(selectedHostIdProvider.notifier).state = foundPcs.first.id;
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: CyberColors.surfaceElevated,
+              content: Text(
+                '✓ Discovered ${foundPcs.length} verified PC(s) running AI NetController on port 8765!',
+                style: const TextStyle(
+                  color: CyberColors.success,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'monospace',
+                ),
+              ),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              backgroundColor: CyberColors.surfaceElevated,
+              content: Text(
+                'No active PCs found on port 8765. Make sure AI NetController Host Agent is running on your PC.',
+                style: TextStyle(
+                  color: CyberColors.warning,
+                  fontFamily: 'monospace',
+                ),
+              ),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+    } catch (err) {
+      debugPrint('Scan error: $err');
+    } finally {
+      if (mounted) {
+        setState(() => _isScanning = false);
+      }
+    }
+  }
+
   void _openStreamScreen(HostState host) {
     Navigator.push(
       context,
@@ -369,6 +517,21 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       onIndexChanged: (idx) => setState(() => _currentTabIndex = idx),
       actions: [
         IconButton(
+          tooltip: 'Scan for PC',
+          icon: _isScanning
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: CyberColors.primary,
+                  ),
+                )
+              : const Icon(Icons.radar_rounded,
+                  color: CyberColors.primary, size: 22),
+          onPressed: _isScanning ? null : _scanForPcs,
+        ),
+        IconButton(
           tooltip: 'Add Workstation',
           icon: const Icon(Icons.add_circle_outline_rounded,
               color: CyberColors.primary, size: 20),
@@ -447,7 +610,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ),
           const SizedBox(height: 14),
           const Text(
-            'No Workstations Registered',
+            'No Workstations Found',
             style: TextStyle(
               color: Colors.white,
               fontSize: 15,
@@ -456,7 +619,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Add a workstation IP and MAC address to wake sleeping PCs via Wake-on-LAN or stream live 120Hz desktops.',
+            'Scan your Wi-Fi network to detect active PCs running the AI NetController host daemon, or manually register an IP address.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: CyberColors.textSecondary,
@@ -464,22 +627,57 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               height: 1.4,
             ),
           ),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: CyberColors.primary,
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
+          const SizedBox(height: 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: CyberColors.primary,
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+                icon: _isScanning
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.black,
+                        ),
+                      )
+                    : const Icon(Icons.radar_rounded, size: 18),
+                label: Text(
+                  _isScanning ? 'Scanning...' : 'Scan Wi-Fi',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 12.5),
+                ),
+                onPressed: _isScanning ? null : _scanForPcs,
               ),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            ),
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text(
-              'Add Workstation',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
-            ),
-            onPressed: _showAddHostDialog,
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.2)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                ),
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text(
+                  'Manual Add',
+                  style: TextStyle(fontSize: 12),
+                ),
+                onPressed: _showAddHostDialog,
+              ),
+            ],
           ),
         ],
       ),

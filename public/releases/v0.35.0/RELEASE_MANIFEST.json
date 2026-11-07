@@ -2,34 +2,34 @@
   "version": "v0.35.0",
   "tag": "v0.35.0",
   "releaseName": "AI NetController v0.35.0",
-  "publishedAt": "2026-11-07T17:51:27.267899+00:00",
   "artifacts": [
     {
       "filename": "AI_NetController_HostAgent_v0.35.0_win64.exe",
-      "kind": "exe",
-      "platform": "Windows 10/11 x64 (Standalone Host Agent .EXE)",
-      "sizeBytes": 36485200,
-      "sizeFormatted": "35630.1 KB",
-      "sha256": "0646d10fa83e77252a9aeff7ae474bbf9385edfeba53133e71b888aa93214459",
+      "sizeBytes": 36428336,
+      "sizeFormatted": "35574.5 KB",
+      "sha256": "a531cfe5a10f8b4788def27d8ee445a55fb8509b73a0c0156a3e7ffebd744427",
       "downloadUrl": "/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe"
     },
     {
       "filename": "AI_NetController_v0.35.0_arm64-v8a.apk",
-      "kind": "apk",
-      "platform": "Android 10\u201315 arm64-v8a (Mobile Companion .APK)",
-      "sizeBytes": 73310,
-      "sizeFormatted": "71.6 KB",
-      "sha256": "29ece6a78bfc8bb6dc2b9e24b93dd0e8ce7fbd6b8cf28b073f2cb743985593f7",
+      "sizeBytes": 1374359,
+      "sizeFormatted": "1342.1 KB",
+      "sha256": "45e12fab15cbca7867d020f1c134ee7209ee8a8f01d07d508e6309651aff10f7",
       "downloadUrl": "/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk"
     },
     {
       "filename": "AI_NetController_HostAgent_v0.35.0_win64_portable.zip",
-      "kind": "zip",
-      "platform": "Windows Portable Agent Bundle + PyInstaller Spec (.ZIP)",
-      "sizeBytes": 36552019,
-      "sizeFormatted": "35695.3 KB",
-      "sha256": "d707272769623f7fe1e6a3b3e794aa9260201ba46a4e6a2f46152d7467bd1889",
+      "sizeBytes": 36495331,
+      "sizeFormatted": "35640.0 KB",
+      "sha256": "c4ac92eaeff5c0524b8d3f3be59f4d32d4bf83418a458aedf4baf4c883c249a1",
       "downloadUrl": "/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64_portable.zip"
+    },
+    {
+      "filename": "AI_NetController_v0.35.0.apk",
+      "sizeBytes": 1374359,
+      "sizeFormatted": "1342.1 KB",
+      "sha256": "45e12fab15cbca7867d020f1c134ee7209ee8a8f01d07d508e6309651aff10f7",
+      "downloadUrl": "/releases/v0.35.0/AI_NetController_v0.35.0.apk"
     }
   ]
 }

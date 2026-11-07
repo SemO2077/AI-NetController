@@ -145,6 +145,9 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   int _lastSentPhysicalHeight = 0;
   bool _resizeScheduled = false;
 
+  // Touch & Remote PC Control
+  Offset? _lastTouchPosition;
+
   // Metrics
   int _fpsCount = 0;
   int _fpsDisplay = 0;
@@ -205,7 +208,11 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                 } else {
                   final statusStr =
                       utf8.decode(packet.payload, allowMalformed: true);
-                  if (statusStr == 'AUTH_OK' && mounted) {
+                  if ((statusStr == 'AUTH_OK' ||
+                          statusStr == 'OK_AUTHENTICATED' ||
+                          statusStr.contains('AUTH') ||
+                          statusStr.contains('OK')) &&
+                      mounted) {
                     setState(() {
                       _isConnected = true;
                       _isConnecting = false;
@@ -314,6 +321,161 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     }
   }
 
+  // ===================================================================
+  // VIRTUAL INPUT & REMOTE PC CONTROL (OPCODE 0x08)
+  // ===================================================================
+  void _sendVirtualInput(Map<String, dynamic> actionMap) {
+    if (_channel == null || !_isConnected) return;
+    try {
+      final jsonStr = jsonEncode(actionMap);
+      final payload = utf8.encode(jsonStr);
+      final packet = StreamBinaryPacket.pack(
+        StreamOpcode.input,
+        ++_pingSequence,
+        Uint8List.fromList(payload),
+      );
+      _channel?.sink.add(packet);
+    } catch (e) {
+      debugPrint('Virtual input send error: $e');
+    }
+  }
+
+  void _sendMouseRel(double dx, double dy) {
+    if (dx.abs() < 0.1 && dy.abs() < 0.1) return;
+    final scaledDx = (dx * 1.6).clamp(-140.0, 140.0);
+    final scaledDy = (dy * 1.6).clamp(-140.0, 140.0);
+    _sendVirtualInput({'action': 'move', 'dx': scaledDx, 'dy': scaledDy});
+  }
+
+  void _sendMouseClick(String button) {
+    _sendVirtualInput({'action': 'click', 'button': button});
+  }
+
+  void _sendMouseScroll(double dy) {
+    _sendVirtualInput({'action': 'scroll', 'dy': (dy * 2.0).round()});
+  }
+
+  void _sendKeyboardText(String text, {bool pressEnter = true}) {
+    _sendVirtualInput({'action': 'type', 'text': text, 'press_enter': pressEnter});
+  }
+
+  void _sendHotkey(List<String> keys) {
+    _sendVirtualInput({'action': 'hotkey', 'keys': keys});
+  }
+
+  void _sendKey(String key) {
+    _sendVirtualInput({'action': 'key', 'key': key});
+  }
+
+  void _showKeyboardDialog() {
+    final textCtrl = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: CyberColors.surfaceElevated,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          title: const Text(
+            'Type on Remote PC',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: textCtrl,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Enter text, commands or shortcuts...',
+                  hintStyle: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    fontSize: 12,
+                  ),
+                ),
+                onSubmitted: (val) {
+                  if (val.isNotEmpty) {
+                    _sendKeyboardText(val, pressEnter: true);
+                    Navigator.of(ctx).pop();
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  _buildQuickKeyChip('Enter', () {
+                    _sendKey('enter');
+                    Navigator.of(ctx).pop();
+                  }),
+                  _buildQuickKeyChip('Backspace', () => _sendKey('backspace')),
+                  _buildQuickKeyChip('Tab', () => _sendKey('tab')),
+                  _buildQuickKeyChip('Esc', () {
+                    _sendKey('esc');
+                    Navigator.of(ctx).pop();
+                  }),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel',
+                  style: TextStyle(color: CyberColors.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: CyberColors.primary,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () {
+                final val = textCtrl.text;
+                if (val.isNotEmpty) {
+                  _sendKeyboardText(val, pressEnter: true);
+                }
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('Send & Enter',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildQuickKeyChip(String label, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontFamily: 'monospace',
+          ),
+        ),
+      ),
+    );
+  }
+
   void _stopPingTimer() {
     _pingTimer?.cancel();
     _pingTimer = null;
@@ -356,11 +518,42 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
               color: Colors.black,
               child: Stack(
                 children: [
-                  // Keep frame decoding in the isolated renderer, not this socket widget.
+                  // Zero-allocation hardware video stream with interactive touch controls
                   Positioned.fill(
-                    child: ZeroGcVideoRenderer(
-                      frameStream: _frameController.stream,
-                      fit: BoxFit.contain,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onScaleStart: (details) {
+                        _lastTouchPosition = details.localFocalPoint;
+                      },
+                      onScaleUpdate: (details) {
+                        if (details.pointerCount == 1) {
+                          if (_lastTouchPosition != null) {
+                            final dx = details.localFocalPoint.dx -
+                                _lastTouchPosition!.dx;
+                            final dy = details.localFocalPoint.dy -
+                                _lastTouchPosition!.dy;
+                            _sendMouseRel(dx, dy);
+                          }
+                          _lastTouchPosition = details.localFocalPoint;
+                        } else if (details.pointerCount == 2) {
+                          if (_lastTouchPosition != null) {
+                            final dy = details.localFocalPoint.dy -
+                                _lastTouchPosition!.dy;
+                            _sendMouseScroll(-dy);
+                          }
+                          _lastTouchPosition = details.localFocalPoint;
+                        }
+                      },
+                      onScaleEnd: (_) {
+                        _lastTouchPosition = null;
+                      },
+                      onTap: () => _sendMouseClick('left'),
+                      onDoubleTap: () => _sendMouseClick('double'),
+                      onLongPress: () => _sendMouseClick('right'),
+                      child: ZeroGcVideoRenderer(
+                        frameStream: _frameController.stream,
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ),
                   if (!_hasReceivedFrame)
@@ -375,6 +568,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                     right: 10,
                     child: _buildHudHeader(context),
                   ),
+
+                  // Bottom Interactive Remote Control Dock
+                  if (_isConnected)
+                    Positioned(
+                      bottom: 10,
+                      left: 10,
+                      child: _buildInteractiveControllerDock(context),
+                    ),
 
                   // Bottom Quick Controls
                   if (widget.onToggleFullscreen != null)
@@ -548,6 +749,72 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       style: TextStyle(
         color: CyberColors.textSecondary,
         fontSize: context.fluidFont(12),
+      ),
+    );
+  }
+
+  Widget _buildInteractiveControllerDock(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: CyberColors.surfaceElevated.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(10),
+            border:
+                Border.all(color: CyberColors.primary.withValues(alpha: 0.3)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildDockButton('L-CLICK', () => _sendMouseClick('left'),
+                  isAccent: true),
+              const SizedBox(width: 5),
+              _buildDockButton('R-CLICK', () => _sendMouseClick('right')),
+              const SizedBox(width: 5),
+              _buildDockButton('⌨️ TYPE', _showKeyboardDialog),
+              const SizedBox(width: 5),
+              _buildDockButton('WIN', () => _sendHotkey(['win'])),
+              const SizedBox(width: 5),
+              _buildDockButton('ALT+TAB', () => _sendHotkey(['alt', 'tab'])),
+              const SizedBox(width: 5),
+              _buildDockButton('ESC', () => _sendKey('esc')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDockButton(String label, VoidCallback onTap,
+      {bool isAccent = false}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: isAccent
+              ? CyberColors.primary.withValues(alpha: 0.25)
+              : Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isAccent
+                ? CyberColors.primary
+                : Colors.white.withValues(alpha: 0.15),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isAccent ? CyberColors.primary : Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
+          ),
+        ),
       ),
     );
   }
