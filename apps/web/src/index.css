@@ -18,11 +18,12 @@
     --theme-accent-bright: #67e8f9;
     --theme-secondary: #818cf8;
     --theme-tertiary: #34d399;
-    --theme-accent-glow: rgba(34, 211, 238, 0.32);
-    --theme-accent-border: rgba(56, 189, 248, 0.45);
-    --aurora-orb-1: rgba(6, 182, 212, 0.28);
-    --aurora-orb-2: rgba(99, 102, 241, 0.24);
-    --aurora-orb-3: rgba(16, 185, 129, 0.18);
+    --theme-accent-glow: rgba(34, 211, 238, 0.36);
+    --theme-accent-border: rgba(56, 189, 248, 0.50);
+    --aurora-orb-1: rgba(6, 182, 212, 0.42);
+    --aurora-orb-2: rgba(99, 102, 241, 0.36);
+    --aurora-orb-3: rgba(16, 185, 129, 0.30);
+    --aurora-orb-4: rgba(56, 189, 248, 0.32);
 
     /* Tailwind v4 Dynamic Accent Mapping */
     --color-cyan-100: #cffafe;
@@ -48,14 +49,15 @@
     --neon-violet: #8b5cf6;
 
     /* Liquid Glass Defaults (Balanced Vision Mode) */
-    --glass-base-bg: rgba(12, 20, 38, 0.56);
-    --glass-subtle-bg: rgba(14, 23, 43, 0.46);
-    --glass-elevated-bg: rgba(9, 15, 30, 0.68);
-    --glass-modal-bg: rgba(9, 15, 30, 0.78);
+    --glass-base-bg: rgba(11, 19, 38, 0.52);
+    --glass-subtle-bg: rgba(14, 23, 44, 0.42);
+    --glass-elevated-bg: rgba(9, 15, 30, 0.66);
+    --glass-modal-bg: rgba(8, 14, 28, 0.80);
     --glass-blur: 18px;
-    --glass-specular-alpha: 0.11;
-    --glass-rim-top: rgba(255, 255, 255, 0.28);
-    --glass-rim-side: rgba(255, 255, 255, 0.12);
+    --glass-saturate: 190%;
+    --glass-specular-alpha: 0.12;
+    --glass-rim-top: rgba(255, 255, 255, 0.32);
+    --glass-rim-side: rgba(255, 255, 255, 0.13);
 
     --ease-samsung: cubic-bezier(0.22, 1, 0.36, 1);
     --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
@@ -73,18 +75,19 @@
   }
 
   /* ==========================================================================
-     DYNAMIC ACCENT COLOR PALETTES (Instant Zero-Lag Global Theme Switching)
+     DYNAMIC ACCENT COLOR PALETTES (Distinct Global Theme Transformation)
      ========================================================================== */
   :root[data-accent="violet"] {
     --theme-accent: #c084fc;
     --theme-accent-bright: #e9d5ff;
     --theme-secondary: #f472b6;
     --theme-tertiary: #38bdf8;
-    --theme-accent-glow: rgba(192, 132, 252, 0.35);
-    --theme-accent-border: rgba(192, 132, 252, 0.48);
-    --aurora-orb-1: rgba(168, 85, 247, 0.30);
-    --aurora-orb-2: rgba(236, 72, 153, 0.24);
-    --aurora-orb-3: rgba(59, 130, 246, 0.20);
+    --theme-accent-glow: rgba(192, 132, 252, 0.40);
+    --theme-accent-border: rgba(192, 132, 252, 0.54);
+    --aurora-orb-1: rgba(168, 85, 247, 0.44);
+    --aurora-orb-2: rgba(236, 72, 153, 0.36);
+    --aurora-orb-3: rgba(59, 130, 246, 0.32);
+    --aurora-orb-4: rgba(192, 132, 252, 0.35);
 
     --color-cyan-100: #f3e8ff;
     --color-cyan-200: #e9d5ff;
@@ -101,11 +104,12 @@
     --theme-accent-bright: #6ee7b7;
     --theme-secondary: #22d3ee;
     --theme-tertiary: #a3e635;
-    --theme-accent-glow: rgba(52, 211, 153, 0.32);
-    --theme-accent-border: rgba(52, 211, 153, 0.45);
-    --aurora-orb-1: rgba(16, 185, 129, 0.28);
-    --aurora-orb-2: rgba(6, 182, 212, 0.24);
-    --aurora-orb-3: rgba(132, 204, 22, 0.16);
+    --theme-accent-glow: rgba(52, 211, 153, 0.38);
+    --theme-accent-border: rgba(52, 211, 153, 0.52);
+    --aurora-orb-1: rgba(16, 185, 129, 0.42);
+    --aurora-orb-2: rgba(6, 182, 212, 0.35);
+    --aurora-orb-3: rgba(132, 204, 22, 0.28);
+    --aurora-orb-4: rgba(52, 211, 153, 0.34);
 
     --color-cyan-100: #d1fae5;
     --color-cyan-200: #a7f3d0;
@@ -122,11 +126,12 @@
     --theme-accent-bright: #fda4af;
     --theme-secondary: #fb923c;
     --theme-tertiary: #c084fc;
-    --theme-accent-glow: rgba(251, 113, 133, 0.34);
-    --theme-accent-border: rgba(251, 113, 133, 0.46);
-    --aurora-orb-1: rgba(244, 63, 94, 0.28);
-    --aurora-orb-2: rgba(249, 115, 22, 0.22);
-    --aurora-orb-3: rgba(168, 85, 247, 0.20);
+    --theme-accent-glow: rgba(251, 113, 133, 0.40);
+    --theme-accent-border: rgba(251, 113, 133, 0.54);
+    --aurora-orb-1: rgba(244, 63, 94, 0.42);
+    --aurora-orb-2: rgba(249, 115, 22, 0.34);
+    --aurora-orb-3: rgba(168, 85, 247, 0.30);
+    --aurora-orb-4: rgba(251, 113, 133, 0.35);
 
     --color-cyan-100: #ffe4e6;
     --color-cyan-200: #fecdd3;
@@ -143,11 +148,12 @@
     --theme-accent-bright: #fde68a;
     --theme-secondary: #f97316;
     --theme-tertiary: #22d3ee;
-    --theme-accent-glow: rgba(251, 191, 36, 0.32);
-    --theme-accent-border: rgba(251, 191, 36, 0.46);
-    --aurora-orb-1: rgba(245, 158, 11, 0.28);
-    --aurora-orb-2: rgba(239, 68, 68, 0.20);
-    --aurora-orb-3: rgba(14, 165, 233, 0.18);
+    --theme-accent-glow: rgba(251, 191, 36, 0.38);
+    --theme-accent-border: rgba(251, 191, 36, 0.52);
+    --aurora-orb-1: rgba(245, 158, 11, 0.42);
+    --aurora-orb-2: rgba(239, 68, 68, 0.32);
+    --aurora-orb-3: rgba(14, 165, 233, 0.28);
+    --aurora-orb-4: rgba(251, 191, 36, 0.34);
 
     --color-cyan-100: #fef3c7;
     --color-cyan-200: #fde68a;
@@ -164,11 +170,12 @@
     --theme-accent-bright: #93c5fd;
     --theme-secondary: #a78bfa;
     --theme-tertiary: #2dd4bf;
-    --theme-accent-glow: rgba(96, 165, 250, 0.34);
-    --theme-accent-border: rgba(96, 165, 250, 0.48);
-    --aurora-orb-1: rgba(59, 130, 246, 0.30);
-    --aurora-orb-2: rgba(139, 92, 246, 0.25);
-    --aurora-orb-3: rgba(45, 212, 191, 0.18);
+    --theme-accent-glow: rgba(96, 165, 250, 0.40);
+    --theme-accent-border: rgba(96, 165, 250, 0.54);
+    --aurora-orb-1: rgba(59, 130, 246, 0.44);
+    --aurora-orb-2: rgba(139, 92, 246, 0.36);
+    --aurora-orb-3: rgba(45, 212, 191, 0.30);
+    --aurora-orb-4: rgba(96, 165, 250, 0.35);
 
     --color-cyan-100: #dbeafe;
     --color-cyan-200: #bfdbfe;
@@ -181,21 +188,34 @@
   }
 
   /* ==========================================================================
-     DYNAMIC FONT PRESETS
+     DYNAMIC FONT PRESETS (Unmistakably Distinct Typography Personalities)
      ========================================================================== */
   :root[data-font="geometric"] {
-    --font-sans: "Onest", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --font-display: "Onest", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-sans: "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-display: "Onest", -apple-system, BlinkMacSystemFont, sans-serif;
   }
 
   :root[data-font="jakarta"] {
-    --font-sans: "Plus Jakarta Sans", "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --font-display: "Plus Jakarta Sans", "Onest", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-display: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  :root[data-font="jakarta"] h1,
+  :root[data-font="jakarta"] h2,
+  :root[data-font="jakarta"] h3,
+  :root[data-font="jakarta"] .font-display {
+    letter-spacing: 0.015em;
+    font-weight: 800;
   }
 
   :root[data-font="system"] {
-    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
-    --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Segoe UI", Roboto, sans-serif;
+    --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Roboto", "Segoe UI", sans-serif;
+    --font-display: system-ui, -apple-system, BlinkMacSystemFont, "Roboto", "Segoe UI", sans-serif;
+  }
+
+  :root[data-font="system"] body {
+    letter-spacing: 0em;
+    line-height: 1.38;
   }
 
   :root[data-font="mono"] {
@@ -203,40 +223,59 @@
     --font-display: "JetBrains Mono", "SF Mono", "Fira Code", Consolas, monospace;
   }
 
+  :root[data-font="mono"] body {
+    letter-spacing: -0.025em;
+    font-size: 0.94em;
+  }
+
+  :root[data-font="mono"] h1,
+  :root[data-font="mono"] h2,
+  :root[data-font="mono"] h3,
+  :root[data-font="mono"] .font-display {
+    letter-spacing: -0.03em;
+    text-transform: uppercase;
+  }
+
   /* ==========================================================================
-     LIQUID GLASS TRANSPARENCY PRESETS
+     SURFACE MATERIAL PRESETS:
+     1. "clear"    -> Ultra-Transparent Crystal Liquid Glass (High Refraction + Prism Rim)
+     2. "balanced" -> Signature Apple Liquid Glass (Translucent + Specular Top Bevel)
+     3. "frosted"  -> True Matte Stealth Surface (100% Matte, Zero Gloss, Zero Blur)
      ========================================================================== */
   :root[data-glass="clear"] {
-    --glass-base-bg: rgba(12, 20, 38, 0.38);
-    --glass-subtle-bg: rgba(14, 24, 46, 0.30);
-    --glass-elevated-bg: rgba(9, 15, 30, 0.52);
-    --glass-modal-bg: rgba(9, 15, 30, 0.66);
-    --glass-blur: 22px;
-    --glass-specular-alpha: 0.15;
-    --glass-rim-top: rgba(255, 255, 255, 0.36);
-    --glass-rim-side: rgba(255, 255, 255, 0.16);
+    --glass-base-bg: rgba(10, 18, 36, 0.20);
+    --glass-subtle-bg: rgba(14, 24, 48, 0.15);
+    --glass-elevated-bg: rgba(8, 14, 28, 0.34);
+    --glass-modal-bg: rgba(7, 12, 26, 0.56);
+    --glass-blur: 26px;
+    --glass-saturate: 240%;
+    --glass-specular-alpha: 0.22;
+    --glass-rim-top: rgba(255, 255, 255, 0.58);
+    --glass-rim-side: rgba(255, 255, 255, 0.22);
   }
 
   :root[data-glass="balanced"] {
-    --glass-base-bg: rgba(12, 20, 38, 0.56);
-    --glass-subtle-bg: rgba(14, 23, 43, 0.45);
-    --glass-elevated-bg: rgba(9, 15, 30, 0.68);
-    --glass-modal-bg: rgba(9, 15, 30, 0.78);
+    --glass-base-bg: rgba(11, 19, 38, 0.52);
+    --glass-subtle-bg: rgba(14, 23, 44, 0.42);
+    --glass-elevated-bg: rgba(9, 15, 30, 0.66);
+    --glass-modal-bg: rgba(8, 14, 28, 0.80);
     --glass-blur: 18px;
-    --glass-specular-alpha: 0.11;
-    --glass-rim-top: rgba(255, 255, 255, 0.28);
-    --glass-rim-side: rgba(255, 255, 255, 0.12);
+    --glass-saturate: 190%;
+    --glass-specular-alpha: 0.12;
+    --glass-rim-top: rgba(255, 255, 255, 0.32);
+    --glass-rim-side: rgba(255, 255, 255, 0.13);
   }
 
   :root[data-glass="frosted"] {
-    --glass-base-bg: rgba(10, 17, 33, 0.78);
-    --glass-subtle-bg: rgba(12, 20, 38, 0.68);
-    --glass-elevated-bg: rgba(8, 13, 26, 0.86);
-    --glass-modal-bg: rgba(8, 13, 26, 0.92);
-    --glass-blur: 14px;
-    --glass-specular-alpha: 0.07;
-    --glass-rim-top: rgba(255, 255, 255, 0.20);
-    --glass-rim-side: rgba(255, 255, 255, 0.09);
+    --glass-base-bg: #0c1220;
+    --glass-subtle-bg: #111829;
+    --glass-elevated-bg: #090e1a;
+    --glass-modal-bg: #080d18;
+    --glass-blur: 0px;
+    --glass-saturate: 100%;
+    --glass-specular-alpha: 0;
+    --glass-rim-top: rgba(255, 255, 255, 0.07);
+    --glass-rim-side: rgba(255, 255, 255, 0.06);
   }
 
   /* 1. Ultra-Narrow Foldables (e.g. Galaxy Z Fold cover <= 320px) */
@@ -389,41 +428,150 @@
 }
 
 /* ============================================================================
-   120Hz NATIVE MICRO-INTERACTIONS & AURORA COMPOSITOR KEYFRAMES
+   120Hz GPU-ACCELERATED MOVING FLUID BACKGROUND ANIMATION SYSTEM
    ============================================================================ */
-@keyframes aurora-drift-primary {
+
+/* Mode 1: Liquid Plasma Mesh ("fluid") - Organic Multi-Orbital Morphing */
+@keyframes fluid-orbit-1 {
+  0%, 100% {
+    transform: translate3d(0%, 0%, 0) rotate(0deg) scale(1);
+  }
+  33% {
+    transform: translate3d(18%, 14%, 0) rotate(120deg) scale(1.22);
+  }
+  66% {
+    transform: translate3d(-10%, 22%, 0) rotate(240deg) scale(0.92);
+  }
+}
+
+@keyframes fluid-orbit-2 {
+  0%, 100% {
+    transform: translate3d(0%, 0%, 0) rotate(0deg) scale(1);
+  }
+  33% {
+    transform: translate3d(-20%, -14%, 0) rotate(-120deg) scale(1.26);
+  }
+  66% {
+    transform: translate3d(14%, -20%, 0) rotate(-240deg) scale(0.90);
+  }
+}
+
+@keyframes fluid-orbit-3 {
   0%, 100% {
     transform: translate3d(0%, 0%, 0) scale(1);
   }
   50% {
-    transform: translate3d(4%, 6%, 0) scale(1.08);
+    transform: translate3d(-16%, 18%, 0) scale(1.30);
   }
 }
 
-@keyframes aurora-drift-secondary {
-  0%, 100% {
-    transform: translate3d(0%, 0%, 0) scale(1);
+@keyframes fluid-vortex-spin {
+  0% {
+    transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(1);
   }
   50% {
-    transform: translate3d(-5%, -4%, 0) scale(1.1);
+    transform: translate3d(-50%, -50%, 0) rotate(180deg) scale(1.15);
+  }
+  100% {
+    transform: translate3d(-50%, -50%, 0) rotate(360deg) scale(1);
   }
 }
 
-.aurora-layer-1 {
-  animation: aurora-drift-primary 16s ease-in-out infinite;
-  will-change: transform;
+/* Mode 2: Northern Aurora Waves ("aurora") - Sweeping Ribbon Curtains */
+@keyframes aurora-ribbon-sweep-1 {
+  0%, 100% {
+    transform: translate3d(-8%, -4%, 0) rotate(-8deg) scaleY(1);
+  }
+  50% {
+    transform: translate3d(10%, 6%, 0) rotate(6deg) scaleY(1.28);
+  }
 }
 
-.aurora-layer-2 {
-  animation: aurora-drift-secondary 20s ease-in-out infinite;
-  will-change: transform;
+@keyframes aurora-ribbon-sweep-2 {
+  0%, 100% {
+    transform: translate3d(8%, 4%, 0) rotate(10deg) scaleY(1);
+  }
+  50% {
+    transform: translate3d(-12%, -8%, 0) rotate(-5deg) scaleY(1.32);
+  }
 }
 
-:root[data-ambient="subtle"] .aurora-layer-1,
-:root[data-ambient="subtle"] .aurora-layer-2,
-:root[data-ambient="minimal"] .aurora-layer-1,
-:root[data-ambient="minimal"] .aurora-layer-2 {
-  animation: none;
+/* Mode 3: Cyber Matrix Pulse ("cyber") - Breathing Core + Grid Horizon */
+@keyframes cyber-core-breathe {
+  0%, 100% {
+    transform: translate3d(-50%, -50%, 0) scale(0.92);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate3d(-50%, -50%, 0) scale(1.18);
+    opacity: 0.9;
+  }
+}
+
+@keyframes cyber-scanline-drift {
+  0% {
+    transform: translate3d(0, -100%, 0);
+  }
+  100% {
+    transform: translate3d(0, 200%, 0);
+  }
+}
+
+.fluid-blob-1 {
+  animation: fluid-orbit-1 13s ease-in-out infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.fluid-blob-2 {
+  animation: fluid-orbit-2 17s ease-in-out infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.fluid-blob-3 {
+  animation: fluid-orbit-3 15s ease-in-out infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.fluid-vortex-layer {
+  animation: fluid-vortex-spin 26s linear infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.aurora-ribbon-1 {
+  animation: aurora-ribbon-sweep-1 14s ease-in-out infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.aurora-ribbon-2 {
+  animation: aurora-ribbon-sweep-2 18s ease-in-out infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.cyber-core-pulse {
+  animation: cyber-core-breathe 8s ease-in-out infinite;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+.cyber-scan-beam {
+  animation: cyber-scanline-drift 10s linear infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.cyber-grid-pattern {
+  background-size: 44px 44px;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 45%, #000 35%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 45%, #000 35%, transparent 100%);
 }
 
 .icon-bubbly,
@@ -473,16 +621,11 @@
   -webkit-overflow-scrolling: touch;
 }
 
-/* Isolate layouts so card interactions never trigger global reflows */
-.contain-paint-layout {
-  contain: layout style;
-}
-
 /* ============================================================================
-   APPLE LIQUID GLASS SURFACES (Refractive Specular Sheen + 120Hz Smoothness)
+   SURFACE ARCHITECTURE: CRYSTAL GLASS vs APPLE LIQUID GLASS vs TRUE MATTE
    ============================================================================ */
 
-/* Tier 1 — Primary Liquid Glass Cards */
+/* Tier 1 — Primary Cards (.glass-liquid) */
 .glass-liquid {
   background: linear-gradient(
     135deg,
@@ -490,8 +633,8 @@
     rgba(255, 255, 255, 0.025) 42%,
     var(--glass-base-bg) 100%
   );
-  backdrop-filter: blur(var(--glass-blur)) saturate(185%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(185%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-rim-side);
   border-top-color: var(--glass-rim-top);
   border-left-color: rgba(255, 255, 255, 0.18);
@@ -506,15 +649,39 @@
     background-color 0.22s ease;
 }
 
+/* Crystal Mode ("clear") extra prismatic refraction highlight */
+:root[data-glass="clear"] .glass-liquid {
+  box-shadow:
+    0 12px 36px -6px rgba(0, 0, 0, 0.45),
+    0 0 24px -10px var(--theme-accent-glow),
+    inset 0 1.5px 0 0 rgba(255, 255, 255, 0.48),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.14);
+}
+
+/* True Matte Mode ("frosted") — 100% Flat Matte Stealth, Zero Gloss, Zero Backdrop Blur */
+:root[data-glass="frosted"] .glass-liquid {
+  background: #0c1220 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.065) !important;
+  box-shadow: 0 6px 18px -4px rgba(0, 0, 0, 0.72) !important;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .glass-liquid:hover {
     transform: translate3d(0, -2px, 0);
     border-color: var(--theme-accent-border);
-    border-top-color: rgba(255, 255, 255, 0.42);
+    border-top-color: rgba(255, 255, 255, 0.44);
     box-shadow:
       0 16px 38px -6px rgba(0, 0, 0, 0.62),
       0 0 24px -6px var(--theme-accent-glow),
       inset 0 1px 0 0 rgba(255, 255, 255, 0.34);
+  }
+
+  :root[data-glass="frosted"] .glass-liquid:hover {
+    background: #0f1728 !important;
+    border-color: var(--theme-accent-border) !important;
+    box-shadow: 0 10px 24px -4px rgba(0, 0, 0, 0.8) !important;
   }
 }
 
@@ -522,14 +689,14 @@
 .glass-liquid-subtle {
   background: linear-gradient(
     135deg,
-    rgba(255, 255, 255, 0.08) 0%,
+    rgba(255, 255, 255, 0.09) 0%,
     rgba(255, 255, 255, 0.02) 50%,
     var(--glass-subtle-bg) 100%
   );
   backdrop-filter: blur(12px) saturate(165%);
   -webkit-backdrop-filter: blur(12px) saturate(165%);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-top-color: rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-top-color: rgba(255, 255, 255, 0.24);
   box-shadow:
     0 4px 16px -2px rgba(0, 0, 0, 0.38),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.16);
@@ -539,22 +706,48 @@
     box-shadow 0.18s ease;
 }
 
+:root[data-glass="clear"] .glass-liquid-subtle {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.18) 0%,
+    rgba(255, 255, 255, 0.04) 50%,
+    rgba(12, 22, 44, 0.18) 100%
+  );
+  border-top-color: rgba(255, 255, 255, 0.45);
+}
+
+:root[data-glass="frosted"] .glass-liquid-subtle {
+  background: #101829 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow: none !important;
+}
+
 /* Tier 2 — Floating Navigation Capsule & Sticky App Bars */
 .glass-liquid-elevated {
   background: linear-gradient(
     135deg,
-    rgba(255, 255, 255, 0.13) 0%,
+    rgba(255, 255, 255, 0.14) 0%,
     rgba(255, 255, 255, 0.03) 45%,
     var(--glass-elevated-bg) 100%
   );
   backdrop-filter: blur(24px) saturate(200%);
   -webkit-backdrop-filter: blur(24px) saturate(200%);
   border: 1px solid rgba(255, 255, 255, 0.15);
-  border-top-color: rgba(255, 255, 255, 0.34);
+  border-top-color: rgba(255, 255, 255, 0.36);
   box-shadow:
     0 16px 40px -4px rgba(0, 0, 0, 0.72),
     0 0 28px -8px var(--theme-accent-glow),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.32);
+}
+
+:root[data-glass="frosted"] .glass-liquid-elevated {
+  background: #090e1a !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.85) !important;
 }
 
 /* Tier 3 — Liquid Glass Modals & Spotlight Sheets */
@@ -575,6 +768,32 @@
     inset 0 1px 0 0 rgba(255, 255, 255, 0.28);
 }
 
+:root[data-glass="frosted"] .glass-liquid-modal {
+  background: #080d18 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.95) !important;
+}
+
+/* Dedicated High-Contrast Solid-Backed Dropdown Surface (Prevents Background Overlap/Bleed) */
+.dropdown-menu-surface {
+  background-color: #060b16 !important;
+  background-image: linear-gradient(
+    165deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    rgba(6, 11, 22, 0.99) 45%,
+    #050914 100%
+  ) !important;
+  border: 1px solid rgba(255, 255, 255, 0.20) !important;
+  border-top-color: var(--theme-accent-border) !important;
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.96),
+    0 0 0 1px rgba(0, 0, 0, 0.9),
+    0 0 28px -8px var(--theme-accent-glow) !important;
+  z-index: 100;
+}
+
 /* Sleek Pill Capsule */
 .samsung-pill {
   border-radius: 9999px;
@@ -586,6 +805,12 @@
     transform 0.16s var(--ease-samsung),
     background-color 0.16s ease,
     border-color 0.16s ease;
+}
+
+:root[data-glass="frosted"] .samsung-pill {
+  background: #111829 !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  box-shadow: none !important;
 }
 
 .samsung-card {

@@ -267,7 +267,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   };
 
   const handleRoleSelect = (roleId: BotRole) => {
-    triggerHapticFeedback('selection');
     setActiveRole(roleId);
     try {
       localStorage.setItem(ROLE_STORAGE_KEY, roleId);
@@ -958,13 +957,13 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   return (
     <div className="flex-1 flex flex-col justify-between w-full max-w-5xl 2xl:max-w-7xl mx-auto pb-1 select-none">
       {/* 1. Sleek Native Header Bar */}
-      <header className="flex-none py-2 px-3 mb-2 rounded-2xl glass-liquid flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
-        <div className="flex items-center gap-2.5 min-w-0">
+      <header className="flex-none py-2 px-3 mb-2 rounded-2xl glass-liquid flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
           <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center shrink-0">
             <Sparkles className="w-4 h-4 text-cyan-300" />
           </div>
-          <div className="flex flex-col min-w-0">
-            <h2 className="font-display text-xs sm:text-[13px] font-bold text-white tracking-tight flex items-center gap-1.5">
+          <div className="flex flex-col min-w-0 flex-1">
+            <h2 className="font-display text-xs sm:text-[13px] font-bold text-white tracking-tight flex items-center gap-1.5 min-w-0">
               <span className="truncate">AI NetController Copilot</span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
             </h2>
@@ -975,7 +974,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+        <div className="flex items-center gap-1.5 shrink-0 ml-auto flex-wrap">
           <button
             type="button"
             onClick={toggleAutoExecute}
@@ -1113,7 +1112,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
               className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
             >
               <div
-                className={`text-xs sm:text-[13px] leading-relaxed relative ${
+                className={`text-xs sm:text-[13px] leading-relaxed relative break-words overflow-hidden ${
                   isUser
                     ? 'bg-cyan-500/20 text-white border border-cyan-400/35 rounded-2xl rounded-tr-xs px-3.5 py-2.5 max-w-[85%] lg:max-w-[75%]'
                     : 'glass-liquid text-slate-100 rounded-2xl rounded-tl-xs p-3.5 max-w-[96%] sm:max-w-[88%] lg:max-w-[84%]'
@@ -1183,12 +1182,12 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                             }`}
                           >
                             <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
                                 <div className="w-8 h-8 rounded-lg bg-white/[0.06] border border-white/10 flex items-center justify-center shrink-0">
                                   {getActionIcon(action.type)}
                                 </div>
-                                <div className="min-w-0">
-                                  <div className="text-xs font-bold text-white truncate">
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-xs font-bold text-white break-words">
                                     {action.label}
                                   </div>
                                   <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2 flex-wrap">

@@ -461,7 +461,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   return (
     <div id="fleet-dashboard-container" className="w-full flex flex-col select-none pb-2 relative">
       {/* Sleek Top App Bar & Unified Filter Controls */}
-      <div className="pt-1 pb-3 flex flex-col gap-2.5">
+      <div className="pt-1 pb-3 flex flex-col gap-2.5 relative z-30">
         {/* Network Disconnection Banner */}
         {isNetworkDisconnected && (
           <div className="glass-liquid-subtle w-full px-3.5 py-2.5 border border-amber-500/40 rounded-xl flex items-center justify-between text-xs text-amber-200">
@@ -577,7 +577,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
         </div>
 
         {/* 2. SEARCH + SCAN LAN + SORT ROW */}
-        <div className="flex items-center gap-2">
+        <div className={`flex items-center gap-2 relative ${isSortMenuOpen ? 'z-50' : 'z-20'}`}>
           <div className="flex-1 h-10 rounded-xl glass-liquid-subtle px-3 flex items-center gap-2 focus-within:border-cyan-400/60 transition min-w-0">
             <Search className="w-4 h-4 text-slate-400 shrink-0" />
             <input
@@ -653,7 +653,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               {isSortMenuOpen && (
                 <>
                   <div
-                    className="fixed inset-0 z-40"
+                    className="fixed inset-0 z-[90]"
                     onClick={() => setIsSortMenuOpen(false)}
                   />
                   <motion.div
@@ -661,7 +661,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                     initial="initial"
                     animate="animate"
                     exit="exit"
-                    className="absolute right-0 top-11 z-50 w-44 rounded-xl glass-liquid-modal p-1.5 shadow-2xl space-y-1"
+                    className="absolute right-0 top-11 z-[100] w-48 rounded-2xl dropdown-menu-surface p-1.5 space-y-1"
                   >
                     {sortOptions.map((opt) => {
                       const isActive = sortMode === opt.id;

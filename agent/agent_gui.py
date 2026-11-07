@@ -1,5 +1,5 @@
 """
-AI NetController — Native Desktop GUI for PC Host Daemon (v0.34.0)
+AI NetController — Native Desktop GUI for PC Host Daemon (v0.35.0)
 ================================================================================
 Provides a clean, transparent, user-facing desktop control panel built on Python's
 standard library (tkinter / ttk) with zero third-party native GUI DLLs.
@@ -53,7 +53,7 @@ class HostDaemonState:
     """
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.lock = threading.Lock()
-        self.version = "0.34.0"
+        self.version = "0.35.0"
         self.protocol = "AI-NET/3.0-SECURE"
         self.hostname = socket.gethostname()
         self.os_name = f"{platform.system()} {platform.release()}"

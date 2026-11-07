@@ -163,7 +163,6 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                   key={tab.id}
                   type="button"
                   onClick={() => {
-                    triggerHapticFeedback('selection');
                     setStatusFilter(tab.id);
                   }}
                   className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition ${

@@ -405,7 +405,7 @@ export const WolModal: React.FC<WolModalProps> = ({
                   id="tab-direct-packet"
                   type="button"
                   onClick={() => {
-                    triggerHapticFeedback('selection');
+
                     setActiveTab('direct');
                   }}
                   className={`relative min-h-[40px] px-3 py-2 rounded-xl text-xs font-display font-bold flex items-center justify-center gap-2 transition cursor-pointer z-10 ${
@@ -427,7 +427,7 @@ export const WolModal: React.FC<WolModalProps> = ({
                   id="tab-recurring-schedules"
                   type="button"
                   onClick={() => {
-                    triggerHapticFeedback('selection');
+
                     setActiveTab('schedules');
                   }}
                   className={`relative min-h-[40px] px-3 py-2 rounded-xl text-xs font-display font-bold flex items-center justify-center gap-2 transition cursor-pointer z-10 ${

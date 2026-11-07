@@ -1,6 +1,6 @@
 # AI NetController
 
-[![Version](https://img.shields.io/badge/version-v0.34.0-00e5ff.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v0.34.0)
+[![Version](https://img.shields.io/badge/version-v0.35.0-00e5ff.svg)](https://github.com/smehmedd/AI-NetController/releases/tag/v0.35.0)
 [![Build](https://img.shields.io/badge/build-passing-10b981.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -8,16 +8,16 @@
 
 ---
 
-## Downloads (v0.34.0)
+## Downloads (v0.35.0)
 
-Download the prebuilt binaries from [GitHub Releases](https://github.com/smehmedd/AI-NetController/releases/tag/v0.34.0):
+Download the prebuilt binaries from [GitHub Releases](https://github.com/smehmedd/AI-NetController/releases/tag/v0.35.0):
 
 | Platform | Package | Description |
 | :--- | :--- | :--- |
-| **Windows (x64)** | `AI_NetController_HostAgent_v0.34.0_win64.exe` | Standalone Windows Host Agent executable with Desktop GUI |
-| **Windows (x64)** | `AI_NetController_HostAgent_v0.34.0_win64_portable.zip` | Portable archive with Host Agent source and launchers |
-| **Android (ARM64)** | `AI_NetController_v0.34.0_arm64-v8a.apk` | Signed Android app (`arm64-v8a`) |
-| **Android (Universal)** | `AI_NetController_v0.34.0.apk` | Standard Android installation package |
+| **Windows (x64)** | `AI_NetController_HostAgent_v0.35.0_win64.exe` | Standalone Windows Host Agent executable with Desktop GUI |
+| **Windows (x64)** | `AI_NetController_HostAgent_v0.35.0_win64_portable.zip` | Portable archive with Host Agent source and launchers |
+| **Android (ARM64)** | `AI_NetController_v0.35.0_arm64-v8a.apk` | Signed Android app (`arm64-v8a`) |
+| **Android (Universal)** | `AI_NetController_v0.35.0.apk` | Standard Android installation package |
 
 ---
 
@@ -81,7 +81,7 @@ Open `http://localhost:3000` in your browser, or run `START_HERE_WINDOWS.bat` on
 
 ### 2. Run the Windows Host Agent
 
-Run the prebuilt `AI_NetController_HostAgent_v0.34.0_win64.exe`, or launch the desktop agent from source:
+Run the prebuilt `AI_NetController_HostAgent_v0.35.0_win64.exe`, or launch the desktop agent from source:
 
 ```bash
 pip install -r agent/requirements.txt

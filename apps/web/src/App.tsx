@@ -224,19 +224,15 @@ export default function App() {
 
       if (e.key === '1') {
         e.preventDefault();
-        triggerHapticFeedback('selection');
         setActiveTab('fleet');
       } else if (e.key === '2') {
         e.preventDefault();
-        triggerHapticFeedback('selection');
         setActiveTab('terminal');
       } else if (e.key === '3') {
         e.preventDefault();
-        triggerHapticFeedback('selection');
         setActiveTab('chat');
       } else if (e.key === '4') {
         e.preventDefault();
-        triggerHapticFeedback('selection');
         setActiveTab('settings');
       } else if (e.key.toLowerCase() === 'r' && !e.shiftKey && !e.altKey) {
         e.preventDefault();
@@ -261,35 +257,86 @@ export default function App() {
   return (
     <GlobalErrorBoundary>
       <div className="h-[100dvh] w-full max-w-full bg-[#030712] text-white flex flex-col font-sans selection:bg-cyan-500/40 selection:text-cyan-100 relative overflow-hidden">
-        {/* GPU-Composited Liquid Aurora Canvas (Radial Gradients Only — Zero Blur Shader Lag) */}
-        <div
-          className={`fixed inset-0 pointer-events-none z-0 overflow-hidden transition-opacity duration-500 ${
-            ambientMode === 'minimal' ? 'opacity-25' : ambientMode === 'subtle' ? 'opacity-60' : 'opacity-100'
-          }`}
-          aria-hidden="true"
-        >
+        {/* 120Hz Hardware-Accelerated Moving Fluid Background Canvas (4 Selectable Modes) */}
+        {ambientMode !== 'minimal' && (
           <div
-            className="aurora-layer-1 absolute -top-[18%] -left-[12%] w-[75%] h-[65%] rounded-full"
-            style={{
-              background:
-                'radial-gradient(circle at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 38%, transparent 72%)',
-            }}
-          />
-          <div
-            className="aurora-layer-2 absolute top-[18%] -right-[15%] w-[70%] h-[68%] rounded-full"
-            style={{
-              background:
-                'radial-gradient(circle at 50% 50%, var(--aurora-orb-2) 0%, var(--aurora-orb-3) 40%, transparent 72%)',
-            }}
-          />
-          <div
-            className=" absolute -bottom-[22%] left-[12%] w-[76%] h-[58%] rounded-full"
-            style={{
-              background:
-                'radial-gradient(circle at 50% 50%, var(--aurora-orb-3) 0%, var(--aurora-orb-1) 35%, transparent 70%)',
-            }}
-          />
-        </div>
+            className="fixed inset-0 pointer-events-none z-0 overflow-hidden select-none"
+            style={{ contain: 'strict' }}
+            aria-hidden="true"
+          >
+            {ambientMode === 'fluid' && (
+              <>
+                <div
+                  className="fluid-vortex-layer absolute top-1/2 left-1/2 w-[135vmax] h-[135vmax] rounded-full opacity-55"
+                  style={{
+                    background:
+                      'conic-gradient(from 0deg at 50% 50%, var(--aurora-orb-1) 0deg, transparent 90deg, var(--aurora-orb-2) 180deg, transparent 270deg, var(--aurora-orb-3) 360deg)',
+                  }}
+                />
+                <div
+                  className="fluid-blob-1 absolute -top-[18%] -left-[14%] w-[82vw] h-[72vh] rounded-full"
+                  style={{
+                    background:
+                      'radial-gradient(circle at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 42%, transparent 72%)',
+                  }}
+                />
+                <div
+                  className="fluid-blob-2 absolute top-[14%] -right-[16%] w-[78vw] h-[74vh] rounded-full"
+                  style={{
+                    background:
+                      'radial-gradient(circle at 50% 50%, var(--aurora-orb-2) 0%, var(--aurora-orb-3) 44%, transparent 72%)',
+                  }}
+                />
+                <div
+                  className="fluid-blob-3 absolute -bottom-[20%] left-[8%] w-[84vw] h-[68vh] rounded-full"
+                  style={{
+                    background:
+                      'radial-gradient(circle at 50% 50%, var(--aurora-orb-3) 0%, var(--aurora-orb-4) 40%, transparent 72%)',
+                  }}
+                />
+              </>
+            )}
+
+            {ambientMode === 'aurora' && (
+              <>
+                <div
+                  className="aurora-ribbon-1 absolute -top-[22%] -left-[18%] w-[135%] h-[62%] rounded-full"
+                  style={{
+                    background:
+                      'radial-gradient(ellipse 85% 55% at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 48%, transparent 78%)',
+                  }}
+                />
+                <div
+                  className="aurora-ribbon-2 absolute -bottom-[24%] -right-[18%] w-[135%] h-[64%] rounded-full"
+                  style={{
+                    background:
+                      'radial-gradient(ellipse 85% 55% at 50% 50%, var(--aurora-orb-3) 0%, var(--aurora-orb-1) 46%, transparent 78%)',
+                  }}
+                />
+              </>
+            )}
+
+            {ambientMode === 'cyber' && (
+              <>
+                <div className="cyber-grid-pattern absolute inset-0 opacity-90" />
+                <div
+                  className="cyber-core-pulse absolute top-1/2 left-1/2 w-[85vw] h-[85vh] rounded-full"
+                  style={{
+                    background:
+                      'radial-gradient(circle at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 38%, transparent 70%)',
+                  }}
+                />
+                <div
+                  className="cyber-scan-beam absolute inset-x-0 h-40 opacity-35"
+                  style={{
+                    background:
+                      'linear-gradient(to bottom, transparent 0%, var(--theme-accent-glow) 50%, transparent 100%)',
+                  }}
+                />
+              </>
+            )}
+          </div>
+        )}
 
         {/* Floating Toast Feedback */}
         <AnimatePresence>

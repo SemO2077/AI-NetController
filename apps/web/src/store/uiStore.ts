@@ -21,7 +21,7 @@ export type ModalType =
 export type AccentColorPreset = 'cyan' | 'violet' | 'emerald' | 'rose' | 'amber' | 'cobalt';
 export type FontFamilyPreset = 'geometric' | 'jakarta' | 'system' | 'mono';
 export type GlassIntensityPreset = 'clear' | 'balanced' | 'frosted';
-export type AmbientModePreset = 'vibrant' | 'subtle' | 'minimal';
+export type AmbientModePreset = 'fluid' | 'aurora' | 'cyber' | 'minimal';
 
 export interface UIState {
   activeTab: NavTab;
@@ -33,11 +33,12 @@ export interface UIState {
   pendingChatPrompt: string | null;
   hasCompletedOnboarding: boolean;
 
-  // Liquid Glass & Appearance Customization
+  // Liquid Glass, Fluid Motion & Appearance Customization
   accentColor: AccentColorPreset;
   fontFamily: FontFamilyPreset;
   glassIntensity: GlassIntensityPreset;
   ambientMode: AmbientModePreset;
+  isCustomizationOpen: boolean;
 
   setActiveTab: (tab: NavTab) => void;
   openModal: (type: ModalType, payload?: any) => void;
@@ -54,13 +55,15 @@ export interface UIState {
   setFontFamily: (font: FontFamilyPreset) => void;
   setGlassIntensity: (glass: GlassIntensityPreset) => void;
   setAmbientMode: (mode: AmbientModePreset) => void;
+  setCustomizationOpen: (open: boolean) => void;
+  toggleCustomizationOpen: () => void;
   resetAppearance: () => void;
 }
 
 const VALID_ACCENTS: AccentColorPreset[] = ['cyan', 'violet', 'emerald', 'rose', 'amber', 'cobalt'];
 const VALID_FONTS: FontFamilyPreset[] = ['geometric', 'jakarta', 'system', 'mono'];
 const VALID_GLASS: GlassIntensityPreset[] = ['clear', 'balanced', 'frosted'];
-const VALID_AMBIENT: AmbientModePreset[] = ['vibrant', 'subtle', 'minimal'];
+const VALID_AMBIENT: AmbientModePreset[] = ['fluid', 'aurora', 'cyber', 'minimal'];
 
 export const applyAppearanceToDocument = (prefs: {
   accentColor: AccentColorPreset;
@@ -142,10 +145,22 @@ const getInitialGlass = (): GlassIntensityPreset => {
 
 const getInitialAmbient = (): AmbientModePreset => {
   try {
-    const saved = localStorage.getItem('ai_netcontroller_ambient') as AmbientModePreset;
-    if (saved && VALID_AMBIENT.includes(saved)) return saved;
+    const saved = localStorage.getItem('ai_netcontroller_ambient');
+    if (saved === 'vibrant') return 'fluid';
+    if (saved === 'subtle') return 'aurora';
+    if (saved && VALID_AMBIENT.includes(saved as AmbientModePreset)) {
+      return saved as AmbientModePreset;
+    }
   } catch {}
-  return 'vibrant';
+  return 'fluid';
+};
+
+const getInitialCustomizationOpen = (): boolean => {
+  try {
+    const saved = localStorage.getItem('ai_netcontroller_customization_open');
+    if (saved !== null) return saved === 'true';
+  } catch {}
+  return true;
 };
 
 const initialAppearance = {
@@ -171,6 +186,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   fontFamily: initialAppearance.fontFamily,
   glassIntensity: initialAppearance.glassIntensity,
   ambientMode: initialAppearance.ambientMode,
+  isCustomizationOpen: getInitialCustomizationOpen(),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
   openModal: (type, payload = null) => set({ activeModal: type, modalPayload: payload }),
@@ -264,12 +280,28 @@ export const useUIStore = create<UIState>((set, get) => ({
     set({ ambientMode });
   },
 
+  setCustomizationOpen: (open) => {
+    try {
+      localStorage.setItem('ai_netcontroller_customization_open', String(open));
+    } catch {}
+    set({ isCustomizationOpen: open });
+  },
+
+  toggleCustomizationOpen: () =>
+    set((state) => {
+      const next = !state.isCustomizationOpen;
+      try {
+        localStorage.setItem('ai_netcontroller_customization_open', String(next));
+      } catch {}
+      return { isCustomizationOpen: next };
+    }),
+
   resetAppearance: () => {
     const defaults = {
       accentColor: 'cyan' as AccentColorPreset,
       fontFamily: 'geometric' as FontFamilyPreset,
       glassIntensity: 'balanced' as GlassIntensityPreset,
-      ambientMode: 'vibrant' as AmbientModePreset,
+      ambientMode: 'fluid' as AmbientModePreset,
     };
     try {
       localStorage.setItem('ai_netcontroller_accent', defaults.accentColor);

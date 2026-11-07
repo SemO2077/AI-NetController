@@ -2,6 +2,23 @@
 
 All notable changes to **AI NetController** are documented in this file.
 
+## [v0.35.0] - 2026-11-07
+
+### Added
+- **4-Mode Moving Fluid Background Engine (`App.tsx`, `index.css`, `uiStore.ts`)**: Added GPU-composited background animations with 4 selectable presets: *Liquid Plasma (`fluid`)*, *Northern Aurora (`aurora`)*, *Cyber Grid Pulse (`cyber`)*, and *Static Deep Void (`minimal`)*.
+- **Collapsible Bottom Customization Studio (`SettingsScreen.tsx`, `uiStore.ts`)**: Moved the Appearance, Surface Material & Fluid Background Studio to the bottom of the Settings screen with a persistent *Show Studio / Hide Studio* (`isCustomizationOpen`) toggle.
+
+### Changed
+- **Distinct Surface Material Presets (`index.css`)**: Re-engineered `Crystal Glass` (`0.20` alpha, `blur(26px) saturate(240%)`, bright prismatic rim), `Liquid Glass` (`0.52` alpha, `blur(18px)`), and `True Matte` (`100%` opaque `#0c1220` stealth surface with `backdrop-filter: none` and zero specular sheen) so each option is unmistakably distinct.
+- **Reorganized Settings & Command Menus (`SettingsScreen.tsx`)**: Added a top 4-card Quick-Launch Command Bar (*Pair Phone & PC*, *PC Daemon Center*, *System & AI Center*, *Interactive Guide*) above a structured 4-section settings grid.
+- **Removed Tab-Switch Haptics**: Removed `triggerHapticFeedback` when switching between navigation tabs and modal/sub-window tabs across the entire app.
+
+### Fixed
+- **Dropdown Menu Overlap & Bleed-Through (`SettingsScreen.tsx`, `FleetDashboard.tsx`, `index.css`)**: Added `.dropdown-menu-surface` with solid `#060b16` backing, click-outside backdrop catchers, and parent stacking context elevation (`z-[80]` / `z-[50]`) so dropdowns never overlap or bleed into sibling glass cards.
+- **System & AI Center Mobile Text Overflow (`SystemUpdateModal.tsx`, `GeminiChatbot.tsx`, `ScreenViewerModal.tsx`, `CodeExportModal.tsx`)**: Unified modal scroll containers, added `min-w-0 flex-1` and `break-words` to headers, and converted component metadata strings into wrapping flex chips so text never goes off-screen or overlaps on mobile viewports.
+
+---
+
 ## [v0.34.0] - 2026-11-07
 
 ### Added

@@ -256,7 +256,6 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                   key={h.id}
                   type="button"
                   onClick={() => {
-                    triggerHapticFeedback('selection');
                     onSelectTarget(h.id);
                   }}
                   className={`h-9 px-3 rounded-xl text-xs font-mono transition flex items-center gap-2 shrink-0 border active:scale-95 ${

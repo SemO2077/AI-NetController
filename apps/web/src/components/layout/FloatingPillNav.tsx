@@ -69,7 +69,6 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
                 type="button"
                 onClick={() => {
                   if (activeTab !== tab.id) {
-                    triggerHapticFeedback('selection');
                     onChangeTab(tab.id);
                   }
                 }}

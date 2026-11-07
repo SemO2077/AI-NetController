@@ -818,8 +818,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           }`}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 bg-[#111726] border-b border-white/10 shrink-0">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center justify-between gap-2 px-3.5 sm:px-4 py-3 bg-[#111726] border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
               <div className="relative shrink-0">
                 <Monitor className="w-5 h-5 text-cyan-400" />
                 {isDeviceOnline && (
@@ -833,8 +833,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     {device.ip}
                   </span>
                 </h3>
-                <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                  <span className="flex items-center gap-1 text-cyan-300 font-medium">
+                <div className="flex items-center gap-2 text-[11px] text-slate-400 min-w-0 truncate">
+                  <span className="flex items-center gap-1 text-cyan-300 font-medium truncate">
                     <Hand className="w-3 h-3" />
                     {isBg
                       ? '1 клик = Ляв бутон • Задръж 1 сек = Десен бутон'
