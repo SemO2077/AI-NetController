@@ -14,24 +14,78 @@ import json
 from datetime import datetime, timezone
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-SDK_DIR = r"C:\Users\Lenovo\AppData\Local\Android\Sdk"
-JDK_DIR = r"C:\Program Files\Android\Android Studio\jbr"
-KEYSTORE_PATH = os.path.expanduser(r"~/.android/debug.keystore")
+IS_WIN = os.name == "nt"
 
-BUILD_TOOLS_DIR = os.path.join(SDK_DIR, "build-tools", "35.0.0")
-ANDROID_JAR = os.path.join(SDK_DIR, "platforms", "android-34", "android.jar")
-JAVAC = os.path.join(JDK_DIR, "bin", "javac.exe")
-D8 = os.path.join(BUILD_TOOLS_DIR, "d8.bat")
-AAPT2 = os.path.join(BUILD_TOOLS_DIR, "aapt2.exe")
-ZIPALIGN = os.path.join(BUILD_TOOLS_DIR, "zipalign.exe")
-APKSIGNER = os.path.join(BUILD_TOOLS_DIR, "apksigner.bat")
+def _resolve_sdk_dir():
+    for cand in [
+        r"C:\Users\Lenovo\AppData\Local\Android\Sdk",
+        os.environ.get("ANDROID_HOME", ""),
+        os.environ.get("ANDROID_SDK_ROOT", ""),
+        "/usr/local/lib/android/sdk",
+        os.path.expanduser("~/Android/Sdk"),
+    ]:
+        if cand and os.path.isdir(cand):
+            return cand
+    return r"C:\Users\Lenovo\AppData\Local\Android\Sdk"
+
+def _resolve_build_tools(sdk_dir):
+    bt_root = os.path.join(sdk_dir, "build-tools")
+    pref = os.path.join(bt_root, "35.0.0")
+    if os.path.isdir(pref):
+        return pref
+    if os.path.isdir(bt_root):
+        versions = sorted(
+            [d for d in os.listdir(bt_root) if os.path.isdir(os.path.join(bt_root, d))],
+            reverse=True,
+        )
+        if versions:
+            return os.path.join(bt_root, versions[0])
+    return pref
+
+def _resolve_android_jar(sdk_dir):
+    plat_root = os.path.join(sdk_dir, "platforms")
+    pref = os.path.join(plat_root, "android-34", "android.jar")
+    if os.path.isfile(pref):
+        return pref
+    if os.path.isdir(plat_root):
+        for d in sorted(os.listdir(plat_root), reverse=True):
+            cand = os.path.join(plat_root, d, "android.jar")
+            if os.path.isfile(cand):
+                return cand
+    return pref
+
+def _resolve_jdk_dir():
+    win_jbr = r"C:\Program Files\Android\Android Studio\jbr"
+    if IS_WIN and os.path.isdir(win_jbr):
+        return win_jbr
+    env_java = os.environ.get("JAVA_HOME", "")
+    if env_java and os.path.isdir(env_java):
+        return env_java
+    javac_bin = shutil.which("javac")
+    if javac_bin:
+        return os.path.dirname(os.path.dirname(os.path.realpath(javac_bin)))
+    return win_jbr
+
+SDK_DIR = _resolve_sdk_dir()
+JDK_DIR = _resolve_jdk_dir()
+KEYSTORE_PATH = os.path.expanduser("~/.android/debug.keystore")
+
+BUILD_TOOLS_DIR = _resolve_build_tools(SDK_DIR)
+ANDROID_JAR = _resolve_android_jar(SDK_DIR)
+JAVAC = os.path.join(JDK_DIR, "bin", "javac.exe" if IS_WIN else "javac") if os.path.isdir(JDK_DIR) else (shutil.which("javac") or "javac")
+KEYTOOL = os.path.join(JDK_DIR, "bin", "keytool.exe" if IS_WIN else "keytool") if os.path.isdir(JDK_DIR) else (shutil.which("keytool") or "keytool")
+D8 = os.path.join(BUILD_TOOLS_DIR, "d8.bat" if IS_WIN else "d8")
+AAPT2 = os.path.join(BUILD_TOOLS_DIR, "aapt2.exe" if IS_WIN else "aapt2")
+ZIPALIGN = os.path.join(BUILD_TOOLS_DIR, "zipalign.exe" if IS_WIN else "zipalign")
+APKSIGNER = os.path.join(BUILD_TOOLS_DIR, "apksigner.bat" if IS_WIN else "apksigner")
 
 WEB_DIST = os.path.join(ROOT_DIR, "apps", "web", "dist")
 STAGE_DIR = os.path.join(ROOT_DIR, "apps", "mobile", "android_native_build")
 
 ENV = os.environ.copy()
-ENV["JAVA_HOME"] = JDK_DIR
-ENV["PATH"] = os.path.join(JDK_DIR, "bin") + os.pathsep + ENV.get("PATH", "")
+if os.path.isdir(JDK_DIR):
+    ENV["JAVA_HOME"] = JDK_DIR
+    ENV["PATH"] = os.path.join(JDK_DIR, "bin") + os.pathsep + ENV.get("PATH", "")
 
 def sha256_file(path):
     h = hashlib.sha256()
@@ -40,10 +94,28 @@ def sha256_file(path):
             h.update(chunk)
     return h.hexdigest()
 
+def ensure_debug_keystore():
+    if os.path.isfile(KEYSTORE_PATH):
+        return
+    os.makedirs(os.path.dirname(KEYSTORE_PATH), exist_ok=True)
+    print(f"[*] Generating Android debug keystore at {KEYSTORE_PATH}...")
+    subprocess.run([
+        KEYTOOL, "-genkeypair", "-v",
+        "-keystore", KEYSTORE_PATH,
+        "-storepass", "android",
+        "-alias", "androiddebugkey",
+        "-keypass", "android",
+        "-keyalg", "RSA",
+        "-keysize", "2048",
+        "-validity", "10000",
+        "-dname", "CN=Android Debug,O=Android,C=US"
+    ], env=ENV, check=True)
+
 def ensure_web_dist():
     """Always build fresh apps/web production assets with vite."""
     print("[*] Building fresh apps/web production assets with vite...")
-    subprocess.run(["npm.cmd", "run", "build"], cwd=ROOT_DIR, check=True)
+    npm_cmd = "npm.cmd" if IS_WIN else "npm"
+    subprocess.run([npm_cmd, "run", "build"], cwd=ROOT_DIR, check=True)
     print(f"[OK] Web assets confirmed in {WEB_DIST}")
 
 def setup_staging():
@@ -1519,6 +1591,7 @@ def zipalign_and_sign():
         print("[ERROR] zipalign failed:", res.stderr)
         sys.exit(1)
 
+    ensure_debug_keystore()
     print("[*] Signing APK with apksigner...")
     cmd_sign = [
         APKSIGNER, "sign",

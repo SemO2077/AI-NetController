@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to publish (e.g. v0.32.0)'
+        description: 'Release tag to publish (e.g. v0.35.0)'
         required: true
-        default: 'v0.32.0'
+        default: 'v0.35.0'
 
 permissions:
   contents: write
@@ -41,7 +41,7 @@ jobs:
       - name: Compile Standalone AI_NetController_HostAgent.exe
         working-directory: agent
         run: |
-          $tag = "${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.32.0' }}"
+          $tag = "${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.35.0' }}"
           pyinstaller --clean build_agent.spec
           if (Test-Path "dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe") {
             Copy-Item "dist/AI_NetController_HostAgent/AI_NetController_HostAgent.exe" "../AI_NetController_HostAgent_${tag}_win64.exe"
@@ -65,31 +65,38 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
       - name: Setup Java 17 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Flutter 3.29
-        uses: subosito/flutter-action@v2
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
         with:
-          channel: 'stable'
-          cache: true
+          python-version: '3.12'
 
-      - name: Build Split-per-ABI Release APK
-        working-directory: apps/mobile
+      - name: Install Web Dependencies & Build Native Android APK
         run: |
-          TAG="${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.32.0' }}"
-          flutter pub get
-          flutter build apk --release --split-per-abi
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "../../AI_NetController_${TAG}_arm64-v8a.apk"
+          TAG="${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.35.0' }}"
+          npm ci || npm install --no-audit --no-fund
+          python3 scripts/build_android_app.py
+          cp apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "AI_NetController_${TAG}_arm64-v8a.apk"
+          cp apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "AI_NetController_${TAG}.apk"
 
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-release
-          path: AI_NetController_*_arm64-v8a.apk
+          path: |
+            AI_NetController_*_arm64-v8a.apk
+            AI_NetController_*.apk
 
   publish-github-release:
     name: Publish Official GitHub Release with Patch Notes
@@ -120,8 +127,8 @@ jobs:
       - name: Create GitHub Release & Upload Binaries
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.32.0' }}
-          name: "AI NetController ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.32.0' }}"
+          tag_name: ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.35.0' }}
+          name: "AI NetController ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.release_tag || 'v0.35.0' }}"
           body_path: PATCH_NOTES.md
           draft: false
           prerelease: false
@@ -129,4 +136,5 @@ jobs:
             release-assets/AI_NetController_HostAgent_*_win64.exe
             release-assets/AI_NetController_HostAgent_*_win64_portable.zip
             release-assets/AI_NetController_*_arm64-v8a.apk
+            release-assets/AI_NetController_*.apk
             release-assets/SHA256SUMS.txt

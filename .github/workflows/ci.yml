@@ -21,12 +21,12 @@ jobs:
           cache: 'npm'
 
       - name: Install Node Dependencies
-        run: npm ci
+        run: npm ci || npm install --no-audit --no-fund
 
       - name: Run TypeScript Type Check
         run: npm run lint
 
-      - name: Execute 34-Pillar Verification & 13-Phase Stress Test Suite
+      - name: Execute Verification & Stress Test Suite
         run: npm test
 
       - name: Build Web Production Bundle
