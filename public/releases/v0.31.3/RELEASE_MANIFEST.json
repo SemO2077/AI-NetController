@@ -2,7 +2,7 @@
   "version": "v0.31.3",
   "tag": "v0.31.3",
   "releaseName": "AI NetController v0.31.3",
-  "publishedAt": "2026-11-06T17:56:04.749715+00:00",
+  "publishedAt": "2026-11-07T14:19:32.999812+00:00",
   "artifacts": [
     {
       "filename": "AI_NetController_HostAgent_v0.31.3_win64.exe",
@@ -17,9 +17,9 @@
       "filename": "AI_NetController_v0.31.3_arm64-v8a.apk",
       "kind": "apk",
       "platform": "Android 10\u201315 arm64-v8a (Mobile Companion .APK)",
-      "sizeBytes": 72231,
-      "sizeFormatted": "70.5 KB",
-      "sha256": "360ba5a586eca59937a82081ece764e81036af40784b8a94104986bc85386760",
+      "sizeBytes": 1366078,
+      "sizeFormatted": "1.3 MB",
+      "sha256": "5820f617d1f3c565643b03d01bd7f5bdcbad81c64c5fe84241c404e92e67ed82",
       "downloadUrl": "/releases/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk"
     },
     {

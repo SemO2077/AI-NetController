@@ -8,10 +8,12 @@
 @layer base {
   :root {
     --canvas-deep: #030712;
-    --canvas-surface: #060c1c;
-    --glass-background: rgba(10, 18, 38, 0.70);
-    --glass-border: rgba(255, 255, 255, 0.12);
-    --glass-border-specular: rgba(0, 240, 255, 0.45);
+    --canvas-surface: #090f1e;
+    --surface-card: #0d1527;
+    --surface-card-elevated: #111c33;
+    --glass-background: rgba(13, 21, 39, 0.96);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-border-specular: rgba(56, 189, 248, 0.35);
     --samsung-blue: #2979ff;
     --samsung-cyan: #00f0ff;
     --samsung-emerald: #00f59b;
@@ -25,56 +27,63 @@
     --neon-rose: #ff2a6d;
     --neon-violet: #8b5cf6;
     --ease-samsung: cubic-bezier(0.22, 1, 0.36, 1);
-    --ease-spring: cubic-bezier(0.22, 1.38, 0.36, 1);
-    --ease-bubbly: cubic-bezier(0.34, 1.56, 0.64, 1);
-    --ease-elastic: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-bubbly: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-elastic: cubic-bezier(0.22, 1, 0.36, 1);
     --ease-fluid: cubic-bezier(0.16, 1, 0.3, 1);
 
-    /* Cohesive Rounded-Geometric UI, Display & Telemetry Font Stack (100% Latin + Bulgarian Cyrillic Parity) */
-    --font-sans: "Onest", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-    --font-display: "Plus Jakarta Sans", "Onest", -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+    /* Cohesive Geometric UI, Display & Telemetry Font Stack (Latin + Bulgarian Cyrillic Parity) */
+    --font-sans: "Onest", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Roboto", "Segoe UI", sans-serif;
+    --font-display: "Plus Jakarta Sans", "Onest", -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
     --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
 
-    /* Fluid Root Font Size Scaling Across Resolutions & Aspect Ratios */
-    font-size: clamp(14px, 0.90rem + 0.20vw, 16.5px);
+    /* Fluid Root Font Size Scaling Across Every Resolution & Aspect Ratio */
+    font-size: clamp(13.5px, 0.85rem + 0.22vw, 16px);
   }
 
   /* 1. Ultra-Narrow Foldables (e.g. Galaxy Z Fold cover <= 320px) */
   @media (max-width: 320px) {
     :root {
-      font-size: 14px;
+      font-size: 13px;
     }
   }
 
   /* 2. Compact Narrow Mobile (321px - 374px) */
   @media (min-width: 321px) and (max-width: 374px) {
     :root {
-      font-size: 14.5px;
-    }
-  }
-
-  /* 3. Short Mobile Landscape (e.g. 16:9 / 19.5:9 / 21:9 phones <= 480px height) */
-  @media (max-height: 480px) and (orientation: landscape) {
-    :root {
       font-size: 14px;
     }
   }
 
-  /* 4. Medium Foldable / Square Inner Displays (aspect-ratio ~ 1:1, 4:3, e.g. 768x1024, 884x1104) */
+  /* 3. Standard Mobile Portrait (375px - 480px) */
+  @media (min-width: 375px) and (max-width: 480px) {
+    :root {
+      font-size: 14.5px;
+    }
+  }
+
+  /* 4. Short Mobile Landscape (16:9 / 19.5:9 / 21:9 phones <= 500px height) */
+  @media (max-height: 500px) and (orientation: landscape) {
+    :root {
+      font-size: 13.5px;
+    }
+  }
+
+  /* 5. Medium Foldable / Square Inner Displays (aspect-ratio ~ 1:1, 4:3) */
   @media (min-width: 600px) and (max-width: 960px) and (max-aspect-ratio: 1.35/1) {
     :root {
       font-size: 14.5px;
     }
   }
 
-  /* 5. Standard Laptops & Desktops 16:9 / 16:10 (1024px - 1919px) */
+  /* 6. Standard Laptops & Desktops (1024px - 1919px) */
   @media (min-width: 1024px) and (max-width: 1919px) {
     :root {
       font-size: 15px;
     }
   }
 
-  /* 6. High-DPI QHD, 4K & Ultrawide 21:9 / 32:9 (>= 1920px) */
+  /* 7. High-DPI QHD, 4K & Ultrawide (>= 1920px) */
   @media (min-width: 1920px) {
     :root {
       font-size: 16px;
@@ -87,25 +96,24 @@
     }
   }
 
-  @media (min-width: 3840px) {
-    :root {
-      font-size: 18.5px;
-    }
-  }
-
   html {
     font-family: var(--font-sans);
     text-size-adjust: 100%;
     -webkit-text-size-adjust: 100%;
     font-optical-sizing: auto;
+    background-color: #030712;
+    color-scheme: dark;
   }
 
   html, body {
     width: 100%;
     max-width: 100vw;
-    overflow-x: hidden;
+    height: 100dvh;
+    overflow: hidden;
     position: relative;
     box-sizing: border-box;
+    margin: 0;
+    padding: 0;
   }
 
   body {
@@ -118,11 +126,18 @@
     text-rendering: optimizeLegibility;
     line-height: 1.45;
     letter-spacing: -0.011em;
-    overflow-x: hidden;
-    touch-action: pan-y pinch-zoom;
-    overscroll-behavior-y: contain;
+    touch-action: manipulation;
+    overscroll-behavior: none;
     -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
     padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* Allow natural text selection inside inputs, textareas, code blocks, and selectable regions */
+  input, textarea, code, pre, .select-text, [contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   *, ::before, ::after {
@@ -132,11 +147,12 @@
   img, video, canvas, svg {
     max-width: 100%;
     height: auto;
+    -webkit-user-drag: none;
   }
 
   h1, h2, h3, h4, .font-display {
     font-family: var(--font-display);
-    letter-spacing: -0.028em;
+    letter-spacing: -0.025em;
     font-weight: 700;
     line-height: 1.2;
     text-wrap: balance;
@@ -157,451 +173,301 @@
 /* Fluid Typography Helpers for Multi-Resolution & Aspect-Ratio Harmony */
 .text-fluid-title {
   font-family: var(--font-display);
-  font-size: clamp(1.18rem, 1rem + 0.75vw, 1.65rem);
-  line-height: 1.18;
-  letter-spacing: -0.03em;
+  font-size: clamp(1.05rem, 0.95rem + 0.55vw, 1.4rem);
+  line-height: 1.2;
+  letter-spacing: -0.025em;
 }
 
 .text-fluid-card-title {
   font-family: var(--font-display);
-  font-size: clamp(0.92rem, 0.84rem + 0.32vw, 1.08rem);
+  font-size: clamp(0.9rem, 0.84rem + 0.25vw, 1.04rem);
   line-height: 1.24;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.018em;
 }
 
 .text-fluid-meta {
-  font-size: clamp(0.75rem, 0.72rem + 0.16vw, 0.84rem);
+  font-size: clamp(0.74rem, 0.7rem + 0.14vw, 0.82rem);
   line-height: 1.35;
 }
 
 /* ============================================================================
-   120Hz EXPRESSIVE & BUBBLY ICON MICRO-ANIMATION ENGINE (Pure GPU Transform)
+   120Hz NATIVE ANDROID MICRO-INTERACTIONS (Zero Jitter, Touch-Safe)
    ============================================================================ */
-@keyframes icon-bubble-pop {
-  0% {
-    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
-  }
-  40% {
-    transform: translate3d(0, -2.5px, 0) scale(1.22) rotate(-8deg);
-  }
-  75% {
-    transform: translate3d(0, 0.5px, 0) scale(0.95) rotate(5deg);
-  }
-  100% {
-    transform: translate3d(0, 0, 0) scale(1.06) rotate(0deg);
-  }
-}
-
-@keyframes icon-sparkle-twinkle {
-  0%, 100% {
-    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
-  }
-  35% {
-    transform: translate3d(0, -1.5px, 0) scale(1.16) rotate(12deg);
-  }
-  70% {
-    transform: translate3d(0, 1px, 0) scale(0.96) rotate(-8deg);
-  }
-}
-
-@keyframes icon-bolt-jolt {
-  0%, 100% {
-    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
-  }
-  30% {
-    transform: translate3d(0, -2px, 0) scale(1.24) rotate(-14deg);
-  }
-  65% {
-    transform: translate3d(0, 0, 0) scale(1.08) rotate(10deg);
-  }
-}
-
-@keyframes icon-float-bob {
-  0%, 100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(0, -2.5px, 0) scale(1.06);
-  }
-}
-
-.icon-bubbly {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition: transform 0.34s var(--ease-bubbly), color 0.2s ease;
-}
-
-.group:hover .icon-bubbly,
-button:hover .icon-bubbly {
-  animation: icon-bubble-pop 0.48s var(--ease-bubbly) forwards;
-}
-
-.icon-sparkle-live {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  animation: icon-sparkle-twinkle 3.2s var(--ease-fluid) infinite;
-}
-
-.icon-bolt-live {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition: transform 0.32s var(--ease-bubbly);
-}
-
-button:hover .icon-bolt-live,
-.group:hover .icon-bolt-live {
-  animation: icon-bolt-jolt 0.44s var(--ease-bubbly) forwards;
-}
-
-.icon-spin-bubbly {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition: transform 0.46s var(--ease-bubbly);
-}
-
-button:hover .icon-spin-bubbly,
-.group:hover .icon-spin-bubbly {
-  transform: translate3d(0, 0, 0) rotate(180deg) scale(1.15);
-}
-
-.icon-plus-bubbly {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition: transform 0.38s var(--ease-bubbly);
-}
-
-button:hover .icon-plus-bubbly,
-.group:hover .icon-plus-bubbly {
-  transform: translate3d(0, 0, 0) rotate(90deg) scale(1.2);
-}
-
+.icon-bubbly,
+.icon-bolt-live,
+.icon-spin-bubbly,
+.icon-plus-bubbly,
+.icon-sparkle-live,
 .icon-float-subtle {
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
-  animation: icon-float-bob 3.6s var(--ease-fluid) infinite;
+  transition: transform 0.2s var(--ease-samsung), color 0.18s ease;
 }
 
-/* 120Hz GPU Layer Acceleration & High-FPS Optimizations */
-.gpu-layer {
+@media (hover: hover) and (pointer: fine) {
+  .group:hover .icon-bubbly,
+  button:hover .icon-bubbly {
+    transform: translate3d(0, -1px, 0) scale(1.08);
+  }
+
+  button:hover .icon-bolt-live,
+  .group:hover .icon-bolt-live {
+    transform: translate3d(0, -1px, 0) scale(1.1);
+  }
+
+  button:hover .icon-spin-bubbly,
+  .group:hover .icon-spin-bubbly {
+    transform: translate3d(0, 0, 0) rotate(90deg);
+  }
+
+  button:hover .icon-plus-bubbly,
+  .group:hover .icon-plus-bubbly {
+    transform: translate3d(0, 0, 0) rotate(90deg);
+  }
+}
+
+/* GPU Layer Helper (Without memory-bloating global will-change or 3D perspective) */
+.gpu-layer,
+.smooth-144hz,
+.transform-gpu {
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
 }
 
-/* Rubber-Band Overscroll & Bouncy Scroll */
+/* Native Android Smooth Momentum Scroll Container */
 .bouncy-scroll {
   overscroll-behavior-y: contain;
-  scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
 }
 
-@keyframes rubber-bounce-top {
-  0% { transform: translate3d(0, 0, 0) scaleY(1); }
-  35% { transform: translate3d(0, 12px, 0) scaleY(1.04); }
-  65% { transform: translate3d(0, -3px, 0) scaleY(0.985); }
-  100% { transform: translate3d(0, 0, 0) scaleY(1); }
-}
-
-@keyframes rubber-bounce-bottom {
-  0% { transform: translate3d(0, 0, 0) scaleY(1); }
-  35% { transform: translate3d(0, -12px, 0) scaleY(1.04); }
-  65% { transform: translate3d(0, 3px, 0) scaleY(0.985); }
-  100% { transform: translate3d(0, 0, 0) scaleY(1); }
-}
-
-.bounce-top {
-  animation: rubber-bounce-top 0.38s var(--ease-bubbly);
-}
-
-.bounce-bottom {
-  animation: rubber-bounce-bottom 0.38s var(--ease-bubbly);
-}
-
-/* 120Hz Zero-Blur Ambient Aurora Drift (Pure translate3d + containment) */
-@keyframes liquid-aurora-drift {
-  0% {
-    transform: translate3d(0%, 0%, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(2.5%, -3%, 0) scale(1.04);
-  }
-  100% {
-    transform: translate3d(-2%, 2.5%, 0) scale(0.98);
-  }
-}
-
-.liquid-aurora-orb {
-  animation: liquid-aurora-drift 22s var(--ease-fluid) infinite alternate;
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
+/* Isolate layouts and repaints so card interactions never trigger global reflows */
+.contain-paint-layout {
   contain: layout style;
 }
 
-/* Tier 1 — Resting Canvas Cards (High vibrancy, specular neon rim) */
+/* ============================================================================
+   SLEEK NATIVE SURFACES (Zero Backdrop-Filter Lag on Scrolling Lists)
+   ============================================================================ */
+
+/* Tier 1 — Resting Cards (Solid high-contrast dark surface, crisp border, zero blur lag) */
 .glass-liquid {
-  background: rgba(8, 15, 32, 0.76);
-  backdrop-filter: blur(18px) saturate(230%);
-  -webkit-backdrop-filter: blur(18px) saturate(230%);
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-top-color: rgba(0, 240, 255, 0.65);
-  box-shadow:
-    0 16px 40px -4px rgba(0, 0, 0, 0.75),
-    0 0 28px -2px rgba(0, 240, 255, 0.18),
-    inset 0 1px 1px rgba(255, 255, 255, 0.35);
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.96) 0%, rgba(10, 16, 30, 0.98) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top-color: rgba(255, 255, 255, 0.13);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.55);
   transition:
-    transform 0.28s var(--ease-bubbly),
-    box-shadow 0.24s var(--ease-samsung),
-    border-color 0.2s var(--ease-samsung),
-    background-color 0.2s var(--ease-samsung);
+    transform 0.18s var(--ease-samsung),
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
-.glass-liquid:hover {
-  border-color: rgba(0, 240, 255, 0.60);
-  box-shadow:
-    0 22px 52px -4px rgba(0, 0, 0, 0.85),
-    0 0 36px rgba(0, 240, 255, 0.32),
-    inset 0 1px 1.5px rgba(255, 255, 255, 0.45);
+@media (hover: hover) and (pointer: fine) {
+  .glass-liquid:hover {
+    border-color: rgba(56, 189, 248, 0.32);
+    box-shadow: 0 8px 28px -4px rgba(0, 0, 0, 0.65);
+  }
 }
 
 .glass-liquid-subtle {
-  background: rgba(8, 15, 32, 0.70);
-  backdrop-filter: blur(14px) saturate(220%);
-  -webkit-backdrop-filter: blur(14px) saturate(220%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-top-color: rgba(0, 240, 255, 0.45);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.60), 0 0 22px rgba(0, 240, 255, 0.15);
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
+  background: rgba(13, 21, 38, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
   transition:
-    transform 0.26s var(--ease-bubbly),
-    border-color 0.2s var(--ease-samsung);
-}
-
-/* Tier 2 — Floating Chrome (FloatingPillNav, Sticky Inputs, Header Capsules) */
-.glass-liquid-elevated {
-  background: rgba(5, 11, 24, 0.95);
-  backdrop-filter: blur(22px) saturate(240%);
-  -webkit-backdrop-filter: blur(22px) saturate(240%);
-  border: 1px solid rgba(255, 255, 255, 0.19);
-  border-top-color: rgba(0, 240, 255, 0.75);
-  box-shadow:
-    0 22px 54px rgba(0, 0, 0, 0.90),
-    0 0 36px rgba(0, 240, 255, 0.26),
-    inset 0 1px 1.5px rgba(255, 255, 255, 0.45);
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-}
-
-/* Tier 3 — Modals, Bottom Sheets & Dropdown Menus */
-.glass-liquid-modal {
-  background: rgba(6, 12, 26, 0.98);
-  backdrop-filter: blur(26px) saturate(240%);
-  -webkit-backdrop-filter: blur(26px) saturate(240%);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-top-color: rgba(0, 240, 255, 0.85);
-  box-shadow:
-    0 30px 76px rgba(0, 0, 0, 0.96),
-    0 0 48px rgba(0, 240, 255, 0.32),
-    inset 0 1px 2px rgba(255, 255, 255, 0.55);
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-}
-
-/* Samsung One UI Bubbly Pill Capsule */
-.samsung-pill {
-  border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.055);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-top-color: rgba(255, 255, 255, 0.26);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.24), 0 8px 20px -4px rgba(0, 0, 0, 0.4);
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition: transform 0.28s var(--ease-bubbly), box-shadow 0.2s var(--ease-samsung), border-color 0.2s var(--ease-samsung);
-}
-
-.samsung-card {
-  border-radius: 1.75rem;
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition: transform 0.28s var(--ease-bubbly), box-shadow 0.22s var(--ease-samsung), border-color 0.2s ease;
-}
-
-.samsung-card:hover {
-  transform: translate3d(0, -3px, 0) scale(1.008);
-}
-
-.samsung-card-active:active {
-  transform: translate3d(0, 1px, 0) scale(0.965);
-  transition-duration: 0.1s;
-}
-
-/* Cohesive 120Hz Bubbly Button & Interactive Micro-Physics (No global will-change memory bloat) */
-button, [role="button"] {
-  touch-action: manipulation;
-  backface-visibility: hidden;
-  transition:
-    transform 0.28s var(--ease-bubbly),
-    background-color 0.18s ease,
-    border-color 0.18s ease,
-    color 0.18s ease,
-    box-shadow 0.22s ease,
-    opacity 0.18s ease;
-}
-
-.bubble-tap {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition:
-    transform 0.28s var(--ease-bubbly),
-    box-shadow 0.22s var(--ease-samsung),
-    background-color 0.18s ease,
+    transform 0.18s var(--ease-samsung),
     border-color 0.18s ease;
 }
 
-.bubble-tap:hover:not(:disabled) {
-  transform: translate3d(0, -2px, 0) scale(1.035);
+/* Tier 2 — Floating Navigation & Sticky App Bars (Single composited surface) */
+.glass-liquid-elevated {
+  background: rgba(8, 13, 26, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.75);
 }
 
-.bubble-tap:active:not(:disabled) {
-  transform: translate3d(0, 1px, 0) scale(0.92);
-  transition-duration: 0.09s;
+/* Tier 3 — Modals & Bottom Sheets */
+.glass-liquid-modal {
+  background: #091020;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(56, 189, 248, 0.35);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.9);
 }
 
+/* Sleek Pill Capsule (Zero Backdrop-Filter inside cards for 120fps scrolling) */
+.samsung-pill {
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition:
+    transform 0.16s var(--ease-samsung),
+    background-color 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.samsung-card {
+  border-radius: 1.25rem;
+  transition:
+    transform 0.18s var(--ease-samsung),
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .samsung-card:hover {
+    border-color: rgba(56, 189, 248, 0.28);
+  }
+}
+
+.samsung-card-active:active {
+  transform: scale(0.985);
+  transition-duration: 0.08s;
+}
+
+/* Native Android Tactile Button Physics */
+button, [role="button"] {
+  touch-action: manipulation;
+  cursor: pointer;
+  transition:
+    transform 0.15s var(--ease-samsung),
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+button:disabled, [role="button"]:disabled {
+  cursor: not-allowed;
+}
+
+.bubble-tap,
 .bubble-pop {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  transition: transform 0.3s var(--ease-bubbly), box-shadow 0.26s var(--ease-bubbly);
+  transition:
+    transform 0.15s var(--ease-samsung),
+    background-color 0.15s ease,
+    border-color 0.15s ease;
 }
 
-.bubble-pop:hover:not(:disabled) {
-  transform: translate3d(0, -2.5px, 0) scale(1.03);
+@media (hover: hover) and (pointer: fine) {
+  .bubble-tap:hover:not(:disabled),
+  .bubble-pop:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
 }
 
+.bubble-tap:active:not(:disabled),
 .bubble-pop:active:not(:disabled) {
-  transform: translate3d(0, 1px, 0) scale(0.925);
-  transition-duration: 0.09s;
+  transform: scale(0.96);
+  transition-duration: 0.06s;
 }
 
-/* Luminous Glows */
+/* Subtle Accent Highlights */
 .samsung-glow-cyan,
 .neon-glow-cyan {
-  box-shadow: 0 0 28px rgba(0, 229, 255, 0.48), inset 0 0 12px rgba(0, 229, 255, 0.28);
+  box-shadow: 0 0 18px rgba(0, 229, 255, 0.25);
 }
 
 .samsung-glow-emerald,
 .neon-glow-emerald {
-  box-shadow: 0 0 28px rgba(0, 245, 155, 0.48), inset 0 0 12px rgba(0, 245, 155, 0.28);
+  box-shadow: 0 0 18px rgba(0, 245, 155, 0.25);
 }
 
 .neon-glow-violet {
-  box-shadow: 0 0 28px rgba(139, 92, 246, 0.48), inset 0 0 12px rgba(139, 92, 246, 0.28);
+  box-shadow: 0 0 18px rgba(139, 92, 246, 0.25);
 }
 
 .neon-glow-amber {
-  box-shadow: 0 0 28px rgba(255, 183, 3, 0.48), inset 0 0 12px rgba(255, 183, 3, 0.28);
+  box-shadow: 0 0 18px rgba(255, 183, 3, 0.25);
 }
 
 .neon-glow-rose {
-  box-shadow: 0 0 28px rgba(255, 42, 109, 0.48), inset 0 0 12px rgba(255, 42, 109, 0.28);
+  box-shadow: 0 0 18px rgba(255, 42, 109, 0.25);
 }
 
-/* 120Hz Concentric Beacon Radar Pulses */
+/* Lightweight Status Pulse (Pure Opacity + Scale) */
 @keyframes radar-ring-pulse {
   0% {
-    transform: scale(0.92);
-    opacity: 0.95;
+    transform: scale(0.95);
+    opacity: 0.85;
   }
-  50% {
-    opacity: 0.45;
+  70% {
+    transform: scale(2.1);
+    opacity: 0;
   }
   100% {
-    transform: scale(2.4);
+    transform: scale(2.1);
     opacity: 0;
   }
 }
 
-.beacon-pulse-emerald {
-  animation: radar-ring-pulse 2s cubic-bezier(0.24, 0, 0.38, 1) infinite;
-}
-
-.beacon-pulse-cyan {
-  animation: radar-ring-pulse 2s cubic-bezier(0.24, 0, 0.38, 1) infinite;
-}
-
+.beacon-pulse-emerald,
+.beacon-pulse-cyan,
 .beacon-pulse-amber {
-  animation: radar-ring-pulse 1.8s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+  animation: radar-ring-pulse 2.4s cubic-bezier(0.24, 0, 0.38, 1) infinite;
 }
 
-/* High-Contrast Telemetry Tracks & Glowing Beads */
+/* High-Contrast Telemetry Tracks */
 .telemetry-track {
-  background: rgba(2, 6, 16, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(2, 6, 16, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .telemetry-glow-cyan {
-  box-shadow: 0 0 12px rgba(0, 240, 255, 0.75), inset 0 0 4px rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.45);
 }
 
 .telemetry-glow-emerald {
-  box-shadow: 0 0 12px rgba(0, 245, 155, 0.75), inset 0 0 4px rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 8px rgba(0, 245, 155, 0.45);
 }
 
 .telemetry-glow-amber {
-  box-shadow: 0 0 12px rgba(255, 183, 3, 0.75), inset 0 0 4px rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 8px rgba(255, 183, 3, 0.45);
 }
 
 .telemetry-glow-rose {
-  box-shadow: 0 0 12px rgba(255, 42, 109, 0.75), inset 0 0 4px rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 8px rgba(255, 42, 109, 0.45);
 }
 
 .telemetry-glow-violet {
-  box-shadow: 0 0 12px rgba(139, 92, 246, 0.75), inset 0 0 4px rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.45);
 }
 
-/* High-Contrast Cyber-Neon Rim Classes */
+/* Accent Rim Classes */
 .neon-rim-cyan {
-  border-color: rgba(0, 240, 255, 0.45);
-  box-shadow: 0 0 16px rgba(0, 240, 255, 0.22);
+  border-color: rgba(0, 240, 255, 0.35);
 }
 
 .neon-rim-emerald {
-  border-color: rgba(0, 245, 155, 0.45);
-  box-shadow: 0 0 16px rgba(0, 245, 155, 0.22);
+  border-color: rgba(0, 245, 155, 0.35);
 }
 
 .neon-rim-amber {
-  border-color: rgba(255, 183, 3, 0.45);
-  box-shadow: 0 0 16px rgba(255, 183, 3, 0.22);
+  border-color: rgba(255, 183, 3, 0.35);
 }
 
 .neon-rim-violet {
-  border-color: rgba(139, 92, 246, 0.45);
-  box-shadow: 0 0 16px rgba(139, 92, 246, 0.22);
+  border-color: rgba(139, 92, 246, 0.35);
 }
 
 .neon-rim-rose {
-  border-color: rgba(255, 42, 109, 0.45);
-  box-shadow: 0 0 16px rgba(255, 42, 109, 0.22);
+  border-color: rgba(255, 42, 109, 0.35);
 }
 
-/* Smooth Scrollbar */
+/* Minimal Scrollbar */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 9999px;
-  transition: background 0.2s ease;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .scrollbar-none,
@@ -618,11 +484,12 @@ button, [role="button"] {
 /* Aspect-Ratio & Short Landscape Viewport Adaptations (<= 520px height) */
 @media (max-height: 520px) and (orientation: landscape) {
   .landscape-compact-nav {
-    height: 46px !important;
-    padding: 0.25rem !important;
+    height: 48px !important;
+    padding-top: 0.15rem !important;
+    padding-bottom: 0.15rem !important;
   }
   .landscape-compact-shell {
-    padding-bottom: 4.25rem !important;
+    padding-bottom: 3.75rem !important;
   }
   .landscape-compact-modal {
     max-height: 94dvh !important;
@@ -630,107 +497,61 @@ button, [role="button"] {
 }
 
 /* ============================================================================
-   144Hz ULTRA-FLUID COMPOSITOR & ZERO-JITTER HARDWARE OPTIMIZATION
-   ============================================================================ */
-/* 6.94ms Frame Budget Pinning: Forces GPU layer separation & prevents paint thrashing */
-.smooth-144hz,
-.transform-gpu {
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-  perspective: 1000px;
-  will-change: transform;
-}
-
-/* Isolate layouts and repaints so card interactions never trigger global reflows */
-.contain-paint-layout {
-  contain: layout style;
-}
-
-/* Liquid aurora zero-blur background layer pinning for 144Hz */
-.liquid-aurora-orb {
-  will-change: transform;
-  contain: strict;
-}
-
-/* ============================================================================
    MULTI-RESOLUTION & MULTI-ASPECT-RATIO CANVAS & GRID SCALING
    ============================================================================ */
-/* Ultrawide 21:9 (3440px) and 32:9 (5120px) container auto-expansion */
 .ultrawide-canvas {
   width: 100%;
-  max-width: 72rem; /* 1152px baseline */
+  max-width: 72rem;
 }
 
 @media (min-width: 1280px) {
   .ultrawide-canvas {
-    max-width: 82rem !important; /* 1312px */
+    max-width: 82rem !important;
   }
 }
 
 @media (min-width: 1536px) {
   .ultrawide-canvas {
-    max-width: 96rem !important; /* 1536px */
+    max-width: 96rem !important;
   }
 }
 
 @media (min-width: 1920px) {
   .ultrawide-canvas {
-    max-width: 114rem !important; /* 1824px */
+    max-width: 114rem !important;
   }
 }
 
 @media (min-width: 2560px) {
   .ultrawide-canvas {
-    max-width: 148rem !important; /* 2368px */
+    max-width: 148rem !important;
   }
 }
 
-@media (min-width: 3440px) {
-  .ultrawide-canvas {
-    max-width: 200rem !important; /* 3200px (21:9 Ultrawide) */
-  }
-}
-
-@media (min-width: 5120px) {
-  .ultrawide-canvas {
-    max-width: 295rem !important; /* 4720px (32:9 Super Ultrawide) */
-  }
-}
-
-/* Fleet Responsive Grid: Smoothly scales from 1 to 6 columns based on width and aspect ratio */
+/* Fleet Responsive Grid: Scales cleanly across foldables, phones, tablets, and desktops */
 .fleet-responsive-grid {
   display: grid;
   grid-template-columns: repeat(1, minmax(0, 1fr));
-  gap: 0.875rem;
+  gap: 0.75rem;
 }
 
-@media (min-width: 640px) {
+@media (min-width: 600px) {
   .fleet-responsive-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.875rem;
   }
 }
 
-@media (min-width: 1180px) {
+@media (min-width: 1100px) {
   .fleet-responsive-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
   }
 }
 
-@media (min-width: 1800px) {
+@media (min-width: 1700px) {
   .fleet-responsive-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 2700px) {
-  .fleet-responsive-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 3600px) {
-  .fleet-responsive-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
 
@@ -742,4 +563,3 @@ button, [role="button"] {
     scroll-behavior: auto !important;
   }
 }
-

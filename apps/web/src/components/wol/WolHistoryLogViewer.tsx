@@ -5,7 +5,6 @@ import {
   XCircle,
   Search,
   Trash2,
-  RotateCcw,
   Check,
   RefreshCw,
 } from 'lucide-react';
@@ -111,7 +110,7 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
 
   return (
     <div id="wol-history-log-viewer" className="space-y-2">
-      <div className="flex items-center justify-between px-2">
+      <div className="flex items-center justify-between px-1">
         <span className="text-[11px] font-mono text-cyan-300/80 uppercase tracking-widest font-semibold">
           {isBg ? 'ИСТОРИЯ НА WAKE-ON-LAN' : 'WAKE-ON-LAN HISTORY'}
         </span>
@@ -120,58 +119,41 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
         </span>
       </div>
 
-      <div className="bg-[#0b1324]/55 backdrop-blur-2xl border border-white/[0.07] border-t-white/[0.16] shadow-[0_12px_32px_rgba(0,0,0,0.4)] w-full rounded-[2rem] p-4 space-y-3">
-        {/* Compact Header */}
+      <div className="glass-liquid w-full rounded-2xl p-3.5 sm:p-4 space-y-3">
+        {/* Header */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-300 flex items-center justify-center border border-amber-400/25 shrink-0">
               <Zap className="w-4 h-4" />
             </div>
-            <div className="min-w-0">
-              <h3 className="font-display text-xs sm:text-sm font-bold text-white truncate">
-                {isBg ? 'Дневник на пакетите' : 'Packet Log'}
-              </h3>
-            </div>
+            <h3 className="font-display text-xs sm:text-sm font-bold text-white truncate">
+              {isBg ? 'Дневник на пакетите' : 'Magic Packet Log'}
+            </h3>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          {entries.length > 0 && (
             <button
               type="button"
               onClick={() => {
-                triggerHapticFeedback('light');
-                wolHistoryStore.resetToDefaultHistory();
+                triggerHapticFeedback('medium');
+                wolHistoryStore.clearHistory();
               }}
-              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/10 border border-white/10 text-slate-300 text-xs flex items-center gap-1.5 transition cursor-pointer"
-              title={isBg ? 'Възстанови примерните записи' : 'Restore sample logs'}
+              className="h-8 px-2.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-300 text-xs flex items-center gap-1.5 transition active:scale-95"
+              title={isBg ? 'Изчисти историята' : 'Clear history'}
             >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>{isBg ? 'Нулирай' : 'Reset'}</span>
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{isBg ? 'Изчисти' : 'Clear'}</span>
             </button>
-
-            {entries.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHapticFeedback('medium');
-                  wolHistoryStore.clearHistory();
-                }}
-                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-1.5 transition cursor-pointer"
-                title={isBg ? 'Изчисти историята' : 'Clear history'}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>{isBg ? 'Изчисти' : 'Clear'}</span>
-              </button>
-            )}
-          </div>
+          )}
         </div>
 
-        {/* Single-Row Filter + Search */}
+        {/* Filter + Search */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-          <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#050914] border border-white/10 shrink-0">
+          <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#070d1b] border border-white/10 shrink-0">
             {(
               [
                 { id: 'all', label: isBg ? 'Всички' : 'All', count: counts.total },
-                { id: 'success', label: isBg ? 'Успешни' : 'Sent', count: counts.success },
+                { id: 'success', label: isBg ? 'Изпратени' : 'Sent', count: counts.success },
                 { id: 'failed', label: isBg ? 'Грешки' : 'Failed', count: counts.failed },
               ] as const
             ).map((tab) => {
@@ -184,14 +166,14 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                     triggerHapticFeedback('selection');
                     setStatusFilter(tab.id);
                   }}
-                  className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                  className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition ${
                     active
-                      ? 'bg-white/10 text-white font-semibold'
+                      ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/30'
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <span>{tab.label}</span>
-                  <span className="text-xs text-slate-400 font-mono">({tab.count})</span>
+                  <span className="text-[10px] text-slate-400 font-mono">({tab.count})</span>
                 </button>
               );
             })}
@@ -204,13 +186,13 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={isBg ? 'Търси устройство или MAC...' : 'Search device or MAC...'}
-              className="w-full h-8 pl-8 pr-7 rounded-xl bg-[#050914] border border-white/10 text-xs text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
+              className="w-full h-9 pl-8 pr-7 rounded-xl bg-[#070d1b] border border-white/10 text-xs text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
             />
             {searchQuery && (
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs cursor-pointer"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
                 aria-label="Clear search"
               >
                 ✕
@@ -219,11 +201,11 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
           </div>
         </div>
 
-        {/* Clean, Scannable Packet List */}
-        <div className="rounded-2xl bg-[#050914]/80 border border-white/[0.07] divide-y divide-white/[0.06] max-h-72 overflow-y-auto">
+        {/* Packet List */}
+        <div className="rounded-xl bg-[#070d1b] border border-white/[0.07] divide-y divide-white/[0.06] max-h-64 overflow-y-auto">
           {filteredEntries.length === 0 ? (
-            <div className="p-6 text-center text-xs text-slate-400">
-              {isBg ? 'Няма записи за Wake-on-LAN пакети.' : 'No Wake-on-LAN packet history found.'}
+            <div className="p-5 text-center text-xs text-slate-400">
+              {isBg ? 'Няма изпратени Wake-on-LAN пакети.' : 'No Wake-on-LAN packets sent yet.'}
             </div>
           ) : (
             filteredEntries.map((entry) => {
@@ -233,9 +215,8 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
               return (
                 <div
                   key={entry.id}
-                  className="px-3.5 py-2.5 flex items-center justify-between gap-3 hover:bg-white/[0.02] transition"
+                  className="px-3 py-2.5 flex items-center justify-between gap-2.5 hover:bg-white/[0.02] transition"
                 >
-                  {/* Left: Status Icon + Device Name + MAC */}
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     {isSuccess ? (
                       <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -244,12 +225,12 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                     )}
 
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 min-w-0">
+                      <div className="flex items-center gap-1.5 min-w-0">
                         <span className="text-xs font-semibold text-white truncate">
                           {entry.deviceName}
                         </span>
                         <span
-                          className={`text-[10px] font-mono px-1.5 py-0.2 rounded shrink-0 ${
+                          className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
                             isSuccess
                               ? 'text-emerald-300 bg-emerald-500/10'
                               : 'text-rose-300 bg-rose-500/15'
@@ -257,7 +238,7 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                         >
                           {isSuccess
                             ? isBg
-                              ? 'Успешен'
+                              ? 'Изпратен'
                               : 'Sent'
                             : isBg
                             ? 'Грешка'
@@ -269,7 +250,7 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                         <button
                           type="button"
                           onClick={() => handleCopyMac(entry.id, entry.mac)}
-                          className="hover:text-cyan-300 transition flex items-center gap-1 cursor-pointer"
+                          className="hover:text-cyan-300 transition flex items-center gap-1"
                           title={isBg ? 'Копирай MAC' : 'Copy MAC'}
                         >
                           <span>{entry.mac}</span>
@@ -281,8 +262,7 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                     </div>
                   </div>
 
-                  {/* Right: Timestamp + Quick Actions */}
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <span className="text-[11px] font-mono text-slate-400 tabular-nums">
                       {entry.timestamp.slice(11) || entry.timestamp}
                     </span>
@@ -290,10 +270,14 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                     <button
                       type="button"
                       onClick={() => handleRetryPacket(entry)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition cursor-pointer"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition"
                       title={isBg ? 'Изпрати отново' : 'Resend packet'}
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin text-cyan-300' : ''}`} />
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${
+                          isRetrying ? 'animate-spin text-cyan-300' : ''
+                        }`}
+                      />
                     </button>
 
                     <button
@@ -302,7 +286,7 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                         triggerHapticFeedback('light');
                         wolHistoryStore.removeEntry(entry.id);
                       }}
-                      className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-white/5 transition cursor-pointer"
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-white/5 transition"
                       title={isBg ? 'Изтрий' : 'Remove'}
                     >
                       <Trash2 className="w-3.5 h-3.5" />

@@ -204,7 +204,7 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
               {language === 'bg' ? 'ОПЕРАЦИОННА СИСТЕМА' : 'OPERATING SYSTEM'}
             </span>
             <span className="text-white/90 font-medium capitalize block">
-              {host.os === 'windows' ? 'Windows 11 Pro' : 'Linux Kernel 6.8'}
+              {host.os === 'windows' ? 'Windows' : 'Linux'}
             </span>
           </div>
 

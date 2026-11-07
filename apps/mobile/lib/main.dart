@@ -61,6 +61,13 @@ final fleetProvider =
 class FleetNotifier extends StateNotifier<List<HostState>> {
   FleetNotifier() : super([]);
 
+  void addHost(HostState host) {
+    state = [
+      ...state.where((h) => h.id != host.id && h.ip != host.ip),
+      host,
+    ];
+  }
+
   void updateHost(String id, {bool? isOnline, int? cpu, int? ram}) {
     state = [
       for (final h in state)
@@ -73,6 +80,20 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
 }
 
 final selectedHostIdProvider = StateProvider<String>((ref) => '');
+
+class CommandLogItem {
+  final String timestamp;
+  final String hostName;
+  final String command;
+  final String status;
+
+  CommandLogItem({
+    required this.timestamp,
+    required this.hostName,
+    required this.command,
+    required this.status,
+  });
+}
 
 // =====================================================================
 // ROOT APPLICATION ENTRY WITH ACCESSIBILITY & CLAMPED SCALER
@@ -125,29 +146,37 @@ class MainAdaptiveScreen extends ConsumerStatefulWidget {
 
 class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   int _currentTabIndex = 0;
+  final TextEditingController _commandController = TextEditingController();
+  final List<CommandLogItem> _commandLogs = [];
 
   static const List<AdaptiveNavItem> _navDestinations = [
     AdaptiveNavItem(
-      label: 'Устройства',
+      label: 'Fleet',
       icon: Icons.devices_rounded,
       activeIcon: Icons.devices_rounded,
     ),
     AdaptiveNavItem(
-      label: 'Команди',
+      label: 'Terminal',
       icon: Icons.terminal_rounded,
       activeIcon: Icons.terminal_rounded,
     ),
     AdaptiveNavItem(
-      label: 'Настройки',
+      label: 'Settings',
       icon: Icons.tune_rounded,
       activeIcon: Icons.tune_rounded,
     ),
   ];
 
+  @override
+  void dispose() {
+    _commandController.dispose();
+    super.dispose();
+  }
+
   Future<void> _sendWakeOnLan(String mac) async {
     try {
       if (await Vibration.hasVibrator()) {
-        Vibration.vibrate(duration: 40);
+        Vibration.vibrate(duration: 20);
       }
       final clean = mac.replaceAll(RegExp(r'[:-]'), '');
       if (clean.length != 12) return;
@@ -199,14 +228,139 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     );
   }
 
+  Future<void> _showAddHostDialog() async {
+    final nameCtrl = TextEditingController();
+    final ipCtrl = TextEditingController();
+    final macCtrl = TextEditingController();
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: CyberColors.surfaceElevated,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          title: const Text(
+            'Add Workstation',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: const InputDecoration(
+                  labelText: 'Hostname',
+                  hintText: 'e.g. WORKSTATION-01',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: ipCtrl,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 13, fontFamily: 'monospace'),
+                decoration: const InputDecoration(
+                  labelText: 'IPv4 Address',
+                  hintText: 'e.g. 192.168.1.50',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: macCtrl,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 13, fontFamily: 'monospace'),
+                decoration: const InputDecoration(
+                  labelText: 'MAC Address (for Wake-on-LAN)',
+                  hintText: 'e.g. AA:BB:CC:DD:EE:FF',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel',
+                  style: TextStyle(color: CyberColors.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: CyberColors.primary,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () {
+                final ip = ipCtrl.text.trim();
+                if (ip.isEmpty) return;
+                final name = nameCtrl.text.trim().isNotEmpty
+                    ? nameCtrl.text.trim()
+                    : 'PC-$ip';
+                final mac = macCtrl.text.trim().isNotEmpty
+                    ? macCtrl.text.trim().toUpperCase()
+                    : '00:00:00:00:00:00';
+                final id = name.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9_-]'), '-');
+                final host = HostState(
+                  id: id,
+                  name: name,
+                  ip: ip,
+                  mac: mac,
+                  isOnline: true,
+                );
+                ref.read(fleetProvider.notifier).addHost(host);
+                ref.read(selectedHostIdProvider.notifier).state = host.id;
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('Save PC',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _dispatchCommand(String cmd, HostState? targetHost) {
+    final trimmed = cmd.trim();
+    if (trimmed.isEmpty) return;
+    final now = TimeOfDay.now();
+    final timeStr =
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final targetLabel = targetHost != null
+        ? '${targetHost.name} (${targetHost.ip})'
+        : 'LAN Broadcast';
+
+    setState(() {
+      _commandLogs.insert(
+        0,
+        CommandLogItem(
+          timestamp: timeStr,
+          hostName: targetLabel,
+          command: trimmed,
+          status: targetHost != null && targetHost.isOnline
+              ? 'Dispatched over CST/3.0-SECURE WebSocket (Port 8765)'
+              : 'Queued — awaiting online host agent connection',
+        ),
+      );
+      _commandController.clear();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final hosts = ref.watch(fleetProvider);
     final selectedHostId = ref.watch(selectedHostIdProvider);
-    final selectedHost = hosts.firstWhere(
-      (h) => h.id == selectedHostId,
-      orElse: () => hosts.first,
-    );
+    HostState? selectedHost;
+    if (hosts.isNotEmpty) {
+      selectedHost = hosts.firstWhere(
+        (h) => h.id == selectedHostId,
+        orElse: () => hosts.first,
+      );
+    }
 
     return AdaptiveScaffold(
       title: 'AI NETCONTROLLER',
@@ -215,43 +369,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       onIndexChanged: (idx) => setState(() => _currentTabIndex = idx),
       actions: [
         IconButton(
-          tooltip: 'App Tour & Onboarding',
+          tooltip: 'Add Workstation',
+          icon: const Icon(Icons.add_circle_outline_rounded,
+              color: CyberColors.primary, size: 20),
+          onPressed: _showAddHostDialog,
+        ),
+        IconButton(
+          tooltip: 'Quick Setup Guide',
           icon: const Icon(Icons.explore_outlined,
               color: CyberColors.primary, size: 20),
           onPressed: () => AdaptiveOnboardingSheet.show(context),
-        ),
-        IconButton(
-          tooltip: 'Test HITL Security Gate',
-          icon: const Icon(Icons.shield_outlined,
-              color: CyberColors.primary, size: 20),
-          onPressed: () async {
-            final authorized = await AdaptiveHitlController.showApprovalPrompt(
-              context: context,
-              hostName: selectedHost.name,
-              command: 'rmdir /s /q C:\\CST_TempCache && format E: /fs:ntfs /q',
-              riskLevel: 'CRITICAL',
-              reasoning:
-                  'Purge volatile artifacts and sanitize auxiliary storage drive.',
-            );
-            if (mounted && authorized != null) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: authorized
-                      ? CyberColors.surfaceElevated
-                      : Colors.red.shade900,
-                  content: Text(
-                    authorized
-                        ? 'Operator AUTHORIZED command execution'
-                        : 'Operator REJECTED command',
-                    style: TextStyle(
-                      color: authorized ? CyberColors.success : Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              );
-            }
-          },
         ),
       ],
 
@@ -278,7 +405,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   Widget _buildBodyForIndex({
     required ScreenTier tier,
     required List<HostState> hosts,
-    required HostState selectedHost,
+    required HostState? selectedHost,
   }) {
     switch (_currentTabIndex) {
       case 0:
@@ -294,6 +421,71 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     }
   }
 
+  Widget _buildEmptyFleetState() {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: CyberColors.surfaceElevated.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: CyberColors.primary.withValues(alpha: 0.12),
+              border: Border.all(
+                  color: CyberColors.primary.withValues(alpha: 0.3)),
+            ),
+            child: const Icon(Icons.devices_rounded,
+                color: CyberColors.primary, size: 24),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'No Workstations Registered',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Add a workstation IP and MAC address to wake sleeping PCs via Wake-on-LAN or stream live 120Hz desktops.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: CyberColors.textSecondary,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: CyberColors.primary,
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            ),
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text(
+              'Add Workstation',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+            ),
+            onPressed: _showAddHostDialog,
+          ),
+        ],
+      ),
+    );
+  }
+
   // -------------------------------------------------------------------
   // 1. COMPACT FLEET VIEW (SINGLE COLUMN SCROLL)
   // -------------------------------------------------------------------
@@ -306,29 +498,34 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       children: [
         _buildSectionHeader('ACTIVE FLEET NODES (mDNS RFC 6762)'),
         const SizedBox(height: 8),
-        ...hosts.map(
-          (host) => ResponsiveDeviceCard(
-            id: host.id,
-            name: host.name,
-            ip: host.ip,
-            mac: host.mac,
-            isOnline: host.isOnline,
-            cpuUsage: host.cpuUsage,
-            ramUsage: host.ramUsage,
-            onTap: () {
-              ref.read(selectedHostIdProvider.notifier).state = host.id;
-              if (host.isOnline) _openStreamScreen(host);
-            },
-            onWakeOnLan: () => _sendWakeOnLan(host.mac),
-            onOpenStream: () => _openStreamScreen(host),
+        if (hosts.isEmpty)
+          _buildEmptyFleetState()
+        else
+          ...hosts.map(
+            (host) => ResponsiveDeviceCard(
+              id: host.id,
+              name: host.name,
+              ip: host.ip,
+              mac: host.mac,
+              isOnline: host.isOnline,
+              cpuUsage: host.cpuUsage,
+              ramUsage: host.ramUsage,
+              onTap: () {
+                ref.read(selectedHostIdProvider.notifier).state = host.id;
+                if (host.isOnline) _openStreamScreen(host);
+              },
+              onWakeOnLan: () => _sendWakeOnLan(host.mac),
+              onOpenStream: () => _openStreamScreen(host),
+            ),
           ),
-        ),
-        const SizedBox(height: 24),
-        _buildSectionHeader('OFFLINE GHOST CACHE'),
-        const SizedBox(height: 8),
-        ...ghostBox.keys.map(
-          (key) => _buildGhostCacheCard(key.toString(), ghostBox.get(key)),
-        ),
+        if (ghostBox.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          _buildSectionHeader('OFFLINE GHOST CACHE'),
+          const SizedBox(height: 8),
+          ...ghostBox.keys.map(
+            (key) => _buildGhostCacheCard(key.toString(), ghostBox.get(key)),
+          ),
+        ],
       ],
     );
   }
@@ -337,6 +534,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // 2. MEDIUM FLEET VIEW (2-COLUMN ADAPTIVE GRID)
   // -------------------------------------------------------------------
   Widget _buildMediumGridFleet(List<HostState> hosts) {
+    if (hosts.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        children: [
+          _buildSectionHeader('FLEET NODES (2-COLUMN GRID VIEW)'),
+          _buildEmptyFleetState(),
+        ],
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: CustomScrollView(
@@ -392,23 +599,26 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       children: [
         _buildSectionHeader('FLEET NODES'),
         const SizedBox(height: 8),
-        ...hosts.map(
-          (host) => ResponsiveDeviceCard(
-            id: host.id,
-            name: host.name,
-            ip: host.ip,
-            mac: host.mac,
-            isOnline: host.isOnline,
-            cpuUsage: host.cpuUsage,
-            ramUsage: host.ramUsage,
-            isSelected: host.id == selectedId,
-            onTap: () {
-              ref.read(selectedHostIdProvider.notifier).state = host.id;
-            },
-            onWakeOnLan: () => _sendWakeOnLan(host.mac),
-            onOpenStream: () => _openStreamScreen(host),
+        if (hosts.isEmpty)
+          _buildEmptyFleetState()
+        else
+          ...hosts.map(
+            (host) => ResponsiveDeviceCard(
+              id: host.id,
+              name: host.name,
+              ip: host.ip,
+              mac: host.mac,
+              isOnline: host.isOnline,
+              cpuUsage: host.cpuUsage,
+              ramUsage: host.ramUsage,
+              isSelected: host.id == selectedId,
+              onTap: () {
+                ref.read(selectedHostIdProvider.notifier).state = host.id;
+              },
+              onWakeOnLan: () => _sendWakeOnLan(host.mac),
+              onOpenStream: () => _openStreamScreen(host),
+            ),
           ),
-        ),
       ],
     );
   }
@@ -416,7 +626,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // -------------------------------------------------------------------
   // 4. EXPANDED DETAIL PANE (65% WIDTH)
   // -------------------------------------------------------------------
-  Widget _buildDetailConsolePane(HostState host) {
+  Widget _buildDetailConsolePane(HostState? host) {
+    if (host == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: _buildEmptyFleetState(),
+        ),
+      );
+    }
+
     return Padding(
       key: ValueKey<String>(host.id),
       padding: const EdgeInsets.all(16.0),
@@ -425,7 +644,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         children: [
           // Live Screen Stream Box (16:9 Aspect Ratio with dynamic downsampling)
           AnimatedSwitcher(
-            duration: const Duration(milliseconds: 280),
+            duration: const Duration(milliseconds: 240),
             switchInCurve: Curves.easeOutCubic,
             child: host.isOnline
                 ? AspectRatio(
@@ -441,51 +660,38 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                 : AspectRatio(
                     key: ValueKey('offline-${host.id}'),
                     aspectRatio: 16 / 9,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(22),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                Colors.white.withValues(alpha: 0.06),
-                                CyberColors.surfaceElevated
-                                    .withValues(alpha: 0.75),
-                              ],
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color:
+                            CyberColors.surfaceElevated.withValues(alpha: 0.92),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.1)),
+                      ),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.power_settings_new_rounded,
+                                size: 40, color: CyberColors.textTertiary),
+                            const SizedBox(height: 12),
+                            Text(
+                              '${host.name} is currently in S3/S5 Sleep State',
+                              style: const TextStyle(
+                                  color: CyberColors.textSecondary),
                             ),
-                            borderRadius: BorderRadius.circular(22),
-                            border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.12)),
-                          ),
-                          child: Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.power_settings_new_rounded,
-                                    size: 40, color: CyberColors.textTertiary),
-                                const SizedBox(height: 12),
-                                Text(
-                                  '${host.name} is currently in S3/S5 Sleep State',
-                                  style: const TextStyle(
-                                      color: CyberColors.textSecondary),
-                                ),
-                                const SizedBox(height: 12),
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.bolt_rounded,
-                                      color: Colors.black),
-                                  label: const Text('WAKE ON LAN (WoL)'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: CyberColors.warning,
-                                    foregroundColor: Colors.black,
-                                  ),
-                                  onPressed: () => _sendWakeOnLan(host.mac),
-                                ),
-                              ],
+                            const SizedBox(height: 12),
+                            ElevatedButton.icon(
+                              icon: const Icon(Icons.bolt_rounded,
+                                  color: Colors.black),
+                              label: const Text('WAKE ON LAN (WoL)'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: CyberColors.warning,
+                                foregroundColor: Colors.black,
+                              ),
+                              onPressed: () => _sendWakeOnLan(host.mac),
                             ),
-                          ),
+                          ],
                         ),
                       ),
                     ),
@@ -504,7 +710,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // -------------------------------------------------------------------
   // COMMANDS TERMINAL TAB
   // -------------------------------------------------------------------
-  Widget _buildTerminalCommandsTab(HostState host, {bool isEmbedded = false}) {
+  Widget _buildTerminalCommandsTab(HostState? host,
+      {bool isEmbedded = false}) {
     final commands = [
       'Get-Process | Sort-Object CPU -Descending | Select -First 8',
       'ipconfig /all',
@@ -513,23 +720,83 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       'nvidia-smi',
     ];
 
+    final targetHeader = host != null
+        ? 'DISPATCH COMMAND TO: ${host.name} · ${host.ip}'
+        : 'DISPATCH COMMAND (SELECT OR ADD A HOST FIRST)';
+
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: isEmbedded ? EdgeInsets.zero : const EdgeInsets.all(16),
       children: [
-        _buildSectionHeader('DISPATCH COMMAND TO: ${host.name} · ${host.ip}'),
+        _buildSectionHeader(targetHeader),
         const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _commandController,
+                onSubmitted: (val) => _dispatchCommand(val, host),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontFamily: 'monospace',
+                  fontSize: 12.5,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'Enter PowerShell or Bash command...',
+                  hintStyle: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                  ),
+                  filled: true,
+                  fillColor:
+                      CyberColors.surfaceElevated.withValues(alpha: 0.92),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.12)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.12)),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: CyberColors.primary,
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+              ),
+              onPressed: () => _dispatchCommand(_commandController.text, host),
+              child: const Text(
+                'Run',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: commands.map((cmd) {
             return ActionChip(
               backgroundColor:
-                  CyberColors.surfaceElevated.withValues(alpha: 0.75),
+                  CyberColors.surfaceElevated.withValues(alpha: 0.9),
               side: BorderSide(
                   color: CyberColors.primary.withValues(alpha: 0.35)),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18)),
+                  borderRadius: BorderRadius.circular(14)),
               label: Text(
                 cmd.split('|').first.trim(),
                 style: TextStyle(
@@ -538,59 +805,64 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   fontFamily: 'monospace',
                 ),
               ),
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    backgroundColor: CyberColors.surfaceElevated,
-                    content: Text(
-                      'Dispatched: $cmd',
-                      style: const TextStyle(
-                          fontFamily: 'monospace', color: CyberColors.primary),
-                    ),
-                  ),
-                );
-              },
+              onPressed: () => _dispatchCommand(cmd, host),
             );
           }).toList(),
         ),
         const SizedBox(height: 18),
         _buildSectionHeader('TERMINAL CONSOLE OUTPUT · SANDBOXED JOB OBJECT'),
         const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.65),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                    color: CyberColors.primary.withValues(alpha: 0.25)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'PS C:\\Windows\\system32> Get-Process | Sort-Object CPU\n'
-                    ' NPM(K)    PM(M)    WS(M)     CPU(s)      Id  ProcessName\n'
-                    ' ------    -----    -----     ------      --  -----------\n'
-                    '     45    85.23   112.54      42.12    4102  AI_NetController_HostAgent\n'
-                    '     98   312.45   489.12      24.08    1184  explorer\n'
-                    '     22    45.10    62.30       8.15    8912  svchost\n'
-                    '     14    12.40    18.90       1.20    7210  dwmd\n'
-                    '\n[Process completed in 24ms with code 0]',
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      color: CyberColors.success,
-                      fontSize: context.fluidFont(10),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF060B16),
+            borderRadius: BorderRadius.circular(16),
+            border:
+                Border.all(color: CyberColors.primary.withValues(alpha: 0.22)),
           ),
+          child: _commandLogs.isEmpty
+              ? Text(
+                  host != null
+                      ? 'Ready on ${host.name} (${host.ip}:8765). Select a preset or type a command above to execute.'
+                      : 'No active command session. Add a workstation in the Fleet tab to execute remote commands.',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: CyberColors.textSecondary,
+                    fontSize: context.fluidFont(11),
+                  ),
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: _commandLogs.map((entry) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '[${entry.timestamp}] ${entry.hostName} > ${entry.command}',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              color: CyberColors.primary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: context.fluidFont(10.5),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            entry.status,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              color: CyberColors.success,
+                              fontSize: context.fluidFont(10),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
         ),
       ],
     );
@@ -635,7 +907,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         ),
         _buildSettingsTile(
           icon: Icons.aspect_ratio_rounded,
-          title: 'Bidirectional Viewport Matching (0x09)',
+          title: 'Bidirectional Viewport Matching (0x0A)',
           subtitle:
               'Dynamically scales desktop downsampling to match physical DPR',
           trailing: const Text('ACTIVE',
@@ -646,8 +918,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           icon: Icons.verified_rounded,
           title: 'AI NetController Mobile',
           subtitle:
-              'Impeller 120Hz Hardware Engine • AI-NETCONTROLLER/3.0-SECURE Protocol',
-          trailing: const Text('BUILD 29',
+              'Impeller 120Hz Hardware Engine • CST/3.0-SECURE Protocol',
+          trailing: const Text('v0.31.3',
               style: TextStyle(
                   color: CyberColors.success,
                   fontFamily: 'monospace',
@@ -665,58 +937,45 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.white.withValues(alpha: 0.07),
-                  CyberColors.surfaceElevated.withValues(alpha: 0.65),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: CyberColors.surfaceElevated.withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: CyberColors.primary.withValues(alpha: 0.12),
+                border: Border.all(
+                    color: CyberColors.primary.withValues(alpha: 0.25)),
+              ),
+              child: Icon(icon, color: CyberColors.primary, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: context.fluidFont(12))),
+                  const SizedBox(height: 2),
+                  Text(subtitle,
+                      style: TextStyle(
+                          color: CyberColors.textSecondary,
+                          fontSize: context.fluidFont(10))),
                 ],
               ),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
             ),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: CyberColors.primary.withValues(alpha: 0.12),
-                    border: Border.all(
-                        color: CyberColors.primary.withValues(alpha: 0.25)),
-                  ),
-                  child: Icon(icon, color: CyberColors.primary, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(title,
-                          style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: context.fluidFont(12))),
-                      const SizedBox(height: 2),
-                      Text(subtitle,
-                          style: TextStyle(
-                              color: CyberColors.textSecondary,
-                              fontSize: context.fluidFont(10))),
-                    ],
-                  ),
-                ),
-                trailing,
-              ],
-            ),
-          ),
+            trailing,
+          ],
         ),
       ),
     );

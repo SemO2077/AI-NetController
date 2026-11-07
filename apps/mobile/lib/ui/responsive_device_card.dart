@@ -111,7 +111,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
       CurvedAnimation(
         parent: _scaleController,
         curve: Curves.easeOutCubic,
-        reverseCurve: Curves.elasticOut,
+        reverseCurve: Curves.easeOutCubic,
       ),
     );
   }

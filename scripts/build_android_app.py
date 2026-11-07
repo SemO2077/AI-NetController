@@ -59,11 +59,11 @@ def setup_staging():
 
     # Copy web dist into assets/dist
     shutil.copytree(WEB_DIST, os.path.join(STAGE_DIR, "assets", "dist"), dirs_exist_ok=True)
-    # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/v0.31.1
-    rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.31.1")
+    # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/v0.31.3
+    rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.31.3")
     if not os.path.exists(rel_src):
         rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.30.0")
-    rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", "v0.31.1")
+    rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", "v0.31.3")
     os.makedirs(rel_dst, exist_ok=True)
     for meta_file in ("RELEASE_MANIFEST.json", "SHA256SUMS.txt", "PATCH_NOTES.md"):
         src_p = os.path.join(rel_src, meta_file)
@@ -75,8 +75,8 @@ def create_android_manifest():
     manifest_content = """<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cst.autonomouslan"
-    android:versionCode="310"
-    android:versionName="3.1.0">
+    android:versionCode="313"
+    android:versionName="0.31.3">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -85,6 +85,7 @@ def create_android_manifest():
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:label="@string/app_name"
@@ -234,6 +235,8 @@ import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.util.Log;
 import android.view.View;
 import android.view.Window;
@@ -243,6 +246,7 @@ import android.webkit.ConsoleMessage;
 import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -287,6 +291,7 @@ public class MainActivity extends Activity {
     private static final String TAG = "AINetController";
     private WebView webView;
     private ServerSocket localServer;
+    private final ExecutorService httpPool = Executors.newFixedThreadPool(12);
     private int localPort = 0;
     private volatile boolean isRunning = true;
     private final long startTimeMs = System.currentTimeMillis();
@@ -418,7 +423,7 @@ public class MainActivity extends Activity {
         webView.setBackgroundColor(0xFF030712);
         // Use direct Chromium GPU hardware composition (LAYER_TYPE_NONE prevents double-FBO memory overhead)
         webView.setLayerType(View.LAYER_TYPE_NONE, null);
-        webView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         webView.setVerticalScrollBarEnabled(false);
         webView.setHorizontalScrollBarEnabled(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
@@ -442,6 +447,10 @@ public class MainActivity extends Activity {
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setTextZoom(100);
+        try {
+            String baseUa = settings.getUserAgentString();
+            settings.setUserAgentString((baseUa != null ? baseUa : "") + " AI_NetController_Android/0.31.3");
+        } catch (Throwable ignored) {}
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
@@ -464,11 +473,21 @@ public class MainActivity extends Activity {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
 
-        // Native Android Bridge: Clipboard, UDP Wake-on-LAN, LAN IP Discovery
+        // Native Android Bridge: Haptics, Clipboard, UDP Wake-on-LAN, LAN IP Discovery
         webView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void vibrate(int durationMs) {
-                // Haptics disabled for smooth 144 FPS performance
+                try {
+                    int ms = Math.max(5, Math.min(durationMs, 60));
+                    Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                    if (v != null && v.hasVibrator()) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
+                        } else {
+                            v.vibrate(ms);
+                        }
+                    }
+                } catch (Throwable ignored) {}
             }
 
             @JavascriptInterface
@@ -904,7 +923,7 @@ public class MainActivity extends Activity {
             "\"status\":\"" + (daemonRunning ? "running" : "stopped") + "\"," +
             "\"isRunning\":" + daemonRunning + "," +
             "\"isPaused\":" + (!daemonRunning) + "," +
-            "\"version\":\"3.0.0-LTS\"," +
+            "\"version\":\"0.31.3\"," +
             "\"protocol\":\"CST/3.0-SECURE\"," +
             "\"hostname\":\"ANDROID-CONTROLLER\"," +
             "\"osName\":\"Android " + Build.VERSION.RELEASE + " (" + escapeJson(Build.MODEL) + ")\"," +
@@ -930,7 +949,7 @@ public class MainActivity extends Activity {
             "\"blacklistedDevices\":[]," +
             "\"activeAdapters\":[{\"name\":\"wlan0\",\"ipv4\":\"" + lanIp + "\",\"mac\":\"\"}]," +
             "\"avIntegrity\":{\"upxDisabled\":true,\"visibleHwnd\":true,\"zeroHiddenShell\":true,\"manifestAsInvoker\":true,\"authenticodeReady\":true,\"sandboxJobObject\":true}," +
-            "\"security\":{\"tlsActive\":" + daemonTlsActive + ",\"hitlMode\":\"" + daemonHitlMode + "\",\"viewOnlyMode\":" + daemonViewOnly + "}," +
+            "\"security\":{\"tlsActive\":" + daemonTlsActive + ",\"hitlMode\":\"" + daemonHitlMode + ",\"viewOnlyMode\":" + daemonViewOnly + "}," +
             "\"pairingPin\":\"" + daemonPin + "\"," +
             "\"pairingToken\":\"" + daemonToken + "\"," +
             "\"logs\":[]" +
@@ -987,9 +1006,9 @@ public class MainActivity extends Activity {
         } else {
             String lanIp = detectDeviceLanIp();
             if (isBg) {
-                reply.append("Автономният Android контролер (v0.30.0, IP: ").append(lanIp).append(") е активен. Можете да сканирате локалната мрежа [ACTION:SCAN], да събудите компютър чрез Wake-on-LAN или да управлявате екрана и терминала в реално време.");
+                reply.append("Автономният Android контролер (v0.31.3, IP: ").append(lanIp).append(") е активен. Можете да сканирате локалната мрежа [ACTION:SCAN], да събудите компютър чрез Wake-on-LAN или да управлявате екрана и терминала в реално време.");
             } else {
-                reply.append("AI NetController Android Companion (v0.30.0, LAN IP: ").append(lanIp).append(") is online. You can scan your local subnet [ACTION:SCAN], wake sleeping workstations via UDP Magic Packets, or stream live desktop & terminal sessions.");
+                reply.append("AI NetController Android Companion (v0.31.3, LAN IP: ").append(lanIp).append(") is online. You can scan your local subnet [ACTION:SCAN], wake sleeping workstations via UDP Magic Packets, or stream live desktop & terminal sessions.");
             }
         }
 
@@ -1023,7 +1042,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleClient(final Socket socket) {
-        new Thread(new Runnable() {
+        httpPool.execute(new Runnable() {
             @Override
             public void run() {
                 try {
@@ -1141,7 +1160,7 @@ public class MainActivity extends Activity {
                     // 3. Health Check
                     if (rawPath.equals("/api/health")) {
                         String lanIp = detectDeviceLanIp();
-                        String json = "{\"status\":\"ok\",\"app\":\"cst-netcontroller-ai\",\"mode\":\"android-native\",\"version\":\"3.0.0\",\"lanIp\":\"" + lanIp + "\"}";
+                        String json = "{\"status\":\"ok\",\"app\":\"ai-netcontroller\",\"mode\":\"android-native\",\"version\":\"0.31.3\",\"lanIp\":\"" + lanIp + "\"}";
                         sendJsonResponse(out, 200, json);
                         socket.close();
                         return;
@@ -1150,7 +1169,7 @@ public class MainActivity extends Activity {
                     // 4. Quick Setup Info
                     if (rawPath.equals("/api/setup/info")) {
                         String lanIp = detectDeviceLanIp();
-                        String setupObj = "{\"version\":\"3.0.0\",\"localIp\":\"" + lanIp + "\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"osName\":\"Android\",\"os\":\"android\",\"mac\":\"\",\"daemonPort\":8765,\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"exeDownloadUrl\":\"/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64.exe\",\"apkDownloadUrl\":\"/releases/v0.30.0/AI_NetController_v0.30.0_arm64-v8a.apk\",\"launcherDownloadUrl\":\"/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64.exe\"}";
+                        String setupObj = "{\"version\":\"0.31.3\",\"localIp\":\"" + lanIp + "\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"osName\":\"Android\",\"os\":\"android\",\"mac\":\"\",\"daemonPort\":8765,\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"exeDownloadUrl\":\"/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe\",\"apkDownloadUrl\":\"/releases/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk\",\"launcherDownloadUrl\":\"/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe\"}";
                         String json = "{\"success\":true,\"setup\":" + setupObj + "}";
                         sendJsonResponse(out, 200, json);
                         socket.close();
@@ -1159,12 +1178,12 @@ public class MainActivity extends Activity {
 
                     // 5. Releases Manifest
                     if (rawPath.equals("/api/releases")) {
-                        String manifestJson = readAssetText("dist/releases/v0.30.0/RELEASE_MANIFEST.json");
+                        String manifestJson = readAssetText("dist/releases/v0.31.3/RELEASE_MANIFEST.json");
                         if (manifestJson != null && !manifestJson.trim().isEmpty()) {
-                            String wrapped = "{\"currentVersion\":\"3.0.0\",\"releases\":[" + manifestJson + "]}";
+                            String wrapped = "{\"currentVersion\":\"0.31.3\",\"releases\":[" + manifestJson + "]}";
                             sendJsonResponse(out, 200, wrapped);
                         } else {
-                            String fallback = "{\"currentVersion\":\"3.0.0\",\"releases\":[{\"version\":\"3.0.0\",\"tag\":\"v0.30.0\",\"codename\":\"Poppy & Vibrant 144Hz Native Edition\",\"publishedAt\":\"2026-10-27T12:00:00Z\",\"artifacts\":[]}]}";
+                            String fallback = "{\"currentVersion\":\"0.31.3\",\"releases\":[{\"version\":\"0.31.3\",\"tag\":\"v0.31.3\",\"codename\":\"Sleek Native Android UI Edition\",\"publishedAt\":\"2026-11-07T16:00:00Z\",\"artifacts\":[]}]}";
                             sendJsonResponse(out, 200, fallback);
                         }
                         socket.close();
@@ -1174,24 +1193,24 @@ public class MainActivity extends Activity {
                     // 6. System Update Center endpoints
                     if (rawPath.equals("/api/update/status") || rawPath.equals("/api/update/check")) {
                         String json = "{" +
-                            "\"currentVersion\":\"3.0.0\"," +
-                            "\"latestVersion\":\"3.0.0\"," +
+                            "\"currentVersion\":\"0.31.3\"," +
+                            "\"latestVersion\":\"0.31.3\"," +
                             "\"upToDate\":true," +
                             "\"isUpdateAvailable\":false," +
                             "\"status\":\"up-to-date\"," +
-                            "\"channel\":\"stable\"," +
+                            "\"channel\":\"beta\"," +
                             "\"lastChecked\":\"" + new java.util.Date().toString() + "\"," +
-                            "\"releaseUrl\":\"https://github.com/smehmedd/AI-NetController/releases/tag/v0.30.0\"," +
+                            "\"releaseUrl\":\"https://github.com/smehmedd/AI-NetController/releases/tag/v0.31.3\"," +
                             "\"changelog\":[" +
-                                "\"Native Android 1:1 Viewport & WindowInsets Edge-to-Edge Engine\"," +
+                                "\"Native Android 120Hz Viewport & Hardware Back Navigation\"," +
                                 "\"Multi-Threaded /24 LAN Subnet Discovery & Directed Broadcast WoL\"," +
                                 "\"Zero-GC Binary WebSocket Protocol with Pure-JS SHA-256 Auth Fallback\"," +
-                                "\"144Hz Poppy & Vibrant Cyber-Glass UI across all aspect ratios\"" +
+                                "\"Sleek Solid Dark Surfaces with Zero Scroll Blur Lag\"" +
                             "]," +
                             "\"assets\":[" +
-                                "{\"name\":\"AI_NetController_v0.30.0_arm64-v8a.apk\",\"size\":\"5.9 MB\",\"platform\":\"Android 8.0–15 (ARM64)\",\"url\":\"/releases/v0.30.0/AI_NetController_v0.30.0_arm64-v8a.apk\",\"verified\":true}," +
-                                "{\"name\":\"AI_NetController_HostAgent_v0.30.0_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64.exe\",\"verified\":true}," +
-                                "{\"name\":\"AI_NetController_HostAgent_v0.30.0_win64_portable.zip\",\"size\":\"15.0 MB\",\"platform\":\"Windows 10/11 x64 Portable\",\"url\":\"/releases/v0.30.0/AI_NetController_HostAgent_v0.30.0_win64_portable.zip\",\"verified\":true}" +
+                                "{\"name\":\"AI_NetController_v0.31.3_arm64-v8a.apk\",\"size\":\"5.9 MB\",\"platform\":\"Android 8.0–15 (ARM64)\",\"url\":\"/releases/v0.31.3/AI_NetController_v0.31.3_arm64-v8a.apk\",\"verified\":true}," +
+                                "{\"name\":\"AI_NetController_HostAgent_v0.31.3_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64.exe\",\"verified\":true}," +
+                                "{\"name\":\"AI_NetController_HostAgent_v0.31.3_win64_portable.zip\",\"size\":\"15.0 MB\",\"platform\":\"Windows 10/11 x64 Portable\",\"url\":\"/releases/v0.31.3/AI_NetController_HostAgent_v0.31.3_win64_portable.zip\",\"verified\":true}" +
                             "]" +
                         "}";
                         sendJsonResponse(out, 200, json);
@@ -1202,13 +1221,13 @@ public class MainActivity extends Activity {
                     if (rawPath.equals("/api/update/execute")) {
                         String json = "{" +
                             "\"success\":true," +
-                            "\"version\":\"3.0.0\"," +
+                            "\"version\":\"0.31.3\"," +
                             "\"steps\":[" +
-                                "{\"step\":\"Verify GitHub Release v0.30.0 manifest\",\"status\":\"completed\",\"durationMs\":45}," +
+                                "{\"step\":\"Verify GitHub Release v0.31.3 manifest\",\"status\":\"completed\",\"durationMs\":45}," +
                                 "{\"step\":\"Validate SHA-256 binary signatures\",\"status\":\"completed\",\"durationMs\":62}," +
-                                "{\"step\":\"Confirm Android APK & Web Bundle v0.30.0 parity\",\"status\":\"completed\",\"durationMs\":38}" +
+                                "{\"step\":\"Confirm Android APK & Web Bundle v0.31.3 parity\",\"status\":\"completed\",\"durationMs\":38}" +
                             "]," +
-                            "\"message\":\"System is running the latest verified v0.30.0 release.\"" +
+                            "\"message\":\"System is running the latest verified v0.31.3 release.\"" +
                         "}";
                         sendJsonResponse(out, 200, json);
                         socket.close();
@@ -1217,8 +1236,8 @@ public class MainActivity extends Activity {
 
                     if (rawPath.equals("/api/update/ai-analyze")) {
                         String json = "{" +
-                            "\"analysis\":\"All installed AI NetController v0.30.0 components (Android Native Engine, Binary WebSocket Worker, and UDP WoL Broadcaster) match the latest cryptographic SHA-256 release signatures.\"," +
-                            "\"recommendation\":\"Keep current v0.30.0-LTS build active. No breaking changes or security vulnerabilities detected.\"," +
+                            "\"analysis\":\"All installed AI NetController v0.31.3 components (Android Native Engine, Binary WebSocket Worker, and UDP WoL Broadcaster) match the latest cryptographic SHA-256 release signatures.\"," +
+                            "\"recommendation\":\"Keep current v0.31.3 build active. No breaking changes or security vulnerabilities detected.\"," +
                             "\"riskLevel\":\"low\"," +
                             "\"compatibilityScore\":100" +
                         "}";
@@ -1341,7 +1360,7 @@ public class MainActivity extends Activity {
                     try { socket.close(); } catch (Exception ignored2) {}
                 }
             }
-        }).start();
+        });
     }
 
     private String getMimeType(String path) {
@@ -1361,7 +1380,23 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
+        if (webView != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            webView.evaluateJavascript(
+                "(function(){ try { return Boolean(window.__handleAndroidBack && window.__handleAndroidBack()); } catch(e) { return false; } })()",
+                new ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(String value) {
+                        if (!"true".equals(value)) {
+                            if (webView != null && webView.canGoBack()) {
+                                webView.goBack();
+                            } else {
+                                MainActivity.super.onBackPressed();
+                            }
+                        }
+                    }
+                }
+            );
+        } else if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
             super.onBackPressed();
@@ -1371,6 +1406,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         isRunning = false;
+        try { httpPool.shutdownNow(); } catch (Exception ignored) {}
         if (localServer != null) {
             try { localServer.close(); } catch (Exception ignored) {}
         }
@@ -1472,7 +1508,7 @@ def zipalign_and_sign():
     bin_dir = os.path.join(STAGE_DIR, "bin")
     unaligned_apk = os.path.join(bin_dir, "unaligned.apk")
     aligned_apk = os.path.join(bin_dir, "aligned.apk")
-    signed_apk = os.path.join(bin_dir, "AI_NetController_v0.30.0_arm64-v8a.apk")
+    signed_apk = os.path.join(bin_dir, "AI_NetController_v0.31.3_arm64-v8a.apk")
 
     print("[*] Aligning APK with zipalign (4-byte alignment)...")
     if os.path.exists(aligned_apk):

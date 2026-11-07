@@ -1,11 +1,10 @@
-import React, { useState, useCallback, useEffect, useMemo, useDeferredValue, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useDeferredValue } from 'react';
 import {
   Plus,
   RefreshCw,
   Search,
   X,
   AlertTriangle,
-  Wifi,
   ChevronDown,
   OctagonAlert,
   ArrowDownAZ,
@@ -15,23 +14,17 @@ import {
   LayoutGrid,
   Network,
   Zap,
-  Download,
-  Check,
-  ShieldCheck,
   Monitor,
   QrCode,
-  Sparkles,
 } from 'lucide-react';
 import { HostDevice, WolPacketPayload } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { useUIStore } from '../../store/uiStore';
 import { HostCard } from './HostCard';
-import { LanguageToggle } from '../ui/LanguageToggle';
 import { generateMagicPacket } from '../../services/wolService';
-import { copyToClipboard } from '../../utils/clipboard';
 import { useTranslation, Language } from '../../i18n/useTranslation';
-import { SPRING_BUBBLY, SPRING_POP, POPOVER_BUBBLE_VARIANTS } from '../../utils/springPhysics';
+import { POPOVER_BUBBLE_VARIANTS } from '../../utils/springPhysics';
 
 const LazyNetworkTopologyGraph = React.lazy(() =>
   import('../telemetry/NetworkTopologyGraph').then((module) => ({
@@ -111,7 +104,7 @@ export function getLatencyConfig(
           lang === 'bg'
             ? `Мрежова латентност (RTT): ${latency} ms • Отлична реакция на връзката (GbE LAN)`
             : `Network latency (RTT): ${latency} ms • Excellent connection response (GbE LAN)`,
-        colorDot: 'bg-emerald-400 shadow-[0_0_8px_#34d399]',
+        colorDot: 'bg-emerald-400',
         colorText: 'text-emerald-400',
         colorBg: 'bg-emerald-500/10',
         colorBorder: 'border-emerald-500/30',
@@ -130,7 +123,7 @@ export function getLatencyConfig(
           lang === 'bg'
             ? `Мрежова латентност (RTT): ${latency} ms • Стабилна и бърза мрежова връзка`
             : `Network latency (RTT): ${latency} ms • Stable and responsive connection`,
-        colorDot: 'bg-cyan-400 shadow-[0_0_8px_#22d3ee]',
+        colorDot: 'bg-cyan-400',
         colorText: 'text-cyan-300',
         colorBg: 'bg-cyan-500/10',
         colorBorder: 'border-cyan-500/30',
@@ -149,7 +142,7 @@ export function getLatencyConfig(
           lang === 'bg'
             ? `Мрежова латентност (RTT): ${latency} ms • Възможно е слабо забавяне при стрийминг`
             : `Network latency (RTT): ${latency} ms • Possible slight stream delay`,
-        colorDot: 'bg-amber-400 shadow-[0_0_8px_#f59e0b]',
+        colorDot: 'bg-amber-400',
         colorText: 'text-amber-300',
         colorBg: 'bg-amber-500/10',
         colorBorder: 'border-amber-500/30',
@@ -168,7 +161,7 @@ export function getLatencyConfig(
           lang === 'bg'
             ? `Мрежова латентност (RTT): ${latency} ms • Високо закъснение / натоварена мрежа`
             : `Network latency (RTT): ${latency} ms • High latency / congested route`,
-        colorDot: 'bg-rose-400 shadow-[0_0_8px_#f43f5e]',
+        colorDot: 'bg-rose-400',
         colorText: 'text-rose-400',
         colorBg: 'bg-rose-500/10',
         colorBorder: 'border-rose-500/30',
@@ -211,14 +204,12 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   const activeSelectedId = selectedHostId || selectedTarget;
   const onSelectHostSafe = onSelectHost || (() => {});
   const rescanHandler = onRescan || (() => {});
-  const addHostHandler = onOpenAddHostModal || onAddNewHost || (() => openModal('addHost'));
-  const toggleOmnibar = useUIStore((s) => s.toggleOmnibar);
   const openModal = useUIStore((s) => s.openModal);
+  const toggleOmnibar = useUIStore((s) => s.toggleOmnibar);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const setPendingChatPrompt = useUIStore((s) => s.setPendingChatPrompt);
+  const addHostHandler = onOpenAddHostModal || onAddNewHost || (() => openModal('addHost'));
   const { t, language } = useTranslation();
-
-  const [exportedFleetFeedback, setExportedFleetFeedback] = useState(false);
 
   const [expandedHostIds, setExpandedHostIds] = useState<Record<string, boolean>>(() => {
     return activeSelectedId ? { [activeSelectedId]: true } : {};
@@ -226,7 +217,8 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
   const [pinnedHostIds, setPinnedHostIds] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('ai_pinned_hosts_v1') || localStorage.getItem('cst_pinned_hosts_v1');
+      const saved =
+        localStorage.getItem('ai_pinned_hosts_v1') || localStorage.getItem('cst_pinned_hosts_v1');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) return parsed;
@@ -253,25 +245,6 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     return 'grid';
   });
 
-  const hasCompletedOnboarding = useUIStore((s) => s.hasCompletedOnboarding);
-  const setCompletedOnboarding = useUIStore((s) => s.setCompletedOnboarding);
-
-  const [showOnboardingBanner, setShowOnboardingBanner] = useState<boolean>(() => {
-    try {
-      const completed = localStorage.getItem('ai_netcontroller_onboarding_completed') === 'true' || localStorage.getItem('cst_onboarding_completed') === 'true';
-      const dismissed = localStorage.getItem('ai_netcontroller_onboarding_banner_dismissed') === 'true' || localStorage.getItem('cst_onboarding_banner_dismissed') === 'true';
-      return !completed && !dismissed;
-    } catch {
-      return false;
-    }
-  });
-
-  useEffect(() => {
-    if (hasCompletedOnboarding) {
-      setShowOnboardingBanner(false);
-    }
-  }, [hasCompletedOnboarding]);
-
   useEffect(() => {
     try {
       localStorage.setItem('cst_fleet_view_mode', viewMode);
@@ -286,18 +259,12 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     }));
   }, []);
 
-  const lastSelectedHostRef = useRef<string | undefined>(selectedHostId);
-  useEffect(() => {
-    if (selectedHostId && selectedHostId !== lastSelectedHostRef.current) {
-      lastSelectedHostRef.current = selectedHostId;
-      setExpandedHostIds((prev) => ({ ...prev, [selectedHostId]: true }));
-    }
-  }, [selectedHostId]);
-
   const [searchQuery, setSearchQuery] = useState('');
   const deferredQuery = useDeferredValue(searchQuery);
 
-  const [activeFilter, setActiveFilter] = useState<'all' | 'online' | 'sleeping' | 'servers' | 'quarantined'>('all');
+  const [activeFilter, setActiveFilter] = useState<
+    'all' | 'online' | 'sleeping' | 'servers' | 'quarantined'
+  >('all');
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [sortMode, setSortMode] = useState<FleetSortMode>(() => {
     try {
@@ -340,78 +307,22 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
   const [wakingCountdown, setWakingCountdown] = useState<Record<string, number>>({});
 
-  // Native Pull-To-Refresh State
-  const [pullY, setPullY] = useState(0);
-  const [isPulling, setIsPulling] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const startYRef = useRef(0);
-  const pullYRef = useRef(0);
-  const pullRafRef = useRef<number | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    pullYRef.current = pullY;
-  }, [pullY]);
-
   const onlineCount = useMemo(() => hosts.filter((h) => h.isOnline).length, [hosts]);
   const offlineHosts = useMemo(() => hosts.filter((h) => !h.isOnline), [hosts]);
   const offlineCount = offlineHosts.length;
-
-  const fleetHealthScore = useMemo(() => {
-    if (hosts.length === 0) return 0;
-    const onlineHosts = hosts.filter((h) => h.isOnline);
-    if (onlineHosts.length === 0) return 0;
-    const avgPing =
-      onlineHosts.reduce((acc, h) => acc + (typeof h.ping === 'number' ? h.ping : 0), 0) /
-      onlineHosts.length;
-    const highLoadCount = onlineHosts.filter((h) => (h.cpuUsage ?? 0) >= 85 || (h.ramUsage ?? 0) >= 88).length;
-    const score = Math.round(100 - Math.min(12, avgPing / 8) - highLoadCount * 2 - quarantinedHosts.length * 5);
-    return Math.max(0, Math.min(100, score));
-  }, [hosts, quarantinedHosts.length]);
 
   const handleDiagnoseHost = useCallback(
     (host: HostDevice) => {
       triggerHapticFeedback('medium');
       const prompt =
         language === 'bg'
-          ? `Диагностицирай високото натоварване на хост ${host.name} (${host.ip}, OS: ${host.os}, CPU: ${host.cpuUsage ?? 78}%, RAM: ${host.ramUsage ?? 82}%). Предложи конкретни диагностични команди и оптимизации.`
-          : `Diagnose the high resource load on host ${host.name} (${host.ip}, OS: ${host.os}, CPU: ${host.cpuUsage ?? 78}%, RAM: ${host.ramUsage ?? 82}%). Recommend specific diagnostic commands and remediation steps.`;
+          ? `Диагностицирай високото натоварване на хост ${host.name} (${host.ip}, OS: ${host.os}, CPU: ${host.cpuUsage ?? 0}%, RAM: ${host.ramUsage ?? 0}%). Предложи конкретни диагностични команди и оптимизации.`
+          : `Diagnose the high resource load on host ${host.name} (${host.ip}, OS: ${host.os}, CPU: ${host.cpuUsage ?? 0}%, RAM: ${host.ramUsage ?? 0}%). Recommend specific diagnostic commands and remediation steps.`;
       setPendingChatPrompt(prompt);
       setActiveTab('chat');
     },
     [language, setPendingChatPrompt, setActiveTab]
   );
-
-  const handleExportFleetJson = useCallback(() => {
-    triggerHapticFeedback('light');
-    const exportPayload = {
-      exportedAt: new Date().toISOString(),
-      protocol: 'CST/3.0-SECURE',
-      totalHosts: hosts.length,
-      hosts: hosts.map((h) => ({
-        id: h.id,
-        name: h.name,
-        ip: h.ip,
-        mac: h.mac,
-        os: h.os,
-        deviceType: h.deviceType,
-        tags: h.tags,
-      })),
-    };
-    const jsonString = JSON.stringify(exportPayload, null, 2);
-    copyToClipboard(jsonString);
-    try {
-      const blob = new Blob([jsonString], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `cst_fleet_manifest_${Date.now()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {}
-    setExportedFleetFeedback(true);
-    setTimeout(() => setExportedFleetFeedback(false), 2000);
-  }, [hosts]);
 
   const handleWakeClick = useCallback(
     (e: React.MouseEvent, host: HostDevice) => {
@@ -464,65 +375,6 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     return () => clearInterval(interval);
   }, [hasWakingHosts]);
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (window.scrollY <= 5 || (containerRef.current && containerRef.current.scrollTop <= 5)) {
-      startYRef.current = e.touches[0].clientY;
-      setIsPulling(true);
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (!isPulling || isRefreshing) return;
-    const currentY = e.touches[0].clientY;
-    const diff = currentY - startYRef.current;
-    if (diff > 0) {
-      if (pullRafRef.current) return;
-      pullRafRef.current = requestAnimationFrame(() => {
-        pullRafRef.current = null;
-        const clamped = Math.min(diff * 0.45, 90);
-        setPullY((prev) => {
-          const next = Math.max(prev, clamped);
-          if (next >= 60 && pullYRef.current < 60) {
-            triggerHapticFeedback('light');
-          }
-          pullYRef.current = next;
-          return next;
-        });
-      });
-    }
-  };
-
-  const handleTouchEnd = () => {
-    if (pullRafRef.current) {
-      cancelAnimationFrame(pullRafRef.current);
-      pullRafRef.current = null;
-    }
-    if (!isPulling) return;
-    setIsPulling(false);
-    const currentPullY = pullYRef.current;
-    if (currentPullY >= 60 && !isRefreshing) {
-      setIsRefreshing(true);
-      triggerHapticFeedback('medium');
-      onRescan?.();
-      setTimeout(() => {
-        setIsRefreshing(false);
-        setPullY(0);
-        pullYRef.current = 0;
-      }, 1000);
-    } else {
-      setPullY(0);
-      pullYRef.current = 0;
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (pullRafRef.current) {
-        cancelAnimationFrame(pullRafRef.current);
-      }
-    };
-  }, []);
-
   const filteredHosts = useMemo(() => {
     const query = deferredQuery.trim().toLowerCase();
     const filtered = hosts.filter((h) => {
@@ -541,8 +393,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
       if (activeFilter === 'sleeping') return !h.isOnline;
       if (activeFilter === 'servers')
         return h.deviceType === 'server' || h.id.includes('SERVER') || h.id.includes('SRV');
-      if (activeFilter === 'quarantined')
-        return quarantinedHosts.includes(h.id);
+      if (activeFilter === 'quarantined') return quarantinedHosts.includes(h.id);
       return true;
     });
 
@@ -560,9 +411,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
       if (sortMode === 'status') {
         if (a.isOnline !== b.isOnline) {
-          return sortDirection === 'asc'
-            ? a.isOnline ? -1 : 1
-            : a.isOnline ? 1 : -1;
+          return sortDirection === 'asc' ? (a.isOnline ? -1 : 1) : a.isOnline ? 1 : -1;
         }
         return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
       }
@@ -577,7 +426,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             return sortDirection === 'asc' ? diff : -diff;
           }
         } else if (a.isOnline !== b.isOnline) {
-          return sortDirection === 'asc' ? (a.isOnline ? -1 : 1) : (a.isOnline ? 1 : -1);
+          return sortDirection === 'asc' ? (a.isOnline ? -1 : 1) : a.isOnline ? 1 : -1;
         }
         return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
       }
@@ -585,24 +434,6 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
       return 0;
     });
   }, [activeFilter, hosts, deferredQuery, sortMode, sortDirection, pinnedHostIds, quarantinedHosts]);
-
-  const areAllFilteredExpanded = useMemo(() => {
-    if (filteredHosts.length === 0) return false;
-    return filteredHosts.every((h) => !!expandedHostIds[h.id]);
-  }, [filteredHosts, expandedHostIds]);
-
-  const handleToggleExpandAll = useCallback(() => {
-    triggerHapticFeedback('light');
-    if (areAllFilteredExpanded) {
-      setExpandedHostIds({});
-    } else {
-      const next: Record<string, boolean> = {};
-      filteredHosts.forEach((h) => {
-        next[h.id] = true;
-      });
-      setExpandedHostIds(next);
-    }
-  }, [areAllFilteredExpanded, filteredHosts]);
 
   const sortOptions = [
     {
@@ -628,450 +459,260 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   const CurrentSortIcon = currentSortOption.icon;
 
   return (
-    <div
-      id="fleet-dashboard-container"
-      ref={containerRef}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      className="w-full flex flex-col select-none pb-4 relative"
-    >
-      {/* Native-Grade Pull-to-Refresh Physics Spinner */}
-      <AnimatePresence>
-        {(pullY > 0 || isRefreshing) && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{
-              opacity: 1,
-              height: isRefreshing ? 54 : pullY,
-            }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ type: 'spring', stiffness: 380, damping: 28 }}
-            className="w-full flex items-center justify-center overflow-hidden"
-          >
-            <div className="bg-[#070c18]/90 backdrop-blur-3xl border border-cyan-400/30 flex items-center space-x-2.5 px-4 py-2 rounded-full text-cyan-300 text-xs font-semibold shadow-lg">
-              <RefreshCw
-                className={`w-4 h-4 text-cyan-400 ${
-                  isRefreshing || isScanning || pullY >= 60 ? 'animate-spin' : ''
-                }`}
-                style={{
-                  transform: !isRefreshing && !isScanning ? `rotate(${pullY * 3}deg)` : undefined,
-                }}
-              />
-              <span>
-                {isRefreshing || isScanning
-                  ? t('pull_scanning')
-                  : pullY >= 60
-                  ? t('pull_release')
-                  : t('pull_down')}
-              </span>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Streamlined Top Header & Unified Search/Filter Bar */}
-      <div className="pt-1.5 pb-4 px-0.5 flex flex-col space-y-2.5">
+    <div id="fleet-dashboard-container" className="w-full flex flex-col select-none pb-2 relative">
+      {/* Sleek Top App Bar & Unified Filter Controls */}
+      <div className="pt-1 pb-3 flex flex-col gap-2.5">
         {/* Network Disconnection Banner */}
         {isNetworkDisconnected && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-[#070c18]/90 backdrop-blur-3xl w-full px-4 py-3 border border-amber-500/40 rounded-2xl flex items-center justify-between text-xs text-amber-200 shadow-lg"
-          >
-            <div className="flex items-center space-x-2.5">
+          <div className="bg-[#0b1326] w-full px-3.5 py-2.5 border border-amber-500/40 rounded-xl flex items-center justify-between text-xs text-amber-200">
+            <div className="flex items-center gap-2 min-w-0">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>{t('conn_disconnected')}</span>
+              <span className="truncate">{t('conn_disconnected')}</span>
             </div>
             {onReconnectNetwork && (
               <button
                 type="button"
                 onClick={onReconnectNetwork}
-                className="min-h-[44px] px-4 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-400/50 rounded-full font-semibold transition flex items-center justify-center cursor-pointer"
+                className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-400/50 rounded-lg font-semibold transition shrink-0 active:scale-95"
               >
                 {t('conn_reconnect')}
               </button>
             )}
-          </motion.div>
+          </div>
         )}
 
-        {/* Onboarding Quick Guide Banner */}
-        {showOnboardingBanner && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="w-full max-w-full overflow-hidden p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-violet-950/50 via-cyan-950/35 to-[#070c18] border border-violet-500/35 shadow-[0_8px_28px_rgba(139,92,246,0.16)] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
-          >
-            <div className="flex items-start sm:items-center gap-3 w-full min-w-0 flex-1">
-              <div className="w-9 h-9 rounded-xl bg-violet-500/25 border border-violet-400/50 flex items-center justify-center text-violet-300 shrink-0 mt-0.5 sm:mt-0 shadow-[0_0_12px_rgba(168,85,247,0.25)]">
-                <Sparkles className="w-4 h-4" />
-              </div>
-              <div className="space-y-0.5 w-full min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs sm:text-sm font-bold text-white tracking-tight">
-                    {language === 'bg' ? 'Добре дошли в AI NetController' : 'Welcome to AI NetController'}
-                  </span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10.5px] font-mono font-bold bg-violet-500/25 text-violet-200 border border-violet-400/30 shrink-0">
-                    {language === 'bg' ? 'Първи стъпки' : 'Quick Start'}
-                  </span>
-                </div>
-                <p className="text-xs text-white/70 line-clamp-2 sm:line-clamp-none break-words leading-relaxed">
-                  {language === 'bg'
-                    ? 'Започнете с интерактивната обиколка, свържете вашия PC демон или сканирайте QR код.'
-                    : 'Explore the 5-step interactive tour, pair your local PC daemon, or scan phone QR.'}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-between sm:justify-end pt-2 sm:pt-0 border-t border-white/5 sm:border-t-0">
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHapticFeedback('light');
-                  openModal('onboarding');
-                }}
-                className="flex-1 sm:flex-none min-h-[40px] px-3.5 py-2 rounded-xl bg-violet-500/25 hover:bg-violet-500/35 active:scale-95 border border-violet-400/50 text-violet-100 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-[0_0_14px_rgba(168,85,247,0.2)]"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-violet-300" />
-                <span>{language === 'bg' ? 'Старт на Обиколката' : 'Start Tour'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowOnboardingBanner(false);
-                  setCompletedOnboarding();
-                }}
-                className="min-h-[40px] min-w-[40px] p-2 rounded-xl hover:bg-white/10 text-white/60 hover:text-white transition cursor-pointer flex items-center justify-center"
-                title={language === 'bg' ? 'Скрий' : 'Dismiss'}
-                aria-label={language === 'bg' ? 'Скрий' : 'Dismiss'}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </motion.div>
-        )}
-
-        {/* 1. HEADER ROW: Title + Inline Non-Wrapping Status Pill + Health Pill on Left | Wake All + Cards/Map + EN/BG on Right */}
-        <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
-          <div className="flex items-center gap-2 min-w-0 flex-wrap sm:flex-nowrap">
-            <h1 className="text-fluid-title font-black tracking-tight font-display truncate bg-gradient-to-r from-white via-cyan-100 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_2px_14px_rgba(0,229,255,0.35)]">
+        {/* 1. NATIVE TOP APP BAR: Title & Live Status on Left | Primary Actions on Right */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col min-w-0">
+            <h1 className="text-fluid-title font-bold tracking-tight font-display text-white truncate">
               {t('fleet_title')}
             </h1>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#060c1c]/95 backdrop-blur-3xl border border-cyan-400/40 text-[11px] font-medium whitespace-nowrap shrink-0 shadow-[0_8px_24px_rgba(0,0,0,0.6),0_0_20px_rgba(0,240,255,0.22)] tabular-nums">
-              <span className="relative flex h-2 w-2 items-center justify-center shrink-0">
-                <span className="beacon-pulse-emerald absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400 shadow-[0_0_10px_#10b981]" />
-              </span>
-              <span className="text-emerald-300 font-bold drop-shadow-[0_0_8px_rgba(16,185,129,0.7)]">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium tabular-nums mt-0.5">
+              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
+              <span className="text-emerald-300 font-semibold">
                 {onlineCount} {t('fleet_online')}
               </span>
-              <span className="text-white/30">•</span>
-              <span className="text-amber-300 font-medium drop-shadow-[0_0_6px_rgba(255,183,3,0.5)]">
+              <span className="text-slate-600">•</span>
+              <span className="text-amber-300/90">
                 {offlineCount} {t('fleet_sleeping')}
               </span>
             </div>
-            <div
-              className="group hidden md:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/50 text-[10.5px] font-mono font-bold text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.25)] whitespace-nowrap shrink-0"
-              title={
-                language === 'bg'
-                  ? 'Индекс на здравето на мрежата (RTT + натоварване + сигурност)'
-                  : 'Real-time Fleet Network Health Index (RTT + load + security)'
-              }
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 icon-bubbly drop-shadow-[0_0_6px_rgba(52,211,153,0.7)]" />
-              <span>{fleetHealthScore}% {language === 'bg' ? 'Здраве' : 'Health'}</span>
-            </div>
           </div>
 
-          {/* Right Header Controls: Wraps cleanly on mobile without overflowing */}
-          <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap shrink-0 max-w-full justify-end ml-auto">
+          <div className="flex items-center gap-1.5 shrink-0">
             {offlineCount > 0 && (
-              <motion.button
+              <button
                 type="button"
-                whileHover={{ scale: 1.05, y: -1.5 }}
-                whileTap={{ scale: 0.92 }}
-                transition={SPRING_POP}
                 onClick={handleWakeAllOffline}
-                className="group min-h-[44px] px-3.5 rounded-full bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-amber-300 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap cursor-pointer shadow-[0_0_16px_rgba(245,158,11,0.2)] transition transform-gpu"
+                className="h-9 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-amber-200 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
                 title={
                   language === 'bg'
                     ? `Събуди всички спящи хостове (${offlineCount})`
                     : `Wake all sleeping hosts (${offlineCount})`
                 }
               >
-                <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30 icon-bolt-live" />
-                <span className="font-display">
-                  {language === 'bg' ? `Събуди (${offlineCount})` : `Wake All (${offlineCount})`}
+                <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="hidden xs:inline">
+                  {language === 'bg' ? 'Събуди' : 'Wake All'}
                 </span>
-              </motion.button>
+              </button>
             )}
 
-            {/* [ ✨ App Tour ] Guided Onboarding Walkthrough */}
-            <motion.button
+            <button
               type="button"
-              whileHover={{ scale: 1.05, y: -1.5 }}
-              whileTap={{ scale: 0.92 }}
-              transition={SPRING_POP}
-              onClick={() => {
-                triggerHapticFeedback('light');
-                openModal('onboarding');
-              }}
-              className="group min-h-[44px] px-3 rounded-full bg-violet-500/15 hover:bg-violet-500/25 border border-violet-400/40 text-violet-300 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap cursor-pointer shadow-[0_0_16px_rgba(168,85,247,0.18)] transition transform-gpu"
-              title={
-                language === 'bg'
-                  ? 'Интерактивна обиколка на възможностите на системата'
-                  : 'Interactive App Tour & Onboarding Walkthrough'
-              }
-            >
-              <Sparkles className="w-3.5 h-3.5 text-violet-400 icon-bubbly" />
-              <span className="hidden sm:inline font-display">
-                {language === 'bg' ? 'Обиколка' : 'Tour'}
-              </span>
-            </motion.button>
-
-            {/* [ 📱 Quick Setup (Phone + PC) ] 1-Click Setup & QR Pairing Wizard */}
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.05, y: -1.5 }}
-              whileTap={{ scale: 0.92 }}
-              transition={SPRING_POP}
               onClick={() => {
                 triggerHapticFeedback('light');
                 openModal('quickSetup');
               }}
-              className="group min-h-[44px] px-3 rounded-full bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap cursor-pointer shadow-[0_0_16px_rgba(16,185,129,0.18)] transition transform-gpu"
+              className="h-9 px-2.5 sm:px-3 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
               title={
                 language === 'bg'
-                  ? 'Бърза Настройка с 1 Клик: Свържи Телефон (QR/APK) и Компютър (.EXE)'
-                  : '1-Click Easy Setup: Connect Phone (QR/APK) & PC (.EXE)'
+                  ? 'Сдвояване на компютър и QR настройка'
+                  : 'Pair PC & Quick Setup'
               }
             >
-              <QrCode className="w-3.5 h-3.5 text-emerald-400 icon-bubbly" />
-              <span className="hidden xs:inline font-display">
-                {language === 'bg' ? 'Бърз Старт' : 'Quick Setup'}
+              <QrCode className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span className="hidden sm:inline">
+                {language === 'bg' ? 'Сдвои PC' : 'Pair PC'}
               </span>
-            </motion.button>
+            </button>
 
-            {/* [ 🖥️ PC Daemon GUI ] Native Control Center Launcher */}
-            <motion.button
+            <button
               type="button"
-              whileHover={{ scale: 1.05, y: -1.5 }}
-              whileTap={{ scale: 0.92 }}
-              transition={SPRING_POP}
+              onClick={() => {
+                triggerHapticFeedback('selection');
+                setViewMode((prev) => (prev === 'grid' ? 'topology' : 'grid'));
+              }}
+              className="w-9 h-9 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 flex items-center justify-center transition active:scale-95"
+              title={
+                viewMode === 'grid'
+                  ? t('fleet_view_topology')
+                  : t('fleet_view_cards')
+              }
+              aria-label="Toggle View Mode"
+            >
+              {viewMode === 'grid' ? (
+                <Network className="w-4 h-4 text-cyan-400" />
+              ) : (
+                <LayoutGrid className="w-4 h-4 text-cyan-400" />
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={() => {
                 triggerHapticFeedback('light');
-                openModal('pcDaemonGui');
+                addHostHandler();
               }}
-              className="group min-h-[44px] px-3 rounded-full bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap cursor-pointer shadow-[0_0_16px_rgba(34,211,238,0.18)] transition transform-gpu"
-              title={
-                language === 'bg'
-                  ? 'Отвори Графичния Контролен Център на PC Демона (Антивирус-Верифициран)'
-                  : 'Open PC Daemon Desktop Control Center GUI (AV-Verified)'
-              }
+              className="h-9 px-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-100 font-semibold text-xs flex items-center gap-1.5 transition active:scale-95"
+              title={t('fleet_add_host_tooltip')}
+              aria-label={t('fleet_add_host_aria')}
             >
-              <Monitor className="w-3.5 h-3.5 text-cyan-400 icon-bubbly" />
-              <span className="hidden sm:inline font-display">
-                {language === 'bg' ? 'PC Демон' : 'PC Daemon'}
+              <Plus className="w-4 h-4 text-cyan-300 shrink-0" />
+              <span className="hidden xs:inline">
+                {language === 'bg' ? 'Добави' : 'Add PC'}
               </span>
-            </motion.button>
-
-            {/* [Cards | Map] Segmented Toggle (Tier 2 Floating Chrome) */}
-            <div className="bg-[#070c18]/90 backdrop-blur-3xl backdrop-saturate-[190%] border border-white/15 border-t-white/25 p-1 rounded-full flex items-center relative shadow-[0_16px_40px_rgba(0,0,0,0.8)] transform-gpu">
-              {(['grid', 'topology'] as const).map((mode) => {
-                const isActive = viewMode === mode;
-                const Icon = mode === 'grid' ? LayoutGrid : Network;
-                const label = mode === 'grid' ? t('fleet_view_cards') : t('fleet_view_topology');
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => {
-                      triggerHapticFeedback('selection');
-                      setViewMode(mode);
-                    }}
-                    className={`group relative min-w-[36px] min-h-[36px] px-2.5 rounded-full text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer z-10 whitespace-nowrap ${
-                      isActive ? 'text-cyan-300 font-semibold' : 'text-white/55 hover:text-white'
-                    }`}
-                    title={label}
-                    aria-label={label}
-                  >
-                    {isActive && (
-                      <motion.div
-                        layoutId="fleetViewModeLens"
-                        className="absolute inset-0 rounded-full bg-cyan-500/20 border border-cyan-400/35 shadow-[0_0_12px_rgba(56,189,248,0.2)] -z-10 transform-gpu"
-                        transition={SPRING_BUBBLY}
-                      />
-                    )}
-                    <motion.div
-                      animate={
-                        isActive
-                          ? { scale: 1.15, rotate: mode === 'grid' ? -6 : 8 }
-                          : { scale: 1, rotate: 0 }
-                      }
-                      transition={SPRING_POP}
-                      className="flex items-center justify-center transform-gpu"
-                    >
-                      <Icon className="w-3.5 h-3.5 icon-bubbly" />
-                    </motion.div>
-                    <span className="hidden sm:inline font-display">{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* [EN/BG] Language Switch */}
-            <LanguageToggle className="!min-h-[44px] !h-11 !px-3" />
-
-            {/* Optional Emergency Panic Kill Button */}
-            {onPanicKill && (
-              <motion.button
-                type="button"
-                whileHover={{ scale: 1.07, rotate: -6 }}
-                whileTap={{ scale: 0.9 }}
-                transition={SPRING_POP}
-                onClick={() => {
-                  triggerHapticFeedback('heavy');
-                  onPanicKill();
-                }}
-                className="group min-w-[44px] min-h-[44px] w-11 h-11 rounded-full bg-rose-500/15 border border-rose-500/35 hover:bg-rose-500/25 text-rose-400 flex items-center justify-center transition shrink-0 cursor-pointer transform-gpu"
-                title={t('fleet_panic_tooltip')}
-                aria-label={t('fleet_panic_aria')}
-              >
-                <OctagonAlert className="w-4 h-4 stroke-[2.1] icon-bubbly" />
-              </motion.button>
-            )}
+            </button>
           </div>
         </div>
 
-        {/* 2. UNIFIED SEARCH + REFRESH + EXPORT + ADD HOST ROW */}
+        {/* 2. SEARCH + SCAN LAN + SORT ROW */}
         <div className="flex items-center gap-2">
-          <div className="group flex-1 min-h-[44px] h-11 rounded-xl bg-[#070c18]/90 backdrop-blur-3xl backdrop-saturate-[190%] border border-white/15 border-t-white/25 shadow-[0_16px_40px_rgba(0,0,0,0.8)] px-3 flex items-center gap-2 focus-within:border-cyan-400/50 transition min-w-0 transform-gpu">
-            <Search className="w-4 h-4 text-cyan-400/80 shrink-0 icon-bubbly" />
+          <div className="flex-1 h-10 rounded-xl bg-[#0b1326] border border-white/10 px-3 flex items-center gap-2 focus-within:border-cyan-400/50 transition min-w-0">
+            <Search className="w-4 h-4 text-slate-400 shrink-0" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t('fleet_search_placeholder')}
-              className="flex-1 min-w-0 bg-transparent border-none outline-none text-xs sm:text-sm text-white placeholder-white/40"
+              className="flex-1 min-w-0 bg-transparent border-none outline-none text-xs sm:text-sm text-white placeholder-slate-500"
             />
-            {filteredHosts.length !== hosts.length && (
-              <span className="text-[10px] font-mono text-cyan-300/80 px-1.5 py-0.5 rounded bg-cyan-500/15 border border-cyan-400/30 shrink-0 tabular-nums">
-                {filteredHosts.length}/{hosts.length}
-              </span>
-            )}
             {searchQuery ? (
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="p-1.5 rounded-full hover:bg-white/10 text-white/50 hover:text-white transition cursor-pointer"
+                className="p-1 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition"
                 aria-label={t('fleet_clear_search')}
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             ) : (
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    triggerHapticFeedback('light');
-                    toggleOmnibar();
-                  }}
-                  className="min-h-[32px] px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-xs font-mono font-semibold text-cyan-300/90 border border-white/10 transition cursor-pointer flex items-center justify-center"
-                  title={t('fleet_spotlight_tooltip')}
-                  aria-label={t('fleet_spotlight_aria')}
-                >
-                  ⌘K
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    triggerHapticFeedback('light');
-                    openModal('shortcuts');
-                  }}
-                  className="min-h-[32px] min-w-[32px] px-2 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-xs font-mono font-semibold text-white/60 hover:text-white border border-white/10 transition cursor-pointer flex items-center justify-center"
-                  title={language === 'bg' ? 'Бързи Клавиши [?]' : 'Keyboard Shortcuts [?]'}
-                  aria-label="Shortcuts"
-                >
-                  ?
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  toggleOmnibar();
+                }}
+                className="hidden lg:inline-flex px-2 py-0.5 rounded bg-white/[0.06] hover:bg-white/[0.12] text-[11px] font-mono text-slate-300 border border-white/10 transition"
+                title={t('fleet_spotlight_tooltip')}
+              >
+                ⌘K
+              </button>
             )}
           </div>
 
-          {/* [Refresh] Button */}
-          <motion.button
+          <button
             type="button"
-            whileHover={{ scale: 1.05, y: -1.5 }}
-            whileTap={{ scale: 0.92 }}
-            transition={SPRING_POP}
             onClick={() => {
               triggerHapticFeedback('medium');
               rescanHandler();
             }}
             disabled={isScanning}
-            className="group min-h-[44px] min-w-[44px] h-11 px-3 rounded-xl bg-[#070c18]/90 backdrop-blur-3xl border border-white/15 border-t-white/25 hover:border-cyan-400/40 text-cyan-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition disabled:opacity-40 cursor-pointer shrink-0 shadow-[0_16px_40px_rgba(0,0,0,0.8)] transform-gpu"
-            title={`${t('fleet_rescan_tooltip')} [R]`}
+            className="h-10 w-10 sm:w-auto sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/35 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition disabled:opacity-40 shrink-0 active:scale-95"
+            title={t('fleet_rescan_tooltip')}
             aria-label={t('fleet_rescan_aria')}
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : 'icon-spin-bubbly'}`} />
-            <span className="hidden sm:inline font-display">{language === 'bg' ? 'Обнови' : 'Refresh'}</span>
-          </motion.button>
+            <RefreshCw className={`w-4 h-4 text-cyan-400 ${isScanning ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{language === 'bg' ? 'Сканирай' : 'Scan'}</span>
+          </button>
 
-          {/* [Export Fleet JSON] Button */}
-          <motion.button
-            type="button"
-            whileHover={{ scale: 1.05, y: -1.5 }}
-            whileTap={{ scale: 0.92 }}
-            transition={SPRING_POP}
-            onClick={handleExportFleetJson}
-            className="group hidden sm:inline-flex min-h-[44px] h-11 px-3 rounded-xl bg-[#070c18]/90 backdrop-blur-3xl border border-white/15 border-t-white/25 hover:border-cyan-400/40 text-white/80 hover:text-cyan-200 text-xs font-semibold items-center justify-center gap-1.5 transition cursor-pointer shrink-0 shadow-[0_16px_40px_rgba(0,0,0,0.8)] transform-gpu"
-            title={language === 'bg' ? 'Експортирай JSON манифест на флота' : 'Export Fleet JSON manifest'}
-          >
-            {exportedFleetFeedback ? (
-              <Check className="w-3.5 h-3.5 text-emerald-400 icon-bubbly" />
-            ) : (
-              <Download className="w-3.5 h-3.5 text-cyan-400 icon-bubbly" />
-            )}
-            <span className="hidden md:inline font-display">
-              {exportedFleetFeedback
-                ? language === 'bg'
-                  ? 'Експортирано'
-                  : 'Exported'
-                : 'JSON'}
-            </span>
-          </motion.button>
+          {/* Compact Sort Dropdown */}
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                triggerHapticFeedback('light');
+                setIsSortMenuOpen((prev) => !prev);
+              }}
+              className="h-10 px-2.5 sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/35 flex items-center gap-1.5 text-xs font-medium text-slate-200 shrink-0 active:scale-95"
+              title={`${t('sort_label')} ${currentSortOption.label}`}
+              aria-label={`${t('sort_label')} ${currentSortOption.label}`}
+            >
+              <CurrentSortIcon className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className="hidden xs:inline font-semibold text-slate-200">
+                {currentSortOption.label}
+              </span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-150 ${
+                  isSortMenuOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
 
-          {/* [+ Add Host] Button */}
-          <motion.button
-            type="button"
-            whileHover={{ scale: 1.05, y: -1.5 }}
-            whileTap={{ scale: 0.92 }}
-            transition={SPRING_POP}
-            onClick={() => {
-              triggerHapticFeedback('light');
-              addHostHandler();
-            }}
-            className="group min-h-[44px] h-11 px-3.5 rounded-xl bg-gradient-to-r from-emerald-500/30 via-teal-500/25 to-cyan-500/25 hover:from-emerald-500/45 hover:to-cyan-500/35 border border-emerald-400/60 text-emerald-200 font-bold text-xs flex items-center gap-1.5 whitespace-nowrap transition cursor-pointer shrink-0 shadow-[0_0_24px_rgba(16,185,129,0.38)] transform-gpu"
-            title={t('fleet_add_host_tooltip')}
-            aria-label={t('fleet_add_host_aria')}
-          >
-            <Plus className="w-4 h-4 stroke-[2.5] icon-plus-bubbly" />
-            <span className="hidden xs:inline font-display">{language === 'bg' ? 'Добави хост' : 'Add Host'}</span>
-          </motion.button>
+            <AnimatePresence>
+              {isSortMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsSortMenuOpen(false)}
+                  />
+                  <motion.div
+                    variants={POPOVER_BUBBLE_VARIANTS}
+                    initial="initial"
+                    animate="animate"
+                    exit="exit"
+                    className="absolute right-0 top-11 z-50 w-44 rounded-xl bg-[#091020] border border-white/15 p-1.5 shadow-2xl space-y-1"
+                  >
+                    {sortOptions.map((opt) => {
+                      const isActive = sortMode === opt.id;
+                      const OptIcon = opt.icon;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            handleSortToggle(opt.id);
+                            setIsSortMenuOpen(false);
+                          }}
+                          className={`w-full min-h-[38px] px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition ${
+                            isActive
+                              ? 'bg-cyan-500/20 text-cyan-200 font-semibold border border-cyan-400/30'
+                              : 'text-slate-300 hover:bg-white/[0.06] hover:text-white'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <OptIcon className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>{opt.label}</span>
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-400">
+                            {opt.badge}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
 
-        {/* 3. HORIZONTAL FILTER PILLS + EXPAND/COLLAPSE ALL + COMPACT SORT DROPDOWN PILL */}
+        {/* 3. FILTER CHIPS ROW */}
         <div className="flex items-center justify-between gap-2">
-          {/* Filter Pills (All, Online, Sleeping, Servers, Quarantined) */}
-          <div className="bg-[#060c1c]/95 backdrop-blur-3xl border border-cyan-400/25 border-t-white/30 shadow-[0_16px_40px_rgba(0,0,0,0.8),0_0_20px_rgba(0,229,255,0.12)] p-1 rounded-full flex items-center gap-0.5 overflow-x-auto scrollbar-none min-w-0 max-w-full flex-1 sm:flex-initial transform-gpu">
+          <div className="flex items-center gap-1 overflow-x-auto scrollbar-none min-w-0 flex-1 py-0.5">
             {[
               { id: 'all', label: t('filter_all'), count: hosts.length },
               { id: 'online', label: t('filter_online'), count: onlineCount },
               { id: 'sleeping', label: t('filter_sleeping'), count: offlineCount },
               { id: 'servers', label: t('filter_servers'), count: null },
               ...(quarantinedHosts.length > 0
-                ? [{ id: 'quarantined', label: language === 'bg' ? 'Карантина' : 'Quarantine', count: quarantinedHosts.length }]
+                ? [
+                    {
+                      id: 'quarantined',
+                      label: language === 'bg' ? 'Карантина' : 'Quarantine',
+                      count: quarantinedHosts.length,
+                    },
+                  ]
                 : []),
             ].map((chip) => {
               const isActive = activeFilter === chip.id;
@@ -1083,20 +724,19 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                     triggerHapticFeedback('selection');
                     setActiveFilter(chip.id as any);
                   }}
-                  className={`relative min-h-[36px] px-3 rounded-full text-[11px] sm:text-xs font-medium whitespace-nowrap transition-colors flex items-center gap-1 cursor-pointer z-10 ${
-                    isActive ? 'text-cyan-200 font-semibold' : 'text-white/55 hover:text-white'
+                  className={`h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 shrink-0 border active:scale-95 ${
+                    isActive
+                      ? 'bg-cyan-500/20 border-cyan-400/45 text-cyan-200 font-semibold'
+                      : 'bg-[#0b1326] border-white/[0.07] text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {isActive && (
-                    <motion.div
-                      layoutId="fleetFilterLens"
-                      className="absolute inset-0 rounded-full bg-gradient-to-r from-cyan-500/25 to-sky-500/20 border border-cyan-400/40 shadow-[0_0_12px_rgba(56,189,248,0.2)] -z-10 transform-gpu"
-                      transition={SPRING_BUBBLY}
-                    />
-                  )}
                   <span>{chip.label}</span>
                   {chip.count !== null && (
-                    <span className={`text-[10px] font-mono tabular-nums ${isActive ? 'text-cyan-300/90' : 'text-white/35'}`}>
+                    <span
+                      className={`text-[10px] font-mono tabular-nums ${
+                        isActive ? 'text-cyan-300' : 'text-slate-500'
+                      }`}
+                    >
                       {chip.count}
                     </span>
                   )}
@@ -1105,130 +745,32 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             })}
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            {/* QoL: 1-Tap Expand All / Collapse All Bento Drawers */}
-            {viewMode === 'grid' && filteredHosts.length > 1 && (
-              <button
-                type="button"
-                onClick={handleToggleExpandAll}
-                className="hidden sm:inline-flex bg-[#070c18]/90 backdrop-blur-3xl border border-white/15 border-t-white/25 hover:border-cyan-400/35 min-h-[40px] px-3 rounded-full items-center gap-1 text-[11px] font-medium text-white/65 hover:text-cyan-200 transition cursor-pointer whitespace-nowrap shadow-[0_16px_40px_rgba(0,0,0,0.8)] transform-gpu"
-                title={
-                  areAllFilteredExpanded
-                    ? language === 'bg'
-                      ? 'Свий всички карти'
-                      : 'Collapse all cards'
-                    : language === 'bg'
-                    ? 'Разгъни всички карти'
-                    : 'Expand all cards'
-                }
-              >
-                <span>
-                  {areAllFilteredExpanded
-                    ? language === 'bg'
-                      ? 'Свий всички'
-                      : 'Collapse All'
-                    : language === 'bg'
-                    ? 'Разгъни всички'
-                    : 'Expand All'}
-                </span>
-              </button>
-            )}
-
-            {/* Single Compact Sort Dropdown Pill (Sort: Name ▾) */}
-            <div className="relative shrink-0">
-              <motion.button
-                type="button"
-                whileHover={{ scale: 1.04, y: -1 }}
-                whileTap={{ scale: 0.93 }}
-                transition={SPRING_POP}
-                onClick={() => {
-                  triggerHapticFeedback('light');
-                  setIsSortMenuOpen((prev) => !prev);
-                }}
-                className="bg-[#070c18]/90 backdrop-blur-3xl backdrop-saturate-[190%] border border-white/15 border-t-white/25 min-h-[40px] px-3 rounded-full flex items-center gap-1.5 text-[11px] sm:text-xs font-medium text-cyan-200 hover:text-white cursor-pointer whitespace-nowrap shadow-[0_16px_40px_rgba(0,0,0,0.8)] transform-gpu"
-                title={t('sort_title_template', {
-                  mode: currentSortOption.label,
-                  badge: currentSortOption.badge,
-                })}
-                aria-label={`${t('sort_label')} ${currentSortOption.label}`}
-              >
-                <CurrentSortIcon className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                <span className="text-white/55">{language === 'bg' ? 'Сорт:' : 'Sort:'}</span>
-                <span className="font-semibold text-cyan-200">{currentSortOption.label}</span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-white/50 transition-transform duration-200 ${
-                    isSortMenuOpen ? 'rotate-180' : ''
-                  }`}
-                />
-              </motion.button>
-
-              <AnimatePresence>
-                {isSortMenuOpen && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-40"
-                      onClick={() => setIsSortMenuOpen(false)}
-                    />
-                    {/* Tier 3 Dropdown Surface */}
-                    <motion.div
-                      variants={POPOVER_BUBBLE_VARIANTS}
-                      initial="initial"
-                      animate="animate"
-                      exit="exit"
-                      className="absolute right-0 top-11 z-50 w-48 rounded-2xl bg-[#091020]/96 backdrop-blur-3xl border border-white/15 border-t-white/25 p-1.5 shadow-[0_24px_64px_rgba(0,0,0,0.9)] space-y-1 transform-gpu"
-                    >
-                      {sortOptions.map((opt) => {
-                        const isActive = sortMode === opt.id;
-                        const OptIcon = opt.icon;
-                        return (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            onClick={() => {
-                              handleSortToggle(opt.id);
-                              setIsSortMenuOpen(false);
-                            }}
-                            className={`w-full min-h-[40px] px-3 py-2 rounded-xl text-xs flex items-center justify-between transition cursor-pointer ${
-                              isActive
-                                ? 'bg-cyan-500/20 text-cyan-200 font-semibold border border-cyan-400/30'
-                                : 'text-white/70 hover:bg-white/[0.08] hover:text-white'
-                            }`}
-                          >
-                            <span className="flex items-center gap-2">
-                              <OptIcon className="w-3.5 h-3.5 text-cyan-400" />
-                              <span>{opt.label}</span>
-                            </span>
-                            <span className="text-[10px] font-mono text-white/50">
-                              {opt.badge}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
-          </div>
+          {onPanicKill && hosts.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                triggerHapticFeedback('heavy');
+                onPanicKill();
+              }}
+              className="h-8 px-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 text-rose-300 text-[11px] font-semibold flex items-center gap-1 shrink-0 transition active:scale-95"
+              title={t('fleet_panic_tooltip')}
+              aria-label={t('fleet_panic_aria')}
+            >
+              <OctagonAlert className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span className="hidden sm:inline">
+                {language === 'bg' ? 'Авариен Стоп' : 'Kill Switch'}
+              </span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Interaction Area: D3 Force-Directed Network Topology or Responsive Multi-Column Cards Grid */}
+      {/* Main Fleet Content */}
       {viewMode === 'topology' ? (
-        <motion.div
-          key="topology-view"
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.16 }}
-          className="px-0.5"
-        >
+        <div className="px-0.5">
           <React.Suspense
             fallback={
-              <div
-                className="grid min-h-[320px] place-items-center"
-                aria-busy="true"
-              >
+              <div className="grid min-h-[280px] place-items-center" aria-busy="true">
                 <div
                   className="h-6 w-6 animate-spin rounded-full border-2 border-cyan-400 border-t-transparent"
                   aria-hidden="true"
@@ -1246,33 +788,32 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               onViewScreen={onViewScreen}
             />
           </React.Suspense>
-        </motion.div>
+        </div>
       ) : filteredHosts.length === 0 ? (
-        <div className="rounded-3xl bg-[#070e20]/80 backdrop-blur-3xl border border-cyan-500/25 border-t-cyan-400/50 p-6 sm:p-12 flex flex-col items-center justify-center text-center mx-auto max-w-lg my-6 shadow-[0_20px_54px_rgba(0,0,0,0.8),0_0_36px_rgba(0,229,255,0.14)] relative overflow-hidden">
-          <div className="absolute inset-x-8 top-0 h-[1.5px] bg-gradient-to-r from-transparent via-cyan-300/60 to-transparent pointer-events-none" />
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-400/20 via-sky-500/15 to-indigo-500/20 border border-cyan-300/40 flex items-center justify-center text-cyan-300 mb-4 shadow-[0_0_30px_rgba(0,240,255,0.3)]">
-            <Monitor className="w-8 h-8 stroke-[2.2]" />
+        <div className="glass-liquid rounded-2xl p-6 sm:p-10 flex flex-col items-center justify-center text-center mx-auto max-w-md my-4">
+          <div className="w-12 h-12 rounded-2xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center text-cyan-300 mb-3">
+            <Monitor className="w-6 h-6" />
           </div>
-          <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight font-display">
+          <h3 className="text-base sm:text-lg font-bold text-white tracking-tight font-display">
             {hosts.length === 0
               ? language === 'bg'
                 ? 'Няма добавени компютри'
                 : 'No Computers Added Yet'
               : t('empty_hosts_title')}
           </h3>
-          <p className="text-xs sm:text-sm text-slate-300 max-w-md mt-2 mb-6 leading-relaxed">
+          <p className="text-xs text-slate-400 max-w-sm mt-1.5 mb-5 leading-relaxed">
             {hosts.length === 0
               ? language === 'bg'
-                ? 'Флотът ви е чист. Натиснете „Добави компютър“, за да въведете своя компютър, или сканирайте мрежата за автоматично откриване на хостове.'
-                : 'Your fleet is ready for setup. Add your computer by entering its IP & MAC address, or scan your local network to discover devices.'
+                ? 'Добавете своя компютър по IP и MAC адрес или сканирайте локалната мрежа за автоматично откриване.'
+                : 'Add your computer by IP & MAC address, or scan your local network to discover active devices.'
               : t('empty_hosts_desc')}
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-3 w-full">
+          <div className="flex flex-wrap items-center justify-center gap-2.5 w-full">
             {searchQuery && (
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="min-h-[44px] px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 active:scale-95 text-white/90 border border-white/15 font-semibold text-xs transition cursor-pointer"
+                className="h-10 px-4 rounded-xl bg-white/10 hover:bg-white/15 active:scale-95 text-white border border-white/15 font-semibold text-xs transition"
               >
                 {language === 'bg' ? 'Изчисти търсенето' : 'Clear Search'}
               </button>
@@ -1280,9 +821,9 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             <button
               type="button"
               onClick={addHostHandler}
-              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-500 to-blue-600 hover:from-cyan-300 hover:to-blue-500 active:scale-95 text-slate-950 font-black text-xs sm:text-sm flex items-center space-x-2 shadow-[0_0_24px_rgba(0,229,255,0.4)] transition cursor-pointer"
+              className="h-10 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
             >
-              <Plus className="w-4 h-4 stroke-[3]" />
+              <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>{language === 'bg' ? 'Добави компютър' : 'Add First PC'}</span>
             </button>
             {onRescan && (
@@ -1290,60 +831,52 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                 type="button"
                 onClick={() => onRescan()}
                 disabled={isScanning}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 text-cyan-200 border border-cyan-400/40 font-semibold text-xs flex items-center space-x-2 transition cursor-pointer disabled:opacity-50 shadow-[0_0_14px_rgba(0,229,255,0.15)]"
+                className="h-10 px-4 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 active:scale-95 text-cyan-200 border border-cyan-400/35 font-semibold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-                <span>{isScanning ? (language === 'bg' ? 'Сканиране...' : 'Scanning...') : (language === 'bg' ? 'Сканирай мрежата' : 'Scan Network')}</span>
+                <span>
+                  {isScanning
+                    ? language === 'bg'
+                      ? 'Сканиране...'
+                      : 'Scanning...'
+                    : language === 'bg'
+                    ? 'Сканирай LAN'
+                    : 'Scan LAN'}
+                </span>
               </button>
             )}
           </div>
         </div>
       ) : (
-        <motion.div
-          initial="hidden"
-          animate="show"
-          variants={{
-            hidden: { opacity: 0 },
-            show: {
-              opacity: 1,
-              transition: {
-                staggerChildren: 0.045,
-              },
-            },
-          }}
-          className="fleet-responsive-grid gap-3.5 items-start px-0.5"
-        >
-          <AnimatePresence mode="popLayout">
-            {filteredHosts.map((host) => (
-              <HostCard
-                key={host.id}
-                host={host}
-                language={language}
-                isSelected={host.id === activeSelectedId}
-                isExpanded={!!expandedHostIds[host.id]}
-                isPinned={pinnedHostIds.includes(host.id)}
-                isQuarantined={quarantinedHosts.includes(host.id)}
-                isCircuitTripped={circuitTrippedHosts.includes(host.id)}
-                sortMode={sortMode}
-                remainingWakeSeconds={wakingCountdown[host.id]}
-                onSelect={onSelectHostSafe}
-                onToggleExpand={toggleHostExpansion}
-                onTogglePin={togglePinHost}
-                onInspectWolPacket={onInspectWolPacket}
-                onViewScreen={onViewScreen}
-                onSelectForCommand={onSelectHostForCommand}
-                onQuickCommand={onSendCommand}
-                onDiagnoseHost={handleDiagnoseHost}
-                onOpenDetailsModal={(dev) => openModal('hostDetails', dev)}
-                onWakeClick={handleWakeClick}
-              />
-            ))}
-          </AnimatePresence>
-        </motion.div>
+        <div className="fleet-responsive-grid items-start">
+          {filteredHosts.map((host) => (
+            <HostCard
+              key={host.id}
+              host={host}
+              language={language}
+              isSelected={host.id === activeSelectedId}
+              isExpanded={!!expandedHostIds[host.id]}
+              isPinned={pinnedHostIds.includes(host.id)}
+              isQuarantined={quarantinedHosts.includes(host.id)}
+              isCircuitTripped={circuitTrippedHosts.includes(host.id)}
+              sortMode={sortMode}
+              remainingWakeSeconds={wakingCountdown[host.id]}
+              onSelect={onSelectHostSafe}
+              onToggleExpand={toggleHostExpansion}
+              onTogglePin={togglePinHost}
+              onInspectWolPacket={onInspectWolPacket}
+              onViewScreen={onViewScreen}
+              onSelectForCommand={onSelectHostForCommand}
+              onQuickCommand={onSendCommand}
+              onDiagnoseHost={handleDiagnoseHost}
+              onOpenDetailsModal={(dev) => openModal('hostDetails', dev)}
+              onWakeClick={handleWakeClick}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
 };
 
 export const FleetDashboard = React.memo(FleetDashboardComponent);
-

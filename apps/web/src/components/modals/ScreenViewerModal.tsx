@@ -1478,14 +1478,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
               </span>
               <span className="hidden sm:flex items-center gap-1.5">
                 <Terminal className="w-3.5 h-3.5 text-cyan-500" />
-                {isBg ? 'Протокол: WOL-RDP-v2' : 'Protocol: WOL-RDP-v2'}
+                {isBg ? 'Протокол: CST/3.0-SECURE' : 'Protocol: CST/3.0-SECURE'}
               </span>
             </div>
             <div className="flex items-center gap-3 font-mono">
               <span className="text-cyan-400">
                 {isBg ? 'Курсор' : 'Cursor'}: {Math.round(cursorPos.x * 19.2)}x{Math.round(cursorPos.y * 10.8)}
               </span>
-              <span>1920x1080</span>
+              <span>{device.ip}:{device.port || 8765}</span>
             </div>
           </div>
         </motion.div>

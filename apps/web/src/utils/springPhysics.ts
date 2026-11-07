@@ -1,129 +1,132 @@
 import type { Transition, Variants } from 'motion/react';
 
 /**
- * 120Hz Hardware-Accelerated Bubbly Spring Physics System
- * Strictly animates GPU-composited properties (transform: translate3d/scale/rotate & opacity)
- * with zero runtime CSS filter blurs or layout-thrashing width/height recalculations.
+ * 120Hz Native Android Critically-Damped Spring Physics System
+ * Strictly animates GPU-composited properties (transform: translate3d/scale & opacity)
+ * with zero wobble, zero overshoot jitter, and zero layout thrashing.
  */
 
-/** Expressive, bubbly spring with a lively overshoot for pills, cards, modals & popovers */
+/** Crisp, critically-damped native spring for cards, modals & sheets */
 export const SPRING_BUBBLY: Transition = {
   type: 'spring',
-  stiffness: 480,
-  damping: 24,
-  mass: 0.6,
+  stiffness: 420,
+  damping: 34,
+  mass: 0.7,
 };
 
-/** Ultra-snappy, tactile micro-bounce for buttons, icons, toggles & chips */
+/** Snappy, tactile micro-response for buttons, chips & toggles */
 export const SPRING_POP: Transition = {
   type: 'spring',
-  stiffness: 580,
-  damping: 22,
-  mass: 0.5,
-};
-
-/** Silky, high-frame-rate fluid spring for tab transitions, sheets & bento drawers */
-export const SPRING_FLUID: Transition = {
-  type: 'spring',
-  stiffness: 410,
-  damping: 27,
-  mass: 0.65,
-};
-
-/** Gentle elastic spring for floating badges, status indicators & telemetry bars */
-export const SPRING_ELASTIC: Transition = {
-  type: 'spring',
-  stiffness: 340,
-  damping: 20,
+  stiffness: 500,
+  damping: 36,
   mass: 0.6,
 };
 
-/** Cohesive hover & tap micro-interaction presets */
+/** Silky, high-frame-rate fluid spring for tab transitions & drawers */
+export const SPRING_FLUID: Transition = {
+  type: 'spring',
+  stiffness: 380,
+  damping: 34,
+  mass: 0.7,
+};
+
+/** Smooth spring for badges, status indicators & telemetry bars */
+export const SPRING_ELASTIC: Transition = {
+  type: 'spring',
+  stiffness: 360,
+  damping: 32,
+  mass: 0.7,
+};
+
+/** Cohesive tap micro-interaction presets (no sticky hover scale on mobile) */
 export const BUBBLE_HOVER = {
-  scale: 1.045,
-  y: -1.5,
+  scale: 1.01,
   transition: SPRING_POP,
 };
 
 export const BUBBLE_TAP = {
-  scale: 0.92,
-  y: 1,
+  scale: 0.96,
   transition: SPRING_POP,
 };
 
 export const CARD_HOVER = {
-  y: -3,
-  scale: 1.006,
+  y: -2,
   transition: SPRING_BUBBLY,
 };
 
-/** 120Hz Zero-Blur Tab View Variants (GPU transform + opacity only) */
+/** 120Hz Native Tab View Variants (GPU transform + opacity only, zero scale distortion) */
 export const TAB_VIEW_VARIANTS: Variants = {
   initial: {
     opacity: 0,
-    y: 14,
-    scale: 0.975,
+    y: 8,
   },
   animate: {
     opacity: 1,
     y: 0,
-    scale: 1,
-    transition: SPRING_BUBBLY,
+    transition: {
+      duration: 0.16,
+      ease: [0.22, 1, 0.36, 1],
+    },
   },
   exit: {
     opacity: 0,
-    y: -8,
-    scale: 0.985,
+    y: -4,
     transition: {
-      duration: 0.13,
+      duration: 0.1,
       ease: [0.32, 0, 0.67, 0],
     },
   },
 };
 
-/** Expressive Popover / Dropdown Menu Variants */
+/** Popover / Dropdown Menu Variants */
 export const POPOVER_BUBBLE_VARIANTS: Variants = {
   initial: {
     opacity: 0,
-    y: -8,
-    scale: 0.92,
+    y: -6,
+    scale: 0.97,
   },
   animate: {
     opacity: 1,
     y: 0,
     scale: 1,
-    transition: SPRING_BUBBLY,
+    transition: {
+      duration: 0.15,
+      ease: [0.22, 1, 0.36, 1],
+    },
   },
   exit: {
     opacity: 0,
-    y: -6,
-    scale: 0.95,
+    y: -4,
+    scale: 0.98,
     transition: {
-      duration: 0.12,
+      duration: 0.1,
       ease: [0.32, 0, 0.67, 0],
     },
   },
 };
 
-/** Modal Dialog Bubbly Entrance & Exit Variants */
+/** Modal Dialog Native Entrance & Exit Variants */
 export const MODAL_BUBBLE_VARIANTS: Variants = {
   initial: {
     opacity: 0,
-    y: 22,
-    scale: 0.93,
+    y: 16,
+    scale: 0.97,
   },
   animate: {
     opacity: 1,
     y: 0,
     scale: 1,
-    transition: SPRING_BUBBLY,
+    transition: {
+      duration: 0.18,
+      ease: [0.22, 1, 0.36, 1],
+    },
   },
   exit: {
     opacity: 0,
-    y: 14,
-    scale: 0.96,
+    y: 10,
+    scale: 0.98,
     transition: {
-      duration: 0.14,
+      duration: 0.12,
       ease: [0.32, 0, 0.67, 0],
     },
   },

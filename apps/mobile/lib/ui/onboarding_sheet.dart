@@ -31,7 +31,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
       'subtitle': 'Автономно Управление на Локална Компютърна Инфраструктура',
       'icon': Icons.bolt_rounded,
       'color': CyberColors.primary,
-      'badge': 'v2.9 Local-First',
+      'badge': 'v0.31.3 Local-First',
       'description':
           'Платформа от ново поколение за пълен отдалечен достъп, нисколатентен 120Hz видео стрийминг и управление с изкуствен интелект без външни облачни сървъри.',
     },
@@ -51,7 +51,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
       'color': CyberColors.secondary,
       'badge': 'Port 8765 Ready',
       'description':
-          'Стартирайте cst_host_daemon.exe на вашия компютър. Мобилното приложение го открива автоматично в локалната мрежа чрез mDNS или чрез сканиране на QR код.',
+          'Стартирайте AI_NetController_HostAgent_v0.31.3_win64.exe на вашия компютър. Мобилното приложение го открива автоматично в локалната мрежа чрез mDNS или чрез сканиране на QR код.',
     },
     {
       'title': '120Hz Екран & Виртуално Дистанционно',

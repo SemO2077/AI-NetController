@@ -17,13 +17,11 @@ import {
   BatteryWarning,
   Zap,
   Check,
-  Maximize2,
   Lock,
   Sparkles,
   RotateCcw,
   HardDrive,
   Star,
-  Radio,
   Link2,
   Info,
 } from 'lucide-react';
@@ -34,7 +32,6 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { getLatencyConfig, FleetSortMode } from './FleetDashboard';
 import { useTranslation, Language } from '../../i18n/useTranslation';
 import { clampPercentage } from '../../utils/viewportScale';
-import { SPRING_BUBBLY, SPRING_POP, SPRING_ELASTIC } from '../../utils/springPhysics';
 
 export interface HostCardProps {
   host: HostDevice;
@@ -64,7 +61,7 @@ export const getBatteryConfig = (percentage: number, isCharging?: boolean) => {
     return {
       icon: BatteryCharging,
       colorText: 'text-amber-300',
-      colorBorder: 'border-amber-400/40 bg-amber-500/10 shadow-[0_0_10px_rgba(245,158,11,0.2)]',
+      colorBorder: 'border-amber-400/40 bg-amber-500/10',
       iconColor: 'text-amber-400',
     };
   }
@@ -72,7 +69,7 @@ export const getBatteryConfig = (percentage: number, isCharging?: boolean) => {
     return {
       icon: BatteryFull,
       colorText: 'text-emerald-400',
-      colorBorder: 'border-emerald-500/30 bg-emerald-500/10 shadow-[0_0_8px_rgba(52,211,153,0.15)]',
+      colorBorder: 'border-emerald-500/30 bg-emerald-500/10',
       iconColor: 'text-emerald-400',
     };
   }
@@ -80,7 +77,7 @@ export const getBatteryConfig = (percentage: number, isCharging?: boolean) => {
     return {
       icon: BatteryMedium,
       colorText: 'text-cyan-300',
-      colorBorder: 'border-cyan-500/30 bg-cyan-500/10 shadow-[0_0_8px_rgba(6,182,212,0.15)]',
+      colorBorder: 'border-cyan-500/30 bg-cyan-500/10',
       iconColor: 'text-cyan-400',
     };
   }
@@ -94,8 +91,8 @@ export const getBatteryConfig = (percentage: number, isCharging?: boolean) => {
   }
   return {
     icon: BatteryWarning,
-    colorText: 'text-rose-400 animate-pulse',
-    colorBorder: 'border-rose-500/40 bg-rose-500/15 shadow-[0_0_8px_rgba(244,63,94,0.3)]',
+    colorText: 'text-rose-400',
+    colorBorder: 'border-rose-500/40 bg-rose-500/15',
     iconColor: 'text-rose-400',
   };
 };
@@ -107,17 +104,26 @@ const InlineMiniSparkline: React.FC<{
 }> = React.memo(({ history, ping = 12, isOnline }) => {
   if (!isOnline) {
     return (
-      <svg width="60" height="18" viewBox="0 0 60 18" className="shrink-0 opacity-35">
-        <line x1="0" y1="9" x2="60" y2="9" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 3" className="text-slate-500" />
+      <svg width="52" height="16" viewBox="0 0 52 16" className="shrink-0 opacity-35">
+        <line
+          x1="0"
+          y1="8"
+          x2="52"
+          y2="8"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeDasharray="3 3"
+          className="text-slate-500"
+        />
       </svg>
     );
   }
 
   const safePing = Number.isFinite(ping) && ping > 0 ? ping : 12;
   const samples =
-    history && history.length >= 3
+    history && history.length >= 2
       ? history.slice(-12).map((d) => (Number.isFinite(d.latency) ? d.latency : safePing))
-      : [safePing, safePing + 1, Math.max(1, safePing - 1), safePing, safePing + 1, safePing];
+      : [safePing, safePing];
 
   const minVal = Math.min(...samples, 1);
   const maxVal = Math.max(...samples, minVal + 4);
@@ -125,14 +131,14 @@ const InlineMiniSparkline: React.FC<{
 
   const points = samples
     .map((val, idx) => {
-      const x = (idx / Math.max(1, samples.length - 1)) * 56 + 2;
-      const y = 15 - ((val - minVal) / range) * 12;
+      const x = (idx / Math.max(1, samples.length - 1)) * 48 + 2;
+      const y = 13 - ((val - minVal) / range) * 10;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(' ');
 
   return (
-    <svg width="60" height="18" viewBox="0 0 60 18" className="shrink-0 overflow-visible">
+    <svg width="52" height="16" viewBox="0 0 52 16" className="shrink-0 overflow-visible">
       <polyline
         fill="none"
         stroke="#22d3ee"
@@ -172,7 +178,6 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   const [copiedMac, setCopiedMac] = useState(false);
   const [copiedIp, setCopiedIp] = useState(false);
   const [copiedUri, setCopiedUri] = useState(false);
-  const [isSonarPulsing, setIsSonarPulsing] = useState(false);
   const [dispatchedAction, setDispatchedAction] = useState<string | null>(null);
 
   const handleCopyMac = (e: React.MouseEvent) => {
@@ -191,10 +196,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     setTimeout(() => setCopiedIp(false), 1600);
   };
 
-  const connectionUri =
-    host.os === 'windows'
-      ? `ws://${host.ip}:${host.port || 8765}`
-      : `ssh admin@${host.ip}`;
+  const connectionUri = `ws://${host.ip}:${host.port || 8765}`;
 
   const handleCopyUri = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -202,13 +204,6 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     copyToClipboard(connectionUri);
     setCopiedUri(true);
     setTimeout(() => setCopiedUri(false), 1800);
-  };
-
-  const handleTriggerSonarPing = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    triggerHapticFeedback('medium');
-    setIsSonarPulsing(true);
-    setTimeout(() => setIsSonarPulsing(false), 1800);
   };
 
   const handleQuickAction = (e: React.MouseEvent, actionId: string, command: string) => {
@@ -222,7 +217,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     }
     setTimeout(() => {
       setDispatchedAction((prev) => (prev === actionId ? null : prev));
-    }, 1600);
+    }, 1500);
   };
 
   const safeId = host.id || 'HOST';
@@ -257,8 +252,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   const cpuVal = clampPercentage(host.cpuUsage, 0);
   const ramVal = clampPercentage(host.ramUsage, 0);
   const isHighLoadAnomaly = host.isOnline && (cpuVal >= 75 || ramVal >= 75);
-  const osBadge = host.os === 'windows' ? 'Win 11' : 'Linux';
-  const osFullLabel = host.os === 'windows' ? 'Windows 11 Pro' : 'Linux Kernel 6.8';
+  const osBadge = host.os === 'windows' ? 'Windows' : 'Linux';
 
   const rttMs = latencyConfig.latency ?? 0;
   const jitterMs =
@@ -272,7 +266,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   const quickActions = [
     {
       id: 'updates',
-      label: currentLang === 'bg' ? 'Провери обновления' : 'Check Updates',
+      label: currentLang === 'bg' ? 'Обновления' : 'Check Updates',
       icon: RefreshCw,
       command:
         host.os === 'windows'
@@ -282,7 +276,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     },
     {
       id: 'dns',
-      label: currentLang === 'bg' ? 'Изчисти DNS и Temp' : 'Flush DNS & Temp',
+      label: currentLang === 'bg' ? 'Изчисти DNS' : 'Flush DNS',
       icon: Sparkles,
       command:
         host.os === 'windows'
@@ -292,7 +286,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     },
     {
       id: 'lock',
-      label: currentLang === 'bg' ? 'Заключи екрана' : 'Lock Screen',
+      label: currentLang === 'bg' ? 'Заключи екран' : 'Lock Screen',
       icon: Lock,
       command:
         host.os === 'windows'
@@ -302,7 +296,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     },
     {
       id: 'restart',
-      label: currentLang === 'bg' ? 'Рестартирай хоста' : 'Restart Host',
+      label: currentLang === 'bg' ? 'Рестартирай' : 'Restart Host',
       icon: RotateCcw,
       command:
         host.os === 'windows'
@@ -313,16 +307,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   ];
 
   return (
-    <motion.div
-      layout="position"
-      initial={{ opacity: 0, y: 16, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.94, transition: { duration: 0.13 } }}
-      whileHover={{ y: -2.5, scale: 1.005 }}
-      transition={SPRING_BUBBLY}
-      className={`${isExpanded ? 'lg:col-span-2' : ''} transform-gpu smooth-144hz contain-paint-layout`}
-    >
-      {/* Tier 1 — Resting Canvas Card */}
+    <div className={`${isExpanded ? 'lg:col-span-2' : ''} contain-paint-layout`}>
       <div
         role="button"
         tabIndex={0}
@@ -339,89 +324,75 @@ const HostCardComponent: React.FC<HostCardProps> = ({
           }
         }}
         className={`
-          bg-[#081024]/85 backdrop-blur-2xl backdrop-saturate-[210%] border border-cyan-400/25 border-t-cyan-400/55 shadow-[0_16px_40px_rgba(0,0,0,0.7),0_0_24px_rgba(0,240,255,0.12)] transform-gpu
-          w-full max-w-full rounded-[1.75rem] p-3.5 sm:p-5 text-left cursor-pointer select-none relative overflow-hidden transition-all duration-200
+          glass-liquid w-full max-w-full rounded-2xl p-3.5 sm:p-4 text-left cursor-pointer select-none relative overflow-hidden
           ${
-            isSonarPulsing
-              ? 'border-cyan-300 shadow-[0_0_48px_rgba(0,240,255,0.6)] ring-2 ring-cyan-400/70'
-              : isSelected
-              ? 'border-cyan-400/80 shadow-[0_20px_54px_-8px_rgba(0,0,0,0.8),0_0_36px_rgba(0,240,255,0.35)] ring-1 ring-cyan-400/60'
-              : 'hover:border-cyan-400/40 hover:shadow-[0_20px_50px_rgba(0,0,0,0.65),0_0_32px_rgba(0,240,255,0.2)]'
+            isSelected
+              ? 'border-cyan-400/60 ring-1 ring-cyan-400/40'
+              : 'border-white/[0.08]'
           }
           ${isOffline ? 'opacity-85' : ''}
         `}
       >
-        <div className="absolute inset-x-8 top-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-300/50 to-transparent pointer-events-none" />
-
-        {/* Collapsed Header Row */}
-        <div className="relative z-10 flex flex-wrap xs:flex-nowrap items-center justify-between gap-2 sm:gap-3">
-          {/* Left: 44x44px Squircle Icon + Full Hostname + OS Badge + Monospace IP + Latency / Sleeping state */}
-          <div className="flex items-center space-x-2.5 sm:space-x-3.5 min-w-[170px] flex-1">
-            <motion.div
-              animate={
-                isExpanded
-                  ? { scale: 1.07, rotate: -5 }
-                  : { scale: 1, rotate: 0 }
-              }
-              whileHover={{ scale: 1.14, rotate: -8, y: -1.5 }}
-              transition={SPRING_POP}
+        {/* Main Row */}
+        <div className="flex items-center justify-between gap-2.5">
+          {/* Left: Device Icon + Identity + Status */}
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            <div
               className={`
-                w-11 h-11 min-w-[44px] min-h-[44px] rounded-2xl flex items-center justify-center shrink-0 border relative overflow-hidden transform-gpu
+                w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border relative
                 ${
                   isOffline
-                    ? 'bg-white/[0.04] text-white/40 border-white/10'
-                    : 'bg-gradient-to-br from-cyan-400/35 via-sky-500/25 to-indigo-500/30 text-cyan-200 border-cyan-300/60 shadow-[inset_0_1px_2px_rgba(255,255,255,0.6),0_0_24px_rgba(0,229,255,0.4)]'
+                    ? 'bg-slate-800/60 text-slate-400 border-white/10'
+                    : 'bg-cyan-500/15 text-cyan-300 border-cyan-400/35'
                 }
               `}
             >
-              <DeviceIcon className="w-5 h-5 icon-bubbly" />
-              {isSonarPulsing && (
-                <span className="absolute inset-0 rounded-2xl border-2 border-cyan-300 animate-ping" />
-              )}
-            </motion.div>
+              <DeviceIcon className="w-5 h-5" />
+              <span
+                className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#0d1527] ${
+                  isOffline ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+              />
+            </div>
 
             <div className="flex flex-col min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-wrap">
-                <span className="text-fluid-card-title font-bold text-white tracking-tight truncate min-w-0">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-fluid-card-title font-bold text-white tracking-tight truncate">
                   {host.name || safeId}
                 </span>
-                <span className="px-2 py-0.5 rounded-md bg-white/[0.06] border border-white/10 text-[10px] font-mono font-semibold text-white/80 shrink-0">
+                <span className="px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/10 text-[10px] font-mono font-medium text-slate-300 shrink-0">
                   {osBadge}
                 </span>
                 {onTogglePin && (
-                  <motion.button
+                  <button
                     type="button"
-                    whileHover={{ scale: 1.22, rotate: 16 }}
-                    whileTap={{ scale: 0.85, rotate: -12 }}
-                    animate={
-                      isPinned
-                        ? { scale: 1.08, rotate: 12 }
-                        : { scale: 1, rotate: 0 }
-                    }
-                    transition={SPRING_POP}
                     onClick={(e) => {
                       e.stopPropagation();
                       triggerHapticFeedback('selection');
                       onTogglePin(host.id);
                     }}
-                    className={`p-1.5 rounded-full transition cursor-pointer shrink-0 transform-gpu ${
+                    className={`p-1 rounded-full transition shrink-0 ${
                       isPinned
-                        ? 'text-amber-300 hover:text-amber-200'
-                        : 'text-white/25 hover:text-white/75'
+                        ? 'text-amber-300'
+                        : 'text-slate-500 hover:text-slate-300'
                     }`}
                     title={
                       isPinned
                         ? currentLang === 'bg'
-                          ? 'Откачи от върха'
-                          : 'Unpin host'
+                          ? 'Откачи'
+                          : 'Unpin'
                         : currentLang === 'bg'
-                        ? 'Закачи най-отгоре'
-                        : 'Pin host to top'
+                        ? 'Закачи'
+                        : 'Pin'
                     }
                     aria-label="Pin host"
                   >
-                    <Star className={`w-3.5 h-3.5 ${isPinned ? 'fill-amber-400 text-amber-400 drop-shadow-[0_0_6px_rgba(251,191,36,0.5)]' : ''}`} />
-                  </motion.button>
+                    <Star
+                      className={`w-3.5 h-3.5 ${
+                        isPinned ? 'fill-amber-400 text-amber-400' : ''
+                      }`}
+                    />
+                  </button>
                 )}
                 {isQuarantined && (
                   <span className="text-[10px] font-mono font-semibold text-rose-400 shrink-0">
@@ -435,41 +406,36 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 )}
               </div>
 
-              {/* Clean Scannable Metadata Sub-row (1-Click Copy IP + Online RTT or Offline Ready state) */}
-              <div className="flex items-center flex-wrap gap-x-2 gap-y-0.5 text-fluid-meta mt-1 tabular-nums">
+              {/* Sub-row: IP + RTT / Sleeping */}
+              <div className="flex items-center flex-wrap gap-x-2 gap-y-0.5 text-fluid-meta mt-0.5 tabular-nums">
                 <button
                   type="button"
                   onClick={handleCopyIp}
-                  className="inline-flex items-center gap-1 font-mono text-cyan-300/95 hover:text-cyan-200 text-[11.5px] font-medium transition cursor-pointer group/ip"
-                  title={currentLang === 'bg' ? 'Кликни за копиране на IP' : 'Click to copy IP address'}
+                  className="inline-flex items-center gap-1 font-mono text-cyan-300/90 hover:text-cyan-200 text-[11px] font-medium transition"
+                  title={currentLang === 'bg' ? 'Копирай IP' : 'Copy IP'}
                 >
                   <span>{host.ip}</span>
                   {copiedIp ? (
                     <Check className="w-3 h-3 text-emerald-400" />
                   ) : (
-                    <Copy className="w-2.5 h-2.5 opacity-0 group-hover/ip:opacity-70 transition-opacity" />
+                    <Copy className="w-2.5 h-2.5 opacity-60" />
                   )}
                 </button>
-                <span className="text-white/25" aria-hidden="true">•</span>
+                <span className="text-slate-600" aria-hidden="true">•</span>
                 {isOffline ? (
-                  <span className="text-amber-300 font-semibold text-[11.5px] drop-shadow-[0_0_8px_rgba(255,183,3,0.55)]">
-                    {currentLang === 'bg' ? 'Спящ • Готов за Wake-on-LAN' : 'Sleeping • Ready for Wake-on-LAN'}
+                  <span className="text-amber-300/90 font-medium text-[11px] truncate">
+                    {currentLang === 'bg' ? 'Спящ (WoL)' : 'Sleeping (WoL)'}
                   </span>
                 ) : (
                   <>
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/25 border border-emerald-400/60 font-mono text-[11px] font-bold text-emerald-300 shadow-[0_0_16px_rgba(0,245,155,0.4)]">
-                      <span className="relative flex h-2 w-2 items-center justify-center shrink-0">
-                        <span className="beacon-pulse-emerald absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
-                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400 shadow-[0_0_8px_#00f59b]" />
-                      </span>
+                    <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-emerald-300">
                       {rttMs}ms
                     </span>
                     {isLaptop && safeBatteryPct !== undefined && batteryConfig && (
                       <>
-                        <span className="text-white/25" aria-hidden="true">•</span>
+                        <span className="text-slate-600" aria-hidden="true">•</span>
                         <span
-                          className={`inline-flex items-center space-x-1 text-[11px] font-mono tabular-nums ${batteryConfig.colorText}`}
-                          title={`Battery: ${safeBatteryPct}%${host.isCharging ? ' (Charging)' : ''}`}
+                          className={`inline-flex items-center gap-0.5 text-[11px] font-mono ${batteryConfig.colorText}`}
                         >
                           <BatteryIcon className="w-3.5 h-3.5" />
                           <span>{safeBatteryPct}%</span>
@@ -483,131 +449,103 @@ const HostCardComponent: React.FC<HostCardProps> = ({
             </div>
           </div>
 
-          {/* Right: Primary 1-tap action buttons + expand chevron */}
-          <div className="flex items-center space-x-1 sm:space-x-1.5 shrink-0 ml-auto">
+          {/* Right: Clean 1-Tap Action Buttons */}
+          <div className="flex items-center gap-1.5 shrink-0">
             {isOffline ? (
               remainingWakeSeconds !== undefined ? (
-                <div className="min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-amber-500/15 border border-amber-400/40 flex flex-col items-center justify-center text-amber-300 text-[10px] font-mono font-bold">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400 mb-0.5" />
+                <div className="h-9 px-2.5 rounded-xl bg-amber-500/15 border border-amber-400/40 flex items-center gap-1.5 text-amber-300 text-[11px] font-mono font-bold">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
                   <span>{remainingWakeSeconds}s</span>
                 </div>
               ) : (
-                <motion.button
+                <button
                   type="button"
-                  whileHover={{ scale: 1.11, y: -2, rotate: -6 }}
-                  whileTap={{ scale: 0.88 }}
-                  transition={SPRING_POP}
                   onClick={(e) => onWakeClick(e, host)}
-                  className="group min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-amber-500/30 to-orange-500/25 hover:from-amber-500/45 hover:to-orange-500/40 border border-amber-400/70 text-amber-100 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_24px_rgba(255,183,3,0.55)] transform-gpu"
+                  className="h-9 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-200 flex items-center gap-1.5 text-xs font-semibold transition active:scale-95"
                   title={t('host_wake_tooltip')}
                   aria-label={t('host_wake_tooltip')}
                 >
-                  <Power className="w-4 h-4 stroke-[2.3] icon-bolt-live" />
-                </motion.button>
+                  <Power className="w-3.5 h-3.5 text-amber-300" />
+                  <span className="hidden xs:inline">
+                    {currentLang === 'bg' ? 'Събуди' : 'Wake'}
+                  </span>
+                </button>
               )
             ) : (
               <>
-                <motion.button
+                <button
                   type="button"
-                  whileHover={{ scale: 1.11, y: -2, rotate: 5 }}
-                  whileTap={{ scale: 0.88 }}
-                  transition={SPRING_POP}
                   onClick={(e) => {
                     e.stopPropagation();
                     triggerHapticFeedback('light');
                     onSelectForCommand?.(host.id);
                   }}
-                  className="group min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-cyan-500/20 to-sky-500/20 hover:from-cyan-500/35 hover:to-sky-500/35 border border-cyan-400/50 text-cyan-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_16px_rgba(0,240,255,0.3)] transform-gpu"
+                  className="w-9 h-9 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/35 text-cyan-200 flex items-center justify-center transition active:scale-95"
                   title={t('host_terminal_tooltip')}
                   aria-label={t('host_terminal_tooltip')}
                 >
-                  <TerminalSquare className="w-4 h-4 icon-bubbly" />
-                </motion.button>
+                  <TerminalSquare className="w-4 h-4" />
+                </button>
 
-                <motion.button
+                <button
                   type="button"
-                  whileHover={{ scale: 1.11, y: -2, rotate: -5 }}
-                  whileTap={{ scale: 0.88 }}
-                  transition={SPRING_POP}
                   onClick={(e) => {
                     e.stopPropagation();
                     triggerHapticFeedback('light');
                     onViewScreen(host);
                   }}
-                  className="group min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-sky-500/25 to-blue-500/20 hover:from-sky-500/40 hover:to-blue-500/35 border border-sky-400/60 text-sky-200 flex items-center justify-center transition-colors cursor-pointer shadow-[0_0_18px_rgba(14,165,233,0.4)] transform-gpu"
+                  className="w-9 h-9 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/35 text-sky-200 flex items-center justify-center transition active:scale-95"
                   title={t('host_screen_tooltip')}
                   aria-label={t('host_screen_tooltip')}
                 >
-                  <ScanEye className="w-4 h-4 icon-bubbly" />
-                </motion.button>
+                  <ScanEye className="w-4 h-4" />
+                </button>
               </>
             )}
 
-            <motion.button
+            <button
               type="button"
-              whileHover={{ scale: 1.11, y: -2 }}
-              whileTap={{ scale: 0.88 }}
-              transition={SPRING_POP}
-              onClick={(e) => {
-                e.stopPropagation();
-                triggerHapticFeedback('light');
-                onOpenDetailsModal(host);
-              }}
-              className="min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full bg-white/[0.05] hover:bg-white/[0.12] border border-white/15 text-white/75 hover:text-cyan-300 flex items-center justify-center transition-colors cursor-pointer transform-gpu"
-              title={currentLang === 'bg' ? 'Детайли за хост, Карантина и Защити' : 'Host Details, Quarantine & Circuit Breaker'}
-              aria-label="Host Details"
-            >
-              <Info className="w-4 h-4 icon-bubbly" />
-            </motion.button>
-
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.08, y: -1 }}
-              whileTap={{ scale: 0.9 }}
-              transition={SPRING_POP}
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleExpand(host.id);
               }}
               aria-expanded={isExpanded}
-              className={`min-w-[38px] min-h-[38px] w-9.5 h-9.5 sm:min-w-[42px] sm:min-h-[42px] sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer border transform-gpu ${
+              className={`w-9 h-9 rounded-xl flex items-center justify-center transition border active:scale-95 ${
                 isExpanded
-                  ? 'bg-cyan-500/25 text-cyan-200 border-cyan-400/50 shadow-[0_0_12px_rgba(0,240,255,0.3)]'
-                  : 'bg-white/[0.04] text-white/55 hover:text-white border-white/15'
+                  ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400/40'
+                  : 'bg-white/[0.04] text-slate-400 hover:text-white border-white/10'
               }`}
               title={isExpanded ? t('host_hide_details_btn') : t('host_details_btn')}
             >
-              <motion.div
-                animate={{ rotate: isExpanded ? 180 : 0, scale: isExpanded ? 1.1 : 1 }}
-                transition={SPRING_POP}
-              >
-                <ChevronDown className="w-4 h-4" />
-              </motion.div>
-            </motion.button>
+              <ChevronDown
+                className={`w-4 h-4 transition-transform duration-150 ${
+                  isExpanded ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
           </div>
         </div>
 
-        {/* Bottom of Collapsed Card (Online only): Ultra-sleek progress bars for CPU and RAM + Proactive AI Anomaly Pill */}
+        {/* Online Telemetry Bars */}
         {host.isOnline && (
-          <div className="relative z-10 mt-3.5 pt-2.5 border-t border-white/[0.08] space-y-2.5">
-            <div className="grid grid-cols-2 gap-4 items-center">
+          <div className="mt-3 pt-2.5 border-t border-white/[0.06] space-y-2">
+            <div className="grid grid-cols-2 gap-3.5 items-center">
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
-                  <span className="text-white/60 font-medium">CPU</span>
-                  <span className={cpuVal >= 75 ? 'text-rose-300 font-bold drop-shadow-[0_0_8px_rgba(255,42,109,0.7)]' : 'text-cyan-300 font-bold drop-shadow-[0_0_8px_rgba(0,240,255,0.6)]'}>
+                  <span className="text-slate-400">CPU</span>
+                  <span
+                    className={
+                      cpuVal >= 75 ? 'text-rose-300 font-bold' : 'text-cyan-300 font-semibold'
+                    }
+                  >
                     {cpuVal}%
                   </span>
                 </div>
-                <div className="h-[4.5px] w-full rounded-full telemetry-track p-[0.5px] overflow-hidden">
-                  <motion.div
-                    initial={{ scaleX: 0 }}
-                    animate={{ scaleX: Math.min(1, Math.max(0.04, cpuVal / 100)) }}
-                    transition={SPRING_ELASTIC}
-                    style={{ transformOrigin: 'left' }}
-                    className={`h-full w-full rounded-full transform-gpu ${
-                      cpuVal >= 75
-                        ? 'bg-gradient-to-r from-rose-500 via-pink-400 to-amber-400 telemetry-glow-rose'
-                        : 'bg-gradient-to-r from-cyan-400 via-sky-300 to-white telemetry-glow-cyan'
+                <div className="h-1.5 w-full rounded-full telemetry-track overflow-hidden">
+                  <div
+                    style={{ width: `${Math.min(100, Math.max(4, cpuVal))}%` }}
+                    className={`h-full rounded-full transition-all duration-300 ${
+                      cpuVal >= 75 ? 'bg-rose-400' : 'bg-cyan-400'
                     }`}
                   />
                 </div>
@@ -615,307 +553,228 @@ const HostCardComponent: React.FC<HostCardProps> = ({
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
-                  <span className="text-white/60 font-medium">RAM</span>
-                  <span className={ramVal >= 75 ? 'text-amber-300 font-bold drop-shadow-[0_0_8px_rgba(255,183,3,0.7)]' : 'text-indigo-300 font-bold drop-shadow-[0_0_8px_rgba(139,92,246,0.6)]'}>
+                  <span className="text-slate-400">RAM</span>
+                  <span
+                    className={
+                      ramVal >= 75 ? 'text-amber-300 font-bold' : 'text-indigo-300 font-semibold'
+                    }
+                  >
                     {ramVal}%
                   </span>
                 </div>
-                <div className="h-[4.5px] w-full rounded-full telemetry-track p-[0.5px] overflow-hidden">
-                  <motion.div
-                    initial={{ scaleX: 0 }}
-                    animate={{ scaleX: Math.min(1, Math.max(0.04, ramVal / 100)) }}
-                    transition={SPRING_ELASTIC}
-                    style={{ transformOrigin: 'left' }}
-                    className={`h-full w-full rounded-full transform-gpu ${
-                      ramVal >= 75
-                        ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 telemetry-glow-amber'
-                        : 'bg-gradient-to-r from-violet-400 via-purple-300 to-cyan-300 telemetry-glow-violet'
+                <div className="h-1.5 w-full rounded-full telemetry-track overflow-hidden">
+                  <div
+                    style={{ width: `${Math.min(100, Math.max(4, ramVal))}%` }}
+                    className={`h-full rounded-full transition-all duration-300 ${
+                      ramVal >= 75 ? 'bg-amber-400' : 'bg-indigo-400'
                     }`}
                   />
                 </div>
               </div>
             </div>
 
-            {/* Proactive "Diagnose with AI" Anomaly Pill for High CPU/RAM Hosts */}
             {isHighLoadAnomaly && (
-              <div className="flex items-center justify-between pt-0.5">
-                <span className="text-[10.5px] font-mono text-rose-300/90 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping" />
-                  <span>
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <span className="text-[10.5px] font-mono text-rose-300 flex items-center gap-1.5 truncate">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
+                  <span className="truncate">
                     {currentLang === 'bg'
-                      ? `Високо натоварване (${cpuVal}% CPU / ${ramVal}% RAM)`
-                      : `High resource utilization (${cpuVal}% CPU / ${ramVal}% RAM)`}
+                      ? `Високо натоварване (${cpuVal}% / ${ramVal}%)`
+                      : `High load (${cpuVal}% CPU / ${ramVal}% RAM)`}
                   </span>
                 </span>
-                <motion.button
+                <button
                   type="button"
-                  whileHover={{ scale: 1.05, y: -1 }}
-                  whileTap={{ scale: 0.92 }}
-                  transition={SPRING_POP}
                   onClick={(e) => {
                     e.stopPropagation();
                     triggerHapticFeedback('medium');
                     onDiagnoseHost?.(host);
                   }}
-                  className="px-2.5 py-1 rounded-full bg-violet-500/20 hover:bg-violet-500/35 border border-violet-400/50 text-violet-200 text-[10.5px] font-semibold flex items-center gap-1 shadow-[0_0_16px_rgba(139,92,246,0.3)] transition cursor-pointer shrink-0 transform-gpu"
+                  className="px-2.5 py-1 rounded-lg bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 text-violet-200 text-[10.5px] font-semibold flex items-center gap-1 transition shrink-0 active:scale-95"
                 >
-                  <Sparkles className="w-3 h-3 text-violet-300 animate-pulse" />
-                  <span>
-                    {currentLang === 'bg' ? 'Диагностицирай с AI' : 'Diagnose High Load'}
-                  </span>
-                </motion.button>
+                  <Sparkles className="w-3 h-3 text-violet-300" />
+                  <span>{currentLang === 'bg' ? 'AI Анализ' : 'AI Diagnose'}</span>
+                </button>
               </div>
             )}
           </div>
         )}
 
-        {/* Expanded 3-Tile "Bento" Drawer (120Hz Bubbly Spring Reveal) */}
+        {/* Expanded Control & Telemetry Drawer (Zero Fake Placeholders) */}
         <AnimatePresence initial={false}>
           {isExpanded && (
             <motion.div
-              initial={{ opacity: 0, y: -8, scale: 0.96 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -6, scale: 0.97, transition: { duration: 0.13 } }}
-              transition={SPRING_BUBBLY}
-              className="overflow-hidden relative z-10 transform-gpu"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+              className="overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="mt-4 pt-3.5 border-t border-white/[0.08] grid grid-cols-1 md:grid-cols-2 gap-3">
-                {/* TILE 1: Live Mini-Screen Preview (Interactive 16:9) */}
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    triggerHapticFeedback('medium');
-                    if (host.isOnline) {
-                      onViewScreen(host);
-                    } else {
-                      onWakeClick(e, host);
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
+              <div className="mt-3.5 pt-3 border-t border-white/[0.08] space-y-3">
+                {/* Primary Remote Control Actions */}
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
                       e.stopPropagation();
-                      if (host.isOnline) onViewScreen(host);
-                    }
-                  }}
-                  className="group relative aspect-video w-full rounded-2xl overflow-hidden border border-white/12 bg-[#060b16] shadow-inner flex flex-col justify-between p-3 cursor-pointer"
-                >
-                  <div
-                    className="absolute inset-0 pointer-events-none"
-                    style={{
-                      background: host.isOnline
-                        ? 'radial-gradient(circle at 25% 25%, rgba(14,165,233,0.22), rgba(15,23,42,0.92) 65%), linear-gradient(135deg, #071226 0%, #09152b 50%, #050a14 100%)'
-                        : 'linear-gradient(135deg, #060913 0%, #0a0f1d 100%)',
+                      triggerHapticFeedback('medium');
+                      if (host.isOnline) {
+                        onViewScreen(host);
+                      } else {
+                        onWakeClick(e, host);
+                      }
                     }}
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500/10 via-transparent to-white/5 pointer-events-none" />
+                    className={`min-h-[40px] px-2.5 py-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition active:scale-95 ${
+                      host.isOnline
+                        ? 'bg-cyan-500/20 hover:bg-cyan-500/30 border-cyan-400/45 text-cyan-100'
+                        : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400/45 text-amber-100'
+                    }`}
+                  >
+                    {host.isOnline ? (
+                      <>
+                        <ScanEye className="w-3.5 h-3.5 text-cyan-300 shrink-0" />
+                        <span className="truncate">
+                          {currentLang === 'bg' ? 'Екран' : 'Live Screen'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Power className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                        <span className="truncate">
+                          {currentLang === 'bg' ? 'Събуди' : 'Wake PC'}
+                        </span>
+                      </>
+                    )}
+                  </button>
 
-                  {host.isOnline && (
-                    <div className="absolute inset-x-4 top-8 bottom-7 rounded-lg border border-cyan-400/20 bg-[#040914]/80 p-2 flex flex-col gap-1.5 pointer-events-none overflow-hidden">
-                      <div className="flex items-center justify-between border-b border-white/[0.06] pb-1">
-                        <div className="flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-400/70" />
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70" />
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400/70" />
-                          <span className="text-[10px] font-mono text-cyan-300/70 ml-1">
-                            {host.name}:~/{host.os === 'windows' ? 'PowerShell' : 'bash'}
-                          </span>
-                        </div>
-                        <span className="text-[10px] font-mono text-white/40">CST/3.0 • Binary WS</span>
-                      </div>
-                      <div className="font-mono text-[10px] text-emerald-300/80 leading-tight space-y-0.5">
-                        <div>$ agent_daemon --status --tls</div>
-                        <div className="text-cyan-300/75">
-                          [OK] Framebuffer pipe active • CPU {cpuVal}% • RAM {ramVal}%
-                        </div>
-                        <div className="text-white/45">
-                          [OK] CST/3.0 frame stream ready ({host.ip}:{host.port || 8765})
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="relative z-10 flex items-center justify-between">
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-mono font-bold tracking-wider uppercase border ${
-                        host.isOnline
-                          ? 'bg-black/65 text-emerald-300 border-emerald-400/40'
-                          : 'bg-black/65 text-amber-300 border-amber-400/35'
-                      }`}
-                    >
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          host.isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
-                        }`}
-                      />
-                      {host.isOnline
-                        ? currentLang === 'bg'
-                          ? 'НА ЖИВО'
-                          : 'LIVE'
-                        : currentLang === 'bg'
-                        ? 'СПЯЩ ХОСТ'
-                        : 'HOST SLEEPING'}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      triggerHapticFeedback('light');
+                      onSelectForCommand?.(host.id);
+                    }}
+                    className="min-h-[40px] px-2.5 py-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition active:scale-95"
+                  >
+                    <TerminalSquare className="w-3.5 h-3.5 text-cyan-300 shrink-0" />
+                    <span className="truncate">
+                      {currentLang === 'bg' ? 'Терминал' : 'Terminal'}
                     </span>
+                  </button>
 
-                    <span className="text-[10px] font-mono text-white/60 bg-black/50 px-2 py-0.5 rounded-md border border-white/10">
-                      1920×1080
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      triggerHapticFeedback('light');
+                      onOpenDetailsModal(host);
+                    }}
+                    className="min-h-[40px] px-2.5 py-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition active:scale-95"
+                  >
+                    <Info className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
+                    <span className="truncate">
+                      {currentLang === 'bg' ? 'Детайли' : 'Details'}
                     </span>
-                  </div>
-
-                  <div className="relative z-10 mt-auto flex items-center justify-center">
-                    <div className="w-full min-h-[38px] py-1.5 px-3 rounded-xl bg-[#070c18]/90 group-hover:bg-cyan-500/25 border border-white/15 group-hover:border-cyan-400/50 text-center transition-all flex items-center justify-center gap-1.5 text-[11px] font-semibold text-cyan-200 shadow-lg">
-                      <Maximize2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                      <span className="truncate">
-                        {host.isOnline
-                          ? currentLang === 'bg'
-                            ? 'Отвори цял екран и тракпад'
-                            : 'Open Fullscreen & Trackpad'
-                          : currentLang === 'bg'
-                          ? 'Събуди с Magic Packet (WoL)'
-                          : 'Wake via Magic Packet (WoL)'}
-                      </span>
-                    </div>
-                  </div>
+                  </button>
                 </div>
 
-                {/* TILE 2: 1-Tap Quick OS Actions (2x2 Grid) */}
-                <div className="rounded-2xl bg-[#070c18]/75 border border-white/10 p-3 flex flex-col justify-between">
+                {/* 1-Tap Quick OS Actions */}
+                <div className="rounded-xl bg-[#070d1b] border border-white/[0.07] p-2.5">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-white/50 font-semibold">
-                      {currentLang === 'bg' ? 'Бързи OS Действия (1-Клик)' : '1-Tap Quick OS Actions'}
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-semibold">
+                      {currentLang === 'bg' ? 'Бързи OS Команди' : 'Quick OS Actions'}
                     </span>
-                    <span className="text-[10px] font-mono text-cyan-300/80">
-                      {host.os === 'windows' ? 'WinRM / PS' : 'SSH / Systemd'}
+                    <span className="text-[10px] font-mono text-cyan-400/80">
+                      {host.os === 'windows' ? 'PowerShell' : 'Systemd'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 flex-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                     {quickActions.map((act) => {
                       const ActIcon = act.icon;
                       const isDispatched = dispatchedAction === act.id;
                       const isWarning = act.variant === 'warning';
-                      const iconAnimClass =
-                        act.id === 'updates'
-                          ? 'icon-spin-bubbly'
-                          : act.id === 'dns'
-                          ? 'icon-sparkle-live'
-                          : 'icon-bubbly';
                       return (
-                        <motion.button
+                        <button
                           key={act.id}
                           type="button"
                           disabled={isOffline}
-                          whileHover={isOffline ? undefined : { scale: 1.03, y: -1.5 }}
-                          whileTap={isOffline ? undefined : { scale: 0.93 }}
-                          transition={SPRING_POP}
                           onClick={(e) => handleQuickAction(e, act.id, act.command)}
-                          className={`group min-h-[44px] px-2.5 py-2 rounded-xl border text-left transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transform-gpu ${
+                          className={`min-h-[38px] px-2.5 py-1.5 rounded-lg border text-left transition flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 ${
                             isDispatched
                               ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-200'
                               : isWarning
                               ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-400/30 text-amber-200'
-                              : 'bg-white/[0.04] hover:bg-white/[0.09] border-white/10 hover:border-cyan-400/35 text-white/85'
+                              : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.08] text-slate-200'
                           }`}
                         >
                           {isDispatched ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 icon-bubbly" />
+                            <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           ) : (
                             <ActIcon
-                              className={`w-3.5 h-3.5 shrink-0 ${iconAnimClass} ${
+                              className={`w-3.5 h-3.5 shrink-0 ${
                                 isWarning ? 'text-amber-400' : 'text-cyan-400'
                               }`}
                             />
                           )}
-                          <span className="font-display text-[11px] font-semibold leading-tight line-clamp-2">
+                          <span className="font-display text-[11px] font-semibold leading-tight truncate">
                             {isDispatched
                               ? currentLang === 'bg'
-                                ? 'Изпратено!'
-                                : 'Sent!'
+                                ? 'Изпратено'
+                                : 'Sent'
                               : act.label}
                           </span>
-                        </motion.button>
+                        </button>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* TILE 3: Compact Diagnostics & Copyable Identity (Full-Width Bottom Tile) */}
-                <div className="md:col-span-2 rounded-xl bg-[#070c18]/80 border border-white/10 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2.5 text-xs font-mono tabular-nums">
+                {/* Network & Hardware Telemetry Strip */}
+                <div className="rounded-xl bg-[#070d1b] border border-white/[0.07] px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-white/45">MAC:</span>
-                    <span className="text-white/90 font-semibold">{host.mac}</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyMac}
-                      className="p-1.5 rounded-md hover:bg-white/10 text-white/50 hover:text-cyan-300 transition cursor-pointer"
-                      title={currentLang === 'bg' ? 'Копирай MAC адрес' : 'Copy MAC address'}
-                    >
-                      {copiedMac ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5" />
-                      )}
-                    </button>
+                    <span className="text-slate-400">MAC:</span>
+                    <span className="text-slate-200 font-semibold">{host.mac || '—'}</span>
+                    {host.mac && (
+                      <button
+                        type="button"
+                        onClick={handleCopyMac}
+                        className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-cyan-300 transition"
+                        title={currentLang === 'bg' ? 'Копирай MAC' : 'Copy MAC'}
+                      >
+                        {copiedMac ? (
+                          <Check className="w-3 h-3 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                      </button>
+                    )}
                   </div>
 
-                  <span className="hidden sm:inline text-white/20">•</span>
+                  {host.diskUsage && (
+                    <div className="flex items-center gap-1">
+                      <HardDrive className="w-3 h-3 text-cyan-400/80 shrink-0" />
+                      <span className="text-slate-400">
+                        {currentLang === 'bg' ? 'Диск:' : 'Disk:'}
+                      </span>
+                      <span className="text-slate-200">{host.diskUsage}</span>
+                    </div>
+                  )}
 
-                  <div className="flex items-center gap-1.5">
-                    <HardDrive className="w-3.5 h-3.5 text-cyan-400/80 shrink-0" />
-                    <span className="text-white/45">
-                      {currentLang === 'bg' ? 'Диск:' : 'Disk:'}
-                    </span>
-                    <span className="text-white/85 font-medium">
-                      {host.diskUsage || 'N/A'}
-                    </span>
-                  </div>
-
-                  <span className="hidden sm:inline text-white/20">•</span>
-
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-white/45">OS:</span>
-                    <span className="text-white/85 font-medium">{osFullLabel}</span>
-                  </div>
-
-                  <span className="hidden lg:inline text-white/20">•</span>
-
-                  {/* 1-Click Copy Connection URI & Visual Sonar Ping */}
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleCopyUri}
-                      className="px-2 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.1] border border-white/10 text-[10.5px] text-cyan-300 flex items-center gap-1 transition cursor-pointer"
-                      title={
-                        currentLang === 'bg'
-                          ? `Копирай URI (${connectionUri})`
-                          : `Copy URI (${connectionUri})`
-                      }
-                    >
-                      {copiedUri ? (
-                        <Check className="w-3 h-3 text-emerald-400" />
-                      ) : (
-                        <Link2 className="w-3 h-3 text-cyan-400" />
-                      )}
-                      <span>{copiedUri ? (currentLang === 'bg' ? 'Копирано' : 'Copied') : 'URI'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleTriggerSonarPing}
-                      className={`px-2 py-1 rounded-lg border text-[10.5px] flex items-center gap-1 transition cursor-pointer ${
-                        isSonarPulsing
-                          ? 'bg-cyan-500/25 border-cyan-300 text-cyan-200'
-                          : 'bg-white/[0.04] hover:bg-white/[0.1] border-white/10 text-white/75 hover:text-cyan-200'
-                      }`}
-                      title={currentLang === 'bg' ? 'Визуален Sonar Ping тест' : 'Visual Sonar Ping locate'}
-                    >
-                      <Radio className={`w-3 h-3 text-cyan-400 ${isSonarPulsing ? 'animate-ping' : ''}`} />
-                      <span>Ping</span>
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyUri}
+                    className="px-2 py-0.5 rounded bg-white/[0.04] hover:bg-white/[0.1] border border-white/10 text-[10.5px] text-cyan-300 flex items-center gap-1 transition"
+                    title={connectionUri}
+                  >
+                    {copiedUri ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Link2 className="w-3 h-3 text-cyan-400" />
+                    )}
+                    <span>{copiedUri ? (currentLang === 'bg' ? 'Копирано' : 'Copied') : connectionUri}</span>
+                  </button>
 
                   <div className="flex items-center gap-2 ml-auto">
                     <InlineMiniSparkline
@@ -925,10 +784,10 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     />
                     <span className="text-cyan-300 font-semibold">
                       {host.isOnline
-                        ? `RTT: ${rttMs}ms (±${jitterMs}ms jitter)`
+                        ? `${rttMs}ms (±${jitterMs}ms)`
                         : currentLang === 'bg'
-                        ? 'RTT: Офлайн'
-                        : 'RTT: Offline'}
+                        ? 'Офлайн'
+                        : 'Offline'}
                     </span>
                   </div>
                 </div>
@@ -937,7 +796,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
           )}
         </AnimatePresence>
       </div>
-    </motion.div>
+    </div>
   );
 };
 
@@ -970,4 +829,3 @@ export const HostCard = React.memo(HostCardComponent, (prev, next) => {
     prev.host.latencyHistory === next.host.latencyHistory
   );
 });
-

@@ -285,7 +285,7 @@ class AdaptiveScaffold extends StatelessWidget {
                   behavior: HitTestBehavior.opaque,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 260),
-                    curve: Curves.easeOutBack,
+                    curve: Curves.easeOutCubic,
                     padding: EdgeInsets.symmetric(
                       horizontal: isSelected ? 16 : 12,
                       vertical: 8,
@@ -323,7 +323,7 @@ class AdaptiveScaffold extends StatelessWidget {
                         AnimatedScale(
                           scale: isSelected ? 1.08 : 1.0,
                           duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutBack,
+                          curve: Curves.easeOutCubic,
                           child: Icon(
                             isSelected
                                 ? (item.activeIcon ?? item.icon)

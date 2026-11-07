@@ -104,7 +104,6 @@ const AUTO_EXEC_STORAGE_KEY = 'cst_gemini_auto_exec_v1';
 const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   hosts,
   selectedTarget,
-  onSendWol,
   onTriggerRescan,
   onToggleLabMode,
   onSendCommand,
@@ -129,8 +128,8 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   const welcomeText = useMemo(
     () =>
       language === 'bg'
-        ? 'Здравейте! Аз съм Вашият **CST Fleet Commander AI** с директен 120Hz контрол над компютъра и автоматични ъпдейти.\n\nМога да управлявам **мишката и клавиатурата** на PC-то (`Opcode 0x08`), да изпълнявам **Shell команди**, да изпращам **Wake-on-LAN** пакети, да управлявам **PC Демона** и да инсталирам **системни и AI обновления**.'
-        : 'Hello! I am your **CST Fleet Commander AI** with live 120Hz PC control and autonomous update capabilities.\n\nI can directly control your PC **mouse & keyboard** (`Opcode 0x08`), execute **Shell commands**, broadcast **Wake-on-LAN** packets, configure the **PC Host Daemon**, and run **System & AI Model Updates**.',
+        ? 'Здравейте! Аз съм Вашият **AI NetController Копилот** с директен контрол над компютъра.\n\nМога да управлявам **мишката и клавиатурата** (`Opcode 0x08`), да изпълнявам **Shell команди**, да изпращам **Wake-on-LAN** пакети и да управлявам **PC Демона**.'
+        : 'Hello! I am your **AI NetController Copilot** with direct PC control and diagnostics.\n\nI can control your PC **mouse & keyboard** (`Opcode 0x08`), execute **Shell commands**, broadcast **Wake-on-LAN** packets, and manage the **PC Host Daemon**.',
     [language]
   );
 
@@ -138,27 +137,33 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     () => [
       {
         id: 'commander' as BotRole,
-        label: language === 'bg' ? 'PC & Флот' : 'PC & Fleet',
+        label: language === 'bg' ? 'Флот' : 'Fleet',
         model: (selectedModel || 'gemini-3.8-flash') as GeminiModelId,
         icon: Sparkles,
         placeholder:
           language === 'bg'
-            ? 'напр. „Кликни на (960, 540)“, „Напиши ipconfig“, „Обнови AI моделите“...'
-            : 'e.g. "Click at (960, 540)", "Type hello on PC", "Update all AI models"...',
+            ? 'напр. „Събуди компютъра“, „Напиши ipconfig“, „Кликни на (960, 540)“...'
+            : 'e.g. "Wake my PC", "Run ipconfig", "Click at (960, 540)"...',
       },
       {
         id: 'diagnostics' as BotRole,
-        label: language === 'bg' ? 'Сигурност' : 'Security',
+        label: language === 'bg' ? 'Одит' : 'Audit',
         model: (selectedModel || 'gemini-3.8-flash') as GeminiModelId,
         icon: Shield,
-        placeholder: language === 'bg' ? 'Одит на PC демона и CST/3.0 протокола...' : 'Audit PC daemon & CST/3.0 security...',
+        placeholder:
+          language === 'bg'
+            ? 'Одит на PC демона и мрежовата сигурност...'
+            : 'Audit PC daemon & network security...',
       },
       {
         id: 'fast_triage' as BotRole,
-        label: language === 'bg' ? 'Бърз Контрол' : 'Quick Action',
+        label: language === 'bg' ? 'Бързо' : 'Quick',
         model: (selectedModel || 'gemini-3.8-flash') as GeminiModelId,
         icon: Terminal,
-        placeholder: language === 'bg' ? 'Бърза команда или клавишна комбинация...' : 'Fast shell command or keyboard shortcut...',
+        placeholder:
+          language === 'bg'
+            ? 'Бърза команда или клавишна комбинация...'
+            : 'Fast shell command or keyboard shortcut...',
       },
     ],
     [language, selectedModel]
@@ -180,7 +185,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     return true;
   });
 
-  const [showControlDeck, setShowControlDeck] = useState<boolean>(true);
+  const [showControlDeck, setShowControlDeck] = useState<boolean>(false);
   const [executingActionId, setExecutingActionId] = useState<string | null>(null);
 
   const activeRoleConfig = useMemo(
@@ -281,8 +286,8 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       role: 'model',
       content:
         language === 'bg'
-          ? 'Разговорът е изчистен. Готов съм за PC контрол, диагностика или системни обновления.'
-          : 'Conversation cleared. Ready for PC control, diagnostics, or system updates.',
+          ? 'Разговорът е изчистен. Готов съм за PC контрол и диагностика.'
+          : 'Conversation cleared. Ready for PC control and diagnostics.',
       timestamp: Date.now(),
       modelUsed: activeRoleConfig.model,
     };
@@ -301,7 +306,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     setIsLoading(false);
   };
 
-  // Build rich localized AiActionItem list from server actions or raw text
   const buildActionItems = useCallback(
     (
       text: string,
@@ -486,7 +490,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         return serverActions.map(formatItemFromServerAction);
       }
 
-      // Client fallback regex parser if serverActions wasn't populated
       const tagRegex = /\[ACTION:([A-Z_]+)([^\]]*)\]/gi;
       let match: RegExpExecArray | null;
       let idx = 0;
@@ -525,7 +528,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     [hosts, language, primaryHost]
   );
 
-  // Execute or Re-Run a single AI Action Item on the PC / Server
   const handleExecuteActionItem = async (messageId: string, action: AiActionItem) => {
     triggerHapticFeedback('medium');
     setExecutingActionId(action.id);
@@ -542,7 +544,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         return;
       }
 
-      // Also invoke local UI callbacks when relevant
       if (action.type === 'shell_exec' && action.payload?.command && onSendCommand) {
         onSendCommand(action.payload.command, action.target || selectedTarget);
       } else if (action.type === 'screen_capture' && onViewScreen) {
@@ -603,7 +604,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         }
       }
 
-      // Update action execution result inside the message state
       setMessages((prev) =>
         prev.map((m) => {
           if (m.id !== messageId || !m.actions) return m;
@@ -615,7 +615,9 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                     ...a,
                     executionResult: {
                       success: Boolean(data.success),
-                      summary: data.summary || (data.success ? 'Executed on PC' : data.error || 'Execution blocked'),
+                      summary:
+                        data.summary ||
+                        (data.success ? 'Executed on PC' : data.error || 'Execution blocked'),
                       output: data.output,
                       opcode: data.opcode,
                       durationMs: data.durationMs,
@@ -710,7 +712,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       const replyContent = data.reply || '';
       const actions = buildActionItems(replyContent, data.actions, data.executionResults);
 
-      // If autoExecute is on and a shell command, input event, or WoL was executed by the AI, sync with terminal, WebSocket & WoL history
       if (autoExecutePcActions && Array.isArray(data.actions)) {
         data.actions.forEach((act: any, idx: number) => {
           if (act.type === 'shell_exec' && act.command && onSendCommand) {
@@ -729,7 +730,9 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
           ) {
             onSendInputOpcode(act.type === 'media_control' ? 0x09 : 0x08, act);
           } else if (act.type === 'wol') {
-            const execRes = Array.isArray(data.executionResults) ? data.executionResults[idx] : undefined;
+            const execRes = Array.isArray(data.executionResults)
+              ? data.executionResults[idx]
+              : undefined;
             const isSuccess = execRes ? Boolean(execRes.success) : true;
             const targetHost =
               hosts.find((h) => h.id === act.target || h.name === act.target) || primaryHost;
@@ -791,7 +794,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     }
   };
 
-  // Auto-dispatch proactive AI diagnostic prompt from HostCard anomaly pill
   useEffect(() => {
     if (pendingChatPrompt && !isLoading) {
       const promptToRun = pendingChatPrompt;
@@ -807,16 +809,16 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     setTimeout(() => setCopiedId(null), 1800);
   };
 
-  // Quick 1-Tap AI PC Control & Update Deck items
   const quickControlDeck = useMemo(() => {
     const bg = language === 'bg';
-    const hostName = primaryHost?.name || primaryHost?.id || (language === 'bg' ? 'Няма хост' : 'No Host');
+    const hostName =
+      primaryHost?.name || primaryHost?.id || (language === 'bg' ? 'Няма хост' : 'No Host');
     return [
       {
         id: 'deck-hotkey',
         icon: Zap,
-        label: bg ? 'Диспечер на задачи (Task Manager)' : 'Open Task Manager',
-        color: 'text-indigo-300 border-indigo-400/50 bg-indigo-500/15 hover:bg-indigo-500/25 shadow-[0_0_14px_rgba(129,140,248,0.25)]',
+        label: bg ? 'Task Manager' : 'Task Manager',
+        color: 'text-indigo-300 border-indigo-400/40 bg-indigo-500/15 hover:bg-indigo-500/25',
         prompt: bg
           ? `Изпрати клавишна комбинация ctrl,shift,esc за отваряне на Task Manager на ${hostName}`
           : `Open Task Manager on ${hostName} using ctrl,shift,esc`,
@@ -824,8 +826,8 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       {
         id: 'deck-desktop',
         icon: Monitor,
-        label: bg ? 'Покажи работния плот (Win+D)' : 'Show Desktop (Win+D)',
-        color: 'text-cyan-300 border-cyan-400/50 bg-cyan-500/15 hover:bg-cyan-500/25 shadow-[0_0_14px_rgba(34,211,238,0.25)]',
+        label: bg ? 'Работен плот (Win+D)' : 'Show Desktop (Win+D)',
+        color: 'text-cyan-300 border-cyan-400/40 bg-cyan-500/15 hover:bg-cyan-500/25',
         prompt: bg
           ? `Покажи работния плот на ${hostName} чрез клавишна комбинация win,d`
           : `Show desktop on ${hostName} using win,d`,
@@ -833,8 +835,8 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       {
         id: 'deck-explorer',
         icon: Terminal,
-        label: bg ? 'Файлов мениджър (Win+E)' : 'Open File Explorer',
-        color: 'text-amber-300 border-amber-400/50 bg-amber-500/15 hover:bg-amber-500/25 shadow-[0_0_14px_rgba(251,191,36,0.25)]',
+        label: bg ? 'Файлове (Win+E)' : 'File Explorer',
+        color: 'text-amber-300 border-amber-400/40 bg-amber-500/15 hover:bg-amber-500/25',
         prompt: bg
           ? `Отвори файловия мениджър на ${hostName} чрез win,e`
           : `Open File Explorer on ${hostName} using win,e`,
@@ -842,35 +844,17 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       {
         id: 'deck-switch',
         icon: RefreshCw,
-        label: bg ? 'Смени прозорец (Alt+Tab)' : 'Switch Window (Alt+Tab)',
-        color: 'text-sky-300 border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 shadow-[0_0_14px_rgba(56,189,248,0.25)]',
+        label: bg ? 'Смени прозорец' : 'Alt+Tab',
+        color: 'text-sky-300 border-sky-400/40 bg-sky-500/15 hover:bg-sky-500/25',
         prompt: bg
           ? `Превключи активния прозорец на ${hostName} чрез alt,tab`
           : `Switch active window on ${hostName} using alt,tab`,
       },
       {
-        id: 'deck-click',
-        icon: MousePointerClick,
-        label: bg ? 'Ляв клик (960, 540)' : 'Left Click (960, 540)',
-        color: 'text-cyan-300 border-cyan-400/50 bg-cyan-500/15 hover:bg-cyan-500/25 shadow-[0_0_14px_rgba(34,211,238,0.25)]',
-        prompt: bg
-          ? `Кликни с левия бутон на мишката на координати 960, 540 на ${hostName}`
-          : `Click the left mouse button at coordinates 960, 540 on ${hostName}`,
-      },
-      {
-        id: 'deck-right-click',
-        icon: MousePointerClick,
-        label: bg ? 'Десен клик (960, 540)' : 'Right Click (960, 540)',
-        color: 'text-purple-300 border-purple-400/50 bg-purple-500/15 hover:bg-purple-500/25 shadow-[0_0_14px_rgba(192,132,252,0.25)]',
-        prompt: bg
-          ? `Кликни с десния бутон на мишката на координати 960, 540 на ${hostName}`
-          : `Right click the mouse at coordinates 960, 540 on ${hostName}`,
-      },
-      {
         id: 'deck-type',
         icon: Keyboard,
-        label: bg ? 'Напиши Статус Команда' : 'Type Status Command',
-        color: 'text-sky-300 border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 shadow-[0_0_14px_rgba(56,189,248,0.25)]',
+        label: bg ? 'Мрежов статус' : 'Network Status',
+        color: 'text-sky-300 border-sky-400/40 bg-sky-500/15 hover:bg-sky-500/25',
         prompt: bg
           ? `Напиши "ipconfig /all" чрез клавиатурата на ${hostName} и натисни Enter`
           : `Type "ipconfig /all" on ${hostName} keyboard and press Enter`,
@@ -878,8 +862,8 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       {
         id: 'deck-update',
         icon: DownloadCloud,
-        label: bg ? 'Системен Ъпдейт' : 'Run System Update',
-        color: 'text-emerald-300 border-emerald-400/50 bg-emerald-500/18 hover:bg-emerald-500/30 shadow-[0_0_16px_rgba(52,211,153,0.3)]',
+        label: bg ? 'Системен Ъпдейт' : 'System Update',
+        color: 'text-emerald-300 border-emerald-400/40 bg-emerald-500/18 hover:bg-emerald-500/30',
         prompt: bg
           ? 'Провери за налични обновления и обнови всички AI модели, хост демона и правилата на защитната стена'
           : 'Check for available updates and upgrade all AI models, the PC host daemon, and AST firewall rules now',
@@ -900,13 +884,18 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         const code = (hasLang ? lines.slice(1) : lines).join('\n');
 
         return (
-          <div key={index} className="my-2.5 rounded-2xl bg-black/60 border border-white/10 overflow-hidden text-[12px] font-mono shadow-inner">
-            <div className="flex items-center justify-between px-3.5 py-1.5 bg-white/[0.04] border-b border-white/5 text-[10px] text-slate-400">
-              <span className="uppercase tracking-wider font-semibold text-cyan-400">{lang || 'SHELL'}</span>
+          <div
+            key={index}
+            className="my-2 rounded-xl bg-black/60 border border-white/10 overflow-hidden text-[12px] font-mono"
+          >
+            <div className="flex items-center justify-between px-3 py-1.5 bg-white/[0.04] border-b border-white/5 text-[10px] text-slate-400">
+              <span className="uppercase tracking-wider font-semibold text-cyan-400">
+                {lang || 'SHELL'}
+              </span>
               <button
                 type="button"
                 onClick={() => handleCopy(`code-${index}`, code)}
-                className="hover:text-white transition flex items-center space-x-1 cursor-pointer min-h-[28px] px-1.5"
+                className="hover:text-white transition flex items-center gap-1 px-1.5 py-0.5"
               >
                 {copiedId === `code-${index}` ? (
                   <>
@@ -923,7 +912,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                 )}
               </button>
             </div>
-            <pre className="p-3.5 overflow-x-auto text-slate-200 select-text leading-relaxed">
+            <pre className="p-3 overflow-x-auto text-slate-200 select-text leading-relaxed">
               <code>{code}</code>
             </pre>
           </div>
@@ -967,73 +956,67 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between w-full max-w-5xl 2xl:max-w-7xl mx-auto px-1 sm:px-3 pb-1 select-none">
-      {/* 1. Tier 2 Optical Glass Header Bar with Role Pills & Auto-Execute Toggle */}
-      <header className="flex-none py-2 px-3 mb-2 rounded-full bg-[#081024]/95 backdrop-blur-2xl border border-white/18 border-t-cyan-400/50 shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_24px_rgba(0,240,255,0.12)] transform-gpu flex items-center justify-between relative gap-2 flex-wrap sm:flex-nowrap">
-        <div className="absolute inset-x-8 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/40 to-transparent pointer-events-none" />
-
-        {/* Gemini Identity & Active Target */}
-        <div className="flex items-center space-x-2.5 pl-1 min-w-0">
-          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-400/20 to-blue-500/20 border border-cyan-400/30 flex items-center justify-center shadow-[0_0_12px_rgba(0,212,255,0.25)] shrink-0">
-            <Sparkles className="w-4 h-4 text-cyan-300 icon-sparkle-live" />
+    <div className="flex-1 flex flex-col justify-between w-full max-w-5xl 2xl:max-w-7xl mx-auto pb-1 select-none">
+      {/* 1. Sleek Native Header Bar */}
+      <header className="flex-none py-2 px-3 mb-2 rounded-2xl glass-liquid flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center shrink-0">
+            <Sparkles className="w-4 h-4 text-cyan-300" />
           </div>
           <div className="flex flex-col min-w-0">
-            <h2 className="font-display text-xs sm:text-[13px] font-bold text-white tracking-tight flex items-center space-x-1.5">
-              <span className="truncate">Gemini PC Copilot</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399] shrink-0" />
+            <h2 className="font-display text-xs sm:text-[13px] font-bold text-white tracking-tight flex items-center gap-1.5">
+              <span className="truncate">AI NetController Copilot</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
             </h2>
             <span className="text-[10px] font-mono text-cyan-300/80 truncate">
-              {selectedModel || activeRoleConfig.model} • {primaryHost ? primaryHost.name : (language === 'bg' ? 'Няма хост' : 'No Host')}
+              {selectedModel || activeRoleConfig.model} •{' '}
+              {primaryHost ? primaryHost.name : language === 'bg' ? 'Няма хост' : 'No Host'}
             </span>
           </div>
         </div>
 
-        {/* Right Controls: Auto-Exec Toggle + Role Selector + Clear */}
-        <div className="flex items-center space-x-1.5 shrink-0 ml-auto">
-          {/* Auto-Execute PC Actions Toggle */}
+        <div className="flex items-center gap-1.5 shrink-0 ml-auto">
           <button
             type="button"
             onClick={toggleAutoExecute}
-            className={`px-2.5 py-1.5 min-h-[36px] min-w-[36px] rounded-full text-[10px] sm:text-[11px] font-semibold border transition flex items-center justify-center space-x-1.5 cursor-pointer bubble-tap ${
+            className={`px-2.5 h-8 rounded-xl text-[10px] sm:text-[11px] font-semibold border transition flex items-center justify-center gap-1.5 active:scale-95 ${
               autoExecutePcActions
-                ? 'bg-emerald-500/18 text-emerald-300 border-emerald-400/40 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
-                : 'bg-white/[0.04] text-slate-400 border-white/10 hover:text-white'
+                ? 'bg-emerald-500/18 text-emerald-300 border-emerald-400/40'
+                : 'bg-[#070d1b] text-slate-400 border-white/10 hover:text-white'
             }`}
             title={
               language === 'bg'
-                ? 'Автоматично изпълнявай AI команди за мишка, клавиатура и обновления'
-                : 'Automatically execute AI mouse, keyboard, shell, and update actions'
+                ? 'Автоматично изпълнявай AI команди'
+                : 'Automatically execute AI actions'
             }
           >
             <span
               className={`w-2 h-2 rounded-full ${
-                autoExecutePcActions ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-slate-500'
+                autoExecutePcActions ? 'bg-emerald-400' : 'bg-slate-500'
               }`}
             />
             <span className="hidden md:inline">
-              {language === 'bg' ? 'Авто-PC Контрол' : 'Auto-PC Control'}
+              {language === 'bg' ? 'Авто-PC' : 'Auto-PC'}
             </span>
           </button>
 
-          {/* Toggle Quick Control Deck */}
           <button
             type="button"
             onClick={() => {
               triggerHapticFeedback('light');
               setShowControlDeck((prev) => !prev);
             }}
-            className={`w-9 h-9 min-w-[36px] min-h-[36px] rounded-full border flex items-center justify-center transition cursor-pointer bubble-tap ${
+            className={`w-8 h-8 rounded-xl border flex items-center justify-center transition active:scale-95 ${
               showControlDeck
                 ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/40'
-                : 'bg-white/[0.04] text-slate-400 border-white/10 hover:text-white'
+                : 'bg-[#070d1b] text-slate-400 border-white/10 hover:text-white'
             }`}
             title={language === 'bg' ? 'AI Панел за Бърз Контрол' : 'AI Quick Control Deck'}
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
           </button>
 
-          {/* Segmented Role Selector with Sliding Lens */}
-          <div className="flex items-center glass-liquid-subtle p-1 rounded-full">
+          <div className="flex items-center bg-[#070d1b] border border-white/10 p-0.5 rounded-xl">
             {ROLES.map((r) => {
               const isSelected = activeRole === r.id;
               const Icon = r.icon;
@@ -1042,18 +1025,13 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                   key={r.id}
                   type="button"
                   onClick={() => handleRoleSelect(r.id)}
-                  className={`group relative px-2.5 sm:px-3 py-1.5 rounded-full text-[11px] font-semibold transition-colors duration-200 cursor-pointer flex items-center space-x-1.5 z-10 whitespace-nowrap min-h-[36px] ${
-                    isSelected ? 'text-cyan-200' : 'text-white/50 hover:text-white/85'
+                  className={`px-2 sm:px-2.5 h-7 rounded-lg text-[11px] font-semibold transition flex items-center gap-1 whitespace-nowrap ${
+                    isSelected
+                      ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/35'
+                      : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  {isSelected && (
-                    <motion.div
-                      layoutId="geminiRoleLens"
-                      className="absolute inset-0 rounded-full bg-gradient-to-r from-cyan-500/25 to-sky-500/20 border border-cyan-400/45 shadow-[0_0_12px_rgba(56,189,248,0.25)] -z-10 transform-gpu"
-                      transition={{ type: 'spring', stiffness: 480, damping: 24, mass: 0.6 }}
-                    />
-                  )}
-                  <Icon className="w-3.5 h-3.5 shrink-0 icon-bubbly" />
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
                   <span className="font-display">{r.label}</span>
                 </button>
               );
@@ -1061,35 +1039,33 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
           </div>
 
           {messages.length > 1 && (
-            <motion.button
+            <button
               type="button"
-              whileHover={{ scale: 1.08, rotate: -8 }}
-              whileTap={{ scale: 0.9 }}
               onClick={handleClearHistory}
-              className="group w-9 h-9 rounded-full glass-liquid-subtle hover:bg-white/10 text-white/55 hover:text-white flex items-center justify-center transition cursor-pointer transform-gpu"
+              className="w-8 h-8 rounded-xl bg-[#070d1b] border border-white/10 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center transition active:scale-95"
               title={language === 'bg' ? 'Изчисти чата' : 'Clear chat'}
               aria-label={language === 'bg' ? 'Изчисти чата' : 'Clear chat'}
             >
-              <Trash2 className="w-4 h-4 icon-bubbly" />
-            </motion.button>
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
           )}
         </div>
       </header>
 
-      {/* 1.5 Direct AI PC Control & Update Deck */}
+      {/* 1.5 Direct AI PC Control Deck (Collapsible) */}
       <AnimatePresence initial={false}>
         {showControlDeck && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            transition={{ type: 'spring', stiffness: 460, damping: 28 }}
+            transition={{ duration: 0.15 }}
             className="flex-none overflow-hidden mb-2"
           >
-            <div className="px-3 py-2 rounded-2xl bg-[#081124]/90 backdrop-blur-2xl border border-cyan-400/20 flex items-center gap-2 overflow-x-auto scrollbar-none [mask-image:linear-gradient(to_right,black_92%,transparent_100%)]">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 shrink-0 flex items-center gap-1 pr-1 border-r border-white/10">
+            <div className="px-2.5 py-2 rounded-xl bg-[#0b1326] border border-white/10 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 shrink-0 flex items-center gap-1 pr-1.5 border-r border-white/10">
                 <Zap className="w-3 h-3 text-cyan-400" />
-                <span>{language === 'bg' ? 'AI PC Контрол:' : 'AI PC Deck:'}</span>
+                <span>{language === 'bg' ? 'Бързи:' : 'Quick:'}</span>
               </span>
               {quickControlDeck.map((item) => {
                 const Icon = item.icon;
@@ -1099,7 +1075,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                     type="button"
                     disabled={isLoading}
                     onClick={() => handleSendMessage(item.prompt)}
-                    className={`min-h-[38px] px-3.5 py-2 rounded-full border text-xs font-semibold flex items-center space-x-2 shrink-0 transition cursor-pointer bubble-tap ${item.color}`}
+                    className={`h-8 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1.5 shrink-0 transition active:scale-95 ${item.color}`}
                   >
                     <Icon className="w-3.5 h-3.5 shrink-0" />
                     <span>{item.label}</span>
@@ -1113,10 +1089,10 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                     triggerHapticFeedback('light');
                     onOpenUpdateCenter();
                   }}
-                  className="min-h-[38px] px-3.5 py-2 rounded-full border border-white/15 bg-white/[0.04] hover:bg-white/10 text-slate-300 text-xs font-semibold flex items-center space-x-1.5 shrink-0 transition cursor-pointer ml-auto"
+                  className="h-8 px-3 rounded-lg border border-white/15 bg-white/[0.04] hover:bg-white/10 text-slate-300 text-xs font-semibold flex items-center gap-1.5 shrink-0 transition ml-auto active:scale-95"
                 >
                   <RefreshCw className="w-3 h-3 text-emerald-400" />
-                  <span>{language === 'bg' ? 'Update Център' : 'Update Center'}</span>
+                  <span>{language === 'bg' ? 'Обновления' : 'Updates'}</span>
                 </button>
               )}
             </div>
@@ -1124,46 +1100,47 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         )}
       </AnimatePresence>
 
-      {/* 2. Scrollable Conversation Thread with Bouncy Overscroll */}
+      {/* 2. Scrollable Conversation Thread */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto py-3 px-1 space-y-4 bouncy-scroll"
+        className="flex-1 overflow-y-auto py-2 px-0.5 space-y-3 bouncy-scroll"
       >
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
           return (
-            <motion.div
+            <div
               key={msg.id}
-              initial={{ opacity: 0, y: 14, scale: 0.94 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ type: 'spring', stiffness: 520, damping: 24, mass: 0.6 }}
               className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
             >
-              {/* Message Bubble */}
               <div
                 className={`text-xs sm:text-[13px] leading-relaxed relative ${
                   isUser
-                    ? 'glass-liquid-elevated bg-cyan-500/20 text-white border border-cyan-400/35 rounded-[1.5rem] rounded-tr-xs px-4 py-2.5 max-w-[85%] lg:max-w-[75%] shadow-[0_8px_20px_rgba(0,212,255,0.15)]'
-                    : 'glass-liquid text-slate-100 rounded-[1.75rem] rounded-tl-xs p-4 max-w-[95%] sm:max-w-[88%] lg:max-w-[84%] border border-white/10 shadow-lg'
+                    ? 'bg-cyan-500/20 text-white border border-cyan-400/35 rounded-2xl rounded-tr-xs px-3.5 py-2.5 max-w-[85%] lg:max-w-[75%]'
+                    : 'glass-liquid text-slate-100 rounded-2xl rounded-tl-xs p-3.5 max-w-[96%] sm:max-w-[88%] lg:max-w-[84%]'
                 }`}
               >
                 {!isUser && (
-                  <div className="flex items-center justify-between gap-3 mb-2 text-[10px] text-cyan-300/80 font-mono border-b border-white/6 pb-1.5">
-                    <span className="flex items-center space-x-1 font-semibold truncate">
+                  <div className="flex items-center justify-between gap-3 mb-2 text-[10px] text-cyan-300/80 font-mono border-b border-white/[0.06] pb-1.5">
+                    <span className="flex items-center gap-1 font-semibold truncate">
                       <Bot className="w-3 h-3 shrink-0" />
                       <span className="truncate">{msg.modelUsed || activeRoleConfig.model}</span>
                     </span>
                     <div className="flex items-center gap-2 shrink-0">
                       {msg.durationMs && (
-                        <span className="flex items-center space-x-0.5 text-white/40 tabular-nums">
+                        <span className="flex items-center gap-0.5 text-slate-400 tabular-nums">
                           <Clock className="w-2.5 h-2.5" />
                           <span>{msg.durationMs}ms</span>
                         </span>
                       )}
                       <button
                         type="button"
-                        onClick={() => handleCopy(msg.id, msg.content.replace(/\[ACTION:[^\]]+\]/gi, '').trim())}
-                        className="min-h-[32px] min-w-[32px] px-2 py-1 rounded-lg text-white/45 hover:text-cyan-300 hover:bg-white/5 transition flex items-center justify-center gap-1 cursor-pointer text-xs"
+                        onClick={() =>
+                          handleCopy(
+                            msg.id,
+                            msg.content.replace(/\[ACTION:[^\]]+\]/gi, '').trim()
+                          )
+                        }
+                        className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition flex items-center justify-center"
                         title={language === 'bg' ? 'Копирай отговора' : 'Copy response'}
                       >
                         {copiedId === msg.id ? (
@@ -1178,14 +1155,13 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
 
                 {renderFormattedContent(msg.content)}
 
-                {/* Interactive PC Control & System Update Action Cards */}
                 {msg.actions && msg.actions.length > 0 && (
-                  <div className="mt-3.5 pt-3 border-t border-white/10 space-y-2">
+                  <div className="mt-3 pt-2.5 border-t border-white/10 space-y-2">
                     <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-cyan-300/80">
                       <span>
                         {language === 'bg'
-                          ? `Изпълними AI Действия (${msg.actions.length})`
-                          : `Executable AI Directives (${msg.actions.length})`}
+                          ? `AI Действия (${msg.actions.length})`
+                          : `AI Directives (${msg.actions.length})`}
                       </span>
                       <span>CST/3.0-SECURE</span>
                     </div>
@@ -1198,17 +1174,17 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                         return (
                           <div
                             key={action.id}
-                            className={`rounded-2xl p-3 border transition-all ${
+                            className={`rounded-xl p-2.5 border transition-all ${
                               exec?.success
                                 ? 'bg-emerald-950/25 border-emerald-500/35'
                                 : exec && !exec.success
                                 ? 'bg-amber-950/25 border-amber-500/35'
-                                : 'bg-white/[0.03] border-white/12'
+                                : 'bg-[#070d1b] border-white/10'
                             }`}
                           >
                             <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <div className="flex items-center space-x-2.5 min-w-0">
-                                <div className="w-8 h-8 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center shrink-0">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="w-8 h-8 rounded-lg bg-white/[0.06] border border-white/10 flex items-center justify-center shrink-0">
                                   {getActionIcon(action.type)}
                                 </div>
                                 <div className="min-w-0">
@@ -1216,7 +1192,9 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                     {action.label}
                                   </div>
                                   <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2 flex-wrap">
-                                    <span>{exec?.opcode || action.subtitle || action.type.toUpperCase()}</span>
+                                    <span>
+                                      {exec?.opcode || action.subtitle || action.type.toUpperCase()}
+                                    </span>
                                     {exec?.durationMs !== undefined && (
                                       <span className="text-emerald-400">• {exec.durationMs}ms</span>
                                     )}
@@ -1224,10 +1202,10 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2 shrink-0 ml-auto">
+                              <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                                 {exec && (
                                   <span
-                                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold flex items-center space-x-1 ${
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold flex items-center gap-1 ${
                                       exec.success
                                         ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
                                         : 'bg-amber-500/20 text-amber-300 border border-amber-400/30'
@@ -1251,7 +1229,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                   type="button"
                                   disabled={isRunning}
                                   onClick={() => handleExecuteActionItem(msg.id, action)}
-                                  className="px-3 py-1.5 min-h-[34px] rounded-full bg-cyan-500/20 hover:bg-cyan-500/35 text-cyan-200 border border-cyan-400/40 text-[11px] font-semibold flex items-center space-x-1 cursor-pointer transition bubble-tap"
+                                  className="px-2.5 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/35 text-cyan-200 border border-cyan-400/40 text-[11px] font-semibold flex items-center gap-1 transition active:scale-95"
                                 >
                                   <Play className="w-3 h-3 fill-current" />
                                   <span>
@@ -1261,11 +1239,11 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                         : 'Running...'
                                       : exec
                                       ? language === 'bg'
-                                        ? 'Изпълни пак'
+                                        ? 'Отново'
                                         : 'Re-Run'
                                       : language === 'bg'
-                                      ? 'Изпълни сега'
-                                      : 'Execute Now'}
+                                      ? 'Изпълни'
+                                      : 'Execute'}
                                   </span>
                                 </button>
 
@@ -1273,7 +1251,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onOpenUpdateCenter()}
-                                    className="px-2.5 py-1.5 min-h-[34px] rounded-full bg-white/[0.06] hover:bg-white/12 text-slate-200 border border-white/15 text-[11px] font-medium flex items-center space-x-1 cursor-pointer"
+                                    className="px-2 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/12 text-slate-200 border border-white/15 text-[11px] font-medium flex items-center gap-1"
                                   >
                                     <span>{language === 'bg' ? 'Детайли' : 'Details'}</span>
                                     <ChevronRight className="w-3 h-3" />
@@ -1284,9 +1262,9 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onOpenDaemonGui()}
-                                    className="px-2.5 py-1.5 min-h-[34px] rounded-full bg-white/[0.06] hover:bg-white/12 text-slate-200 border border-white/15 text-[11px] font-medium flex items-center space-x-1 cursor-pointer"
+                                    className="px-2 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/12 text-slate-200 border border-white/15 text-[11px] font-medium flex items-center gap-1"
                                   >
-                                    <span>{language === 'bg' ? 'Демон GUI' : 'Daemon GUI'}</span>
+                                    <span>{language === 'bg' ? 'Демон' : 'Daemon'}</span>
                                     <ChevronRight className="w-3 h-3" />
                                   </button>
                                 )}
@@ -1294,13 +1272,13 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                             </div>
 
                             {exec?.summary && (
-                              <div className="mt-2 text-[11px] text-slate-300 font-medium">
+                              <div className="mt-1.5 text-[11px] text-slate-300 font-medium">
                                 {exec.summary}
                               </div>
                             )}
 
                             {exec?.output && (
-                              <pre className="mt-1.5 p-2 rounded-xl bg-black/50 border border-white/8 text-[10px] font-mono text-emerald-300/90 overflow-x-auto max-h-28">
+                              <pre className="mt-1.5 p-2 rounded-lg bg-black/50 border border-white/10 text-[10px] font-mono text-emerald-300/90 overflow-x-auto max-h-28">
                                 {exec.output}
                               </pre>
                             )}
@@ -1311,38 +1289,31 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                   </div>
                 )}
               </div>
-            </motion.div>
+            </div>
           );
         })}
 
-        {/* Loading Indicator Pill */}
         {isLoading && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex items-center space-x-2.5 px-4 py-2.5 rounded-full glass-liquid-subtle border border-cyan-400/30 text-cyan-300 text-xs font-mono w-max shadow-md"
-          >
+          <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#0b1326] border border-cyan-400/30 text-cyan-300 text-xs font-mono w-max">
             <div className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
             <span>
               {language === 'bg'
-                ? 'Gemini анализира и подготвя PC действия...'
-                : 'Gemini reasoning & preparing PC actions...'}
+                ? 'Gemini анализира и подготвя действия...'
+                : 'Gemini reasoning & preparing actions...'}
             </span>
-          </motion.div>
+          </div>
         )}
       </div>
 
-      {/* 3. Tier 2 Liquid Glass Input Capsule Bar */}
+      {/* 3. Prompt Input Bar */}
       <footer className="flex-none pt-1">
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleSendMessage();
           }}
-          className="relative bg-[#081024]/95 backdrop-blur-2xl border border-white/18 border-t-cyan-400/50 shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_24px_rgba(0,240,255,0.12)] transform-gpu rounded-full p-1.5 flex items-center"
+          className="relative bg-[#0b1326] border border-white/15 focus-within:border-cyan-400/60 rounded-2xl p-1.5 flex items-center gap-1.5"
         >
-          <div className="absolute inset-x-8 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/40 to-transparent pointer-events-none" />
-
           <textarea
             ref={textareaRef}
             value={inputPrompt}
@@ -1355,14 +1326,14 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             }}
             placeholder={activeRoleConfig.placeholder}
             rows={1}
-            className="flex-1 bg-transparent px-4 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-400/70 focus:outline-none resize-none max-h-24 leading-relaxed font-medium"
+            className="flex-1 bg-transparent px-3 py-1.5 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-24 leading-relaxed font-medium"
           />
 
           {isLoading ? (
             <button
               type="button"
               onClick={handleStopGeneration}
-              className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-400/40 flex items-center justify-center transition cursor-pointer shrink-0 bubble-tap"
+              className="w-9 h-9 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-400/40 flex items-center justify-center transition shrink-0 active:scale-95"
               title={language === 'bg' ? 'Спри генерирането' : 'Stop generation'}
             >
               <Square className="w-4 h-4 fill-current" />
@@ -1371,9 +1342,9 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             <button
               type="submit"
               disabled={!inputPrompt.trim()}
-              className={`w-11 h-11 min-w-[44px] min-h-[44px] rounded-full flex items-center justify-center transition-all duration-200 shrink-0 cursor-pointer bubble-tap ${
+              className={`w-9 h-9 rounded-xl flex items-center justify-center transition shrink-0 active:scale-95 ${
                 inputPrompt.trim()
-                  ? 'bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 font-bold shadow-[0_0_16px_rgba(0,212,255,0.5)]'
+                  ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold'
                   : 'bg-white/5 text-white/20 border border-white/5 cursor-not-allowed'
               }`}
             >
