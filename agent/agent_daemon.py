@@ -33,11 +33,55 @@ from typing import Dict, List, Optional, Tuple, Any
 from multiprocessing import Process, Event, shared_memory
 from concurrent.futures import ThreadPoolExecutor
 
-_AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if _AGENT_DIR not in sys.path:
-    sys.path.insert(0, _AGENT_DIR)
+def _configure_import_paths():
+    cand_dirs = []
+    if hasattr(sys, "_MEIPASS"):
+        cand_dirs.append(sys._MEIPASS)
+        cand_dirs.append(os.path.join(sys._MEIPASS, "agent"))
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        cand_dirs.append(exe_dir)
+        cand_dirs.append(os.path.join(exe_dir, "_internal"))
+        cand_dirs.append(os.path.join(exe_dir, "agent"))
+        cand_dirs.append(os.path.join(exe_dir, "src"))
+        cand_dirs.append(os.path.join(exe_dir, "_internal", "agent"))
+    try:
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        cand_dirs.append(this_dir)
+        cand_dirs.append(os.path.dirname(this_dir))
+    except Exception:
+        pass
+    cand_dirs.append(os.path.abspath("."))
+    cand_dirs.append(os.path.abspath("agent"))
 
-from crypto_vault import HostCryptoVault, scrub_memory
+    for d in cand_dirs:
+        if d and os.path.isdir(d) and d not in sys.path:
+            sys.path.insert(0, d)
+
+_configure_import_paths()
+
+try:
+    from crypto_vault import HostCryptoVault, scrub_memory
+except (ImportError, ModuleNotFoundError):
+    try:
+        from agent.crypto_vault import HostCryptoVault, scrub_memory
+    except (ImportError, ModuleNotFoundError) as err:
+        import importlib.util
+        cv_path = None
+        for base in sys.path:
+            cand = os.path.join(base, "crypto_vault.py")
+            if os.path.isfile(cand):
+                cv_path = cand
+                break
+        if cv_path:
+            spec = importlib.util.spec_from_file_location("crypto_vault", cv_path)
+            cv_mod = importlib.util.module_from_spec(spec)
+            sys.modules["crypto_vault"] = cv_mod
+            spec.loader.exec_module(cv_mod)
+            HostCryptoVault = cv_mod.HostCryptoVault
+            scrub_memory = cv_mod.scrub_memory
+        else:
+            raise err
 
 try:
     from windows_integration import (
@@ -51,16 +95,29 @@ try:
         perform_full_install,
         register_windows_uninstaller,
     )
-except ImportError:
-    SingleInstanceGuard = None
-    check_port_available = None
-    create_desktop_shortcut = None
-    create_start_menu_shortcut = None
-    show_uninstall_dialog = None
-    show_install_dialog = None
-    perform_full_uninstall = None
-    perform_full_install = None
-    register_windows_uninstaller = None
+except (ImportError, ModuleNotFoundError):
+    try:
+        from agent.windows_integration import (
+            SingleInstanceGuard,
+            check_port_available,
+            create_desktop_shortcut,
+            create_start_menu_shortcut,
+            show_uninstall_dialog,
+            show_install_dialog,
+            perform_full_uninstall,
+            perform_full_install,
+            register_windows_uninstaller,
+        )
+    except (ImportError, ModuleNotFoundError):
+        SingleInstanceGuard = None
+        check_port_available = None
+        create_desktop_shortcut = None
+        create_start_menu_shortcut = None
+        show_uninstall_dialog = None
+        show_install_dialog = None
+        perform_full_uninstall = None
+        perform_full_install = None
+        register_windows_uninstaller = None
 
 # Logging Configuration
 logging.basicConfig(
@@ -601,8 +658,12 @@ def main():
     job_guard = WindowsJobObjectGuard()
     ws_daemon = None
     try:
-        from agent import HostAgentDaemon
-        ws_daemon = HostAgentDaemon(host="0.0.0.0", port=8765)
+        try:
+            from agent import HostAgentDaemon
+        except (ImportError, ModuleNotFoundError):
+            from agent.agent import HostAgentDaemon
+        if HostAgentDaemon:
+            ws_daemon = HostAgentDaemon(host="0.0.0.0", port=8765)
     except Exception as e:
         logger.warning(f"WebSocket daemon fallback notice: {e}")
 
@@ -616,7 +677,10 @@ def main():
     try:
         if "--headless" not in sys.argv:
             try:
-                from agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
+                try:
+                    from agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
+                except (ImportError, ModuleNotFoundError):
+                    from agent.agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
                 if HAS_TKINTER:
                     gui_state = HostDaemonState(host="0.0.0.0", port=8765)
                     if ws_daemon:
