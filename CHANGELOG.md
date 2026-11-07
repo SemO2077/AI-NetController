@@ -2,6 +2,19 @@
 
 All notable changes to **AI NetController** are documented in this file.
 
+## [v0.34.0] - 2026-11-07
+
+### Added
+- **Apple Liquid Glass UI & Specular Refraction**: Overhauled cards, controls, floating navigation dock, and modals with multi-stop refractive translucency (`backdrop-filter: blur(...) saturate(185%)`), top/left specular bevel highlights, and GPU-composited multi-tone ambient aurora lighting.
+- **Liquid Glass & Appearance Customization Studio (`SettingsScreen.tsx` & `uiStore.ts`)**:
+  - **6 Dynamic Accent Color Palettes**: Instant zero-lag switching between *Cyber Cyan*, *Ultraviolet*, *Bio Mint*, *Crimson Sunset*, *Solar Gold*, and *Vision Sapphire* (persisted to `localStorage` and mapped globally across all Tailwind v4 accent tokens).
+  - **4 Interface Typography Presets**: *Onest Geometric*, *Plus Jakarta Display*, *SF System Native*, and *JetBrains Tech Mono*.
+  - **3 Glass Translucency Modes**: *Crystal Clear*, *Balanced Liquid*, and *Deep Frosted*.
+  - **3 Ambient Aurora & Motion Modes**: *Vibrant Aurora*, *Subtle Glow*, and *Minimal Stealth*.
+- **Vibrant Gradient Telemetry & Spring Micro-Animations**: Upgraded CPU/RAM telemetry bars, host status icons, and the floating bottom navigation capsule with smooth 120 Hz spring transitions and zero-lag compositor animations.
+
+---
+
 ## [v0.33.0] - 2026-11-07
 
 ### Added

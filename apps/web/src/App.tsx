@@ -8,7 +8,7 @@ import { GlobalErrorBoundary } from './components/layout/GlobalErrorBoundary';
 import { HitlApprovalModal } from './components/modals/HitlApprovalModal';
 import { useWorkerEngine } from './hooks/useWorkerEngine';
 import { useFleetState } from './hooks/useFleetState';
-import { useUIStore } from './store/uiStore';
+import { useUIStore, applyAppearanceToDocument } from './store/uiStore';
 import { triggerHapticFeedback } from './services/hapticService';
 import { AlertTriangle, ShieldAlert, X } from 'lucide-react';
 import { SPRING_BUBBLY, TAB_VIEW_VARIANTS } from './utils/springPhysics';
@@ -50,10 +50,18 @@ export default function App() {
   const isOmnibarOpen = useUIStore((s) => s.isOmnibarOpen);
   const setOmnibarOpen = useUIStore((s) => s.setOmnibarOpen);
   const language = useUIStore((s) => s.language);
+  const accentColor = useUIStore((s) => s.accentColor);
+  const fontFamily = useUIStore((s) => s.fontFamily);
+  const glassIntensity = useUIStore((s) => s.glassIntensity);
+  const ambientMode = useUIStore((s) => s.ambientMode);
 
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
+
+  useEffect(() => {
+    applyAppearanceToDocument({ accentColor, fontFamily, glassIntensity, ambientMode });
+  }, [accentColor, fontFamily, glassIntensity, ambientMode]);
 
   const fleet = useFleetState();
   const agent = useWorkerEngine({
@@ -253,15 +261,35 @@ export default function App() {
   return (
     <GlobalErrorBoundary>
       <div className="h-[100dvh] w-full max-w-full bg-[#030712] text-white flex flex-col font-sans selection:bg-cyan-500/40 selection:text-cyan-100 relative overflow-hidden">
-        {/* Static, Zero-Cost Ambient Top Illumination (Zero Runtime GPU Animation Overhead) */}
+        {/* GPU-Composited Liquid Aurora Canvas (Radial Gradients Only — Zero Blur Shader Lag) */}
         <div
-          className="fixed inset-x-0 top-0 h-[320px] pointer-events-none z-0"
-          style={{
-            background:
-              'radial-gradient(ellipse 80% 60% at 50% -15%, rgba(14, 165, 233, 0.14), rgba(99, 102, 241, 0.05) 55%, transparent 80%)',
-          }}
+          className={`fixed inset-0 pointer-events-none z-0 overflow-hidden transition-opacity duration-500 ${
+            ambientMode === 'minimal' ? 'opacity-25' : ambientMode === 'subtle' ? 'opacity-60' : 'opacity-100'
+          }`}
           aria-hidden="true"
-        />
+        >
+          <div
+            className="aurora-layer-1 absolute -top-[18%] -left-[12%] w-[75%] h-[65%] rounded-full"
+            style={{
+              background:
+                'radial-gradient(circle at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 38%, transparent 72%)',
+            }}
+          />
+          <div
+            className="aurora-layer-2 absolute top-[18%] -right-[15%] w-[70%] h-[68%] rounded-full"
+            style={{
+              background:
+                'radial-gradient(circle at 50% 50%, var(--aurora-orb-2) 0%, var(--aurora-orb-3) 40%, transparent 72%)',
+            }}
+          />
+          <div
+            className=" absolute -bottom-[22%] left-[12%] w-[76%] h-[58%] rounded-full"
+            style={{
+              background:
+                'radial-gradient(circle at 50% 50%, var(--aurora-orb-3) 0%, var(--aurora-orb-1) 35%, transparent 70%)',
+            }}
+          />
+        </div>
 
         {/* Floating Toast Feedback */}
         <AnimatePresence>
@@ -271,7 +299,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.1 } }}
               transition={SPRING_BUBBLY}
-              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.5rem)] left-1/2 -translate-x-1/2 z-[88] px-4 py-2 rounded-full bg-[#0b1326] border border-cyan-400/40 text-cyan-200 text-xs font-semibold shadow-lg pointer-events-none whitespace-nowrap"
+              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.5rem)] left-1/2 -translate-x-1/2 z-[88] px-4 py-2 rounded-full glass-liquid-elevated border border-cyan-400/45 text-cyan-100 text-xs font-semibold shadow-lg pointer-events-none whitespace-nowrap"
             >
               {qolToast}
             </motion.div>

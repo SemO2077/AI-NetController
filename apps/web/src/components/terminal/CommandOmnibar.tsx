@@ -261,7 +261,7 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
             transition={{ type: 'spring', stiffness: 520, damping: 36, mass: 0.7 }}
             className="
               relative z-10 w-full max-w-2xl mx-auto
-              bg-[#091020]
+              glass-liquid-modal
               border border-white/15 border-t-white/25
               shadow-[0_24px_64px_rgba(0,0,0,0.85)]
               transform-gpu

@@ -342,8 +342,8 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border relative
                 ${
                   isOffline
-                    ? 'bg-slate-800/60 text-slate-400 border-white/10'
-                    : 'bg-cyan-500/15 text-cyan-300 border-cyan-400/35'
+                    ? 'bg-white/[0.06] text-slate-300 border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]'
+                    : 'bg-gradient-to-br from-cyan-400/25 via-cyan-500/15 to-indigo-500/15 text-cyan-200 border-cyan-300/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_16px_var(--theme-accent-glow)]'
                 }
               `}
             >
@@ -545,7 +545,9 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                   <div
                     style={{ width: `${Math.min(100, Math.max(4, cpuVal))}%` }}
                     className={`h-full rounded-full transition-all duration-300 ${
-                      cpuVal >= 75 ? 'bg-rose-400' : 'bg-cyan-400'
+                      cpuVal >= 75
+                        ? 'bg-gradient-to-r from-rose-500 via-pink-500 to-amber-400 shadow-[0_0_10px_rgba(244,63,94,0.6)]'
+                        : 'bg-gradient-to-r from-cyan-400 via-sky-400 to-indigo-400 telemetry-glow-cyan'
                     }`}
                   />
                 </div>
@@ -566,7 +568,9 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                   <div
                     style={{ width: `${Math.min(100, Math.max(4, ramVal))}%` }}
                     className={`h-full rounded-full transition-all duration-300 ${
-                      ramVal >= 75 ? 'bg-amber-400' : 'bg-indigo-400'
+                      ramVal >= 75
+                        ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 shadow-[0_0_10px_rgba(251,191,36,0.6)]'
+                        : 'bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 shadow-[0_0_10px_rgba(168,85,247,0.45)]'
                     }`}
                   />
                 </div>
@@ -680,7 +684,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 </div>
 
                 {/* 1-Tap Quick OS Actions */}
-                <div className="rounded-xl bg-[#070d1b] border border-white/[0.07] p-2.5">
+                <div className="rounded-xl bg-white/[0.04] border border-white/[0.10] border-t-white/[0.18] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-semibold">
                       {currentLang === 'bg' ? 'Бързи OS Команди' : 'Quick OS Actions'}
@@ -732,7 +736,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 </div>
 
                 {/* Network & Hardware Telemetry Strip */}
-                <div className="rounded-xl bg-[#070d1b] border border-white/[0.07] px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums">
+                <div className="rounded-xl bg-white/[0.04] border border-white/[0.10] border-t-white/[0.18] px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]">
                   <div className="flex items-center gap-1.5">
                     <span className="text-slate-400">MAC:</span>
                     <span className="text-slate-200 font-semibold">{host.mac || '—'}</span>

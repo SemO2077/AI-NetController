@@ -464,7 +464,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
       <div className="pt-1 pb-3 flex flex-col gap-2.5">
         {/* Network Disconnection Banner */}
         {isNetworkDisconnected && (
-          <div className="bg-[#0b1326] w-full px-3.5 py-2.5 border border-amber-500/40 rounded-xl flex items-center justify-between text-xs text-amber-200">
+          <div className="glass-liquid-subtle w-full px-3.5 py-2.5 border border-amber-500/40 rounded-xl flex items-center justify-between text-xs text-amber-200">
             <div className="flex items-center gap-2 min-w-0">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
               <span className="truncate">{t('conn_disconnected')}</span>
@@ -578,7 +578,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
         {/* 2. SEARCH + SCAN LAN + SORT ROW */}
         <div className="flex items-center gap-2">
-          <div className="flex-1 h-10 rounded-xl bg-[#0b1326] border border-white/10 px-3 flex items-center gap-2 focus-within:border-cyan-400/50 transition min-w-0">
+          <div className="flex-1 h-10 rounded-xl glass-liquid-subtle px-3 flex items-center gap-2 focus-within:border-cyan-400/60 transition min-w-0">
             <Search className="w-4 h-4 text-slate-400 shrink-0" />
             <input
               type="text"
@@ -618,7 +618,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               rescanHandler();
             }}
             disabled={isScanning}
-            className="h-10 w-10 sm:w-auto sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/35 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition disabled:opacity-40 shrink-0 active:scale-95"
+            className="h-10 w-10 sm:w-auto sm:px-3 rounded-xl glass-liquid-subtle hover:border-cyan-400/45 text-slate-100 text-xs font-semibold flex items-center justify-center gap-1.5 transition disabled:opacity-40 shrink-0 active:scale-95"
             title={t('fleet_rescan_tooltip')}
             aria-label={t('fleet_rescan_aria')}
           >
@@ -634,7 +634,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                 triggerHapticFeedback('light');
                 setIsSortMenuOpen((prev) => !prev);
               }}
-              className="h-10 px-2.5 sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/35 flex items-center gap-1.5 text-xs font-medium text-slate-200 shrink-0 active:scale-95"
+              className="h-10 px-2.5 sm:px-3 rounded-xl glass-liquid-subtle hover:border-cyan-400/45 flex items-center gap-1.5 text-xs font-medium text-slate-100 shrink-0 active:scale-95"
               title={`${t('sort_label')} ${currentSortOption.label}`}
               aria-label={`${t('sort_label')} ${currentSortOption.label}`}
             >
@@ -661,7 +661,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                     initial="initial"
                     animate="animate"
                     exit="exit"
-                    className="absolute right-0 top-11 z-50 w-44 rounded-xl bg-[#091020] border border-white/15 p-1.5 shadow-2xl space-y-1"
+                    className="absolute right-0 top-11 z-50 w-44 rounded-xl glass-liquid-modal p-1.5 shadow-2xl space-y-1"
                   >
                     {sortOptions.map((opt) => {
                       const isActive = sortMode === opt.id;
@@ -726,8 +726,8 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                   }}
                   className={`h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 shrink-0 border active:scale-95 ${
                     isActive
-                      ? 'bg-cyan-500/20 border-cyan-400/45 text-cyan-200 font-semibold'
-                      : 'bg-[#0b1326] border-white/[0.07] text-slate-400 hover:text-slate-200'
+                      ? 'bg-gradient-to-b from-cyan-400/28 to-cyan-500/15 border-cyan-300/50 text-white font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]'
+                      : 'glass-liquid-subtle text-slate-300 hover:text-white'
                   }`}
                 >
                   <span>{chip.label}</span>

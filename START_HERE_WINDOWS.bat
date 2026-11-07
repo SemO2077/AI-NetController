@@ -2,7 +2,7 @@
 title AI NetController — 1-Click PC & Phone Launcher
 color 0B
 echo ============================================================================
-echo   AI NetController v0.33.0 — 1-Click PC ^& Phone Setup Launcher
+echo   AI NetController v0.34.0 — 1-Click PC ^& Phone Setup Launcher
 echo ============================================================================
 echo.
 

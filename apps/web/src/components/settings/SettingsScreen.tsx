@@ -18,6 +18,10 @@ import {
   ShieldCheck,
   QrCode,
   Sparkles,
+  Palette,
+  Type,
+  Layers,
+  RotateCcw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { triggerHapticFeedback } from '../../services/hapticService';
@@ -26,7 +30,13 @@ import { WolEnergyCalculator } from '../wol/WolEnergyCalculator';
 import { WolHistoryLogViewer } from '../wol/WolHistoryLogViewer';
 import { useTranslation } from '../../i18n/useTranslation';
 import { LanguageToggle } from '../ui/LanguageToggle';
-import { useUIStore } from '../../store/uiStore';
+import {
+  useUIStore,
+  AccentColorPreset,
+  FontFamilyPreset,
+  GlassIntensityPreset,
+  AmbientModePreset,
+} from '../../store/uiStore';
 import {
   SPRING_POP,
   POPOVER_BUBBLE_VARIANTS,
@@ -68,6 +78,15 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
 
   const selectedModel = useUIStore((s) => s.selectedModel);
   const setSelectedModel = useUIStore((s) => s.setSelectedModel);
+  const accentColor = useUIStore((s) => s.accentColor);
+  const setAccentColor = useUIStore((s) => s.setAccentColor);
+  const fontFamily = useUIStore((s) => s.fontFamily);
+  const setFontFamily = useUIStore((s) => s.setFontFamily);
+  const glassIntensity = useUIStore((s) => s.glassIntensity);
+  const setGlassIntensity = useUIStore((s) => s.setGlassIntensity);
+  const ambientMode = useUIStore((s) => s.ambientMode);
+  const setAmbientMode = useUIStore((s) => s.setAmbientMode);
+  const resetAppearance = useUIStore((s) => s.resetAppearance);
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const [isAddModelOpen, setIsAddModelOpen] = useState(false);
   const [newModelId, setNewModelId] = useState('');
@@ -221,6 +240,291 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
     <div className="w-full max-w-6xl mx-auto pb-4 select-none grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
       {/* LEFT COLUMN: GENERAL & AI + WAKE-ON-LAN */}
       <div className="lg:col-span-7 flex flex-col space-y-5">
+        {/* SECTION 0: LIQUID GLASS & APPEARANCE STUDIO */}
+        <div className="space-y-2 relative z-40">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[11px] font-mono text-cyan-300 uppercase tracking-widest font-semibold flex items-center gap-1.5">
+              <Palette className="w-3.5 h-3.5 text-cyan-400" />
+              <span>
+                {language === 'bg'
+                  ? 'ТЕЧНО СТЪКЛО И ПЕРСОНАЛИЗАЦИЯ'
+                  : 'LIQUID GLASS & APPEARANCE'}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHapticFeedback('medium');
+                resetAppearance();
+              }}
+              className="text-[11px] font-mono text-slate-400 hover:text-cyan-300 flex items-center gap-1 transition active:scale-95"
+              title={language === 'bg' ? 'Възстанови стандартния облик' : 'Reset appearance to defaults'}
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>{language === 'bg' ? 'Нулирай' : 'Reset'}</span>
+            </button>
+          </div>
+
+          <div className="glass-liquid w-full rounded-2xl divide-y divide-white/[0.08] overflow-hidden">
+            {/* 1. Accent Color Palette Picker */}
+            <div className="p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-300 flex items-center justify-center border border-cyan-400/35">
+                    <Palette className="w-4 h-4" />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight">
+                      {language === 'bg' ? 'Цветова Палитра и Сияние' : 'Accent Color & Aurora Glow'}
+                    </span>
+                    <span className="text-fluid-meta text-slate-400">
+                      {language === 'bg'
+                        ? 'Променя акцентите, индикаторите и фоновото сияние'
+                        : 'Tints liquid glass edges, telemetry bars & ambient aurora'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-0.5">
+                {(
+                  [
+                    {
+                      id: 'cyan' as AccentColorPreset,
+                      label: language === 'bg' ? 'Кибер Циан' : 'Cyber Cyan',
+                      swatch: 'from-[#22d3ee] via-[#38bdf8] to-[#6366f1]',
+                    },
+                    {
+                      id: 'violet' as AccentColorPreset,
+                      label: language === 'bg' ? 'Ултравиолет' : 'Ultraviolet',
+                      swatch: 'from-[#c084fc] via-[#a855f7] to-[#ec4899]',
+                    },
+                    {
+                      id: 'emerald' as AccentColorPreset,
+                      label: language === 'bg' ? 'Емералд' : 'Bio Mint',
+                      swatch: 'from-[#34d399] via-[#10b981] to-[#06b6d4]',
+                    },
+                    {
+                      id: 'rose' as AccentColorPreset,
+                      label: language === 'bg' ? 'Рубин' : 'Crimson',
+                      swatch: 'from-[#fb7185] via-[#f43f5e] to-[#fb923c]',
+                    },
+                    {
+                      id: 'amber' as AccentColorPreset,
+                      label: language === 'bg' ? 'Соларно Злато' : 'Solar Gold',
+                      swatch: 'from-[#fbbf24] via-[#f59e0b] to-[#ef4444]',
+                    },
+                    {
+                      id: 'cobalt' as AccentColorPreset,
+                      label: language === 'bg' ? 'Сапфир' : 'Sapphire',
+                      swatch: 'from-[#60a5fa] via-[#3b82f6] to-[#8b5cf6]',
+                    },
+                  ] as const
+                ).map((item) => {
+                  const isSelected = accentColor === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        triggerHapticFeedback('selection');
+                        setAccentColor(item.id);
+                      }}
+                      className={`p-2 rounded-xl border flex flex-col items-center gap-1.5 transition active:scale-95 ${
+                        isSelected
+                          ? 'bg-white/[0.12] border-white/40 shadow-[0_0_16px_var(--theme-accent-glow)]'
+                          : 'bg-white/[0.03] border-white/[0.08] hover:bg-white/[0.07]'
+                      }`}
+                    >
+                      <span
+                        className={`w-7 h-7 rounded-full bg-gradient-to-br ${item.swatch} flex items-center justify-center shadow-inner border border-white/30`}
+                      >
+                        {isSelected && <Check className="w-3.5 h-3.5 text-slate-950 stroke-[3]" />}
+                      </span>
+                      <span
+                        className={`text-[10.5px] font-medium truncate max-w-full ${
+                          isSelected ? 'text-white font-bold' : 'text-slate-300'
+                        }`}
+                      >
+                        {item.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 2. Typography / Font Family Selector */}
+            <div className="p-3.5 space-y-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-300 flex items-center justify-center border border-cyan-400/35">
+                  <Type className="w-4 h-4" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight">
+                    {language === 'bg' ? 'Шрифт на Интерфейса' : 'Interface Typography'}
+                  </span>
+                  <span className="text-fluid-meta text-slate-400">
+                    {language === 'bg'
+                      ? 'Изберете стил на шрифта за заглавия и панели'
+                      : 'Choose the primary typeface across cards & controls'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-0.5">
+                {(
+                  [
+                    {
+                      id: 'geometric' as FontFamilyPreset,
+                      name: 'Onest',
+                      desc: language === 'bg' ? 'Модерен' : 'Geometric',
+                      sampleStyle: { fontFamily: '"Onest", sans-serif' },
+                    },
+                    {
+                      id: 'jakarta' as FontFamilyPreset,
+                      name: 'Jakarta',
+                      desc: language === 'bg' ? 'Динамичен' : 'Editorial',
+                      sampleStyle: { fontFamily: '"Plus Jakarta Sans", sans-serif' },
+                    },
+                    {
+                      id: 'system' as FontFamilyPreset,
+                      name: 'SF System',
+                      desc: language === 'bg' ? 'Системен' : 'Native OS',
+                      sampleStyle: { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+                    },
+                    {
+                      id: 'mono' as FontFamilyPreset,
+                      name: 'JetBrains',
+                      desc: language === 'bg' ? 'Терминален' : 'Tech Mono',
+                      sampleStyle: { fontFamily: '"JetBrains Mono", monospace' },
+                    },
+                  ] as const
+                ).map((f) => {
+                  const isSelected = fontFamily === f.id;
+                  return (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => {
+                        triggerHapticFeedback('selection');
+                        setFontFamily(f.id);
+                      }}
+                      style={f.sampleStyle}
+                      className={`px-3 py-2 rounded-xl border text-left transition flex items-center justify-between gap-2 active:scale-95 ${
+                        isSelected
+                          ? 'bg-cyan-500/20 border-cyan-300/55 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]'
+                          : 'bg-white/[0.03] border-white/[0.08] text-slate-300 hover:bg-white/[0.07]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold truncate">{f.name}</div>
+                        <div className="text-[10px] text-slate-400 truncate">{f.desc}</div>
+                      </div>
+                      <span className="text-sm font-extrabold text-cyan-300 shrink-0">Aa</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 3. Liquid Glass Translucency & Ambient Aurora Row */}
+            <div className="p-3.5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-white">
+                  <Layers className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>
+                    {language === 'bg' ? 'Прозрачност на Стъклото' : 'Glass Translucency'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-black/30 border border-white/10">
+                  {(
+                    [
+                      {
+                        id: 'clear' as GlassIntensityPreset,
+                        label: language === 'bg' ? 'Кристал' : 'Crystal',
+                      },
+                      {
+                        id: 'balanced' as GlassIntensityPreset,
+                        label: language === 'bg' ? 'Баланс' : 'Liquid',
+                      },
+                      {
+                        id: 'frosted' as GlassIntensityPreset,
+                        label: language === 'bg' ? 'Матово' : 'Frosted',
+                      },
+                    ] as const
+                  ).map((g) => {
+                    const active = glassIntensity === g.id;
+                    return (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => {
+                          triggerHapticFeedback('selection');
+                          setGlassIntensity(g.id);
+                        }}
+                        className={`h-8 rounded-lg text-[11px] font-semibold transition active:scale-95 ${
+                          active
+                            ? 'bg-cyan-500/25 text-white border border-cyan-300/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {g.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-white">
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>
+                    {language === 'bg' ? 'Фоново Аврора Сияние' : 'Ambient Aurora & Motion'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-black/30 border border-white/10">
+                  {(
+                    [
+                      {
+                        id: 'vibrant' as AmbientModePreset,
+                        label: language === 'bg' ? 'Живо' : 'Vibrant',
+                      },
+                      {
+                        id: 'subtle' as AmbientModePreset,
+                        label: language === 'bg' ? 'Нежно' : 'Subtle',
+                      },
+                      {
+                        id: 'minimal' as AmbientModePreset,
+                        label: language === 'bg' ? 'Изчистено' : 'Minimal',
+                      },
+                    ] as const
+                  ).map((m) => {
+                    const active = ambientMode === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          triggerHapticFeedback('selection');
+                          setAmbientMode(m.id);
+                        }}
+                        className={`h-8 rounded-lg text-[11px] font-semibold transition active:scale-95 ${
+                          active
+                            ? 'bg-cyan-500/25 text-white border border-cyan-300/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* SECTION 1: GENERAL & AI */}
         <div className="space-y-2 relative z-30">
           <span className="text-[11px] font-mono text-cyan-300/80 uppercase tracking-widest px-1 font-semibold">
@@ -760,7 +1064,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
               </div>
             </button>
 
-            {/* Update Center (Clean v0.33.0 version indicator, no hardcoded fake count) */}
+            {/* Update Center (Clean v0.34.0 version indicator, no hardcoded fake count) */}
             <button
               type="button"
               onClick={() => {
@@ -785,7 +1089,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
 
               <div className="flex items-center gap-2 shrink-0">
                 <span className="text-[11px] font-mono text-cyan-300 bg-cyan-500/10 border border-cyan-400/25 px-2 py-0.5 rounded">
-                  v0.33.0
+                  v0.34.0
                 </span>
                 <ChevronRight className="w-4 h-4 text-slate-400" />
               </div>

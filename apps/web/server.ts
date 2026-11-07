@@ -177,7 +177,7 @@ function getGenAI() {
 
 // Role-specific System Instructions with Full PC Control, Daemon Security & System Update Capabilities
 const SYSTEM_INSTRUCTIONS: Record<string, string> = {
-  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system update copilot for AI NetController v0.33.0.
+  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system update copilot for AI NetController v0.34.0.
 You manage heterogeneous Windows and Linux hosts across local subnets and possess direct remote control over PC mouse, keyboard, media keys, shell commands, Wake-on-LAN, PC Daemon security profiles, and System/AI Model Updates.
 
 Your Executable Action Directives (include these exact tags whenever the user asks to perform an action or when an action is helpful):
@@ -225,7 +225,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'online',
     protocol: 'CST/3.0-SECURE',
-    version: '0.33.0',
+    version: '0.34.0',
     timestamp: new Date().toISOString(),
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
     models: DYNAMIC_MODELS,
@@ -242,7 +242,7 @@ app.get('/api/releases', (_req: Request, res: Response) => {
     if (cachedReleasesPayload && now - cachedReleasesPayload.timestamp < RELEASES_CACHE_TTL_MS) {
       return res.json(cachedReleasesPayload.data);
     }
-    const v330Path = path.join(RELEASES_PUBLIC_DIR, 'v0.33.0', 'RELEASE_MANIFEST.json');
+    const v330Path = path.join(RELEASES_PUBLIC_DIR, 'v0.34.0', 'RELEASE_MANIFEST.json');
     const v320Path = path.join(RELEASES_PUBLIC_DIR, 'v0.32.0', 'RELEASE_MANIFEST.json');
     const v310Path = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
     const v300Path = path.join(RELEASES_PUBLIC_DIR, 'v0.30.0', 'RELEASE_MANIFEST.json');
@@ -276,7 +276,7 @@ app.get('/api/releases', (_req: Request, res: Response) => {
       success: true,
       manifest,
       legacyManifest,
-      availableVersions: ['v0.33.0', 'v0.32.0', 'v0.31.3', 'v0.31.2', 'v0.31.1', 'v0.30.0', 'v0.29.0', 'v0.28.0', 'v0.27.1', 'v0.27.0'],
+      availableVersions: ['v0.34.0', 'v0.32.0', 'v0.31.3', 'v0.31.2', 'v0.31.1', 'v0.30.0', 'v0.29.0', 'v0.28.0', 'v0.27.1', 'v0.27.0'],
       patchNotes,
     };
     cachedReleasesPayload = { data: payload, timestamp: now };
@@ -298,7 +298,7 @@ app.post('/api/releases/rebuild', (_req: Request, res: Response) => {
         error: stderr || err.message,
       });
     }
-    const manifestPath = path.join(RELEASES_PUBLIC_DIR, 'v0.33.0', 'RELEASE_MANIFEST.json');
+    const manifestPath = path.join(RELEASES_PUBLIC_DIR, 'v0.34.0', 'RELEASE_MANIFEST.json');
     const fallbackPath = path.join(RELEASES_PUBLIC_DIR, 'v0.32.0', 'RELEASE_MANIFEST.json');
     const legacyPath = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
     const manifest = fs.existsSync(manifestPath)
@@ -556,7 +556,7 @@ interface BlacklistedDeviceEntry {
 }
 
 const pcDaemonState = {
-  version: '0.33.0',
+  version: '0.34.0',
   protocol: 'CST/3.0-SECURE',
   hostname: os.hostname() || 'LOCALHOST',
   osName: `${os.type()} ${os.release()} (${os.arch()})`,
@@ -937,9 +937,9 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
         pairingToken: snap.pairingToken,
         webOrigin,
         mobilePairUrl,
-        exeDownloadUrl: '/releases/v0.33.0/AI_NetController_HostAgent_v0.33.0_win64.exe',
-        apkDownloadUrl: '/releases/v0.33.0/AI_NetController_v0.33.0_arm64-v8a.apk',
-        portableZipUrl: '/releases/v0.33.0/AI_NetController_HostAgent_v0.33.0_win64_portable.zip',
+        exeDownloadUrl: '/releases/v0.34.0/AI_NetController_HostAgent_v0.34.0_win64.exe',
+        apkDownloadUrl: '/releases/v0.34.0/AI_NetController_v0.34.0_arm64-v8a.apk',
+        portableZipUrl: '/releases/v0.34.0/AI_NetController_HostAgent_v0.34.0_win64_portable.zip',
         legacyExeDownloadUrl: '/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64.exe',
         legacyApkDownloadUrl: '/releases/v0.32.0/AI_NetController_v0.32.0_arm64-v8a.apk',
         launcherDownloadUrl: '/api/setup/windows-launcher',
@@ -958,7 +958,7 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     'title AI NetController — 1-Click PC & Phone Setup',
     'color 0B',
     'echo ============================================================================',
-    'echo   AI NetController v0.33.0 - Automatic PC ^& Phone Setup Wizard',
+    'echo   AI NetController v0.34.0 - Automatic PC ^& Phone Setup Wizard',
     'echo ============================================================================',
     'echo.',
     `set AI_AGENT_SECRET=${snap.pairingToken}`,
@@ -974,7 +974,7 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     '        python -m pip install -r agent\\requirements.txt --quiet',
     '    )',
     ') else (',
-    '    echo [!] Python not found in PATH. Looking for standalone AI_NetController_HostAgent_v0.33.0_win64.exe...',
+    '    echo [!] Python not found in PATH. Looking for standalone AI_NetController_HostAgent_v0.34.0_win64.exe...',
     ')',
     '',
     'echo [2/4] Configuring Windows Private LAN Firewall rules (Ports 8765 ^& 3000)...',
@@ -986,14 +986,14 @@ app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
     ')',
     '',
     'echo [3/4] Launching AI NetController Host Agent Desktop Control Center...',
-    'if exist "public\\releases\\v0.33.0\\AI_NetController_HostAgent_v0.33.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "public\\releases\\v0.33.0\\AI_NetController_HostAgent_v0.33.0_win64.exe"',
+    'if exist "public\\releases\\v0.34.0\\AI_NetController_HostAgent_v0.34.0_win64.exe" (',
+    '    start "AI NetController Host Agent" "public\\releases\\v0.34.0\\AI_NetController_HostAgent_v0.34.0_win64.exe"',
     ') else if exist "public\\releases\\v0.32.0\\AI_NetController_HostAgent_v0.32.0_win64.exe" (',
     '    start "AI NetController Host Agent" "public\\releases\\v0.32.0\\AI_NetController_HostAgent_v0.32.0_win64.exe"',
     ') else if exist "public\\releases\\v0.31.3\\AI_NetController_HostAgent_v0.31.3_win64.exe" (',
     '    start "AI NetController Host Agent" "public\\releases\\v0.31.3\\AI_NetController_HostAgent_v0.31.3_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v0.33.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.33.0_win64.exe"',
+    ') else if exist "AI_NetController_HostAgent_v0.34.0_win64.exe" (',
+    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.34.0_win64.exe"',
     ') else if exist "AI_NetController_HostAgent_v0.32.0_win64.exe" (',
     '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.32.0_win64.exe"',
     ') else if exist "agent\\dist\\AI_NetController_HostAgent\\AI_NetController_HostAgent.exe" (',
@@ -1075,11 +1075,11 @@ const systemUpdateRegistry: SystemUpdateComponentState[] = [
     name: 'AI NetController Host Agent (Python + Native Win32 GUI)',
     category: 'agent',
     currentVersion: 'v0.32.0',
-    latestVersion: 'v0.33.0',
+    latestVersion: 'v0.34.0',
     status: 'available',
     size: '18.4 MB',
     lastChecked: 'Just now',
-    changelog: 'v0.33.0: End-to-end performance optimization, hardened AST & LOLBin firewall, 120Hz UI smoothness, and full Android/Web API parity.',
+    changelog: 'v0.34.0: End-to-end performance optimization, hardened AST & LOLBin firewall, 120Hz UI smoothness, and full Android/Web API parity.',
   },
   {
     id: 'ast-security-rules',
@@ -1171,7 +1171,7 @@ app.get('/api/update/status', async (_req: Request, res: Response) => {
       nodeVersion,
       pythonVersion: cachedPythonVersion,
       aiModels: DYNAMIC_MODELS.map((m) => m.id),
-      agentVersion: hostAgent?.currentVersion || 'v0.33.0',
+      agentVersion: hostAgent?.currentVersion || 'v0.34.0',
       components: systemUpdateRegistry,
       updatesAvailableCount: systemUpdateRegistry.filter((c) => c.status === 'available').length,
       status: 'ready',

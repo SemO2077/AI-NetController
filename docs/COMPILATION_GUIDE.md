@@ -1,6 +1,6 @@
 # Compilation Guide
 
-This guide explains how to compile all **AI NetController** (`v0.33.0`) artifacts from source: the web bundle, the standalone Windows Host Agent executable, and the signed Android APK.
+This guide explains how to compile all **AI NetController** (`v0.34.0`) artifacts from source: the web bundle, the standalone Windows Host Agent executable, and the signed Android APK.
 
 ---
 
@@ -33,8 +33,8 @@ python scripts/build_release_binaries.py
 ```
 
 This script packages `agent/agent.py`, `agent/agent_gui.py`, and all security modules into:
-- `public/releases/v0.33.0/AI_NetController_HostAgent_v0.33.0_win64.exe`
-- `public/releases/v0.33.0/AI_NetController_HostAgent_v0.33.0_win64_portable.zip`
+- `public/releases/v0.34.0/AI_NetController_HostAgent_v0.34.0_win64.exe`
+- `public/releases/v0.34.0/AI_NetController_HostAgent_v0.34.0_win64_portable.zip`
 
 ---
 
@@ -55,17 +55,17 @@ python scripts/build_android_app.py
 1. Builds and syncs the latest production web bundle (`apps/web/dist/`) into the Android staging asset directory.
 2. Compiles `MainActivity.java` against `android-34`.
 3. Converts bytecode to DEX format with `d8`, packages resources with `aapt2`, `zipalign`s on 4-byte boundaries, and signs the APK with `apksigner` (V1 + V2 + V3 signatures).
-4. Outputs the signed binaries to `public/releases/v0.33.0/`:
-   - `AI_NetController_v0.33.0_arm64-v8a.apk`
-   - `AI_NetController_v0.33.0.apk`
+4. Outputs the signed binaries to `public/releases/v0.34.0/`:
+   - `AI_NetController_v0.34.0_arm64-v8a.apk`
+   - `AI_NetController_v0.34.0.apk`
 
 ---
 
 ## 4. Generating Checksums & Release Manifest
 
-Both `scripts/build_release_binaries.py` and `scripts/build_android_app.py` update `SHA256SUMS.txt` and `RELEASE_MANIFEST.json` inside `public/releases/v0.33.0/`.
+Both `scripts/build_release_binaries.py` and `scripts/build_android_app.py` update `SHA256SUMS.txt` and `RELEASE_MANIFEST.json` inside `public/releases/v0.34.0/`.
 
 To verify checksums on Windows PowerShell:
 ```powershell
-Get-FileHash public/releases/v0.33.0/* -Algorithm SHA256
+Get-FileHash public/releases/v0.34.0/* -Algorithm SHA256
 ```

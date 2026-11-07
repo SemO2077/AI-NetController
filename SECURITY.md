@@ -2,13 +2,13 @@
 
 ## Supported Versions
 
-Security fixes are applied to the latest beta release branch (`0.33.x`).
+Security fixes are applied to the latest beta release branch (`0.34.x`).
 
 | Version | Supported |
 | :--- | :--- |
-| `0.33.x` | Yes |
-| `0.32.x` | Security fixes only |
-| `< 0.32.0` | No |
+| `0.34.x` | Yes |
+| `0.33.x` | Security fixes only |
+| `< 0.33.0` | No |
 
 ---
 
