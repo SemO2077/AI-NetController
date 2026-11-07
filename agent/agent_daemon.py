@@ -46,7 +46,9 @@ try:
         create_desktop_shortcut,
         create_start_menu_shortcut,
         show_uninstall_dialog,
+        show_install_dialog,
         perform_full_uninstall,
+        perform_full_install,
         register_windows_uninstaller,
     )
 except ImportError:
@@ -55,7 +57,9 @@ except ImportError:
     create_desktop_shortcut = None
     create_start_menu_shortcut = None
     show_uninstall_dialog = None
+    show_install_dialog = None
     perform_full_uninstall = None
+    perform_full_install = None
     register_windows_uninstaller = None
 
 # Logging Configuration
@@ -561,7 +565,15 @@ def main():
     import multiprocessing
     multiprocessing.freeze_support()
 
-    # CLI Command Flags: Uninstaller & Shortcut creation
+    # CLI Command Flags: Installer, Uninstaller & Shortcut creation
+    if "--install" in sys.argv or "--setup" in sys.argv:
+        if show_install_dialog:
+            show_install_dialog()
+        elif perform_full_install:
+            res = perform_full_install()
+            print(res.get("message", "Installed successfully."))
+        sys.exit(0)
+
     if "--uninstall" in sys.argv:
         if show_uninstall_dialog:
             show_uninstall_dialog()

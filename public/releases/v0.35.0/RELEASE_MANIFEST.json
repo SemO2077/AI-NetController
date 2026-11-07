@@ -5,30 +5,30 @@
   "artifacts": [
     {
       "filename": "AI_NetController_HostAgent_v0.35.0_win64.exe",
-      "sizeBytes": 36428336,
-      "sizeFormatted": "35574.5 KB",
-      "sha256": "a531cfe5a10f8b4788def27d8ee445a55fb8509b73a0c0156a3e7ffebd744427",
+      "sizeBytes": 36717192,
+      "sizeFormatted": "35856.6 KB",
+      "sha256": "d2fb3c237e00e5ce910c44a5ce06c6604baeccbba07172b95d16c7223c76d2a0",
       "downloadUrl": "/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe"
     },
     {
       "filename": "AI_NetController_v0.35.0_arm64-v8a.apk",
       "sizeBytes": 1374359,
       "sizeFormatted": "1342.1 KB",
-      "sha256": "45e12fab15cbca7867d020f1c134ee7209ee8a8f01d07d508e6309651aff10f7",
+      "sha256": "0be63f8034c29e7c8e31d273b93a225c8dbd1f55f830ae53f84b31c26ba11273",
       "downloadUrl": "/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk"
     },
     {
       "filename": "AI_NetController_HostAgent_v0.35.0_win64_portable.zip",
-      "sizeBytes": 36495331,
-      "sizeFormatted": "35640.0 KB",
-      "sha256": "c4ac92eaeff5c0524b8d3f3be59f4d32d4bf83418a458aedf4baf4c883c249a1",
+      "sizeBytes": 36930909,
+      "sizeFormatted": "36065.3 KB",
+      "sha256": "b5166621546556b9c04e5ca09e1ad1bdd7ee5ec27fea975ab0ecdb19f215e7a5",
       "downloadUrl": "/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64_portable.zip"
     },
     {
       "filename": "AI_NetController_v0.35.0.apk",
       "sizeBytes": 1374359,
       "sizeFormatted": "1342.1 KB",
-      "sha256": "45e12fab15cbca7867d020f1c134ee7209ee8a8f01d07d508e6309651aff10f7",
+      "sha256": "0be63f8034c29e7c8e31d273b93a225c8dbd1f55f830ae53f84b31c26ba11273",
       "downloadUrl": "/releases/v0.35.0/AI_NetController_v0.35.0.apk"
     }
   ]

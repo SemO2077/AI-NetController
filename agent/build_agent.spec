@@ -47,13 +47,20 @@ a = Analysis(
     ['agent_daemon.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('icon.ico', '.'),
+        ('icon.png', '.'),
+        ('assets/icon.ico', 'assets'),
+        ('assets/icon.png', 'assets'),
+    ],
     hiddenimports=[
         'agent_gui',
         'agent',
+        'icon_assets',
         'tkinter',
         'tkinter.ttk',
         'tkinter.messagebox',
+        'tkinter.filedialog',
         'zeroconf',
         'zeroconf.asyncio',
         'websockets',
@@ -63,6 +70,7 @@ a = Analysis(
         'PIL',
         'PIL.Image',
         'PIL.ImageDraw',
+        'PIL.ImageTk',
         'turbojpeg',
         'psutil',
         'pyautogui',
@@ -107,7 +115,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     manifest='app_manifest.xml',
     version='version_info.txt',
-    icon=None
+    icon='icon.ico'
 )
 
 coll = COLLECT(
@@ -137,6 +145,6 @@ exe_onefile = EXE(
     disable_windowed_traceback=False,
     manifest='app_manifest.xml',
     version='version_info.txt',
-    icon=None
+    icon='icon.ico'
 )
 

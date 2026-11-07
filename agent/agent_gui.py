@@ -49,9 +49,12 @@ try:
         create_start_menu_shortcut,
         register_windows_uninstaller,
         show_uninstall_dialog,
+        show_install_dialog,
         perform_full_uninstall,
         check_port_available,
         SingleInstanceGuard,
+        is_running_from_install_dir,
+        is_app_installed,
         APP_NAME,
         APP_VERSION,
     )
@@ -60,11 +63,24 @@ except ImportError:
     create_start_menu_shortcut = None
     register_windows_uninstaller = None
     show_uninstall_dialog = None
+    show_install_dialog = None
     perform_full_uninstall = None
     check_port_available = None
     SingleInstanceGuard = None
+    is_running_from_install_dir = lambda: False
+    is_app_installed = lambda: False
     APP_NAME = "AI NetController"
     APP_VERSION = "0.35.0"
+
+try:
+    from icon_assets import apply_window_icon, get_icon_image, get_icon_ico_path
+except ImportError:
+    try:
+        from agent.icon_assets import apply_window_icon, get_icon_image, get_icon_ico_path
+    except ImportError:
+        apply_window_icon = lambda win: None
+        get_icon_image = lambda size=64: None
+        get_icon_ico_path = lambda: None
 
 logger = logging.getLogger("AI-NetController-GUI")
 
@@ -127,6 +143,7 @@ class HostDaemonState:
         # Cross-thread GUI signals from System Tray & Background Worker threads
         self._show_window_requested: bool = False
         self._hide_window_requested: bool = False
+        self._install_requested: bool = False
         self._uninstall_requested: bool = False
         self._exit_requested: bool = False
 
@@ -145,6 +162,11 @@ class HostDaemonState:
         """Signals the GUI main thread to minimize the window to system tray."""
         with self.lock:
             self._hide_window_requested = True
+
+    def request_install(self) -> None:
+        """Signals the GUI main thread to display the dedicated installation wizard dialog."""
+        with self.lock:
+            self._install_requested = True
 
     def request_uninstall(self) -> None:
         """Signals the GUI main thread to display the interactive uninstaller dialog."""
@@ -464,6 +486,7 @@ class HostDaemonDesktopGUI:
         self.root.geometry("860x660")
         self.root.minsize(760, 560)
         self.root.configure(bg="#070c18")
+        apply_window_icon(self.root)
 
         self._configure_styles()
         self._build_layout()
@@ -806,6 +829,21 @@ class HostDaemonDesktopGUI:
 
         tk.Button(
             sys_row,
+            text="🚀 Install to PC...",
+            command=self._open_installer_window,
+            bg="#0284c7",
+            fg="#ffffff",
+            activebackground="#0369a1",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            font=("Segoe UI", 8, "bold"),
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(
+            sys_row,
             text="📌 Add Desktop Shortcut",
             command=self._create_shortcuts_action,
             bg="#1e293b",
@@ -908,6 +946,7 @@ class HostDaemonDesktopGUI:
         win.title(f"Connected Devices & Firewall Blacklist — {self.state.hostname}")
         win.geometry("820x560")
         win.configure(bg="#070c18")
+        apply_window_icon(win)
         self._devices_win = win
 
         # Section 1: Connected Devices Table
@@ -1138,6 +1177,7 @@ class HostDaemonDesktopGUI:
         win.title(f"AI NetController Setup & Security Wizard — {self.state.hostname}")
         win.geometry("680x480")
         win.configure(bg="#070c18")
+        apply_window_icon(win)
         self._setup_win = win
 
         card = tk.Frame(win, bg="#0b1324", padx=18, pady=16, highlightthickness=1, highlightbackground="#1e293b")
@@ -1366,6 +1406,17 @@ class HostDaemonDesktopGUI:
         else:
             messagebox.showerror("Error", "Shortcut manager is not available on this platform.", parent=self.root)
 
+    def _open_installer_window(self) -> None:
+        """Opens the dedicated GUI installation wizard."""
+        if show_install_dialog:
+            show_install_dialog(parent_root=self.root)
+        else:
+            messagebox.showinfo(
+                "Installer",
+                "Installation Wizard module is unavailable on this platform.",
+                parent=self.root,
+            )
+
     def _prompt_uninstall(self) -> None:
         """Opens the full interactive uninstaller dialog."""
         if show_uninstall_dialog:
@@ -1414,6 +1465,8 @@ class HostDaemonDesktopGUI:
             self.state._show_window_requested = False
             hide_req = self.state._hide_window_requested
             self.state._hide_window_requested = False
+            inst_req = getattr(self.state, "_install_requested", False)
+            self.state._install_requested = False
             uninst_req = self.state._uninstall_requested
             self.state._uninstall_requested = False
             exit_req = self.state._exit_requested
@@ -1423,6 +1476,8 @@ class HostDaemonDesktopGUI:
             self.show_window()
         if hide_req:
             self.hide_to_tray()
+        if inst_req:
+            self._open_installer_window()
         if uninst_req:
             self._prompt_uninstall()
         if exit_req:

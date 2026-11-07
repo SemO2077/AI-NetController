@@ -83,6 +83,7 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
 
     # Build the full portable bundle ZIP
     agent_files = [
+        "__init__.py",
         "agent.py",
         "agent_daemon.py",
         "agent_gui.py",
@@ -90,9 +91,12 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
         "crypto_handshake.py",
         "crypto_vault.py",
         "host_file_writer.py",
+        "icon_assets.py",
         "multi_monitor_streamer.py",
         "network_fuzzer_shield.py",
         "windows_integration.py",
+        "icon.ico",
+        "icon.png",
         "requirements.txt",
         "build_agent.spec",
         "build_exe.bat",

@@ -124,6 +124,7 @@ try:
         create_desktop_shortcut,
         create_start_menu_shortcut,
         show_uninstall_dialog,
+        show_install_dialog,
         perform_full_uninstall,
         register_windows_uninstaller,
     )
@@ -133,8 +134,17 @@ except ImportError:
     create_desktop_shortcut = None
     create_start_menu_shortcut = None
     show_uninstall_dialog = None
+    show_install_dialog = None
     perform_full_uninstall = None
     register_windows_uninstaller = None
+
+try:
+    from icon_assets import get_icon_image
+except ImportError:
+    try:
+        from agent.icon_assets import get_icon_image
+    except ImportError:
+        get_icon_image = lambda size=64: None
 
 # Configure logging with high-performance minimal formatter
 logging.basicConfig(
@@ -810,20 +820,25 @@ class HostAgentDaemon:
             return
 
         def run_tray():
-            # Create a 64x64 high-visibility cyber icon
-            img = Image.new('RGBA', (64, 64), (7, 12, 24, 255))
-            from PIL import ImageDraw
-            draw = ImageDraw.Draw(img)
-            # Outer cyan circular boundary
-            draw.ellipse([4, 4, 60, 60], outline=(34, 211, 238, 255), width=3)
-            # Inner neon emerald core
-            draw.ellipse([16, 16, 48, 48], fill=(5, 150, 105, 255), outline=(52, 211, 153, 255), width=2)
-            # Center bright dot
-            draw.ellipse([26, 26, 38, 38], fill=(110, 231, 183, 255))
+            # Load Android-matching icon for system tray
+            img = get_icon_image(64)
+            if not img:
+                img = Image.new('RGBA', (64, 64), (7, 12, 24, 255))
+                from PIL import ImageDraw
+                draw = ImageDraw.Draw(img)
+                draw.ellipse([4, 4, 60, 60], outline=(34, 211, 238, 255), width=3)
+                draw.ellipse([16, 16, 48, 48], fill=(5, 150, 105, 255), outline=(52, 211, 153, 255), width=2)
+                draw.ellipse([26, 26, 38, 38], fill=(110, 231, 183, 255))
 
             def _show_gui():
                 if self.gui_state and hasattr(self.gui_state, "request_show_window"):
                     self.gui_state.request_show_window()
+
+            def _install():
+                if self.gui_state and hasattr(self.gui_state, "request_install"):
+                    self.gui_state.request_install()
+                elif show_install_dialog:
+                    show_install_dialog()
 
             def _toggle_view_only():
                 self.view_only_mode = not self.view_only_mode
@@ -861,6 +876,7 @@ class HostAgentDaemon:
 
             menu = pystray.Menu(
                 pystray.MenuItem("🖥️ Open Control Center", _show_gui, default=True),
+                pystray.MenuItem("🚀 Install AI NetController to PC...", _install),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("AI NetController v0.35.0", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"● Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
