@@ -73,7 +73,7 @@ app.get('/releases/:version/:filename', (req: Request, res: Response) => {
   if (/^v\d+\.\d+\.\d+$/.test(version) && /\.(exe|apk|zip|txt|json)$/i.test(filename)) {
     return res.redirect(
       302,
-      `https://github.com/smehmedd/AI-NetController/releases/download/${version}/${filename}`
+      `https://github.com/SemO2077/AI-NetController/releases/download/${version}/${filename}`
     );
   }
   return res.status(404).json({ error: 'Release artifact not found' });
