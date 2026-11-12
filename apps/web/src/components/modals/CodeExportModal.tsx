@@ -141,19 +141,19 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
     }
   };
 
-  const ghReleaseCommands = `# 1. Tag and push v0.35.0 (triggers .github/workflows/release.yml automatically)
+  const ghReleaseCommands = `# 1. Tag and push v0.35.0 (triggers .github/workflows/ci.yml automatically)
 git add .
 git commit -m "release: AI NetController v0.35.0 (APK + EXE + Patch Notes)"
 git tag -a v0.35.0 -m "AI NetController v0.35.0"
-git push gitlab main --tags
+git push origin main --tags
 
 # 2. Or publish pre-built binaries directly with GitHub CLI (gh):
-python scripts/publish_gitlab_release.py --tag v0.35.0 \\
+gh release create v0.35.0 \\
   public/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe \\
   public/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk \\
   public/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64_portable.zip \\
   public/releases/v0.35.0/SHA256SUMS.txt \\
-  --title "AI NetController v0.35.0 — Fluid Background Studio, Surface Materials & Mobile Layout Polish" \\
+  --title "AI NetController v0.35.0" \\
   --notes-file PATCH_NOTES.md`;
 
   const handleCopyGhCommands = () => {
@@ -496,8 +496,8 @@ python scripts/publish_gitlab_release.py --tag v0.35.0 \\
                   <Terminal className="w-4 h-4 text-cyan-400 shrink-0" />
                   <span className="text-xs font-mono font-bold text-white uppercase break-words">
                     {isBg
-                      ? 'Публикуване в GitLab Releases (publish_gitlab_release.py)'
-                      : 'Publish to GitLab Releases (publish_gitlab_release.py)'}
+                      ? 'Публикуване в GitHub Releases (gh CLI / CI Pipeline)'
+                      : 'Publish to GitHub Releases (gh CLI / CI Pipeline)'}
                   </span>
                 </div>
                 <button

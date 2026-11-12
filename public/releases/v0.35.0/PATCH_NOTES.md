@@ -1,44 +1,51 @@
 # AI NetController v0.35.0 — Release Notes
 
-**AI NetController v0.35.0** introduces a 4-mode GPU-accelerated **Moving Fluid Background Engine**, sharply distinct **Surface Material Presets** (including a 100% opaque **True Matte** surface), a reorganized **Settings & Command Architecture**, a collapsible bottom **Customization Studio**, fixed **Dropdown Stacking & Opaque Surfaces**, removed tab-switching haptic vibrations, and resolved text overflow/overlap across the **System & AI Center** and all mobile tabs.
+**AI NetController v0.35.0** delivers a major update focused on user experience refinement, visual polish, layout reliability across mobile form factors, and release packaging standardization.
 
 ---
 
 ## What's New in v0.35.0
 
-### 1. Moving Fluid Background Engine (4 Selectable Modes)
-- **Liquid Plasma (`fluid`)**: Multi-layered orbiting plasma spheres (`fluid-orbit-1`, `fluid-orbit-2`, `fluid-orbit-3`) and a rotating conic vortex (`fluid-vortex-spin`) running purely on GPU `transform: translate3d(...)` and `opacity` keyframes.
-- **Northern Aurora (`aurora`)**: Sweeping diagonal aurora ribbons (`aurora-ribbon-sweep-1`, `aurora-ribbon-sweep-2`) with smooth multi-stop color transitions.
-- **Cyber Grid Pulse (`cyber`)**: Architectural perspective grid overlay (`.cyber-grid-pattern`) paired with a vertical radar scanline sweep and breathing core pulse.
-- **Static Deep Void (`minimal`)**: Zero-animation stealth dark canvas for maximum power efficiency.
+### 1. Composited Background Animation Engine
+- Introduced four GPU-composited background motion presets:
+  - **Liquid Plasma (`fluid`)**: Multi-layered orbiting radial elements and conic rotation composited via CSS 3D transforms.
+  - **Northern Aurora (`aurora`)**: Sweeping diagonal aurora ribbons with multi-stop color transitions.
+  - **Cyber Grid (`cyber`)**: Geometric perspective grid overlay with coordinated vertical scan sweeps.
+  - **Static Dark Void (`minimal`)**: Minimalist, zero-animation canvas for low-power operation.
 
-### 2. Distinct Surface Material, Font & Accent Customization
-- **Crystal Glass (`clear`)**: Ultra-transparent (`0.20` alpha) refractive surface with `blur(26px) saturate(240%)`, bright prismatic top/left rim highlights (`0.58` alpha), and specular inner reflections.
-- **Liquid Glass (`balanced`)**: Balanced Apple Liquid Glass translucency (`0.52` alpha, `blur(18px) saturate(190%)`) with soft specular bevels.
-- **True Matte (`frosted`)**: 100% opaque flat dark stealth surface (`#0c1220` / `#101829`), zero `backdrop-filter` blur, zero glossy reflection, and clean flat borders (`rgba(255, 255, 255, 0.065)`).
-- **Bottom Hideable Customization Studio**: Relocated the **Appearance, Surface Material & Fluid Background Studio** to the bottom of the Settings tab with a persistent **Show Studio / Hide Studio** toggle (`isCustomizationOpen`).
+### 2. Surface Material & Customization Presets
+- Refined translucent and opaque surface styling:
+  - **Crystal Clear (`clear`)**: High-transparency surface with backdrop blur and specular highlights.
+  - **Balanced (`balanced`)**: Moderate translucency with ambient diffuse lighting.
+  - **True Matte (`frosted`)**: 100% opaque dark surface (`#0c1220`) with no backdrop filter blur or reflections.
+- Added collapsible **Appearance & Customization Studio** positioned at the base of the Settings view, controlled by a persistent toggle (`isCustomizationOpen`).
 
-### 3. Reorganized Settings Architecture & Dropdown Fixes
-- **Top 4-Card Quick-Launch Command Bar**: Instant 1-tap access to **Pair Phone & PC**, **PC Daemon Center**, **System & AI Center**, and **Interactive Guide**.
-- **Logical 2x2 Settings Grid**:
-  1. *Connection, Network & Language*
+### 3. Settings View Restructuring & Dropdown Fixes
+- Added a 4-card Quick-Launch Command Bar for instant access to primary operational workflows:
+  - **Pair Phone & PC**
+  - **PC Daemon Center**
+  - **System & AI Center**
+  - **Interactive Guide**
+- Reorganized system configuration into a clean 2x2 section grid:
+  1. *Connection, Network & Localization*
   2. *AI Copilot Engine & Automation*
-  3. *Security, Alerts & Diagnostics*
-  4. *Wake-on-LAN Telemetry & Fleet Energy*
-- **Dropdown Menu Surface & Stacking Fix**: Added `.dropdown-menu-surface` (`#060b16` opaque backing, high-contrast border, `z-index: 100`) and elevated parent card stacking contexts in `SettingsScreen.tsx` and `FleetDashboard.tsx` so dropdowns never bleed into or get overlapped by background cards.
+  3. *Security Policies, Alerts & Diagnostics*
+  4. *Wake-on-LAN Schedules & Energy Accounting*
+- Resolved dropdown menu stacking conflicts: added `.dropdown-menu-surface` with solid `#060b16` backing and elevated z-index stacking contexts in `SettingsScreen.tsx` and `FleetDashboard.tsx` to prevent clipping beneath adjacent cards.
 
-### 4. Mobile Layout & Ergonomics Polish
-- **System & AI Center Overhaul (`SystemUpdateModal.tsx`)**: Rebuilt header with `min-w-0 flex-1` and `break-words`, unified vertical scrolling across the AI Advisory, Compatibility Deck, Category Filter Bar, Component List, and Audit Log, and replaced single-line metadata strings with wrapping flex chips.
-- **Tab-Switch Haptic Removal**: Removed `triggerHapticFeedback` from all main navigation tabs (`FloatingPillNav.tsx`, `App.tsx`) and modal/sub-window tab bars (`GeminiChatbot.tsx`, `CommandTerminal.tsx`, `PcDaemonGuiModal.tsx`, `WolModal.tsx`, `QuickSetupModal.tsx`, `WolHistoryLogViewer.tsx`, `CodeExportModal.tsx`).
+### 4. Mobile Viewport & Ergonomics Refinements
+- **System & AI Center Polish (`SystemUpdateModal.tsx`)**: Rebuilt modal header using responsive flex wrapping (`min-w-0 flex-1 break-words`) and unified scrolling across AI Advisory, Component Inventory, Category Filters, and Audit Logs.
+- **Haptic Tuning**: Removed redundant haptic trigger events from main navigation tabs (`FloatingPillNav.tsx`, `App.tsx`) and sub-modal tab headers to reduce vibration fatigue.
 
 ---
 
-## Release Assets
+## Release Deliverables
 
-| File | Platform | Description |
+| File | Target Platform | Description |
 | :--- | :--- | :--- |
-| `AI_NetController_HostAgent_v0.35.0_win64.exe` | Windows x64 | Standalone Windows Host Agent executable |
-| `AI_NetController_HostAgent_v0.35.0_win64_portable.zip` | Windows x64 | Portable archive containing Host Agent and launchers |
-| `AI_NetController_v0.35.0_arm64-v8a.apk` | Android ARM64 | Signed Android package optimized for `arm64-v8a` devices |
-| `AI_NetController_v0.35.0.apk` | Android Universal | Universal Android installation package |
-| `SHA256SUMS.txt` | All | SHA-256 checksums for all release artifacts |
+| `AI_NetController_HostAgent_v0.35.0_win64.exe` | Windows 10/11 x64 | Standalone PE32+ Host Agent executable with system tray & GUI |
+| `AI_NetController_HostAgent_v0.35.0_win64_portable.zip` | Windows x64 | Portable archive containing Host Agent source, spec files, and launchers |
+| `AI_NetController_v0.35.0_arm64-v8a.apk` | Android 10+ (arm64-v8a) | Signed native Android APK package |
+| `AI_NetController_v0.35.0.apk` | Android Universal | Signed universal APK package |
+| `SHA256SUMS.txt` | All | SHA-256 cryptographic digests for release validation |
+| `RELEASE_MANIFEST.json` | All | Machine-readable release metadata and asset manifest |

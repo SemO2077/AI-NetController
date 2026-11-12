@@ -494,7 +494,7 @@ class TestProcessSupervisionEdgeCases(unittest.TestCase):
         """Ensures timed-out subprocesses are cleanly killed without resource leaks."""
         async def run_timeout_test():
             # Command that attempts to sleep indefinitely
-            infinite_cmd = "python3 -c 'import time; time.sleep(60)'"
+            infinite_cmd = f'"{sys.executable}" -c "import time; time.sleep(60)"'
             t0 = time.perf_counter()
             res = await CommandASTFirewall.execute_sandboxed(infinite_cmd, timeout_sec=1.0)
             elapsed = time.perf_counter() - t0

@@ -50,7 +50,7 @@ _RE_WHITESPACE = re.compile(r"\s+")
 _RE_EVASION_CARET = re.compile(r"\w\^\w")
 _RE_EVASION_BACKTICK = re.compile(r"\w`\w")
 _RE_ENV_SUBSTRING_SLICE = re.compile(r"%[a-zA-Z0-9_]+:~\d+,\d+%")
-_RE_PYTHON_CMD = re.compile(r"^(python(?:3)?)(\s+|$)", flags=re.IGNORECASE)
+_RE_PYTHON_CMD = re.compile(r'^(?:"[^"]*?python(?:3)?(?:\.exe)?"|[^\s]*?python(?:3)?(?:\.exe)?|python(?:3)?)(\s+|$)', flags=re.IGNORECASE)
 _RE_ENCODED_POWERSHELL = re.compile(r"(?:powershell|pwsh)(?:\.exe)?\s+.*-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\b", flags=re.IGNORECASE)
 _RE_SUBSHELL_INJECTION = re.compile(r"\$\([^)]+\)|`[^`]+`|\b(?:iex|invoke-expression)\b", flags=re.IGNORECASE)
 _RE_CHAIN_OPERATORS = re.compile(r"(?:&&|\|\||[;&|])")
@@ -261,12 +261,21 @@ class CommandASTFirewall:
                 try:
                     if proc.returncode is None:
                         if IS_WINDOWS:
+                            try:
+                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                            except Exception:
+                                pass
                             proc.terminate()
                         else:
                             proc.send_signal(signal.SIGINT)
                         await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=0.5)
                 except asyncio.TimeoutError:
                     if proc.returncode is None:
+                        if IS_WINDOWS:
+                            try:
+                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                            except Exception:
+                                pass
                         proc.terminate()
                     try:
                         await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=0.5)

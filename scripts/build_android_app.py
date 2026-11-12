@@ -1272,7 +1272,7 @@ public class MainActivity extends Activity {
                             "\"status\":\"up-to-date\"," +
                             "\"channel\":\"beta\"," +
                             "\"lastChecked\":\"" + new java.util.Date().toString() + "\"," +
-                            "\"releaseUrl\":\"https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.35.0\"," +
+                            "\"releaseUrl\":\"https://github.com/SemO2077/AI-NetController/releases/tag/v0.35.0\"," +
                             "\"changelog\":[" +
                                 "\"Native Android 120Hz Viewport & Hardware Back Navigation\"," +
                                 "\"Multi-Threaded /24 LAN Subnet Discovery & Directed Broadcast WoL\"," +
@@ -1295,7 +1295,7 @@ public class MainActivity extends Activity {
                             "\"success\":true," +
                             "\"version\":\"0.35.0\"," +
                             "\"steps\":[" +
-                                "{\"step\":\"Verify GitLab Release v0.35.0 manifest\",\"status\":\"completed\",\"durationMs\":45}," +
+                                "{\"step\":\"Verify GitHub Release v0.35.0 manifest\",\"status\":\"completed\",\"durationMs\":45}," +
                                 "{\"step\":\"Validate SHA-256 binary signatures\",\"status\":\"completed\",\"durationMs\":62}," +
                                 "{\"step\":\"Confirm Android APK & Web Bundle v0.35.0 parity\",\"status\":\"completed\",\"durationMs\":38}" +
                             "]," +

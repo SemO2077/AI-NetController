@@ -67,7 +67,7 @@ app.use(
   })
 );
 
-// Fallback redirect to official GitLab Generic Packages if binary artifact is not stored locally
+// Fallback redirect to official GitHub Releases if binary artifact is not stored locally
 app.get('/releases/:version/:filename', (req: Request, res: Response) => {
   const { version, filename } = req.params;
   if (/^v\d+\.\d+\.\d+$/.test(version) && /\.(exe|apk|zip|txt|json)$/i.test(filename)) {

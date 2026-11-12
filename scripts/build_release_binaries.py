@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 AI NetController - Standalone Binary & Release Builder
-Generates standalone packaged release artifacts for GitLab Releases and Web OTA distribution:
+Generates standalone packaged release artifacts for GitHub Releases and Web OTA distribution:
 1. AI_NetController_HostAgent_{version}_win64.exe (PE32+ Windows launcher + embedded Python 3.12 payload)
 2. AI_NetController_{version}_arm64-v8a.apk (Signed Android APK package)
 3. AI_NetController_HostAgent_{version}_win64_portable.zip (Full Windows Agent source + portable launcher)
@@ -125,6 +125,21 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
 
 
 def build_android_apk(output_apk_path: str) -> None:
+    # Check if a native compiled Android APK already exists
+    candidate_paths = [
+        os.path.join(ROOT_DIR, "apps", "mobile", "android_native_build", "bin", f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk"),
+        os.path.join(ROOT_DIR, "apps", "mobile", "android_native_build", "bin", "AI_NetController_v0.35.0_arm64-v8a.apk"),
+        os.path.join(RELEASE_DIR, f"AI_NetController_{RELEASE_VERSION}.apk"),
+        os.path.join(RELEASE_DIR, "AI_NetController_v0.35.0.apk"),
+    ]
+    for cand in candidate_paths:
+        if os.path.exists(cand) and os.path.getsize(cand) > 500000:
+            print(f"[INFO] Using pre-compiled native Android APK from {cand}")
+            shutil.copy2(cand, output_apk_path)
+            apk_size = os.path.getsize(output_apk_path)
+            print(f"[SUCCESS] Copied Native Android APK: {output_apk_path} ({apk_size} bytes)")
+            return
+
     mobile_dir = os.path.join(ROOT_DIR, "apps", "mobile")
 
     dex_bytes = bytearray(112)
