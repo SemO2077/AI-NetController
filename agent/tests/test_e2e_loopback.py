@@ -54,11 +54,13 @@ OP_CLIP = 0x07
 OP_INPUT = 0x08
 OP_AUDIO = 0x09
 OP_VIEWPORT_RESIZE = 0x0A
-OP_DISPLAY_ENUM = 0x0B
+OP_LLM_STREAM = 0x0B
 OP_FILE_TRANSFER = 0x0C
+OP_DISPLAY_ENUM = 0x0D
+OP_FRAME_SYNC = 0xED
 OP_ERROR = 0xEE
 
-SHARED_SECRET = b"CST_SECRET_KEY_CHANGE_ME_IN_PRODUCTION"
+SHARED_SECRET = os.urandom(32).hex().encode("utf-8")
 
 
 def pack_packet(opcode: int, payload: bytes = b'', flags: int = 0, seq: int = 0) -> bytes:

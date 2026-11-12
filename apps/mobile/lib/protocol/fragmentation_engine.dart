@@ -90,7 +90,8 @@ class PacketFragmenter {
       return [packPacket(opcode, payload, flags: flags, seq: seq)];
     }
 
-    final int messageId = ++_nextMessageId;
+    _nextMessageId = (_nextMessageId >= 0x7FFFFFFE) ? 1 : (_nextMessageId + 1);
+    final int messageId = _nextMessageId;
     final int totalLength = payload.length;
     final List<Uint8List> packets = [];
 

@@ -18,7 +18,7 @@ export enum Opcode {
   OP_UNKNOWN = 0x00,
   OP_PING = 0x01,
   OP_TELEMETRY = 0x02,
-  OP_PONG = 0x02, // Legacy alias
+  OP_PONG = 0x02, // Legacy telemetry/pong alias
   OP_SCREEN_FRAME = 0x03,
   OP_COMMAND = 0x04,
   OP_SHELL = 0x04,
@@ -30,6 +30,9 @@ export enum Opcode {
   OP_VIEWPORT_RESIZE = 0x0A,
   OP_LLM_STREAM = 0x0B,
   OP_FILE_TRANSFER = 0x0C,
+  OP_DISPLAY_ENUM = 0x0D,
+  OP_FRAME_SYNC = 0xED,
+  OP_ERR = 0xEE,
   OP_ERROR = 0xEE,
 }
 
@@ -97,16 +100,26 @@ export function parseHeader(dv: DataView): ParsedHeader {
   };
 }
 
+export function parseValidatedFrame(dv: DataView): ParsedHeader {
+  const parsed = parseHeader(dv);
+  if (!parsed.isValid) return parsed;
+  if (dv.byteLength !== HEADER_SIZE + parsed.payloadLength) {
+    return { isValid: false, opcode: Opcode.OP_UNKNOWN, flags: 0, sequenceId: 0, payloadLength: 0 };
+  }
+  return parsed;
+}
+
 export function packControlFrameFast(opcode: Opcode, sequenceId: number, payload?: Uint8Array): DataView {
   const payloadLen = payload ? payload.byteLength : 0;
+  const safeSeq = sequenceId >>> 0;
   if (HEADER_SIZE + payloadLen > 64) {
-    return new DataView(packFrame(opcode, sequenceId, payload));
+    return new DataView(packFrame(opcode, safeSeq, payload));
   }
   POOL_CONTROL_VIEW.setUint16(0, 0xC571, false);
-  POOL_CONTROL_VIEW.setUint8(2, opcode);
+  POOL_CONTROL_VIEW.setUint8(2, opcode & 0xff);
   POOL_CONTROL_VIEW.setUint8(3, 0x00);
-  POOL_CONTROL_VIEW.setUint32(4, sequenceId, false);
-  POOL_CONTROL_VIEW.setUint32(8, payloadLen, false);
+  POOL_CONTROL_VIEW.setUint32(4, safeSeq, false);
+  POOL_CONTROL_VIEW.setUint32(8, payloadLen >>> 0, false);
   if (payload && payloadLen > 0) {
     POOL_CONTROL_U8.set(payload, HEADER_SIZE);
     return new DataView(POOL_CONTROL_BUFFER, 0, HEADER_SIZE + payloadLen);
@@ -116,15 +129,19 @@ export function packControlFrameFast(opcode: Opcode, sequenceId: number, payload
 
 export function packFrame(opcode: Opcode, sequenceId: number, payload?: Uint8Array): ArrayBuffer {
   const payloadLen = payload ? payload.byteLength : 0;
+  if (payloadLen > 0xffffffff) {
+    throw new RangeError('Binary frame payload exceeds uint32 maximum length');
+  }
+  const safeSeq = sequenceId >>> 0;
   const totalLength = HEADER_SIZE + payloadLen;
   const buffer = new ArrayBuffer(totalLength);
   const dv = new DataView(buffer);
 
   dv.setUint16(0, 0xC571, false);
-  dv.setUint8(2, opcode);
+  dv.setUint8(2, opcode & 0xff);
   dv.setUint8(3, 0x00);
-  dv.setUint32(4, sequenceId, false);
-  dv.setUint32(8, payloadLen, false);
+  dv.setUint32(4, safeSeq, false);
+  dv.setUint32(8, payloadLen >>> 0, false);
 
   if (payload && payloadLen > 0) {
     new Uint8Array(buffer, HEADER_SIZE).set(payload);

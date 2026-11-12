@@ -358,25 +358,39 @@ class AuthenticatedCipher:
 class HostCryptoSession:
     """
     Manages the life-cycle of a single WebSocket client's encrypted session.
-    Provides Perfect Forward Secrecy via ephemeral X25519 pairs generated per connection.
+    Provides Perfect Forward Secrecy via ephemeral X25519 pairs generated per connection,
+    directional TX/RX session key separation, and sender-tag + replay validation.
     """
+    _HOST_SENDER_TAG = 0x484F5354  # 'HOST'
+    _CLIENT_SENDER_TAGS = {0x4D4F424C, 0x434C494E}  # 'MOBL', 'CLIN'
+    _HANDSHAKE_TTL_SEC = 120
+
     def __init__(self, psk_secret: bytes):
-        self.psk = psk_secret
+        if not psk_secret or len(psk_secret) == 0:
+            raise ValueError("Pre-shared key (PSK) must not be empty.")
+        self.psk: Optional[bytes] = psk_secret
         self.session_key: Optional[bytes] = None
+        self.tx_key: Optional[bytes] = None
+        self.rx_key: Optional[bytes] = None
         self.cipher: Optional[AuthenticatedCipher] = None
+        self._tx_cipher: Optional[AuthenticatedCipher] = None
+        self._rx_cipher: Optional[AuthenticatedCipher] = None
         self.is_established: bool = False
+        self._closed: bool = False
 
         # Monotonic Nonce counters (prevents replay attacks)
         self._tx_nonce_counter = 0
-        self._rx_last_nonce_counter = -1
+        self._rx_last_nonce_counter = 0
 
         # Generate Host Ephemeral Curve25519 Key Pair
         if HAS_CRYPTOGRAPHY_LIB:
             self._private_key_obj = x25519.X25519PrivateKey.generate()
             self._public_bytes = self._private_key_obj.public_key().public_bytes_raw()
+            self._private_bytes = None
         else:
             self._private_bytes = PurePythonX25519.generate_private_key()
             self._public_bytes = PurePythonX25519.public_key_from_private(self._private_bytes)
+            self._private_key_obj = None
 
         self.salt = secrets.token_bytes(SALT_SIZE)
         self.handshake_timestamp = int(time.time())
@@ -386,6 +400,8 @@ class HostCryptoSession:
         Creates Opcode 0x06 Challenge Payload:
         Format: [MAGIC (11 bytes)] + [Host X25519 Pubkey (32 bytes)] + [Salt (16 bytes)] + [Timestamp (8 bytes)]
         """
+        if self._closed:
+            raise RuntimeError("Cryptographic session is closed.")
         payload = bytearray()
         payload.extend(HANDSHAKE_MAGIC)
         payload.extend(self._public_bytes)
@@ -398,16 +414,21 @@ class HostCryptoSession:
         Processes Client Handshake Response:
         Format: [Client X25519 Pubkey (32 bytes)] + [HMAC-SHA256 Auth Tag (32 bytes)]
         """
+        if self._closed or self.is_established or not self.psk:
+            return False
+        if abs(int(time.time()) - self.handshake_timestamp) > self._HANDSHAKE_TTL_SEC:
+            return False
         if len(client_response_payload) < 64:
             return False
 
         client_pubkey = client_response_payload[:32]
         client_auth_tag = client_response_payload[32:64]
 
-        # Verify client proved knowledge of Pre-Shared Key (PSK)
+        # Verify client proved knowledge of Pre-Shared Key (PSK) bound to timestamp
+        ts_bytes = struct.pack('!Q', self.handshake_timestamp)
         expected_tag = hmac.new(
             self.psk,
-            HANDSHAKE_MAGIC + self._public_bytes + client_pubkey + self.salt,
+            HANDSHAKE_MAGIC + self._public_bytes + client_pubkey + self.salt + ts_bytes,
             hashlib.sha256
         ).digest()
 
@@ -416,11 +437,13 @@ class HostCryptoSession:
 
         # Compute ECDH Shared Secret
         try:
-            if HAS_CRYPTOGRAPHY_LIB:
+            if HAS_CRYPTOGRAPHY_LIB and self._private_key_obj:
                 peer_pub_obj = x25519.X25519PublicKey.from_public_bytes(client_pubkey)
                 shared_secret = self._private_key_obj.exchange(peer_pub_obj)
-            else:
+            elif self._private_bytes:
                 shared_secret = PurePythonX25519.compute_shared_secret(self._private_bytes, client_pubkey)
+            else:
+                return False
         except Exception:
             return False
 
@@ -428,46 +451,68 @@ class HostCryptoSession:
         if hmac.compare_digest(shared_secret, b"\x00" * 32):
             return False
 
-        # HKDF-SHA256 Derive Symmetric Session Key
+        # Derive directional TX/RX keys so host packets cannot be reflected back as client packets
         self.session_key = derive_session_key(shared_secret, self.salt, INFO_STRING)
+        self.tx_key = derive_session_key(shared_secret, self.salt, INFO_STRING + b"-host-tx")
+        self.rx_key = derive_session_key(shared_secret, self.salt, INFO_STRING + b"-client-tx")
         self.cipher = AuthenticatedCipher(self.session_key)
+        self._tx_cipher = AuthenticatedCipher(self.tx_key)
+        self._rx_cipher = AuthenticatedCipher(self.rx_key)
+        self._private_key_obj = None
+        self._private_bytes = None
         self.is_established = True
         return True
 
     def generate_tx_nonce(self) -> bytes:
         """
         Generates a strictly monotonic 96-bit (12-byte) nonce:
-        [8-byte big-endian counter] + [4-byte fixed host identifier]
+        [8-byte big-endian counter >= 1] + [4-byte fixed host identifier]
         """
         self._tx_nonce_counter += 1
-        return struct.pack('!QI', self._tx_nonce_counter, 0x484F5354)  # 'HOST'
+        return struct.pack('!QI', self._tx_nonce_counter, self._HOST_SENDER_TAG)
 
     def encrypt_frame(self, header_aad: bytes, plaintext: bytes) -> Tuple[bytes, bytes]:
         """
-        Encrypts payload using ChaCha20-Poly1305.
+        Encrypts payload using ChaCha20-Poly1305 with the host-TX directional key.
         Returns: (12-byte nonce, ciphertext + 16-byte tag)
         """
-        if not self.is_established or not self.cipher:
-            raise RuntimeError("Cryptographic session not established")
+        if self._closed or not self.is_established or not self._tx_cipher:
+            raise RuntimeError("Cryptographic session not established or closed")
         nonce = self.generate_tx_nonce()
-        ciphertext_tag = self.cipher.encrypt(nonce, plaintext, aad=header_aad)
+        ciphertext_tag = self._tx_cipher.encrypt(nonce, plaintext, aad=header_aad)
         return nonce, ciphertext_tag
 
     def decrypt_frame(self, header_aad: bytes, nonce: bytes, ciphertext_tag: bytes) -> bytes:
         """
-        Decrypts payload and enforces monotonic nonce replay checks.
+        Decrypts payload using the client-TX directional key, validating sender tag
+        and monotonic counter before decryption.
         """
-        if not self.is_established or not self.cipher:
-            raise RuntimeError("Cryptographic session not established")
+        if self._closed or not self.is_established or not self._rx_cipher:
+            raise RuntimeError("Cryptographic session not established or closed")
         if len(nonce) != NONCE_SIZE:
             raise ValueError(f"Invalid nonce length: {len(nonce)}")
 
-        # Extract counter and verify strictly increasing
-        rx_counter, _ = struct.unpack('!QI', nonce)
-        if rx_counter <= self._rx_last_nonce_counter:
+        rx_counter, sender_tag = struct.unpack('!QI', nonce)
+        if sender_tag == self._HOST_SENDER_TAG or sender_tag not in self._CLIENT_SENDER_TAGS:
+            raise ValueError("Invalid sender identifier in nonce (possible packet reflection attack)")
+        if rx_counter <= 0 or rx_counter <= self._rx_last_nonce_counter:
             raise ValueError(f"Replay attack detected! Received counter {rx_counter} <= {self._rx_last_nonce_counter}")
 
         # Decrypt & verify MAC before committing counter state
-        plaintext = self.cipher.decrypt(nonce, ciphertext_tag, aad=header_aad)
+        plaintext = self._rx_cipher.decrypt(nonce, ciphertext_tag, aad=header_aad)
         self._rx_last_nonce_counter = rx_counter
         return plaintext
+
+    def close(self) -> None:
+        """Zeroes and clears all session state."""
+        self._closed = True
+        self.is_established = False
+        self.psk = None
+        self.session_key = None
+        self.tx_key = None
+        self.rx_key = None
+        self.cipher = None
+        self._tx_cipher = None
+        self._rx_cipher = None
+        self._private_key_obj = None
+        self._private_bytes = None

@@ -473,7 +473,7 @@ class AdaptiveScaffold extends StatelessWidget {
                   const SizedBox(width: 10),
                   const Expanded(
                     child: Text(
-                      'CST NODE',
+                      'AI-NET NODE',
                       style: TextStyle(
                         fontFamily: 'monospace',
                         fontWeight: FontWeight.bold,

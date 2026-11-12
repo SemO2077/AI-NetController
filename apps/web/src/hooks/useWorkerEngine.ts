@@ -4,6 +4,7 @@ import {
   AgentExecutionResponse,
   ClientCommandMessage,
   HeartbeatMetrics,
+  RiskLevel,
 } from '../types';
 import { logStore } from '../store/logStore';
 import { useScreenStore } from '../store/screenStore';
@@ -54,12 +55,20 @@ export function useWorkerEngine({
   const [circuitTrippedHosts, setCircuitTrippedHosts] = useState<string[]>([]);
   const [quarantinedHosts, setQuarantinedHostsList] = useState<string[]>(getQuarantinedHosts);
   const [securityAlert, setSecurityAlert] = useState<{ title: string; reason: string } | null>(null);
+  const [availableDisplays, setAvailableDisplays] = useState<Array<{ id: number; name?: string; width: number; height: number; primary?: boolean }>>([]);
 
   const workerRef = useRef<Worker | null>(null);
   const currentBlobUrlRef = useRef<string | null>(null);
   const targetIdRef = useRef(targetId);
   const onTelemetryRef = useRef(onTelemetry);
   const onHostUnreachableRef = useRef(onHostUnreachable);
+  const pendingHitlCommandRef = useRef<{ commandId: string; cmd: ClientCommandMessage; riskLevel: RiskLevel } | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      fetch('/api/auth/session', { credentials: 'include' }).catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     targetIdRef.current = targetId;
@@ -92,7 +101,7 @@ export function useWorkerEngine({
             setHeartbeatStatus('healthy');
             setUnreachableAlert(null);
             triggerHapticFeedback('medium');
-            logStore.addLog('SYSTEM_MDNS', targetIdRef.current, 'success', 'WebSocket връзката е активна и криптографски защитена (CST/2.4-SECURE)');
+            logStore.addLog('SYSTEM_MDNS', targetIdRef.current, 'success', 'WebSocket връзката е активна и криптографски защитена (AI-NET/3.0-SECURE)');
           } else if (status === 'connecting') {
             setIsConnecting(true);
             setIsReconnecting(false);
@@ -176,6 +185,9 @@ export function useWorkerEngine({
             setActiveHitlEvent({
               event: 'APPROVAL_REQUIRED',
               command_id: data.command_id || data.approval_id || `cmd_${Date.now()}`,
+              approval_id: data.approval_id || data.command_id,
+              challenge_nonce: data.challenge_nonce,
+              signature: data.signature,
               risk_level: data.risk_level || 'HIGH',
               proposed_command: data.proposed_command || data.command || '',
               explanation: data.explanation || data.reason || 'Operator confirmation required.',
@@ -186,6 +198,22 @@ export function useWorkerEngine({
                   : new Date().toLocaleTimeString('en-GB', { hour12: false }),
             });
             setIsSendingCommand(false);
+          } else if (data.event === 'DISPLAY_ENUM' && Array.isArray(data.monitors)) {
+            setAvailableDisplays(data.monitors);
+          } else if (data.event === 'ERROR') {
+            setIsSendingCommand(false);
+            const errMsg = data.error || data.message || 'Host agent rejected request.';
+            logStore.addLog('HOST_AGENT', targetIdRef.current, 'error', errMsg);
+            setLastExecutionResult({
+              event: 'EXECUTION_RESULT',
+              command_id: data.command_id || `err_${Date.now()}`,
+              target_id: data.target_id || targetIdRef.current,
+              status: 'failed',
+              output: errMsg,
+              exit_code: -1,
+              execution_time_ms: 0,
+              timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+            });
           } else if (data.event === 'EXECUTION_RESULT' || data.event === 'SHELL_RESULT') {
             setIsSendingCommand(false);
             const normalizedStatus = data.status === 'error' ? 'failed' : (data.status || 'success');
@@ -292,8 +320,8 @@ export function useWorkerEngine({
     (cmd: ClientCommandMessage) => {
       const isBg = useUIStore.getState().language === 'bg';
 
-      // 1. Quarantined Host Gate
-      if (quarantinedHosts.includes(cmd.target_id) && !cmd.prompt.toLowerCase().includes('status')) {
+      // 1. Quarantined Host Gate (strict: never bypass via substring tricks)
+      if (quarantinedHosts.includes(cmd.target_id)) {
         triggerHapticFeedback('warning');
         setSecurityAlert({
           title: isBg ? 'Хост под Карантина' : 'Host Under Quarantine',
@@ -378,12 +406,18 @@ export function useWorkerEngine({
         isBg ? `Команда: "${cmd.prompt}" [Риск: ${verdict.riskLevel}]` : `Command: "${cmd.prompt}" [Risk: ${verdict.riskLevel}]`
       );
 
-      // 5. Critical Destructive Command: Automatically trigger HITL gate if needed
-      if (verdict.requiresHoldConfirmation && !isConnected) {
+      // 5. Critical Destructive Command: Enforce interactive HITL confirmation gate BEFORE dispatching
+      if (verdict.requiresHoldConfirmation) {
+        const hitlCmdId = `cmd_sec_${Date.now()}`;
+        pendingHitlCommandRef.current = {
+          commandId: hitlCmdId,
+          cmd,
+          riskLevel: verdict.riskLevel,
+        };
         setIsSendingCommand(false);
         setActiveHitlEvent({
           event: 'APPROVAL_REQUIRED',
-          command_id: `cmd_sec_${Date.now()}`,
+          command_id: hitlCmdId,
           risk_level: verdict.riskLevel,
           proposed_command: cmd.prompt,
           explanation: isBg ? `Изисква потвърждение: ${verdict.reason}` : `Confirmation required: ${verdict.reason}`,
@@ -398,6 +432,7 @@ export function useWorkerEngine({
           type: 'SEND_JSON',
           payload: {
             action: 'EXECUTE_PROMPT',
+            target_id: cmd.target_id,
             command_id: `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             prompt: cmd.prompt,
             session_rules: cmd.session_instruction || '',
@@ -444,14 +479,53 @@ export function useWorkerEngine({
   const resolveHitl = useCallback(
     (commandId: string, decision: 'APPROVED' | 'REJECTED') => {
       const prevHitl = activeHitlEvent;
+      const pendingLocal = pendingHitlCommandRef.current;
+      pendingHitlCommandRef.current = null;
       setActiveHitlEvent(null);
+
+      if (pendingLocal && pendingLocal.commandId === commandId) {
+        if (decision === 'APPROVED' && isConnected) {
+          setIsSendingCommand(true);
+          workerRef.current?.postMessage({
+            type: 'SEND_JSON',
+            payload: {
+              action: 'EXECUTE_PROMPT',
+              target_id: pendingLocal.cmd.target_id,
+              command_id: commandId,
+              prompt: pendingLocal.cmd.prompt,
+              session_rules: pendingLocal.cmd.session_instruction || '',
+              request_screenshot: pendingLocal.cmd.request_screenshot ?? true,
+              risk_verdict: pendingLocal.riskLevel,
+              hitl_confirmed: true,
+            },
+          });
+          return;
+        }
+        setLastExecutionResult({
+          event: 'EXECUTION_RESULT',
+          command_id: commandId,
+          target_id: pendingLocal.cmd.target_id,
+          status: decision === 'APPROVED' ? 'failed' : 'rejected',
+          output:
+            decision === 'APPROVED'
+              ? 'Cannot execute approved command: Host WebSocket is disconnected.'
+              : 'Execution denied by operator (HITL Safety Gate).',
+          exit_code: -1,
+          execution_time_ms: 1,
+          timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+        });
+        return;
+      }
+
       if (isConnected) {
         workerRef.current?.postMessage({
           type: 'SEND_JSON',
           payload: {
             action: 'APPROVAL_RESPONSE',
             command_id: commandId,
-            approval_id: commandId,
+            approval_id: prevHitl?.approval_id || commandId,
+            challenge_nonce: prevHitl?.challenge_nonce,
+            signature: prevHitl?.signature,
             approved: decision === 'APPROVED',
           },
         });
@@ -515,6 +589,7 @@ export function useWorkerEngine({
       panicKillAll,
       securityAlert,
       clearSecurityAlert,
+      availableDisplays,
       connect,
       reconnectNow,
       disconnect,
@@ -544,6 +619,7 @@ export function useWorkerEngine({
       panicKillAll,
       securityAlert,
       clearSecurityAlert,
+      availableDisplays,
       connect,
       reconnectNow,
       disconnect,

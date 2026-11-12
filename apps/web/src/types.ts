@@ -100,11 +100,24 @@ export interface ClientCommandMessage {
 export interface ApprovalRequiredEvent {
   event: 'APPROVAL_REQUIRED';
   command_id: string;
+  approval_id?: string;
+  challenge_nonce?: string;
+  signature?: string;
   risk_level: RiskLevel;
   proposed_command: string;
   explanation: string;
   target_id: string;
   timestamp: string;
+}
+
+export interface RemoteDisplayInfo {
+  id: number;
+  name?: string;
+  width: number;
+  height: number;
+  left?: number;
+  top?: number;
+  primary?: boolean;
 }
 
 export interface AgentExecutionResponse {

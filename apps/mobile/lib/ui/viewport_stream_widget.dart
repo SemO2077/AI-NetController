@@ -16,7 +16,6 @@ const int magicByte0 = 0xC5;
 const int magicByte1 = 0x71;
 const int _streamHeaderSize = 12;
 const int _maxStreamPayloadBytes = 10 * 1024 * 1024;
-const String _defaultSharedSecret = 'cst_thesis_2026_secret_key';
 
 enum StreamOpcode {
   ping(0x01), // 1 (0x01)
@@ -31,6 +30,8 @@ enum StreamOpcode {
   viewportResize(0x0A), // 10 (0x0A) - Bidirectional Resolution Matching
   llmStream(0x0B), // 11 (0x0B)
   fileTransfer(0x0C), // 12 (0x0C)
+  displayEnum(0x0D), // 13 (0x0D)
+  frameSync(0xED), // 237 (0xED)
   error(0xEE); // 238 (0xEE)
 
   final int code;
@@ -119,7 +120,7 @@ class ViewportStreamWidget extends StatefulWidget {
     this.wsPort = 8765,
     this.isInline = true,
     this.onToggleFullscreen,
-    this.sharedSecret = _defaultSharedSecret,
+    this.sharedSecret = '',
   });
 
   @override
@@ -174,6 +175,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
   void _connect() {
     _cleanupSocket();
+    final secret = widget.sharedSecret.trim();
+    if (secret.isEmpty) {
+      setState(() {
+        _isConnected = false;
+        _isConnecting = false;
+        _errorMessage = 'Pairing secret required before connecting to host stream.';
+      });
+      return;
+    }
     setState(() {
       _isConnecting = true;
       _errorMessage = null;
@@ -197,7 +207,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                 // Respond to 16-byte HMAC-SHA256 challenge from agent.py
                 if (packet.payload.length == 16) {
                   final hmacSha256 =
-                      Hmac(sha256, utf8.encode(widget.sharedSecret));
+                      Hmac(sha256, utf8.encode(secret));
                   final digest = hmacSha256.convert(packet.payload);
                   final authReply = StreamBinaryPacket.pack(
                     StreamOpcode.auth,
@@ -207,16 +217,21 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                   _channel?.sink.add(authReply);
                 } else {
                   final statusStr =
-                      utf8.decode(packet.payload, allowMalformed: true);
+                      utf8.decode(packet.payload, allowMalformed: true).trim();
                   if ((statusStr == 'AUTH_OK' ||
-                          statusStr == 'OK_AUTHENTICATED' ||
-                          statusStr.contains('AUTH') ||
-                          statusStr.contains('OK')) &&
+                          statusStr == 'OK_AUTHENTICATED') &&
                       mounted) {
                     setState(() {
                       _isConnected = true;
                       _isConnecting = false;
                     });
+                  } else if (mounted) {
+                    setState(() {
+                      _isConnected = false;
+                      _isConnecting = false;
+                      _errorMessage = 'Stream authentication rejected: $statusStr';
+                    });
+                    _cleanupSocket();
                   }
                 }
               } else if (packet.opcode == StreamOpcode.frame) {

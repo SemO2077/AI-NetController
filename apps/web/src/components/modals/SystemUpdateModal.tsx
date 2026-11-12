@@ -47,6 +47,22 @@ export interface UpdatableComponent {
   releaseNotes?: string;
 }
 
+const parseSemverParts = (raw?: string): [number, number, number] => {
+  if (!raw) return [0, 0, 0];
+  const m = raw.trim().replace(/^v/i, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+  if (!m) return [0, 0, 0];
+  return [Number(m[1] || 0), Number(m[2] || 0), Number(m[3] || 0)];
+};
+
+const compareSemver = (a?: string, b?: string): number => {
+  const pa = parseSemverParts(a);
+  const pb = parseSemverParts(b);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] > pb[i] ? 1 : -1;
+  }
+  return 0;
+};
+
 const INITIAL_COMPONENTS: UpdatableComponent[] = [
   {
     id: 'deepseek-r1',
@@ -60,12 +76,12 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     status: 'available',
     progress: 0,
     driftSeverity: 'moderate',
-    driftDescription: '1 minor version behind (v1.4 → v1.5.2)',
-    compatibilityRequirement: 'Requires Host Agent Daemon >= v2.4.2 for CoT chunk streaming',
-    minRequiredDaemonVersion: 'v2.4.2',
-    lastCheckedAt: '2026-09-11 13:45:10',
+    driftDescription: '1 minor version behind (v1.4 -> v1.5.2)',
+    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.50.0 for CoT chunk streaming',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
     releaseNotes:
-      'Optimized Q4_K_M quant with 32k context and streaming reasoning tokens via Opcode 0x06.',
+      'Optimized Q4_K_M quant with 32k context and streaming reasoning tokens via Opcode 0x0B.',
   },
   {
     id: 'qwen25-coder',
@@ -74,15 +90,15 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     engineType: 'ai_engine',
     currentVersion: 'v2.1.0',
     latestVersion: 'v2.2.4-instruct',
-    description: 'SOTA Autonomous Code & PowerShell Script Generator with Syntax Checking',
+    description: 'Local Autonomous Code & PowerShell Script Generator with Syntax Checking',
     size: '18.4 GB',
     status: 'available',
     progress: 0,
     driftSeverity: 'minor',
-    driftDescription: '1 minor version behind (v2.1.0 → v2.2.4)',
-    compatibilityRequirement: 'Supports Wire Protocol v2.4+ and Job Object sandbox',
-    minRequiredDaemonVersion: 'v2.4.0',
-    lastCheckedAt: '2026-09-11 13:45:10',
+    driftDescription: '1 minor version behind (v2.1.0 -> v2.2.4)',
+    compatibilityRequirement: 'Supports AI-NET/3.0-SECURE and Job Object sandbox',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
     releaseNotes: 'Added enhanced AST de-obfuscation prompts and cmd.exe caret normalization.',
   },
   {
@@ -92,74 +108,74 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     engineType: 'ai_engine',
     currentVersion: 'v3.2.0',
     latestVersion: 'v3.3.1-q4',
-    description: 'Flagship Multi-Host Fleet Orchestrator & Autonomous Task Planner',
+    description: 'Multi-Host Fleet Orchestrator & Autonomous Task Planner',
     size: '42.1 GB',
     status: 'available',
     progress: 0,
     driftSeverity: 'minor',
-    driftDescription: '1 minor version behind (v3.2.0 → v3.3.1)',
-    compatibilityRequirement: 'Compatible with Host Daemon v2.4+ multi-monitor routing',
-    minRequiredDaemonVersion: 'v2.4.0',
-    lastCheckedAt: '2026-09-11 13:45:10',
+    driftDescription: '1 minor version behind (v3.2.0 -> v3.3.1)',
+    compatibilityRequirement: 'Compatible with Host Daemon v0.50.0 multi-monitor routing',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
     releaseNotes: 'Multi-GPU tensor parallelism enhancements and Wake-on-LAN routing templates.',
   },
   {
     id: 'llama32-3b',
-    name: 'llama3.2:3b (Edge Mobile)',
+    name: 'llama3.2:3b',
     category: 'ai_model',
     engineType: 'ai_engine',
     currentVersion: 'v1.2.0-quant',
     latestVersion: 'v1.2.0-quant',
-    description: 'Ultra-low RAM 3B On-Device Mobile Fallback Engine (<1.8GB VRAM)',
+    description: 'Low-RAM 3B Local Edge Model (<1.8GB VRAM)',
     size: '2.0 GB',
     status: 'up_to_date',
     progress: 100,
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Fully compatible with Mobile Flutter Client & Host Daemon',
-    minRequiredDaemonVersion: 'v2.4.0',
-    lastCheckedAt: '2026-09-11 13:45:10',
-    releaseNotes: 'Current verified release for mobile edge reasoning.',
+    compatibilityRequirement: 'Compatible with Mobile Client & Host Daemon',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
+    releaseNotes: 'Current verified release for lightweight edge reasoning.',
   },
   {
     id: 'cst-host-agent',
     name: 'AI NetController Host Agent (EXE + GUI)',
     category: 'core_system',
     engineType: 'host_daemon',
-    currentVersion: 'v0.35.0',
-    latestVersion: 'v0.35.0',
+    currentVersion: 'v0.50.0',
+    latestVersion: 'v0.50.0',
     description:
-      'Native Desktop GUI Control Center, Binary WebSocket Server (0xC5,0x71), AV-Clean Authenticode Build',
+      'Native Desktop GUI Control Center, Binary WebSocket Server (0xC5,0x71), Signed Build',
     size: '18.2 MB',
-    status: 'available',
-    progress: 0,
-    driftSeverity: 'moderate',
-    driftDescription: '1 minor release behind (v0.35.0 → v0.35.0)',
-    compatibilityRequirement: 'Core supervisor. Required by DeepSeek-R1 v1.5 for reasoning stream.',
-    minRequiredDaemonVersion: 'v2.4.0',
-    lastCheckedAt: '2026-10-24 14:20:00',
+    status: 'up_to_date',
+    progress: 100,
+    driftSeverity: 'none',
+    driftDescription: 'Synchronized with Beta v0.50.0',
+    compatibilityRequirement: 'Core supervisor required by local & cloud AI execution bridge.',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
     releaseNotes:
-      'Added Native Tkinter Desktop Control Center GUI, View-Only input lock, zero-UPX AV-clean build, and Authenticode SHA-256 signing.',
+      'Beta 0.50.00: EPHEMERAL/DPAPI secrets, directional AEAD keys, PIN-only QR pairing, and real WoL scheduling.',
   },
   {
     id: 'ast-security-rules',
     name: 'AST Security & HITL Policy DB',
     category: 'security_rule',
     engineType: 'host_daemon',
-    currentVersion: 'v2025.01',
-    latestVersion: 'v2025.09-REV4',
+    currentVersion: 'v2026.05',
+    latestVersion: 'v2026.05',
     description:
-      'Quarantine tokens for high-risk commands (rmdir, format, diskpart, net user)',
+      'Quarantine tokens for high-risk commands (rmdir, format, diskpart, net user, LOLBins)',
     size: '450 KB',
-    status: 'available',
-    progress: 0,
-    driftSeverity: 'moderate',
-    driftDescription: '8 monthly revisions behind policy baseline',
-    compatibilityRequirement: 'Requires Host Daemon v2.4+ for caret escape normalization',
-    minRequiredDaemonVersion: 'v2.4.0',
-    lastCheckedAt: '2026-09-11 13:45:10',
+    status: 'up_to_date',
+    progress: 100,
+    driftSeverity: 'none',
+    driftDescription: 'No version drift (Up to date)',
+    compatibilityRequirement: 'Requires Host Daemon v0.50.0 for NFKC & caret normalization',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
     releaseNotes:
-      'Updated heuristics for obfuscated PowerShell script blocks and symlink traversal.',
+      'Updated heuristics for obfuscated PowerShell/LOLBin execution and symlink traversal.',
   },
   {
     id: 'zeroconf-mdns',
@@ -175,8 +191,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
     compatibilityRequirement: 'Dual-stack IPv4/IPv6 compliant',
-    minRequiredDaemonVersion: 'v2.4.0',
-    lastCheckedAt: '2026-09-11 13:45:10',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
     releaseNotes: 'Latest RFC 6762 beacon engine.',
   },
   {
@@ -184,36 +200,36 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     name: 'SIMD TurboJPEG Desktop Grabber',
     category: 'core_system',
     engineType: 'host_daemon',
-    currentVersion: 'v1.7.5',
+    currentVersion: 'v1.8.0',
     latestVersion: 'v1.8.0-SIMD',
-    description: 'Sub-5ms Adler-32 Delta Hashing & 34MB SharedMemory Frame Pipeline',
+    description: 'Sub-5ms Adler-32 Delta Hashing & Low-Latency Frame Pipeline',
     size: '4.1 MB',
-    status: 'available',
-    progress: 0,
-    driftSeverity: 'minor',
-    driftDescription: '1 minor version behind (v1.7.5 → v1.8.0)',
-    compatibilityRequirement: 'Requires Host Agent Daemon >= v2.4.0',
-    minRequiredDaemonVersion: 'v2.4.0',
-    lastCheckedAt: '2026-09-11 13:45:10',
-    releaseNotes: 'AVX2/NEON SIMD color space transformation and zero-copy desktop pipe.',
+    status: 'up_to_date',
+    progress: 100,
+    driftSeverity: 'none',
+    driftDescription: 'No version drift (Up to date)',
+    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.50.0',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
+    releaseNotes: 'AVX2/NEON SIMD color space transformation and multi-monitor enumeration.',
   },
   {
     id: 'directed-wol-engine',
     name: 'Directed Wake-on-LAN L3 Engine',
     category: 'network_engine',
     engineType: 'host_daemon',
-    currentVersion: 'v1.3.1',
-    latestVersion: 'v1.3.1',
+    currentVersion: 'v1.4.0',
+    latestVersion: 'v1.4.0',
     description: 'Subnet-Directed Magic Packet (FF*6 + MAC*16) Multi-Hop Router Traversal',
     size: '890 KB',
     status: 'up_to_date',
     progress: 100,
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Supports IPv4 Directed Broadcast and IPv6 ff02::1',
-    minRequiredDaemonVersion: 'v2.4.0',
-    lastCheckedAt: '2026-09-11 13:45:10',
-    releaseNotes: 'Verified against Cisco/Juniper subnet-directed broadcast configurations.',
+    compatibilityRequirement: 'Supports IPv4 Directed Broadcast and persistent schedules',
+    minRequiredDaemonVersion: 'v0.50.0',
+    lastCheckedAt: 'Pending check',
+    releaseNotes: 'Backed by persistent disk schedule storage and NIC WakeOnMagicPacket audit.',
   },
 ];
 
@@ -223,35 +239,35 @@ const COMPONENT_BG_MAP: Record<
 > = {
   'deepseek-r1': {
     description: 'Локален модел за разсъждение (верига от мисли и синтез на системни команди)',
-    driftDescription: '1 минорна версия назад (v1.4 → v1.5.2)',
-    compatibilityRequirement: 'Изисква хост демон >= v2.4.2 за поточно предаване',
+    driftDescription: '1 минорна версия назад (v1.4 -> v1.5.2)',
+    compatibilityRequirement: 'Изисква хост демон >= v0.50.0 за поточно предаване',
   },
   'qwen25-coder': {
     description: 'Автономен генератор на код и скриптове с проверка на синтаксиса',
-    driftDescription: '1 минорна версия назад (v2.1.0 → v2.2.4)',
-    compatibilityRequirement: 'Поддържа мрежов протокол v2.4+ и изолиран процес',
+    driftDescription: '1 минорна версия назад (v2.1.0 -> v2.2.4)',
+    compatibilityRequirement: 'Поддържа мрежов протокол AI-NET/3.0 и изолиран процес',
   },
   'llama33-70b': {
     description: 'Водещ оркестратор за многохостов флот и автономно планиране на задачи',
-    driftDescription: '1 минорна версия назад (v3.2.0 → v3.3.1)',
-    compatibilityRequirement: 'Съвместим с хост демон v2.4+ за няколко монитора',
+    driftDescription: '1 минорна версия назад (v3.2.0 -> v3.3.1)',
+    compatibilityRequirement: 'Съвместим с хост демон v0.50.0 за няколко монитора',
   },
   'llama32-3b': {
-    description: 'Свръхлек 3B локален резервен модел за мобилни устройства (<1.8GB памет)',
+    description: 'Лек 3B локален резервен модел (<1.8GB VRAM)',
     driftDescription: 'Няма разминаване във версията (Актуална)',
     compatibilityRequirement: 'Напълно съвместим с мобилния клиент и хост демона',
   },
   'cst-host-agent': {
     description:
       'Графичен контролен център за настолен компютър, двоичен сървър и сертифициран компилатор',
-    driftDescription: '1 минорна версия назад (v0.35.0 → v0.35.0)',
-    compatibilityRequirement: 'Основен супервайзър. Изисква се от DeepSeek-R1 v1.5.',
+    driftDescription: 'Синхронизиран с Beta v0.50.0',
+    compatibilityRequirement: 'Основен супервайзър за AI и отдалечено управление.',
   },
   'ast-security-rules': {
     description:
       'Правила за карантина на високорискови команди (изтриване, форматиране, акаунти)',
-    driftDescription: '8 месечни ревизии назад спрямо базовата линия',
-    compatibilityRequirement: 'Изисква хост демон v2.4+ за нормализиране на ескейп символи',
+    driftDescription: 'Актуална политика за сигурност',
+    compatibilityRequirement: 'Изисква хост демон v0.50.0 за NFKC нормализиране',
   },
   'zeroconf-mdns': {
     description: 'Откриване на мрежови интерфейси по RFC 6762 и активен кеш на адреси',
@@ -260,13 +276,13 @@ const COMPONENT_BG_MAP: Record<
   },
   'turbojpeg-pipeline': {
     description: 'Бързо хеширане на делта кадри под 5ms и споделена памет за видео поток',
-    driftDescription: '1 минорна версия назад (v1.7.5 → v1.8.0)',
-    compatibilityRequirement: 'Изисква хост демон >= v2.4.0',
+    driftDescription: 'Актуална версия (v1.8.0)',
+    compatibilityRequirement: 'Изисква хост демон >= v0.50.0',
   },
   'directed-wol-engine': {
     description: 'Мрежов двигател за насочени пакети за събуждане през маршрутизатори',
     driftDescription: 'Няма разминаване във версията (Актуална)',
-    compatibilityRequirement: 'Поддържа насочено разпръскване IPv4 и IPv6 ff02::1',
+    compatibilityRequirement: 'Поддържа насочено разпръскване IPv4 и постоянни графици',
   },
 };
 
@@ -292,7 +308,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
   const [filterCategory, setFilterCategory] = useState<
     'all' | 'ai_model' | 'core_system' | 'security_rule' | 'network_engine'
   >('all');
-  const [lastSystemAuditTime, setLastSystemAuditTime] = useState<string>('2026-10-24 14:20:00');
+  const [lastSystemAuditTime, setLastSystemAuditTime] = useState<string>('Pending');
   const [isRunningAiAdvisor, setIsRunningAiAdvisor] = useState(false);
   const [aiAdvisory, setAiAdvisory] = useState<{
     analysis: string;
@@ -301,10 +317,9 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
   } | null>(null);
 
   const [updateLogs, setUpdateLogs] = useState<string[]>([
-    '[INIT] System & AI Model Registry initialized.',
-    '[INFO] Gemini 3.8 Flash Cloud Engine & Local LLM Runtime verified.',
-    '[INFO] AI NetController Host Agent Daemon active on ws://127.0.0.1:8765 (v0.35.0).',
-    '[READY] Update Center primed for 1-click OTA updates or AI Drift Analysis.',
+    '[INIT] System & AI Model Registry initialized (Beta v0.50.0).',
+    '[INFO] Gemini 2.5 Flash & Local Ollama Runtime checks ready.',
+    '[READY] Update Center ready to query /api/update/status and /api/update/check.',
   ]);
 
   const appendLog = (msg: string) => {
@@ -315,8 +330,8 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    fetch('/api/update/status')
-      .then((res) => res.json())
+    fetch('/api/update/status', { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data) => {
         if (cancelled || !data?.components || !Array.isArray(data.components)) return;
         setComponents((prev) =>
@@ -338,7 +353,11 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
           })
         );
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) {
+          appendLog('[WARN] /api/update/status unreachable; start Control Server for live status.');
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -348,27 +367,29 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     triggerHapticFeedback('medium');
     setIsRunningAiAdvisor(true);
     appendLog(
-      '✨ [AI ADVISOR] Requesting Gemini 3.8 Flash version drift & compatibility analysis...'
+      '[AI ADVISOR] Requesting Gemini 2.5 Flash version drift & compatibility analysis...'
     );
     try {
       const res = await fetch('/api/update/ai-analyze', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ language }),
       });
-      const data = await res.json();
-      if (data.success) {
-        setAiAdvisory({
-          analysis: data.analysis,
-          securityScore: data.securityScore ?? 94,
-          modelUsed: data.modelUsed || 'gemini-3.8-flash',
-        });
-        appendLog(
-          `✅ [AI ADVISOR] Drift report generated by ${data.modelUsed} (Security Score: ${data.securityScore}/100).`
-        );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
       }
+      setAiAdvisory({
+        analysis: data.analysis,
+        securityScore: data.securityScore ?? 94,
+        modelUsed: data.modelUsed || 'gemini-2.5-flash',
+      });
+      appendLog(
+        `[AI ADVISOR] Drift report generated by ${data.modelUsed || 'gemini-2.5-flash'} (Score: ${data.securityScore ?? '--'}/100).`
+      );
     } catch (err: any) {
-      appendLog(`⚠️ [AI ADVISOR] ${err?.message || 'Failed to generate AI analysis'}`);
+      appendLog(`[AI ADVISOR ERROR] ${err?.message || 'Failed to generate AI analysis'}`);
     } finally {
       setIsRunningAiAdvisor(false);
     }
@@ -376,7 +397,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
   const systemCompatibility = useMemo(() => {
     const daemonComp = components.find((c) => c.id === 'cst-host-agent');
-    const daemonVersion = daemonComp ? daemonComp.currentVersion : 'v0.35.0';
+    const daemonVersion = daemonComp ? daemonComp.currentVersion : 'v0.50.0';
     const isDaemonLatest =
       daemonComp?.status === 'up_to_date' || daemonComp?.status === 'completed';
 
@@ -388,7 +409,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
     const conflictingModels = aiModels.filter((m) => {
       if (!m.minRequiredDaemonVersion) return false;
-      return m.minRequiredDaemonVersion > daemonVersion && !isDaemonLatest;
+      return compareSemver(daemonVersion, m.minRequiredDaemonVersion) < 0 && !isDaemonLatest;
     });
 
     const hasCriticalConflict = conflictingModels.length > 0;
@@ -405,8 +426,8 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
       status = 'incompatible';
       label = isBg ? 'ПРЕДУПРЕЖДЕНИЕ ЗА СЪВМЕСТИМОСТ' : 'VERSION DRIFT & COMPATIBILITY WARNING';
       summary = isBg
-        ? `Хост демонът (${daemonVersion}) изостава спрямо изискванията на AI моделите. DeepSeek-R1 изисква демон >= v2.4.2.`
-        : `Host Daemon (${daemonVersion}) is lagging behind AI Model requirements. DeepSeek-R1 requires Daemon >= v2.4.2 for streaming reasoning tokens.`;
+        ? `Хост демонът (${daemonVersion}) изостава спрямо изискванията на AI моделите.`
+        : `Host Daemon (${daemonVersion}) is behind minimum required AI bridge version.`;
       badgeColor = 'bg-amber-950/80 text-amber-300 border-amber-500/50';
     } else if (hasDrift) {
       status = 'drift_warning';
@@ -445,65 +466,64 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
   if (!isOpen) return null;
 
+  const runServerCheck = async (scope: 'all' | 'ai_engine' | 'host_daemon', targetComponentId?: string) => {
+    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const res = await fetch('/api/update/check', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, componentId: targetComponentId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
+    if (data.systemInfo) {
+      appendLog(
+        `[SYSTEM INFO] Node ${data.systemInfo.nodeVersion} on ${data.systemInfo.platform} (${data.systemInfo.arch})`
+      );
+    }
+    setLastSystemAuditTime(nowStr);
+    setComponents((prev) =>
+      prev.map((c) => {
+        if (targetComponentId && c.id !== targetComponentId) return c;
+        if (!targetComponentId && scope !== 'all' && c.engineType !== scope) return c;
+        const srv = Array.isArray(data.checkedComponents)
+          ? data.checkedComponents.find((s: any) => s.id === c.id)
+          : undefined;
+        const isUpToDate = srv
+          ? srv.status === 'up_to_date'
+          : c.status === 'completed' || c.status === 'up_to_date';
+        return {
+          ...c,
+          currentVersion: srv?.currentVersion || c.currentVersion,
+          latestVersion: srv?.latestVersion || c.latestVersion,
+          lastCheckedAt: nowStr,
+          status: isUpToDate ? 'up_to_date' : 'available',
+        };
+      })
+    );
+    return data;
+  };
+
   const handleCheckAllUpdates = async () => {
     triggerHapticFeedback('medium');
     setIsCheckingAll(true);
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    setLastSystemAuditTime(nowStr);
-
-    appendLog('🔍 [1-CLICK CHECK ALL] Initializing full-spectrum backend audit...');
-    appendLog('📡 [API /api/update/check] Querying backend update service...');
+    appendLog('[CHECK ALL] Querying /api/update/check for backend & model registry state...');
 
     try {
-      const res = await fetch('/api/update/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await res.json();
-
-      if (data.systemInfo) {
-        appendLog(
-          `🖥️ [SYSTEM INFO] Node ${data.systemInfo.nodeVersion} on ${data.systemInfo.platform} (${data.systemInfo.arch})`
-        );
-      }
-
-      appendLog('🧠 [AI ENGINE] Verified Gemini 3.8 Flash, 3.1 Flash Lite & Local LLM matrices.');
-      appendLog(
-        '🖥️ [HOST DAEMON] Queried AI NetController Host Agent requirements and AST Firewall rule definitions.'
-      );
-
-      setComponents((prev) =>
-        prev.map((c) => {
-          const srv = Array.isArray(data.checkedComponents)
-            ? data.checkedComponents.find((s: any) => s.id === c.id)
-            : undefined;
-          const isUpToDate = srv
-            ? srv.status === 'up_to_date'
-            : c.status === 'completed' || c.status === 'up_to_date';
-          return {
-            ...c,
-            currentVersion: srv?.currentVersion || c.currentVersion,
-            latestVersion: srv?.latestVersion || c.latestVersion,
-            lastCheckedAt: nowStr,
-            status: isUpToDate ? 'up_to_date' : 'available',
-          };
-        })
-      );
-
-      appendLog('🏁 [CHECK COMPLETE] Real system audit finished. Pending updates identified.');
-
+      await runServerCheck('all');
+      appendLog('[CHECK COMPLETE] System audit finished via control server.');
       if (onNotify) {
         onNotify(
           isBg
-            ? 'Системната проверка завърши успешно! Всички AI матрици са проверени.'
-            : 'System update check completed! All AI matrices verified.',
+            ? 'Системната проверка завърши успешно.'
+            : 'System update check completed.',
           'success'
         );
       }
     } catch (err: any) {
-      appendLog(
-        `⚠️ [CHECK ERROR] Remote check warning: ${err?.message || err}. Falling back to cached registry.`
-      );
+      appendLog(`[CHECK ERROR] ${err?.message || err}`);
     } finally {
       setIsCheckingAll(false);
       triggerHapticFeedback('light');
@@ -513,68 +533,52 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
   const handleCheckAiEngine = async () => {
     triggerHapticFeedback('medium');
     setIsCheckingAiEngine(true);
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
-
-    appendLog(
-      '🤖 [MANUAL CHECK: AI ENGINE] Initiating local LLM inference runtime verification...'
-    );
-    appendLog('📡 [OLLAMA/GEMINI] Querying active model matrices...');
-    await new Promise((r) => setTimeout(r, 250));
-
-    setComponents((prev) =>
-      prev.map((c) => (c.engineType === 'ai_engine' ? { ...c, lastCheckedAt: nowStr } : c))
-    );
-
-    setIsCheckingAiEngine(false);
-    triggerHapticFeedback('light');
-
-    const aiPending = components.filter(
-      (c) => c.engineType === 'ai_engine' && c.status === 'available'
-    ).length;
-    appendLog(`✅ [AI ENGINE CHECK] Verification completed: ${aiPending} model weights available.`);
-
-    if (onNotify) {
-      onNotify(
-        isBg
-          ? `AI двигател: ${aiPending} модела имат налични актуализации.`
-          : `AI Model Engine: ${aiPending} models have updates available.`,
-        aiPending > 0 ? 'info' : 'success'
-      );
+    appendLog('[CHECK: AI ENGINE] Querying local Ollama & Gemini runtime via /api/update/check...');
+    try {
+      await runServerCheck('ai_engine');
+      const aiPending = components.filter(
+        (c) => c.engineType === 'ai_engine' && c.status === 'available'
+      ).length;
+      appendLog(`[AI ENGINE CHECK] Completed (${aiPending} update(s) available).`);
+      if (onNotify) {
+        onNotify(
+          isBg
+            ? `AI двигател: ${aiPending} модела имат налични актуализации.`
+            : `AI Model Engine: ${aiPending} models have updates available.`,
+          aiPending > 0 ? 'info' : 'success'
+        );
+      }
+    } catch (err: any) {
+      appendLog(`[AI CHECK ERROR] ${err?.message || err}`);
+    } finally {
+      setIsCheckingAiEngine(false);
+      triggerHapticFeedback('light');
     }
   };
 
   const handleCheckHostDaemon = async () => {
     triggerHapticFeedback('medium');
     setIsCheckingHostDaemon(true);
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
-
-    appendLog(
-      '🖥️ [MANUAL CHECK: HOST DAEMON] Checking Windows Service & Agentic OS Bridge...'
-    );
-    appendLog('🔍 [DAEMON IPC] Inspecting TurboJPEG grabber & AST Command Firewall...');
-    await new Promise((r) => setTimeout(r, 250));
-
-    setComponents((prev) =>
-      prev.map((c) => (c.engineType === 'host_daemon' ? { ...c, lastCheckedAt: nowStr } : c))
-    );
-
-    setIsCheckingHostDaemon(false);
-    triggerHapticFeedback('light');
-
-    const daemonPending = components.filter(
-      (c) => c.engineType === 'host_daemon' && c.status === 'available'
-    ).length;
-    appendLog(
-      `✅ [HOST DAEMON CHECK] Verification completed: v2.4.2-LTS release candidate ready.`
-    );
-
-    if (onNotify) {
-      onNotify(
-        isBg
-          ? `Хост демон: Налична е версия v2.4.2-LTS с подобрена поддръжка.`
-          : `Host Daemon: Version v2.4.2-LTS is available with enhanced WoL and SIMD TurboJPEG support.`,
-        daemonPending > 0 ? 'info' : 'success'
-      );
+    appendLog('[CHECK: HOST DAEMON] Querying Host Agent & AST rules via /api/update/check...');
+    try {
+      await runServerCheck('host_daemon');
+      const daemonPending = components.filter(
+        (c) => c.engineType === 'host_daemon' && c.status === 'available'
+      ).length;
+      appendLog(`[HOST DAEMON CHECK] Completed (${daemonPending} update(s) available).`);
+      if (onNotify) {
+        onNotify(
+          isBg
+            ? 'Проверката на хост демона завърши.'
+            : 'Host Daemon check completed.',
+          daemonPending > 0 ? 'info' : 'success'
+        );
+      }
+    } catch (err: any) {
+      appendLog(`[DAEMON CHECK ERROR] ${err?.message || err}`);
+    } finally {
+      setIsCheckingHostDaemon(false);
+      triggerHapticFeedback('light');
     }
   };
 
@@ -584,92 +588,70 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
     triggerHapticFeedback('light');
     setCheckingComponentId(componentId);
-    appendLog(`🔎 [COMPONENT AUDIT] Checking upstream manifest for ${item.name}...`);
-
-    await new Promise((r) => setTimeout(r, 250));
-
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    setComponents((prev) =>
-      prev.map((c) =>
-        c.id === componentId
-          ? {
-              ...c,
-              lastCheckedAt: nowStr,
-              status: c.status === 'completed' ? 'completed' : c.status,
-            }
-          : c
-      )
-    );
-
-    setCheckingComponentId(null);
-    appendLog(
-      `✅ [AUDIT FINISHED] ${item.name}: Current ${item.currentVersion} | Upstream ${item.latestVersion}.`
-    );
-    if (onNotify) {
-      const bgInfo = COMPONENT_BG_MAP[item.id];
-      onNotify(
-        isBg
-          ? `Проверка за ${item.name}: ${bgInfo?.driftDescription || item.driftDescription}`
-          : `Check for ${item.name}: ${item.driftDescription}`,
-        'info'
-      );
+    appendLog(`[COMPONENT AUDIT] Checking manifest for ${item.name}...`);
+    try {
+      await runServerCheck(item.engineType, componentId);
+      appendLog(`[AUDIT FINISHED] ${item.name}: Current ${item.currentVersion} | Target ${item.latestVersion}.`);
+      if (onNotify) {
+        const bgInfo = COMPONENT_BG_MAP[item.id];
+        onNotify(
+          isBg
+            ? `Проверка за ${item.name}: ${bgInfo?.driftDescription || item.driftDescription}`
+            : `Check for ${item.name}: ${item.driftDescription}`,
+          'info'
+        );
+      }
+    } catch (err: any) {
+      appendLog(`[AUDIT ERROR] ${item.name}: ${err?.message || err}`);
+    } finally {
+      setCheckingComponentId(null);
     }
+  };
+
+  const executeComponentUpdate = async (item: UpdatableComponent) => {
+    const endpoint =
+      item.category === 'ai_model' ? '/api/update/ollama-pull' : '/api/update/agent';
+    const body =
+      item.category === 'ai_model'
+        ? { model: item.name, componentId: item.id }
+        : { componentId: item.id };
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (Array.isArray(data.logs)) {
+      data.logs.forEach((logLine: string) => appendLog(logLine));
+    }
+    if (!res.ok || data.success === false) {
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
+    return data;
   };
 
   const handleUpdateAll = async () => {
     triggerHapticFeedback('heavy');
     setIsUpdatingAll(true);
-    appendLog(
-      '🚀 [1-CLICK REAL BATCH UPDATE] Dispatching backend update pipeline to /api/update/execute...'
-    );
 
     const pending = components.filter((c) => c.status === 'available');
     if (pending.length === 0) {
-      appendLog('✅ All components and AI models are already at the latest release version.');
+      appendLog('[OK] All components and AI models are already up to date.');
       setIsUpdatingAll(false);
       return;
     }
 
-    try {
-      const res = await fetch('/api/update/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updateAll: true }),
-      });
-      const data = await res.json();
+    appendLog(`[BATCH UPDATE] Updating ${pending.length} component(s) via backend endpoints...`);
+    let failedCount = 0;
 
-      if (data.logs && Array.isArray(data.logs)) {
-        data.logs.forEach((logLine: string) => appendLog(logLine));
-      }
-
+    for (const item of pending) {
       setComponents((prev) =>
-        prev.map((c) => ({
-          ...c,
-          currentVersion: c.latestVersion,
-          status: 'completed',
-          progress: 100,
-          driftSeverity: 'none',
-          driftDescription: 'No version drift (Up to date)',
-        }))
+        prev.map((c) => (c.id === item.id ? { ...c, status: 'updating', progress: 35 } : c))
       );
-
-      appendLog('🎉 [BATCH COMPLETE] Real system pipeline upgrade complete!');
-      if (onNotify) {
-        onNotify(
-          isBg
-            ? 'Всички AI модели, агенти и системни компоненти бяха успешно обновени!'
-            : 'All AI models, agents, and system components were successfully updated!',
-          'success'
-        );
-      }
-    } catch (err: any) {
-      appendLog(`⚠️ [UPDATE ERROR] Executing fallback client upgrade: ${err?.message || err}`);
-
-      for (const item of pending) {
-        setComponents((prev) =>
-          prev.map((c) => (c.id === item.id ? { ...c, status: 'updating', progress: 50 } : c))
-        );
-        await new Promise((r) => setTimeout(r, 180));
+      try {
+        await executeComponentUpdate(item);
         setComponents((prev) =>
           prev.map((c) =>
             c.id === item.id
@@ -684,18 +666,28 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
               : c
           )
         );
-      }
-      if (onNotify) {
-        onNotify(
-          isBg
-            ? 'Компонентите бяха обновени до най-новите версии!'
-            : 'Components updated to the latest versions!',
-          'success'
+      } catch (err: any) {
+        failedCount += 1;
+        appendLog(`[UPDATE FAILED] ${item.name}: ${err?.message || err}`);
+        setComponents((prev) =>
+          prev.map((c) => (c.id === item.id ? { ...c, status: 'error', progress: 0 } : c))
         );
       }
-    } finally {
-      setIsUpdatingAll(false);
-      triggerHapticFeedback('medium');
+    }
+
+    setIsUpdatingAll(false);
+    triggerHapticFeedback('medium');
+    if (onNotify) {
+      onNotify(
+        failedCount === 0
+          ? isBg
+            ? 'Компонентите бяха обновени успешно!'
+            : 'Components updated successfully!'
+          : isBg
+          ? `${failedCount} компонента не можаха да се обновят. Вижте дневника.`
+          : `${failedCount} component update(s) failed. Check logs for details.`,
+        failedCount === 0 ? 'success' : 'warning'
+      );
     }
   };
 
@@ -704,24 +696,14 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     if (!item) return;
 
     triggerHapticFeedback('medium');
-    appendLog(`🔄 [REAL UPDATE] Commencing backend update for: ${item.name}...`);
+    appendLog(`[UPDATE] Dispatching update for ${item.name}...`);
 
     setComponents((prev) =>
       prev.map((c) => (c.id === componentId ? { ...c, status: 'updating', progress: 30 } : c))
     );
 
     try {
-      const res = await fetch('/api/update/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ componentId }),
-      });
-      const data = await res.json();
-
-      if (data.logs && Array.isArray(data.logs)) {
-        data.logs.forEach((logLine: string) => appendLog(logLine));
-      }
-
+      await executeComponentUpdate(item);
       setComponents((prev) =>
         prev.map((c) =>
           c.id === componentId
@@ -737,7 +719,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
         )
       );
 
-      appendLog(`✨ [SUCCESS] ${item.name} updated to ${item.latestVersion} and verified.`);
+      appendLog(`[SUCCESS] ${item.name} updated to ${item.latestVersion}.`);
       if (onNotify) {
         onNotify(
           isBg
@@ -747,21 +729,20 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
         );
       }
     } catch (err: any) {
-      appendLog(`⚠️ Error during component update: ${err?.message || err}`);
+      appendLog(`[UPDATE FAILED] ${item.name}: ${err?.message || err}`);
       setComponents((prev) =>
         prev.map((c) =>
-          c.id === componentId
-            ? {
-                ...c,
-                currentVersion: c.latestVersion,
-                status: 'completed',
-                progress: 100,
-                driftSeverity: 'none',
-                driftDescription: 'No version drift (Up to date)',
-              }
-            : c
+          c.id === componentId ? { ...c, status: 'error', progress: 0 } : c
         )
       );
+      if (onNotify) {
+        onNotify(
+          isBg
+            ? `Неуспешно обновяване на ${item.name}: ${err?.message || 'Грешка'}`
+            : `Failed to update ${item.name}: ${err?.message || 'Error'}`,
+          'warning'
+        );
+      }
     }
   };
 
@@ -808,7 +789,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                       : 'System & AI Model Update Center'}
                   </h2>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 shrink-0">
-                    v0.35.0 OTA
+                    Beta v0.50.0 OTA
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5 break-words leading-snug">
@@ -1047,11 +1028,11 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                 <p className="text-[11px] text-slate-300 leading-snug break-words">
                   {systemCompatibility.availableDaemonUpdates > 0
                     ? isBg
-                      ? 'Налична е версия v0.35.0 с подобрена производителност.'
-                      : 'Version v0.35.0 available with enhanced WoL and SIMD support.'
+                      ? 'Налична е актуализация за Beta v0.50.0 хост агента.'
+                      : 'Host Agent update available for Beta v0.50.0.'
                     : isBg
-                    ? 'Хост демонът е актуален с протокол v0.35.0.'
-                    : 'Host Daemon is up to date with Wire Protocol v0.35.0.'}
+                    ? 'Хост демонът е актуален с протокол Beta v0.50.0 (AI-NET/3.0).'
+                    : 'Host Daemon is up to date with Beta v0.50.0 (AI-NET/3.0).'}
                 </p>
               </div>
               <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 flex-wrap">

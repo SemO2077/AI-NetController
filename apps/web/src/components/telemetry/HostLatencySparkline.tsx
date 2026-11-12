@@ -68,16 +68,12 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
       }
     }
 
-    // Fallback if empty and host is online
-    if (rawPoints.length === 0 && isOnline) {
-      const fallbackBase = currentPing ?? 4;
-      for (let i = 0; i <= 15; i++) {
-        const t = cutoff + (i / 15) * windowMs;
-        rawPoints.push({
-          timestamp: t,
-          latency: Math.max(1, fallbackBase + (i % 2 === 0 ? 0.5 : -0.5)),
-        });
-      }
+    // When only currentPing is available without prior buffered history, plot a flat real baseline
+    if (rawPoints.length === 0 && isOnline && typeof currentPing === 'number') {
+      rawPoints.push(
+        { timestamp: cutoff, latency: currentPing },
+        { timestamp: now, latency: currentPing }
+      );
     }
 
     if (!isOnline || rawPoints.length === 0) {

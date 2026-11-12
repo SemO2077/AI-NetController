@@ -1,191 +1,188 @@
 @import "tailwindcss";
-@import "./fonts.css";
 
 @theme {
   --breakpoint-xs: 400px;
 }
 
+:root,
+:root[data-accent="cyan"] {
+  --canvas-deep: #030712;
+  --canvas-surface: #090f1e;
+  --surface-card: #0d1527;
+  --surface-card-elevated: #111c33;
+
+  /* Dynamic Accent Theme Palette (Default: Cyber Cyan + Electric Indigo) */
+  --theme-accent: #22d3ee;
+  --theme-accent-bright: #67e8f9;
+  --theme-secondary: #818cf8;
+  --theme-tertiary: #34d399;
+  --theme-accent-glow: rgba(34, 211, 238, 0.36);
+  --theme-accent-border: rgba(56, 189, 248, 0.50);
+  --aurora-orb-1: rgba(6, 182, 212, 0.42);
+  --aurora-orb-2: rgba(99, 102, 241, 0.36);
+  --aurora-orb-3: rgba(16, 185, 129, 0.30);
+  --aurora-orb-4: rgba(56, 189, 248, 0.32);
+
+  /* Tailwind v4 Dynamic Accent Mapping */
+  --color-cyan-100: #cffafe;
+  --color-cyan-200: #a5f3fc;
+  --color-cyan-300: #67e8f9;
+  --color-cyan-400: #22d3ee;
+  --color-cyan-500: #06b6d4;
+  --color-cyan-600: #0891b2;
+  --color-cyan-900: #164e63;
+  --color-cyan-950: #083344;
+
+  --samsung-blue: #2979ff;
+  --samsung-cyan: #00f0ff;
+  --samsung-emerald: #00f59b;
+  --samsung-amber: #ffb703;
+  --samsung-rose: #ff2a6d;
+  --samsung-purple: #8b5cf6;
+  --neon-cyan: #00f0ff;
+  --neon-sky: #38bdf8;
+  --neon-emerald: #00f59b;
+  --neon-amber: #ffb703;
+  --neon-rose: #ff2a6d;
+  --neon-violet: #8b5cf6;
+
+  /* Liquid Glass Defaults (Balanced Vision Mode) */
+  --glass-base-bg: rgba(11, 19, 38, 0.52);
+  --glass-subtle-bg: rgba(14, 23, 44, 0.42);
+  --glass-elevated-bg: rgba(9, 15, 30, 0.66);
+  --glass-modal-bg: rgba(8, 14, 28, 0.80);
+  --glass-blur: 18px;
+  --glass-saturate: 190%;
+  --glass-specular-alpha: 0.12;
+  --glass-rim-top: rgba(255, 255, 255, 0.32);
+  --glass-rim-side: rgba(255, 255, 255, 0.13);
+
+  --ease-samsung: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-bubbly: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-elastic: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-fluid: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Cohesive Geometric UI, Display & Telemetry Font Stack (Latin + Bulgarian Cyrillic Parity) */
+  --font-sans: "Onest", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Roboto", "Segoe UI", sans-serif;
+  --font-display: "Plus Jakarta Sans", "Onest", -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+
+  /* Fluid Root Font Size Scaling Across Every Resolution & Aspect Ratio */
+  font-size: clamp(13.5px, 0.85rem + 0.22vw, 16px);
+}
+
+:root[data-accent="violet"] {
+  --theme-accent: #c084fc;
+  --theme-accent-bright: #e9d5ff;
+  --theme-secondary: #f472b6;
+  --theme-tertiary: #38bdf8;
+  --theme-accent-glow: rgba(192, 132, 252, 0.40);
+  --theme-accent-border: rgba(192, 132, 252, 0.54);
+  --aurora-orb-1: rgba(168, 85, 247, 0.44);
+  --aurora-orb-2: rgba(236, 72, 153, 0.36);
+  --aurora-orb-3: rgba(59, 130, 246, 0.32);
+  --aurora-orb-4: rgba(192, 132, 252, 0.35);
+
+  --color-cyan-100: #f3e8ff;
+  --color-cyan-200: #e9d5ff;
+  --color-cyan-300: #d8b4fe;
+  --color-cyan-400: #c084fc;
+  --color-cyan-500: #a855f7;
+  --color-cyan-600: #9333ea;
+  --color-cyan-900: #581c87;
+  --color-cyan-950: #3b0764;
+}
+
+:root[data-accent="emerald"] {
+  --theme-accent: #34d399;
+  --theme-accent-bright: #6ee7b7;
+  --theme-secondary: #22d3ee;
+  --theme-tertiary: #a3e635;
+  --theme-accent-glow: rgba(52, 211, 153, 0.38);
+  --theme-accent-border: rgba(52, 211, 153, 0.52);
+  --aurora-orb-1: rgba(16, 185, 129, 0.42);
+  --aurora-orb-2: rgba(6, 182, 212, 0.35);
+  --aurora-orb-3: rgba(132, 204, 22, 0.28);
+  --aurora-orb-4: rgba(52, 211, 153, 0.34);
+
+  --color-cyan-100: #d1fae5;
+  --color-cyan-200: #a7f3d0;
+  --color-cyan-300: #6ee7b7;
+  --color-cyan-400: #34d399;
+  --color-cyan-500: #10b981;
+  --color-cyan-600: #059669;
+  --color-cyan-900: #064e3b;
+  --color-cyan-950: #022c22;
+}
+
+:root[data-accent="rose"] {
+  --theme-accent: #fb7185;
+  --theme-accent-bright: #fda4af;
+  --theme-secondary: #fb923c;
+  --theme-tertiary: #c084fc;
+  --theme-accent-glow: rgba(251, 113, 133, 0.40);
+  --theme-accent-border: rgba(251, 113, 133, 0.54);
+  --aurora-orb-1: rgba(244, 63, 94, 0.42);
+  --aurora-orb-2: rgba(249, 115, 22, 0.34);
+  --aurora-orb-3: rgba(168, 85, 247, 0.30);
+  --aurora-orb-4: rgba(251, 113, 133, 0.35);
+
+  --color-cyan-100: #ffe4e6;
+  --color-cyan-200: #fecdd3;
+  --color-cyan-300: #fda4af;
+  --color-cyan-400: #fb7185;
+  --color-cyan-500: #f43f5e;
+  --color-cyan-600: #e11d48;
+  --color-cyan-900: #881337;
+  --color-cyan-950: #4c0519;
+}
+
+:root[data-accent="amber"] {
+  --theme-accent: #fbbf24;
+  --theme-accent-bright: #fde68a;
+  --theme-secondary: #f97316;
+  --theme-tertiary: #22d3ee;
+  --theme-accent-glow: rgba(251, 191, 36, 0.38);
+  --theme-accent-border: rgba(251, 191, 36, 0.52);
+  --aurora-orb-1: rgba(245, 158, 11, 0.42);
+  --aurora-orb-2: rgba(239, 68, 68, 0.32);
+  --aurora-orb-3: rgba(14, 165, 233, 0.28);
+  --aurora-orb-4: rgba(251, 191, 36, 0.34);
+
+  --color-cyan-100: #fef3c7;
+  --color-cyan-200: #fde68a;
+  --color-cyan-300: #fcd34d;
+  --color-cyan-400: #fbbf24;
+  --color-cyan-500: #f59e0b;
+  --color-cyan-600: #d97706;
+  --color-cyan-900: #78350f;
+  --color-cyan-950: #451a03;
+}
+
+:root[data-accent="cobalt"] {
+  --theme-accent: #60a5fa;
+  --theme-accent-bright: #93c5fd;
+  --theme-secondary: #a78bfa;
+  --theme-tertiary: #2dd4bf;
+  --theme-accent-glow: rgba(96, 165, 250, 0.40);
+  --theme-accent-border: rgba(96, 165, 250, 0.54);
+  --aurora-orb-1: rgba(59, 130, 246, 0.44);
+  --aurora-orb-2: rgba(139, 92, 246, 0.36);
+  --aurora-orb-3: rgba(45, 212, 191, 0.30);
+  --aurora-orb-4: rgba(96, 165, 250, 0.35);
+
+  --color-cyan-100: #dbeafe;
+  --color-cyan-200: #bfdbfe;
+  --color-cyan-300: #93c5fd;
+  --color-cyan-400: #60a5fa;
+  --color-cyan-500: #3b82f6;
+  --color-cyan-600: #2563eb;
+  --color-cyan-900: #1e3a8a;
+  --color-cyan-950: #172554;
+}
+
 @layer base {
-  :root,
-  :root[data-accent="cyan"] {
-    --canvas-deep: #030712;
-    --canvas-surface: #090f1e;
-    --surface-card: #0d1527;
-    --surface-card-elevated: #111c33;
-
-    /* Dynamic Accent Theme Palette (Default: Cyber Cyan + Electric Indigo) */
-    --theme-accent: #22d3ee;
-    --theme-accent-bright: #67e8f9;
-    --theme-secondary: #818cf8;
-    --theme-tertiary: #34d399;
-    --theme-accent-glow: rgba(34, 211, 238, 0.36);
-    --theme-accent-border: rgba(56, 189, 248, 0.50);
-    --aurora-orb-1: rgba(6, 182, 212, 0.42);
-    --aurora-orb-2: rgba(99, 102, 241, 0.36);
-    --aurora-orb-3: rgba(16, 185, 129, 0.30);
-    --aurora-orb-4: rgba(56, 189, 248, 0.32);
-
-    /* Tailwind v4 Dynamic Accent Mapping */
-    --color-cyan-100: #cffafe;
-    --color-cyan-200: #a5f3fc;
-    --color-cyan-300: #67e8f9;
-    --color-cyan-400: #22d3ee;
-    --color-cyan-500: #06b6d4;
-    --color-cyan-600: #0891b2;
-    --color-cyan-900: #164e63;
-    --color-cyan-950: #083344;
-
-    --samsung-blue: #2979ff;
-    --samsung-cyan: #00f0ff;
-    --samsung-emerald: #00f59b;
-    --samsung-amber: #ffb703;
-    --samsung-rose: #ff2a6d;
-    --samsung-purple: #8b5cf6;
-    --neon-cyan: #00f0ff;
-    --neon-sky: #38bdf8;
-    --neon-emerald: #00f59b;
-    --neon-amber: #ffb703;
-    --neon-rose: #ff2a6d;
-    --neon-violet: #8b5cf6;
-
-    /* Liquid Glass Defaults (Balanced Vision Mode) */
-    --glass-base-bg: rgba(11, 19, 38, 0.52);
-    --glass-subtle-bg: rgba(14, 23, 44, 0.42);
-    --glass-elevated-bg: rgba(9, 15, 30, 0.66);
-    --glass-modal-bg: rgba(8, 14, 28, 0.80);
-    --glass-blur: 18px;
-    --glass-saturate: 190%;
-    --glass-specular-alpha: 0.12;
-    --glass-rim-top: rgba(255, 255, 255, 0.32);
-    --glass-rim-side: rgba(255, 255, 255, 0.13);
-
-    --ease-samsung: cubic-bezier(0.22, 1, 0.36, 1);
-    --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
-    --ease-bubbly: cubic-bezier(0.22, 1, 0.36, 1);
-    --ease-elastic: cubic-bezier(0.22, 1, 0.36, 1);
-    --ease-fluid: cubic-bezier(0.16, 1, 0.3, 1);
-
-    /* Cohesive Geometric UI, Display & Telemetry Font Stack (Latin + Bulgarian Cyrillic Parity) */
-    --font-sans: "Onest", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Roboto", "Segoe UI", sans-serif;
-    --font-display: "Plus Jakarta Sans", "Onest", -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
-    --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
-
-    /* Fluid Root Font Size Scaling Across Every Resolution & Aspect Ratio */
-    font-size: clamp(13.5px, 0.85rem + 0.22vw, 16px);
-  }
-
-  /* ==========================================================================
-     DYNAMIC ACCENT COLOR PALETTES (Distinct Global Theme Transformation)
-     ========================================================================== */
-  :root[data-accent="violet"] {
-    --theme-accent: #c084fc;
-    --theme-accent-bright: #e9d5ff;
-    --theme-secondary: #f472b6;
-    --theme-tertiary: #38bdf8;
-    --theme-accent-glow: rgba(192, 132, 252, 0.40);
-    --theme-accent-border: rgba(192, 132, 252, 0.54);
-    --aurora-orb-1: rgba(168, 85, 247, 0.44);
-    --aurora-orb-2: rgba(236, 72, 153, 0.36);
-    --aurora-orb-3: rgba(59, 130, 246, 0.32);
-    --aurora-orb-4: rgba(192, 132, 252, 0.35);
-
-    --color-cyan-100: #f3e8ff;
-    --color-cyan-200: #e9d5ff;
-    --color-cyan-300: #d8b4fe;
-    --color-cyan-400: #c084fc;
-    --color-cyan-500: #a855f7;
-    --color-cyan-600: #9333ea;
-    --color-cyan-900: #581c87;
-    --color-cyan-950: #3b0764;
-  }
-
-  :root[data-accent="emerald"] {
-    --theme-accent: #34d399;
-    --theme-accent-bright: #6ee7b7;
-    --theme-secondary: #22d3ee;
-    --theme-tertiary: #a3e635;
-    --theme-accent-glow: rgba(52, 211, 153, 0.38);
-    --theme-accent-border: rgba(52, 211, 153, 0.52);
-    --aurora-orb-1: rgba(16, 185, 129, 0.42);
-    --aurora-orb-2: rgba(6, 182, 212, 0.35);
-    --aurora-orb-3: rgba(132, 204, 22, 0.28);
-    --aurora-orb-4: rgba(52, 211, 153, 0.34);
-
-    --color-cyan-100: #d1fae5;
-    --color-cyan-200: #a7f3d0;
-    --color-cyan-300: #6ee7b7;
-    --color-cyan-400: #34d399;
-    --color-cyan-500: #10b981;
-    --color-cyan-600: #059669;
-    --color-cyan-900: #064e3b;
-    --color-cyan-950: #022c22;
-  }
-
-  :root[data-accent="rose"] {
-    --theme-accent: #fb7185;
-    --theme-accent-bright: #fda4af;
-    --theme-secondary: #fb923c;
-    --theme-tertiary: #c084fc;
-    --theme-accent-glow: rgba(251, 113, 133, 0.40);
-    --theme-accent-border: rgba(251, 113, 133, 0.54);
-    --aurora-orb-1: rgba(244, 63, 94, 0.42);
-    --aurora-orb-2: rgba(249, 115, 22, 0.34);
-    --aurora-orb-3: rgba(168, 85, 247, 0.30);
-    --aurora-orb-4: rgba(251, 113, 133, 0.35);
-
-    --color-cyan-100: #ffe4e6;
-    --color-cyan-200: #fecdd3;
-    --color-cyan-300: #fda4af;
-    --color-cyan-400: #fb7185;
-    --color-cyan-500: #f43f5e;
-    --color-cyan-600: #e11d48;
-    --color-cyan-900: #881337;
-    --color-cyan-950: #4c0519;
-  }
-
-  :root[data-accent="amber"] {
-    --theme-accent: #fbbf24;
-    --theme-accent-bright: #fde68a;
-    --theme-secondary: #f97316;
-    --theme-tertiary: #22d3ee;
-    --theme-accent-glow: rgba(251, 191, 36, 0.38);
-    --theme-accent-border: rgba(251, 191, 36, 0.52);
-    --aurora-orb-1: rgba(245, 158, 11, 0.42);
-    --aurora-orb-2: rgba(239, 68, 68, 0.32);
-    --aurora-orb-3: rgba(14, 165, 233, 0.28);
-    --aurora-orb-4: rgba(251, 191, 36, 0.34);
-
-    --color-cyan-100: #fef3c7;
-    --color-cyan-200: #fde68a;
-    --color-cyan-300: #fcd34d;
-    --color-cyan-400: #fbbf24;
-    --color-cyan-500: #f59e0b;
-    --color-cyan-600: #d97706;
-    --color-cyan-900: #78350f;
-    --color-cyan-950: #451a03;
-  }
-
-  :root[data-accent="cobalt"] {
-    --theme-accent: #60a5fa;
-    --theme-accent-bright: #93c5fd;
-    --theme-secondary: #a78bfa;
-    --theme-tertiary: #2dd4bf;
-    --theme-accent-glow: rgba(96, 165, 250, 0.40);
-    --theme-accent-border: rgba(96, 165, 250, 0.54);
-    --aurora-orb-1: rgba(59, 130, 246, 0.44);
-    --aurora-orb-2: rgba(139, 92, 246, 0.36);
-    --aurora-orb-3: rgba(45, 212, 191, 0.30);
-    --aurora-orb-4: rgba(96, 165, 250, 0.35);
-
-    --color-cyan-100: #dbeafe;
-    --color-cyan-200: #bfdbfe;
-    --color-cyan-300: #93c5fd;
-    --color-cyan-400: #60a5fa;
-    --color-cyan-500: #3b82f6;
-    --color-cyan-600: #2563eb;
-    --color-cyan-900: #1e3a8a;
-    --color-cyan-950: #172554;
-  }
 
   /* ==========================================================================
      DYNAMIC FONT PRESETS (Unmistakably Distinct Typography Personalities)

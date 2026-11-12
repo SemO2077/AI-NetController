@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
-/// Monitor display specification from Opcode 0x0B (DISPLAY_ENUMERATION)
+/// Monitor display specification from Opcode 0x0D (DISPLAY_ENUMERATION)
 class MonitorDisplay {
   final int index;
   final int width;
@@ -39,12 +39,7 @@ class PipStreamViewer extends StatefulWidget {
   const PipStreamViewer({
     super.key,
     required this.frameData,
-    this.monitors = const [
-      MonitorDisplay(
-          index: 1, width: 2560, height: 1440, label: 'Display 1 (2560x1440)'),
-      MonitorDisplay(
-          index: 2, width: 1920, height: 1080, label: 'Display 2 (1920x1080)'),
-    ],
+    this.monitors = const [],
     this.selectedMonitorIndex = 1,
     this.dominantAccentColor = const Color(0xFF00F0FF),
     this.isStreaming = true,

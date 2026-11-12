@@ -38,7 +38,7 @@ if IS_WINDOWS:
     import winreg
     import ctypes
     from ctypes import wintypes
-    kernel32 = ctypes.windll.kernel32
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     user32 = ctypes.windll.user32
 else:
     winreg = None
@@ -70,7 +70,7 @@ logger = logging.getLogger("AI-NetController-WindowsIntegration")
 
 APP_NAME = "AI NetController"
 APP_DESCRIPTION = "AI NetController — PC Host Agent & Desktop Control Center"
-APP_VERSION = "0.35.0"
+APP_VERSION = "0.50.0"
 APP_PUBLISHER = "AI NetController"
 MUTEX_NAME = "Global\\AI_NetController_HostAgent_Mutex"
 REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -98,15 +98,27 @@ class SingleInstanceGuard:
 
         kernel32.CreateMutexW.restype = wintypes.HANDLE
         kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
-        # 0x00100000 = SYNCHRONIZE
+        # Clear thread-local last error before CreateMutexW call
+        ctypes.set_last_error(0)
         self.mutex_handle = kernel32.CreateMutexW(None, False, self.mutex_name)
-        last_error = kernel32.GetLastError()
+        last_error = ctypes.get_last_error()
+
+        if not self.mutex_handle:
+            self.is_already_running = False
+            return True
 
         # ERROR_ALREADY_EXISTS = 183
         if last_error == 183:
             self.is_already_running = True
             logger.warning("Another instance of AI NetController Host Agent is already running.")
+            try:
+                kernel32.CloseHandle(self.mutex_handle)
+            except Exception:
+                pass
+            self.mutex_handle = None
             self._activate_existing_window()
             return False
 
@@ -180,6 +192,12 @@ def get_executable_path() -> str:
     return os.path.abspath(sys.argv[0])
 
 
+def _sanitize_vbs_literal(value: str) -> str:
+    """Strips control characters/newlines and doubles quotes for safe VBScript literals."""
+    cleaned = "".join(ch for ch in str(value or "") if ch not in ("\r", "\n", "\x00"))
+    return cleaned.replace('"', '""')
+
+
 def create_vbs_shortcut(
     target_exe: str,
     lnk_path: str,
@@ -199,11 +217,11 @@ def create_vbs_shortcut(
         ico = get_icon_ico_path()
         icon_path = ico if (ico and os.path.exists(ico)) else f"{target_exe},0"
 
-    clean_target = target_exe.replace('"', '""')
-    clean_lnk = lnk_path.replace('"', '""')
-    clean_work = work_dir.replace('"', '""')
-    clean_desc = description.replace('"', '""')
-    clean_icon = icon_path.replace('"', '""')
+    clean_target = _sanitize_vbs_literal(target_exe)
+    clean_lnk = _sanitize_vbs_literal(lnk_path)
+    clean_work = _sanitize_vbs_literal(work_dir)
+    clean_desc = _sanitize_vbs_literal(description)
+    clean_icon = _sanitize_vbs_literal(icon_path)
 
     vbs_content = (
         'Set w = WScript.CreateObject("WScript.Shell")\n'
@@ -215,15 +233,23 @@ def create_vbs_shortcut(
         'l.Save\n'
     )
 
-    vbs_path = os.path.join(tempfile.gettempdir(), f"ainet_mklnk_{time.time_ns()}.vbs")
+    vbs_path = ""
     try:
-        with open(vbs_path, "w", encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".vbs",
+            prefix="ainet_mklnk_",
+            encoding="utf-8",
+            delete=False,
+        ) as f:
+            vbs_path = f.name
             f.write(vbs_content)
 
         res = subprocess.run(
             ["cscript", "//Nologo", vbs_path],
             capture_output=True,
             text=True,
+            timeout=15,
             creationflags=0x08000000 if IS_WINDOWS else 0
         )
         return res.returncode == 0 and os.path.exists(lnk_path)
@@ -231,7 +257,7 @@ def create_vbs_shortcut(
         logger.error(f"Failed to create shortcut at {lnk_path}: {e}")
         return False
     finally:
-        if os.path.exists(vbs_path):
+        if vbs_path and os.path.exists(vbs_path):
             try:
                 os.remove(vbs_path)
             except Exception:
@@ -388,6 +414,31 @@ def unregister_windows_uninstaller() -> bool:
 # =====================================================================
 # 4. FULL UNINSTALLATION WORKFLOW
 # =====================================================================
+def _stop_external_agent_processes() -> bool:
+    """Terminates other running AI_NetController_HostAgent.exe instances without self-killing."""
+    if not IS_WINDOWS:
+        return True
+    try:
+        res = subprocess.run(
+            [
+                "taskkill",
+                "/F",
+                "/IM",
+                "AI_NetController_HostAgent.exe",
+                "/FI",
+                f"PID ne {os.getpid()}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=0x08000000,
+        )
+        return res.returncode in (0, 128)
+    except Exception as e:
+        logger.debug(f"External process termination notice: {e}")
+        return False
+
+
 def perform_full_uninstall(
     interactive: bool = True,
     remove_config: bool = False,
@@ -395,17 +446,19 @@ def perform_full_uninstall(
 ) -> Dict[str, Any]:
     """
     Executes complete uninstallation of AI NetController from the host PC:
-    1. Stops running daemon and background services
+    1. Stops running external daemon and background services
     2. Removes Desktop and Start Menu shortcuts
     3. Removes Windows Run startup entry
     4. Removes Windows Add/Remove Programs registry entry
     5. Optionally removes local app data / logs
     """
+    stopped = _stop_external_agent_processes()
     results = {
-        "stopped_daemon": True,
+        "stopped_daemon": stopped,
         "removed_shortcuts": 0,
         "removed_autostart": False,
         "removed_uninstaller": False,
+        "removed_config": False,
         "success": True,
         "message": ""
     }
@@ -420,12 +473,23 @@ def perform_full_uninstall(
     # 3. Unregister from Windows Add/Remove Programs
     results["removed_uninstaller"] = unregister_windows_uninstaller()
 
+    # 4. Optionally clean persisted configuration directory
+    if remove_config:
+        try:
+            appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+            cfg_dir = os.path.join(appdata, "AI NetController")
+            if os.path.isdir(cfg_dir):
+                shutil.rmtree(cfg_dir, ignore_errors=True)
+                results["removed_config"] = not os.path.exists(cfg_dir)
+        except Exception:
+            results["removed_config"] = False
+
     results["message"] = (
         f"AI NetController has been successfully uninstalled from your PC.\n\n"
         f"• Removed {count} Desktop & Start Menu shortcut(s)\n"
         f"• Removed Windows startup registry entries\n"
         f"• Removed from Installed Apps / Control Panel\n"
-        f"• Terminated background daemon processes"
+        f"• Stopped external background daemon processes"
     )
 
     if on_complete and callable(on_complete):
@@ -521,16 +585,20 @@ def show_uninstall_dialog(parent_root=None, on_exit: Optional[Callable[[], None]
     btn_frame.pack(fill=tk.X)
 
     def _do_uninstall():
-        res = perform_full_uninstall(interactive=False, on_complete=on_exit)
-        messagebox.showinfo(
-            "Uninstallation Complete",
-            res["message"],
-            parent=win
-        )
-        win.destroy()
-        if on_exit:
+        res = perform_full_uninstall(interactive=False, on_complete=None)
+        try:
+            messagebox.showinfo(
+                "Uninstallation Complete",
+                res["message"],
+                parent=win
+            )
+            if win.winfo_exists():
+                win.destroy()
+        except Exception:
+            pass
+        if on_exit and callable(on_exit):
             on_exit()
-        else:
+        elif not parent_root:
             sys.exit(0)
 
     tk.Button(
@@ -680,22 +748,17 @@ def perform_full_install(
     dest_exe = os.path.join(valid_dir, "AI_NetController_HostAgent.exe")
     result["installed_exe"] = dest_exe
 
-    # 1. Stop existing daemon if running
+    # 1. Stop existing external daemon instances if locking destination binary
     _update(15, "Checking for running instances...")
     current_exe = get_executable_path()
-    if os.path.exists(dest_exe) and dest_exe.lower() != current_exe.lower():
+    if os.path.exists(dest_exe) and os.path.abspath(dest_exe).lower() != os.path.abspath(current_exe).lower():
         for attempt in range(3):
             try:
                 with open(dest_exe, "a+b"):
                     break
             except PermissionError:
                 _update(20, "Stopping existing background daemon...")
-                if IS_WINDOWS:
-                    subprocess.run(
-                        ["taskkill", "/F", "/IM", "AI_NetController_HostAgent.exe"],
-                        capture_output=True,
-                        creationflags=0x08000000
-                    )
+                _stop_external_agent_processes()
                 time.sleep(0.5)
 
     # 2. Copy binary assets
@@ -1002,7 +1065,17 @@ def show_install_dialog(
 
         def _worker():
             def _progress(pct, msg):
-                win.after(0, lambda: (prog_bar.configure(value=pct), status_var.set(f"[{pct}%] {msg}")))
+                def _apply(p=pct, m=msg):
+                    try:
+                        if win.winfo_exists():
+                            prog_bar.configure(value=p)
+                            status_var.set(f"[{p}%] {m}")
+                    except Exception:
+                        pass
+                try:
+                    win.after(0, _apply)
+                except Exception:
+                    pass
 
             target = dest_var.get()
             res = perform_full_install(
@@ -1015,6 +1088,11 @@ def show_install_dialog(
             )
 
             def _finish():
+                try:
+                    if not win.winfo_exists():
+                        return
+                except Exception:
+                    return
                 if res["success"]:
                     status_var.set("✓ Installation completed successfully!")
                     install_btn.configure(
@@ -1028,7 +1106,8 @@ def show_install_dialog(
                         res["message"],
                         parent=win
                     )
-                    win.destroy()
+                    if win.winfo_exists():
+                        win.destroy()
                     if on_complete and callable(on_complete):
                         on_complete()
                 else:
@@ -1041,7 +1120,10 @@ def show_install_dialog(
                         parent=win
                     )
 
-            win.after(0, _finish)
+            try:
+                win.after(0, _finish)
+            except Exception:
+                pass
 
         import threading
         threading.Thread(target=_worker, daemon=True, name="InstallerWorker").start()

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto_pkg;
@@ -49,7 +50,20 @@ class SlidingWindowReplayGuard {
 
   SlidingWindowReplayGuard({this.windowSize = kWindowSize});
 
+  /// Non-mutating check to ensure replay state is not polluted before AEAD tag verification.
+  bool canAccept(int seq) {
+    if (seq <= 0) return false;
+    if (!_initialized) return true;
+    final int diff = seq - _maxSeq;
+    if (diff > 0) return true;
+    final int absDiff = -diff;
+    if (absDiff >= windowSize) return false;
+    final BigInt bitMask = BigInt.one << absDiff;
+    return (_bitmap & bitMask) == BigInt.zero;
+  }
+
   bool validateAndUpdate(int seq) {
+    if (seq <= 0) return false;
     if (!_initialized) {
       _maxSeq = seq;
       _bitmap = BigInt.one;
@@ -130,7 +144,9 @@ class X25519 {
   static Uint8List scalarMult(Uint8List kBytes, Uint8List uBytes) {
     final Uint8List clamped = clampScalar(kBytes);
     final BigInt k = _bytesToBigInt(clamped);
-    final BigInt u = _bytesToBigInt(uBytes);
+    // RFC 7748 Section 5: mask bit 255 of u-coordinate and reduce mod p
+    final BigInt mask255 = (BigInt.one << 255) - BigInt.one;
+    final BigInt u = (_bytesToBigInt(uBytes) & mask255) % _p;
 
     BigInt x1 = u;
     BigInt x2 = BigInt.one;
@@ -383,6 +399,9 @@ class CryptoEngine {
   bool get isEstablished => _isEstablished;
 
   CryptoEngine({required this.preSharedKey}) {
+    if (preSharedKey.trim().isEmpty) {
+      throw ArgumentError("preSharedKey cannot be empty");
+    }
     _clientPrivKey = X25519.generatePrivateKey();
     _clientPubKey = X25519.publicFromPrivate(_clientPrivKey);
 
@@ -417,7 +436,7 @@ class CryptoEngine {
     proofData.add(_clientNonceN1);
     proofData.add(hostNonceN2);
 
-    final List<int> pskBytes = preSharedKey.codeUnits;
+    final List<int> pskBytes = utf8.encode(preSharedKey);
     final crypto_pkg.Hmac hmac = crypto_pkg.Hmac(crypto_pkg.sha256, pskBytes);
     final List<int> hmacDigest = hmac.convert(proofData.toBytes()).bytes;
 
@@ -428,9 +447,9 @@ class CryptoEngine {
     final Uint8List salt = saltBuilder.toBytes();
 
     // Client TX key = Host RX key
-    _kSend = hkdfExpandAndExtract(salt, sharedSecret, Uint8List.fromList(kCtxClientTx.codeUnits), kKeySize);
+    _kSend = hkdfExpandAndExtract(salt, sharedSecret, Uint8List.fromList(utf8.encode(kCtxClientTx)), kKeySize);
     // Client RX key = Host TX key
-    _kRecv = hkdfExpandAndExtract(salt, sharedSecret, Uint8List.fromList(kCtxHostTx.codeUnits), kKeySize);
+    _kRecv = hkdfExpandAndExtract(salt, sharedSecret, Uint8List.fromList(utf8.encode(kCtxHostTx)), kKeySize);
 
     _isEstablished = true;
     zeroize(sharedSecret);
@@ -477,16 +496,32 @@ class CryptoEngine {
     final ByteData nonceBd = ByteData.sublistView(nonce);
     final int seq = nonceBd.getUint64(4, Endian.big);
 
-    if (!_replayGuard.validateAndUpdate(seq)) {
-      return null; // Replay attack or out-of-bounds sequence
+    // Check replay eligibility BEFORE committing state, then verify Poly1305 MAC first
+    if (!_replayGuard.canAccept(seq)) {
+      return null;
     }
 
-    return ChaCha20Poly1305.decrypt(_kRecv!, nonce, ctAndTag, aad: aad);
+    final Uint8List? plaintext = ChaCha20Poly1305.decrypt(_kRecv!, nonce, ctAndTag, aad: aad);
+    if (plaintext == null) {
+      return null;
+    }
+    if (!_replayGuard.validateAndUpdate(seq)) {
+      return null;
+    }
+    return plaintext;
   }
 
   void dispose() {
-    if (_kSend != null) zeroize(_kSend!);
-    if (_kRecv != null) zeroize(_kRecv!);
+    if (_kSend != null) {
+      zeroize(_kSend!);
+      _kSend = null;
+    }
+    if (_kRecv != null) {
+      zeroize(_kRecv!);
+      _kRecv = null;
+    }
+    zeroize(_clientPrivKey);
+    zeroize(_clientNonceN1);
     _isEstablished = false;
   }
 }

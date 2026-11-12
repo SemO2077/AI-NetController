@@ -239,7 +239,9 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
   const [viewMode, setViewMode] = useState<'grid' | 'topology'>(() => {
     try {
-      const saved = localStorage.getItem('cst_fleet_view_mode');
+      const saved =
+        localStorage.getItem('ai_net_fleet_view_mode') ||
+        localStorage.getItem('cst_fleet_view_mode');
       if (saved === 'grid' || saved === 'topology') return saved;
     } catch {}
     return 'grid';
@@ -247,7 +249,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
   useEffect(() => {
     try {
-      localStorage.setItem('cst_fleet_view_mode', viewMode);
+      localStorage.setItem('ai_net_fleet_view_mode', viewMode);
     } catch {}
   }, [viewMode]);
 
@@ -374,6 +376,23 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
     return () => clearInterval(interval);
   }, [hasWakingHosts]);
+
+  useEffect(() => {
+    if (!hasWakingHosts) return;
+    setWakingCountdown((prev) => {
+      let changed = false;
+      const next: Record<string, number> = {};
+      for (const [id, count] of Object.entries(prev)) {
+        const host = hosts.find((h) => h.id === id);
+        if (host?.isOnline) {
+          changed = true;
+        } else {
+          next[id] = count;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [hosts, hasWakingHosts]);
 
   const filteredHosts = useMemo(() => {
     const query = deferredQuery.trim().toLowerCase();

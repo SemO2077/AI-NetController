@@ -44,7 +44,7 @@ def get_icon_ico_path() -> Optional[str]:
             os.path.join(root, "agent", "assets", "icon.ico"),
             os.path.join(root, "agent", "icon.ico"),
         ]:
-            if os.path.exists(cand) and os.path.getsize(cand) > 0:
+            if os.path.isfile(cand) and os.path.getsize(cand) > 0:
                 return os.path.abspath(cand)
     return None
 
@@ -61,13 +61,13 @@ def get_icon_png_path(size: int = 512) -> Optional[str]:
             os.path.join(root, "assets", "icon.png"),
             os.path.join(root, "icon.png"),
         ]:
-            if os.path.exists(cand) and os.path.getsize(cand) > 0:
+            if os.path.isfile(cand) and os.path.getsize(cand) > 0:
                 return os.path.abspath(cand)
     return None
 
 
 def get_icon_image(size: int = 64):
-    """Returns a PIL Image of the AI NetController icon, or creates one dynamically."""
+    """Returns an RGBA PIL Image of the AI NetController icon, or creates one dynamically."""
     if not HAS_PIL:
         return None
 
@@ -75,14 +75,14 @@ def get_icon_image(size: int = 64):
     if png_path:
         try:
             with Image.open(png_path) as src_im:
-                im = src_im.copy()
+                im = src_im.convert("RGBA") if src_im.mode != "RGBA" else src_im.copy()
             if im.size != (size, size):
                 im = im.resize((size, size), Image.Resampling.LANCZOS)
             return im
         except Exception as e:
             logger.debug(f"Could not load icon from {png_path}: {e}")
 
-    # Fallback: create dynamic in-memory icon matching the Android app
+    # Fallback: create dynamic in-memory icon matching app brand
     img = Image.new("RGBA", (size, size), (7, 12, 24, 255))
     from PIL import ImageDraw
     draw = ImageDraw.Draw(img)
@@ -103,7 +103,7 @@ def apply_window_icon(window) -> None:
 
     # 1. Try native Windows .ico via iconbitmap
     ico_path = get_icon_ico_path()
-    if ico_path and os.path.exists(ico_path):
+    if ico_path and os.path.isfile(ico_path):
         try:
             window.iconbitmap(default=ico_path)
             return
@@ -112,7 +112,7 @@ def apply_window_icon(window) -> None:
 
     # 2. Try PhotoImage via iconphoto
     png_path = get_icon_png_path(64) or get_icon_png_path(512)
-    if png_path and os.path.exists(png_path):
+    if png_path and os.path.isfile(png_path):
         try:
             import tkinter as tk
             from PIL import ImageTk

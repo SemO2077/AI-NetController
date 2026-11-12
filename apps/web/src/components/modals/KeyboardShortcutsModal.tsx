@@ -155,7 +155,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
             <span>{language === 'bg' ? 'Натиснете Esc за изход' : 'Press Esc to dismiss'}</span>
             <div className="flex items-center gap-1 font-mono text-cyan-400/80">
               <Command className="w-3 h-3" />
-              <span>CST/3.0-SECURE</span>
+              <span>AI-NET/3.0-SECURE</span>
             </div>
           </div>
         </motion.div>

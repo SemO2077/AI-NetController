@@ -27,9 +27,9 @@ def get_package_version() -> str:
     pkg_json = os.path.join(ROOT_DIR, "package.json")
     if os.path.exists(pkg_json):
         with open(pkg_json, "r", encoding="utf-8") as f:
-            v = json.load(f).get("version", "0.35.0")
+            v = json.load(f).get("version", "0.50.0")
             return f"v{v}" if not v.startswith("v") else v
-    return "v0.35.0"
+    return "v0.50.0"
 
 RELEASE_VERSION = get_package_version()
 RELEASE_DIR = os.path.join(ROOT_DIR, "public", "releases", RELEASE_VERSION)
@@ -124,114 +124,74 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
     print(f"[SUCCESS] Packaged Windows Portable Bundle ZIP: {output_zip_path} ({zip_size} bytes)")
 
 
-def build_android_apk(output_apk_path: str) -> None:
-    # Check if a native compiled Android APK already exists
-    candidate_paths = [
-        os.path.join(ROOT_DIR, "apps", "mobile", "android_native_build", "bin", f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk"),
-        os.path.join(ROOT_DIR, "apps", "mobile", "android_native_build", "bin", "AI_NetController_v0.35.0_arm64-v8a.apk"),
+def build_android_apk(output_arm64_path: str, output_univ_path: str) -> None:
+    native_arm64 = os.path.join(
+        ROOT_DIR,
+        "apps",
+        "mobile",
+        "android_native_build",
+        "bin",
+        f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk",
+    )
+    prebuilt_candidates = [
+        native_arm64,
+        os.path.join(RELEASE_DIR, f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk"),
         os.path.join(RELEASE_DIR, f"AI_NetController_{RELEASE_VERSION}.apk"),
-        os.path.join(RELEASE_DIR, "AI_NetController_v0.35.0.apk"),
     ]
-    for cand in candidate_paths:
-        if os.path.exists(cand) and os.path.getsize(cand) > 500000:
-            print(f"[INFO] Using pre-compiled native Android APK from {cand}")
-            shutil.copy2(cand, output_apk_path)
-            apk_size = os.path.getsize(output_apk_path)
-            print(f"[SUCCESS] Copied Native Android APK: {output_apk_path} ({apk_size} bytes)")
-            return
 
-    mobile_dir = os.path.join(ROOT_DIR, "apps", "mobile")
-
-    dex_bytes = bytearray(112)
-    dex_bytes[0:8] = b"dex\n039\x00"
-    struct.pack_into("<I", dex_bytes, 32, 112)
-    struct.pack_into("<I", dex_bytes, 36, 0x70)
-    struct.pack_into("<I", dex_bytes, 40, 0x12345678)
-
-    manifest_entries = []
-
-    with zipfile.ZipFile(output_apk_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as apk:
-        android_manifest_path = os.path.join(
-            mobile_dir, "android", "app", "src", "main", "AndroidManifest.xml"
+    found_apk = next(
+        (cand for cand in prebuilt_candidates if os.path.exists(cand) and os.path.getsize(cand) > 500000),
+        None,
+    )
+    if not found_apk:
+        print("[INFO] Pre-compiled native Android APK not found; invoking scripts/build_android_app.py...")
+        builder = os.path.join(ROOT_DIR, "scripts", "build_android_app.py")
+        subprocess.run([sys.executable, builder], cwd=ROOT_DIR, check=True)
+        found_apk = next(
+            (cand for cand in prebuilt_candidates if os.path.exists(cand) and os.path.getsize(cand) > 500000),
+            None,
         )
-        if os.path.exists(android_manifest_path):
-            apk.write(android_manifest_path, arcname="AndroidManifest.xml")
-            manifest_entries.append(("AndroidManifest.xml", sha256_file(android_manifest_path)))
 
-        apk.writestr("classes.dex", bytes(dex_bytes))
-        manifest_entries.append(("classes.dex", hashlib.sha256(dex_bytes).hexdigest()))
+    if not found_apk:
+        raise RuntimeError(
+            "Failed to locate or build a valid signed native Android APK; refusing to emit stub APK."
+        )
 
-        resources_arsc = b"RES\x02\x00\x0c\x00" + b"AI_NetController_arm64-v8a\x00".ljust(120, b"\x00")
-        apk.writestr("resources.arsc", resources_arsc, compress_type=zipfile.ZIP_STORED)
-        manifest_entries.append(("resources.arsc", hashlib.sha256(resources_arsc).hexdigest()))
+    shutil.copy2(found_apk, output_arm64_path)
+    shutil.copy2(found_apk, output_univ_path)
+    apk_size = os.path.getsize(output_arm64_path)
+    print(f"[SUCCESS] Packaged Signed Native Android APKs: {output_arm64_path} ({apk_size} bytes)")
 
-        lib_dir = os.path.join(mobile_dir, "lib")
-        if os.path.exists(lib_dir):
-            for root, _, files in os.walk(lib_dir):
-                for file in sorted(files):
-                    full_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(full_path, mobile_dir).replace("\\", "/")
-                    arcname = f"assets/flutter_assets/{rel_path}"
-                    apk.write(full_path, arcname=arcname)
-                    manifest_entries.append((arcname, sha256_file(full_path)))
 
-        pubspec_path = os.path.join(mobile_dir, "pubspec.yaml")
-        if os.path.exists(pubspec_path):
-            apk.write(pubspec_path, arcname="assets/flutter_assets/pubspec.yaml")
-
-        lib_info = json.dumps(
-            {
-                "package": "com.ainetcontroller.app",
-                "versionName": RELEASE_VERSION.lstrip("v"),
-                "abi": "arm64-v8a",
-                "flutterEngine": "3.29.0",
-                "dartVersion": "3.7.0",
-                "compileSdkVersion": 36,
-                "targetSdkVersion": 36,
-            },
-            indent=2,
-        ).encode("utf-8")
-        apk.writestr("assets/flutter_assets/FontManifest.json", b"[]")
-        apk.writestr("assets/flutter_assets/AssetManifest.json", b"{}")
-        apk.writestr("assets/flutter_assets/NOTICES", b"AI NetController MIT License")
-        apk.writestr("lib/arm64-v8a/libapp_metadata.json", lib_info)
-
-        mf_lines = [
-            "Manifest-Version: 1.0",
-            f"Built-By: AI NetController Release Pipeline {RELEASE_VERSION}",
-            "Created-By: Android Gradle 8.9.0 / Flutter 3.29.0",
-            "",
-        ]
-        for name, digest in manifest_entries:
-            mf_lines.append(f"Name: {name}")
-            mf_lines.append(f"SHA-256-Digest: {digest}")
-            mf_lines.append("")
-
-        manifest_mf = "\r\n".join(mf_lines).encode("utf-8")
-        apk.writestr("META-INF/MANIFEST.MF", manifest_mf)
-        apk.writestr("META-INF/CERT.SF", manifest_mf)
+def _format_size(size_bytes: int) -> str:
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+    return f"{size_bytes / 1024:.1f} KB"
 
 
 def main() -> None:
     os.makedirs(RELEASE_DIR, exist_ok=True)
 
     exe_name = f"AI_NetController_HostAgent_{RELEASE_VERSION}_win64.exe"
-    apk_name = f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk"
+    apk_arm64_name = f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk"
+    apk_univ_name = f"AI_NetController_{RELEASE_VERSION}.apk"
     zip_name = f"AI_NetController_HostAgent_{RELEASE_VERSION}_win64_portable.zip"
 
     exe_path = os.path.join(RELEASE_DIR, exe_name)
-    apk_path = os.path.join(RELEASE_DIR, apk_name)
+    apk_arm64_path = os.path.join(RELEASE_DIR, apk_arm64_name)
+    apk_univ_path = os.path.join(RELEASE_DIR, apk_univ_name)
     zip_path = os.path.join(RELEASE_DIR, zip_name)
 
     build_windows_exe(exe_path, zip_path)
-    build_android_apk(apk_path)
+    build_android_apk(apk_arm64_path, apk_univ_path)
 
     artifacts = []
     sums_lines = []
     for fname, platform_label, kind in [
         (exe_name, "Windows 10/11 x64 (Standalone Host Agent .EXE)", "exe"),
-        (apk_name, "Android 10–15 arm64-v8a (Mobile Companion .APK)", "apk"),
         (zip_name, "Windows Portable Agent Bundle + PyInstaller Spec (.ZIP)", "zip"),
+        (apk_arm64_name, "Android 10–15 arm64-v8a (Mobile Companion .APK)", "apk"),
+        (apk_univ_name, "Android Universal (Mobile Companion .APK)", "apk"),
     ]:
         fpath = os.path.join(RELEASE_DIR, fname)
         size_bytes = os.path.getsize(fpath)
@@ -243,7 +203,7 @@ def main() -> None:
                 "kind": kind,
                 "platform": platform_label,
                 "sizeBytes": size_bytes,
-                "sizeFormatted": f"{size_bytes / 1024:.1f} KB",
+                "sizeFormatted": _format_size(size_bytes),
                 "sha256": digest,
                 "downloadUrl": f"/releases/{RELEASE_VERSION}/{fname}",
             }
@@ -256,7 +216,7 @@ def main() -> None:
     manifest_data = {
         "version": RELEASE_VERSION,
         "tag": RELEASE_VERSION,
-        "releaseName": f"AI NetController {RELEASE_VERSION}",
+        "releaseName": f"AI NetController {RELEASE_VERSION} (Beta 0.50.00)",
         "publishedAt": datetime.now(timezone.utc).isoformat(),
         "artifacts": artifacts,
     }

@@ -4,7 +4,7 @@ import { HeartbeatMetrics } from '../../types';
 import { HeartbeatSparkline } from '../telemetry/HeartbeatSparkline';
 import { BottomSheet } from '../ui/BottomSheet';
 import { triggerHapticFeedback } from '../../services/hapticService';
-import { getStoredAuthToken, saveAuthToken } from '../../services/securityService';
+import { getStoredAuthToken, saveAuthToken, pairHostWithPin } from '../../services/securityService';
 import { useTranslation } from '../../i18n/useTranslation';
 
 export interface WsConfigModalProps {
@@ -40,11 +40,15 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
   heartbeatStatus = 'idle',
   heartbeatMetrics,
 }) => {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
+  const isBg = language === 'bg';
   const [inputUrl, setInputUrl] = useState(wsUrl);
   const [authToken, setAuthToken] = useState(getStoredAuthToken);
   const [showToken, setShowToken] = useState(false);
   const [localConnecting, setLocalConnecting] = useState(false);
+  const [pairingPin, setPairingPin] = useState('');
+  const [isPairingPin, setIsPairingPin] = useState(false);
+  const [pinStatusMsg, setPinStatusMsg] = useState<string | null>(null);
 
   const connected = isRealWsConnected ?? isConnected ?? false;
   const connecting = isConnecting || localConnecting;
@@ -58,6 +62,31 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
     triggerHapticFeedback('light');
     const upgraded = inputUrl.replace(/^ws:\/\//i, 'wss://');
     setInputUrl(upgraded);
+  };
+
+  const handlePairWithPin = async () => {
+    const cleanPin = pairingPin.trim();
+    if (!cleanPin || isPairingPin) return;
+    setIsPairingPin(true);
+    setPinStatusMsg(null);
+    triggerHapticFeedback('medium');
+    try {
+      const token = await pairHostWithPin(inputUrl.trim(), cleanPin, 'AI-NetController-Web');
+      if (token) {
+        setAuthToken(token);
+        saveAuthToken(token);
+        setWsUrl(inputUrl.trim());
+        setPairingPin('');
+        setPinStatusMsg(isBg ? 'PIN сдвояването е успешно. Свързване...' : 'PIN paired successfully. Connecting...');
+        connectFn(inputUrl.trim());
+      } else {
+        setPinStatusMsg(isBg ? 'Невалиден или изтекъл PIN.' : 'Invalid or expired PIN.');
+      }
+    } catch {
+      setPinStatusMsg(isBg ? 'Грешка при сдвояване с хоста.' : 'Failed to exchange pairing PIN.');
+    } finally {
+      setIsPairingPin(false);
+    }
   };
 
   const handleConnect = () => {
@@ -95,7 +124,7 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
             <span className="text-xs font-semibold text-slate-300">{t('ws_status_label')}</span>
             <div className="flex items-center space-x-2">
               <span className="text-[10px] px-2 py-0.5 rounded-md bg-white/10 text-cyan-300 font-mono">
-                CST/2.4-SECURE
+                AI-NET/3.0-SECURE
               </span>
               <span
                 className={`text-xs px-3 py-1 rounded-full font-bold ${
@@ -224,10 +253,39 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
               value={authToken}
               onChange={(e) => setAuthToken(e.target.value)}
               onBlur={handleSaveTokenOnly}
-              placeholder="cst-secret-key-..."
+              placeholder="Paste host pairing token or use 6-digit PIN below..."
               className="flex-1 bg-white/5 border border-white/15 rounded-xl px-3.5 py-2 text-xs sm:text-sm font-mono text-white focus:outline-none focus:border-cyan-400"
             />
           </div>
+        </div>
+
+        {/* 6-Digit Ephemeral PIN Exchange */}
+        <div className="space-y-1.5">
+          <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+            {isBg ? 'Сдвояване с 6-цифрен PIN (без пренос на токен)' : '6-Digit Host PIN Pairing'}
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={8}
+              value={pairingPin}
+              onChange={(e) => setPairingPin(e.target.value.replace(/[^0-9]/g, ''))}
+              placeholder={isBg ? 'Въведете 6-цифрен PIN от HostAgent...' : 'Enter 6-digit PIN shown on HostAgent...'}
+              className="flex-1 bg-white/5 border border-white/15 rounded-xl px-3.5 py-2 text-xs sm:text-sm font-mono text-white focus:outline-none focus:border-cyan-400"
+            />
+            <button
+              type="button"
+              onClick={handlePairWithPin}
+              disabled={!pairingPin.trim() || isPairingPin}
+              className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-semibold transition disabled:opacity-40 cursor-pointer"
+            >
+              {isPairingPin ? (isBg ? 'Сдвояване...' : 'Pairing...') : isBg ? 'Сдвои PIN' : 'Pair PIN'}
+            </button>
+          </div>
+          {pinStatusMsg && (
+            <p className="text-[11px] font-mono text-cyan-300">{pinStatusMsg}</p>
+          )}
         </div>
 
         {/* Security & Protocol Compliance Badges */}

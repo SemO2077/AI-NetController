@@ -31,8 +31,8 @@ const BILINGUAL_RULE_DICTIONARY: Array<{ en: string; bg: string }> = [
     bg: 'Браузър по подразбиране е Brave (C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe)',
   },
   {
-    en: 'Project files are located in D:\\Projects\\CST_Graduation',
-    bg: 'Файловете на проекта се намират в D:\\Projects\\CST_Graduation',
+    en: 'Project files are located in D:\\Projects\\AI_NetController',
+    bg: 'Файловете на проекта се намират в D:\\Projects\\AI_NetController',
   },
   {
     en: 'Direct termination of the PostgreSQL service is strictly prohibited',
@@ -51,8 +51,8 @@ const BILINGUAL_RULE_DICTIONARY: Array<{ en: string; bg: string }> = [
     bg: 'Лаптоп за полева диагностика и отдалечена инспекция на Wi-Fi и VLAN',
   },
   {
-    en: 'NFS storage partition mounted at /mnt/cst_backups',
-    bg: 'NFS дял за резервни копия, монтиран в /mnt/cst_backups',
+    en: 'NFS storage partition mounted at /mnt/ai_net_backups',
+    bg: 'NFS дял за резервни копия, монтиран в /mnt/ai_net_backups',
   },
   {
     en: 'Never stop sshd.service without explicit secondary confirmation',

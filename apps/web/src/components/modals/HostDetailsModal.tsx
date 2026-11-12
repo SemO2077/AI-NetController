@@ -194,7 +194,7 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
 
           <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
             <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'CST ПОРТ АГЕНТ' : 'CST AGENT PORT'}
+              {language === 'bg' ? 'ПОРТ НА АГЕНТА' : 'AGENT PORT'}
             </span>
             <span className="text-emerald-400 font-bold block">{host.port || 8765} (TCP/WS)</span>
           </div>

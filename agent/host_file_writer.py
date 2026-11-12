@@ -11,12 +11,15 @@ clients to the Host PC. Features:
 ================================================================================
 """
 
-import os
-import re
-import time
-import struct
+import asyncio
 import hashlib
 import logging
+import os
+import re
+import secrets
+import stat
+import struct
+import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -44,6 +47,27 @@ STATUS_ERR_CHECKSUM = 0x12
 STATUS_ERR_IO = 0x13
 
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB hard limit
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_DANGEROUS_EXECUTABLES = {
+    ".exe", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".vbs", ".vbe",
+    ".js", ".jse", ".wsf", ".wsh", ".msi", ".msp", ".scr", ".pif",
+    ".com", ".hta", ".cpl", ".dll", ".sys", ".lnk", ".scf", ".url", ".reg",
+}
+
+
+def _is_symlink_or_reparse(path: Path) -> bool:
+    """Checks for POSIX symlinks and Windows NTFS junctions / reparse points."""
+    try:
+        if path.is_symlink():
+            return True
+        reparse_attr = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if reparse_attr and path.exists():
+            st = os.lstat(path)
+            if getattr(st, "st_file_attributes", 0) & reparse_attr:
+                return True
+    except OSError:
+        return True
+    return False
 
 
 class ActiveTransfer:
@@ -54,42 +78,70 @@ class ActiveTransfer:
         self.total_size = total_size
         self.expected_sha256 = expected_sha256.lower()
         self.target_path = target_path
-        self.temp_path = target_path.with_suffix(f"{target_path.suffix}.cst_part")
+        unique_suffix = secrets.token_hex(4)
+        self.temp_path = target_path.with_name(f".{target_path.name}.{transfer_id}.{unique_suffix}.cst_part")
         self.bytes_written = 0
+        self.max_offset_written = 0
         self.file_handle = None
 
     def open(self, truncate: bool = False):
-        # Ensure parent directory exists
+        # Ensure parent directory exists and neither target nor temp path is a symlink/junction
         self.temp_path.parent.mkdir(parents=True, exist_ok=True)
-        mode = "wb" if (truncate or not self.temp_path.exists()) else "r+b"
-        self.file_handle = open(self.temp_path, mode)
+        if _is_symlink_or_reparse(self.temp_path.parent) or _is_symlink_or_reparse(self.temp_path):
+            raise ValueError("Unsafe symlink or reparse point detected for transfer temp path")
+        flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        if truncate:
+            flags |= os.O_TRUNC
+        fd = os.open(str(self.temp_path), flags, 0o600)
+        try:
+            self.file_handle = os.fdopen(fd, "wb" if truncate else "r+b")
+        except Exception:
+            os.close(fd)
+            raise
 
     def write_chunk(self, offset: int, data: bytes):
-        if offset < 0 or offset > self.total_size or offset + len(data) > MAX_FILE_SIZE:
-            raise ValueError(f"Chunk offset {offset} + len {len(data)} exceeds permitted bounds ({MAX_FILE_SIZE})")
+        if offset < 0 or offset + len(data) > self.total_size or offset + len(data) > MAX_FILE_SIZE:
+            raise ValueError(
+                f"Chunk offset {offset} + len {len(data)} exceeds declared bounds ({self.total_size} / {MAX_FILE_SIZE})"
+            )
         if not self.file_handle:
             self.open()
         self.file_handle.seek(offset)
         self.file_handle.write(data)
         self.bytes_written += len(data)
+        if offset + len(data) > self.max_offset_written:
+            self.max_offset_written = offset + len(data)
 
     def close(self):
         if self.file_handle and not self.file_handle.closed:
+            try:
+                self.file_handle.flush()
+            except Exception:
+                pass
             self.file_handle.close()
         self.file_handle = None
 
     def finalize(self) -> bool:
         self.close()
-        
-        # Calculate SHA-256 over actual sequential bytes written to disk
+        if _is_symlink_or_reparse(self.temp_path):
+            logger.error("Aborted finalize: temp file became symlink/reparse point: %s", self.temp_path)
+            return False
+
+        # Verify file size and SHA-256 over sequential bytes written to disk
         hasher = hashlib.sha256()
         try:
+            actual_size = self.temp_path.stat().st_size
+            if actual_size != self.total_size:
+                logger.error("Size mismatch for %s: expected %d bytes, got %d", self.filename, self.total_size, actual_size)
+                if self.temp_path.exists():
+                    self.temp_path.unlink()
+                return False
             with open(self.temp_path, "rb") as f:
                 while chunk := f.read(65536):
                     hasher.update(chunk)
             calculated_sha = hasher.hexdigest().lower()
         except Exception as e:
-            logger.error(f"Failed to calculate checksum for {self.filename}: {e}")
+            logger.error("Failed to calculate checksum for %s: %s", self.filename, e)
             if self.temp_path.exists():
                 try:
                     self.temp_path.unlink()
@@ -99,7 +151,10 @@ class ActiveTransfer:
 
         if calculated_sha != self.expected_sha256:
             logger.error(
-                f"Checksum mismatch for {self.filename}! Expected {self.expected_sha256}, got {calculated_sha}"
+                "Checksum mismatch for %s! Expected %s, got %s",
+                self.filename,
+                self.expected_sha256,
+                calculated_sha,
             )
             if self.temp_path.exists():
                 try:
@@ -109,22 +164,21 @@ class ActiveTransfer:
             return False
 
         # Atomic rename part file to final filename
-        if self.target_path.exists():
-            # Generate unique name if already exists
+        if self.target_path.exists() or _is_symlink_or_reparse(self.target_path):
             stem = self.target_path.stem
             ext = self.target_path.suffix
             counter = 1
-            while self.target_path.exists():
+            while self.target_path.exists() or _is_symlink_or_reparse(self.target_path):
                 self.target_path = self.target_path.with_name(f"{stem} ({counter}){ext}")
                 counter += 1
 
-        self.temp_path.rename(self.target_path)
-        logger.info(f"File successfully received and verified: {self.target_path} ({self.bytes_written} bytes)")
+        self.temp_path.replace(self.target_path)
+        logger.info("File successfully received and verified: %s (%d bytes)", self.target_path, self.bytes_written)
         return True
 
     def abort(self):
         self.close()
-        if self.temp_path.exists():
+        if self.temp_path.exists() and not _is_symlink_or_reparse(self.temp_path):
             try:
                 self.temp_path.unlink()
             except Exception:
@@ -133,17 +187,17 @@ class ActiveTransfer:
 
 class HostFileWriter:
     """Zero-Trust Host File Transfer Receiver."""
-    def __init__(self, download_dir: Optional[Path] = None):
+    def __init__(self, download_dir: Optional[Path] = None, allow_executables: bool = False):
         if download_dir:
             self.download_dir = download_dir.resolve()
         else:
-            # Cross-platform user Downloads folder resolution
             user_home = Path.home()
             self.download_dir = (user_home / "Downloads").resolve()
 
+        self.allow_executables = allow_executables
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.active_transfers: Dict[int, ActiveTransfer] = {}
-        logger.info(f"HostFileWriter initialized. Target chroot directory: {self.download_dir}")
+        logger.info("HostFileWriter initialized. Target chroot directory: %s", self.download_dir)
 
     _WINDOWS_RESERVED_NAMES = {
         "CON", "PRN", "AUX", "NUL",
@@ -153,12 +207,9 @@ class HostFileWriter:
 
     def _sanitize_filename(self, filename: str) -> str:
         """Strip directory paths and dangerous characters to block path traversal."""
-        # Normalize backslashes so Windows paths are stripped on all platforms
         normalized = filename.replace("\\", "/")
         clean_name = os.path.basename(normalized)
-        # Remove any null bytes or control characters
         clean_name = re.sub(r'[\x00-\x1f\x7f]', '', clean_name)
-        # Replace dangerous filesystem characters with underscore
         clean_name = re.sub(r'[<>:"/\\|?*]', '_', clean_name).strip(" .")
         stem_upper = clean_name.split(".")[0].upper() if clean_name else ""
         if not clean_name or clean_name in {".", ".."} or stem_upper in self._WINDOWS_RESERVED_NAMES:
@@ -166,20 +217,65 @@ class HostFileWriter:
         return clean_name
 
     def _verify_path_contained(self, target_path: Path) -> bool:
-        """Mathematically verifies that target_path is within download_dir."""
+        """Verifies target_path is non-symlink/reparse and strictly contained inside download_dir."""
         try:
+            if _is_symlink_or_reparse(self.download_dir) or _is_symlink_or_reparse(target_path):
+                return False
             target_resolved = target_path.resolve()
             return self.download_dir in target_resolved.parents or target_resolved == self.download_dir
         except Exception:
             return False
 
+    def _prepare_transfer(self, transfer_id: int, payload: bytes) -> bytes:
+        if len(payload) < 1 + 4 + 8 + 64:
+            return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "INIT payload too small")
+
+        total_size = struct.unpack_from('!Q', payload, 5)[0]
+        sha256_hex = payload[13:77].decode('ascii', errors='ignore').strip()
+        raw_filename = payload[77:].decode('utf-8', errors='replace')
+
+        if not _SHA256_RE.match(sha256_hex):
+            return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, 0, "Invalid SHA-256 digest header")
+
+        if total_size > MAX_FILE_SIZE or total_size < 0:
+            logger.warning("Rejected transfer %s: size %d exceeds %d limit", transfer_id, total_size, MAX_FILE_SIZE)
+            return self._build_ack(transfer_id, STATUS_ERR_SIZE_LIMIT, 0, "Exceeds 500MB maximum file limit")
+
+        clean_name = self._sanitize_filename(raw_filename)
+        ext = Path(clean_name).suffix.lower()
+        if not self.allow_executables and ext in _DANGEROUS_EXECUTABLES:
+            logger.warning("Blocked executable file transfer %s (%s)", transfer_id, clean_name)
+            return self._build_ack(
+                transfer_id,
+                STATUS_ERR_TRAVERSAL,
+                0,
+                f"Blocked executable extension '{ext}' by security policy",
+            )
+
+        target_path = self.download_dir / clean_name
+        if not self._verify_path_contained(target_path):
+            logger.error("Path traversal blocked for transfer %s: %s -> %s", transfer_id, raw_filename, target_path)
+            return self._build_ack(transfer_id, STATUS_ERR_TRAVERSAL, 0, "Access denied: path traversal attempt")
+
+        if transfer_id in self.active_transfers:
+            self.active_transfers[transfer_id].abort()
+
+        try:
+            transfer = ActiveTransfer(transfer_id, clean_name, total_size, sha256_hex, target_path)
+            if not self._verify_path_contained(transfer.temp_path):
+                return self._build_ack(transfer_id, STATUS_ERR_TRAVERSAL, 0, "Access denied: unsafe temp path")
+            transfer.open(truncate=True)
+            transfer.close()
+            self.active_transfers[transfer_id] = transfer
+            logger.info("Transfer initiated: ID %s, File: '%s', Size: %d bytes", transfer_id, clean_name, total_size)
+            return self._build_ack(transfer_id, STATUS_OK, 0, "Ready for chunks")
+        except Exception as e:
+            logger.error("Failed to initialize transfer %s: %s", transfer_id, e)
+            return self._build_ack(transfer_id, STATUS_ERR_IO, 0, str(e))
+
     def handle_packet(self, payload: bytes) -> bytes:
         """
-        Processes Opcode 0x0C payload and returns structured binary ACK packet.
-        
-        Sub-header format:
-          Byte 0: Sub-command (0x01: INIT, 0x02: CHUNK, 0x03: FINISH, 0x04: ABORT)
-          Bytes 1-4: Transfer ID (Big Endian uint32)
+        Processes Opcode 0x0C payload synchronously and returns structured binary ACK packet.
         """
         if len(payload) < 5:
             return self._build_ack(0, STATUS_ERR_IO, 0, "Packet truncated")
@@ -187,51 +283,9 @@ class HostFileWriter:
         sub_cmd = payload[0]
         transfer_id = struct.unpack_from('!I', payload, 1)[0]
 
-        # -------------------------------------------------------------
-        # SUB-COMMAND 0x01: INIT
-        # Format: [1 cmd][4 id][8 total_size][64 sha256_hex][filename_utf8]
-        # -------------------------------------------------------------
         if sub_cmd == CMD_INIT:
-            if len(payload) < 1 + 4 + 8 + 64:
-                return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "INIT payload too small")
+            return self._prepare_transfer(transfer_id, payload)
 
-            total_size = struct.unpack_from('!Q', payload, 5)[0]
-            sha256_hex = payload[13:77].decode('ascii', errors='ignore')
-            raw_filename = payload[77:].decode('utf-8', errors='replace')
-
-            # Validation: Size limit
-            if total_size > MAX_FILE_SIZE or total_size < 0:
-                logger.warning(f"Rejected transfer {transfer_id}: size {total_size} exceeds {MAX_FILE_SIZE} limit")
-                return self._build_ack(transfer_id, STATUS_ERR_SIZE_LIMIT, 0, "Exceeds 500MB maximum file limit")
-
-            # Validation: Path Traversal
-            clean_name = self._sanitize_filename(raw_filename)
-            target_path = self.download_dir / clean_name
-            if not self._verify_path_contained(target_path):
-                logger.error(f"Path traversal blocked for transfer {transfer_id}: {raw_filename} -> {target_path}")
-                return self._build_ack(transfer_id, STATUS_ERR_TRAVERSAL, 0, "Access denied: path traversal attempt")
-
-            # Clean up any stale transfer with same ID
-            if transfer_id in self.active_transfers:
-                self.active_transfers[transfer_id].abort()
-
-            try:
-                transfer = ActiveTransfer(transfer_id, clean_name, total_size, sha256_hex, target_path)
-                # Keep the metadata visible for the lifecycle tests, but do not leave the
-                # temporary file handle open across idle periods. Chunk writes reopen it on demand.
-                transfer.open(truncate=True)
-                transfer.close()
-                self.active_transfers[transfer_id] = transfer
-                logger.info(f"Transfer initiated: ID {transfer_id}, File: '{clean_name}', Size: {total_size} bytes")
-                return self._build_ack(transfer_id, STATUS_OK, 0, "Ready for chunks")
-            except Exception as e:
-                logger.error(f"Failed to initialize transfer {transfer_id}: {e}")
-                return self._build_ack(transfer_id, STATUS_ERR_IO, 0, str(e))
-
-        # -------------------------------------------------------------
-        # SUB-COMMAND 0x02: CHUNK
-        # Format: [1 cmd][4 id][8 offset][data...]
-        # -------------------------------------------------------------
         elif sub_cmd == CMD_CHUNK:
             transfer = self.active_transfers.get(transfer_id)
             if not transfer:
@@ -247,13 +301,10 @@ class HostFileWriter:
                 transfer.write_chunk(offset, chunk_data)
                 return self._build_ack(transfer_id, STATUS_PROGRESS, transfer.bytes_written, "Chunk accepted")
             except Exception as e:
-                logger.error(f"IO error writing chunk for transfer {transfer_id}: {e}")
+                transfer.close()
+                logger.error("IO error writing chunk for transfer %s: %s", transfer_id, e)
                 return self._build_ack(transfer_id, STATUS_ERR_IO, transfer.bytes_written, str(e))
 
-        # -------------------------------------------------------------
-        # SUB-COMMAND 0x03: FINISH
-        # Format: [1 cmd][4 id]
-        # -------------------------------------------------------------
         elif sub_cmd == CMD_FINISH:
             transfer = self.active_transfers.pop(transfer_id, None)
             if not transfer:
@@ -262,12 +313,8 @@ class HostFileWriter:
             success = transfer.finalize()
             if success:
                 return self._build_ack(transfer_id, STATUS_COMPLETED, transfer.bytes_written, "File verified and saved")
-            else:
-                return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, transfer.bytes_written, "SHA-256 mismatch")
+            return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, transfer.bytes_written, "SHA-256 mismatch")
 
-        # -------------------------------------------------------------
-        # SUB-COMMAND 0x04: ABORT
-        # -------------------------------------------------------------
         elif sub_cmd == CMD_ABORT:
             transfer = self.active_transfers.pop(transfer_id, None)
             if transfer:
@@ -275,6 +322,21 @@ class HostFileWriter:
             return self._build_ack(transfer_id, STATUS_OK, 0, "Transfer aborted")
 
         return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown sub-command")
+
+    async def handle_packet_async(self, payload: bytes) -> bytes:
+        """
+        Async-safe wrapper that offloads large-file SHA-256 finalization off the event loop.
+        """
+        if len(payload) >= 5 and payload[0] == CMD_FINISH:
+            transfer_id = struct.unpack_from('!I', payload, 1)[0]
+            transfer = self.active_transfers.pop(transfer_id, None)
+            if not transfer:
+                return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown transfer ID")
+            success = await asyncio.to_thread(transfer.finalize)
+            if success:
+                return self._build_ack(transfer_id, STATUS_COMPLETED, transfer.bytes_written, "File verified and saved")
+            return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, transfer.bytes_written, "SHA-256 mismatch")
+        return self.handle_packet(payload)
 
     def _build_ack(self, transfer_id: int, status: int, bytes_written: int, message: str) -> bytes:
         """

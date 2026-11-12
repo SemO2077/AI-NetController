@@ -156,7 +156,7 @@ class HostDaemonState:
     "category": "backend",
     "description": "Windows Authenticode SHA-256 Code Signing & Windows Defender MpCmdRun Verification Script",
     "code": `param(
-    [string]$BinaryPath = "dist\\CST_HostAgent\\AI_NetController_HostAgent.exe"
+    [string]$BinaryPath = "dist\\AI_NetController_HostAgent\\AI_NetController_HostAgent.exe"
 )
 $ErrorActionPreference = "Stop"
 $CertSubject = "CN=AI NetController, O=AI NetController, C=BG"
@@ -171,21 +171,18 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "filename": "PATCH_NOTES.md",
     "language": "markdown",
     "category": "docs",
-    "description": "v0.27.0 Release Patch Notes — PC Daemon Desktop GUI, AV False-Positive Hardening & Native APK/EXE Releases",
-    "code": `# Patch Notes — AI NetController v0.27.0
+    "description": "Beta v0.50.00 Release Patch Notes — Full Security Audit, Authenticated Session Control & Native APK/EXE Releases",
+    "code": `# Patch Notes — AI NetController v0.50.0 (Beta 0.50.00)
 
-**Release Date:** October 24, 2026
-**Version:** v0.27.0
+**Version:** Beta 0.50.00 (v0.50.0)
 **Protocol Version:** AI-NET/3.0-SECURE
 
-## 1. Native PC Daemon Control Center GUI (agent_gui.py & PcDaemonGuiModal.tsx)
-- Interactive Desktop Control Center with live CPU/RAM/Disk/FPS telemetry, 1-click WebSocket URI & Pairing Key copy/rotate, Start/Pause toggle, View-Only Mode (remote input lock), HITL approval gate, native NIC & WoL check, Panic Disconnect All, and live event console.
+## 1. Host Daemon & Security Hardening (agent/)
+- Eliminated fallback secrets, enforced Windows DPAPI sealing & 15m TTL PIN pairing.
+- Canonical framing (0x0D/0xED/0xEE), Origin validation, HITL approval challenge nonces, and Authenticode-signed Windows EXE packaging.
 
-## 2. Antivirus False-Positive Elimination & Binary Hardening
-- Zero UPX Compression (upx=False on both EXE and COLLECT in build_agent.spec).
-- Visible top-level HWND window via Tkinter/TTK instead of a headless background listener.
-- Pure Python psutil/socket NIC diagnostics replacing hidden powershell.exe / cmd.exe subprocesses.
-- SHA-256 Authenticode Code Signing & Windows Defender MpCmdRun scan verification (sign_binary.ps1).
+## 2. Control Plane & Native Client Hardening
+- Fail-closed localhost auth session cookies, real TCP RTT LAN scanner, persistent WoL schedules, and live Android WebView/Flutter protocol alignment.
 `
   }
 ];

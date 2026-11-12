@@ -406,7 +406,7 @@ export const translations: Record<Language, Translations> = {
     chat_security_role: 'Сигурност',
     chat_shell_role: 'Shell',
     chat_placeholder_fleet: 'Попитайте Флот Командира...',
-    chat_placeholder_security: 'Анализ на CST/3.0 протокол...',
+    chat_placeholder_security: 'Анализ на AI-NET/3.0 протокол...',
     chat_placeholder_shell: 'Бърза shell команда...',
     chat_clear_confirm: 'Разговорът е изчистен. С какво мога да съдействам?',
     chat_stop_gen: 'Спри генерирането',
@@ -643,7 +643,7 @@ export const translations: Record<Language, Translations> = {
     chat_security_role: 'Security',
     chat_shell_role: 'Shell',
     chat_placeholder_fleet: 'Ask Fleet Copilot...',
-    chat_placeholder_security: 'Analyze CST/3.0 security...',
+    chat_placeholder_security: 'Analyze AI-NET/3.0 security...',
     chat_placeholder_shell: 'Fast shell command...',
     chat_clear_confirm: 'Conversation cleared. How can I help with the fleet?',
     chat_stop_gen: 'Stop generation',
@@ -678,10 +678,10 @@ export const translations: Record<Language, Translations> = {
 
     // WebSocket Modal
     ws_modal_title: 'Network Mode & WebSocket',
-    ws_modal_subtitle: 'CST/3.0-SECURE Protocol with Anti-Replay Guard',
+    ws_modal_subtitle: 'AI-NET/3.0-SECURE Protocol with Anti-Replay Guard',
     ws_status_label: 'Connection Status:',
     ws_connected_host: 'Connected to Host Agent',
-    ws_lab_mode: 'AI NetController Simulation Lab',
+    ws_lab_mode: 'Standby (Host Agent Offline)',
     ws_endpoint_label: 'WebSocket Endpoint',
     ws_btn_connect: 'Connect',
     ws_btn_connecting: 'Connecting...',
@@ -695,7 +695,7 @@ export const translations: Record<Language, Translations> = {
     ws_monotonic: 'Monotonic Sequence',
     ws_circuit_breaker: 'Circuit Breaker',
     ws_circuit_breaker_desc: 'Auto-trip protection (3 attempts)',
-    ws_protocol_hint: 'The CST/3.0-SECURE standard combines zero-copy binary memory framing with mutual token authentication, TLS 1.3 and anti-replay guards.',
+    ws_protocol_hint: 'The AI-NET/3.0-SECURE standard combines zero-copy binary memory framing with mutual token authentication, TLS 1.3 and anti-replay guards.',
 
     // Latency & Sparkline Stats
     spark_avg_30s: 'Avg (30s)',

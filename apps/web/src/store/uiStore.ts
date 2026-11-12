@@ -98,7 +98,7 @@ const getInitialLanguage = (): Language => {
       return 'bg';
     }
   } catch {}
-  return 'bg';
+  return 'en';
 };
 
 const getInitialModel = (): string => {
@@ -108,15 +108,15 @@ const getInitialModel = (): string => {
       if (
         saved === 'gemini-1.5-flash' ||
         saved === 'gemini-1.5-pro' ||
-        saved === 'gemini-2.0-flash' ||
-        saved === 'gemini-2.5-flash'
+        saved === 'gemini-3.8-flash' ||
+        saved === 'gemini-3.1-flash-lite'
       ) {
-        return 'gemini-3.8-flash';
+        return 'gemini-2.5-flash';
       }
       return saved;
     }
   } catch {}
-  return 'gemini-3.8-flash';
+  return 'gemini-2.5-flash';
 };
 
 const getInitialAccent = (): AccentColorPreset => {

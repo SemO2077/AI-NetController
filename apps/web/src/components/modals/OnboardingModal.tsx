@@ -161,7 +161,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   AI NetController
                 </span>
                 <span className="px-2 py-0.5 rounded text-[10.5px] font-mono font-semibold bg-cyan-500/15 border border-cyan-400/30 text-cyan-300 shrink-0 shadow-[0_0_8px_rgba(0,240,255,0.2)]">
-                  v0.35.0
+                  Beta v0.50.0
                 </span>
               </div>
               <h2 className="text-sm font-semibold text-white/90 truncate">
@@ -625,16 +625,16 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => setSelectedModel('gemini-3.8-flash')}
+                      onClick={() => setSelectedModel('gemini-2.5-flash')}
                       className={`p-3 rounded-2xl text-left border transition cursor-pointer flex items-start gap-2.5 ${
-                        selectedModel === 'gemini-3.8-flash'
+                        selectedModel === 'gemini-2.5-flash'
                           ? 'bg-cyan-500/15 border-cyan-400/60 shadow-[0_0_15px_rgba(0,240,255,0.15)]'
                           : 'bg-white/[0.02] border-white/10 hover:border-white/20'
                       }`}
                     >
                       <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
                       <div>
-                        <div className="font-semibold text-xs text-white">Gemini 3.8 Flash</div>
+                        <div className="font-semibold text-xs text-white">Gemini 2.5 Flash</div>
                         <div className="text-[10.5px] text-white/50">
                           {isBg ? 'Препоръчителен • Бърз & Точен' : 'Recommended • Fast & Accurate'}
                         </div>

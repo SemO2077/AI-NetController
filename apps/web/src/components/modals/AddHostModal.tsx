@@ -202,8 +202,8 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                       ? `Актуализиране на параметрите за ${editingHost.name}`
                       : `Update network configuration for ${editingHost.name}`
                     : isBg
-                      ? 'Ръчно конфигуриране в CST мрежовия флот'
-                      : 'Manual node registration in CST network fleet'}
+                      ? 'Ръчно конфигуриране в AI NetController флота'
+                      : 'Manual node registration in AI NetController fleet'}
                 </p>
               </div>
             </div>

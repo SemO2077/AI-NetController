@@ -62,7 +62,9 @@ class Curve25519 {
   static Uint8List scalarMult(Uint8List scalar, Uint8List uCoordinate) {
     final Uint8List clamped = clampScalar(scalar);
     final BigInt k = _decodeLittleEndian(clamped);
-    final BigInt u = _decodeLittleEndian(uCoordinate) % _p;
+    // RFC 7748 Section 5: clear bit 255 and reduce mod p
+    final BigInt mask255 = (BigInt.one << 255) - BigInt.one;
+    final BigInt u = (_decodeLittleEndian(uCoordinate) & mask255) % _p;
 
     BigInt x1 = u;
     BigInt x2 = BigInt.one;
@@ -429,6 +431,9 @@ class CryptoChannel {
 
   /// Decrypts an incoming framed packet and validates the Poly1305 tag & anti-replay counter.
   ProtocolPacket decryptPacket(Uint8List rawBytes) {
+    if (!_isEstablished || _sessionKey == null) {
+      throw StateError("CryptoChannel is not established. Handshake required.");
+    }
     if (rawBytes.length < kHeaderSize + kNonceSize + kTagSize) {
       throw const FormatException("Encrypted packet is too short");
     }
@@ -436,13 +441,20 @@ class CryptoChannel {
     final Uint8List headerBytes = rawBytes.sublist(0, kHeaderSize);
     final ByteData headerBd = ByteData.sublistView(headerBytes);
 
+    final int m0 = headerBd.getUint8(0);
+    final int m1 = headerBd.getUint8(1);
+    if (m0 != kMagicByte0 || m1 != kMagicByte1) {
+      throw const FormatException("Invalid magic bytes in encrypted frame");
+    }
+
     final int opcode = headerBd.getUint8(2);
     final int flags = headerBd.getUint8(3);
     final int seq = headerBd.getUint32(4, Endian.big);
     final int totalLength = headerBd.getUint32(8, Endian.big);
 
-    if (rawBytes.length < kHeaderSize + totalLength) {
-      throw const FormatException("Incomplete encrypted frame");
+    if (totalLength < kNonceSize + kTagSize ||
+        rawBytes.length != kHeaderSize + totalLength) {
+      throw const FormatException("Malformed encrypted frame length");
     }
 
     final Uint8List nonce = rawBytes.sublist(kHeaderSize, kHeaderSize + kNonceSize);
@@ -451,15 +463,14 @@ class CryptoChannel {
       kHeaderSize + totalLength,
     );
 
-    // Monotonic Anti-Replay Nonce Verification
+    // Check monotonic counter WITHOUT mutating state before AEAD verification
     final ByteData nonceBd = ByteData.sublistView(nonce);
     final int rxCounter = nonceBd.getUint64(0, Endian.big);
-    if (rxCounter <= _rxLastNonceCounter) {
+    if (rxCounter <= 0 || rxCounter <= _rxLastNonceCounter) {
       throw FormatException(
         "Replay attack detected! Counter $rxCounter <= $_rxLastNonceCounter",
       );
     }
-    _rxLastNonceCounter = rxCounter;
 
     final Uint8List plaintext = ChaCha20Poly1305.decrypt(
       _sessionKey!,
@@ -467,6 +478,9 @@ class CryptoChannel {
       ciphertextAndTag,
       aad: headerBytes,
     );
+
+    // Commit anti-replay watermark ONLY after Poly1305 MAC authentication succeeds
+    _rxLastNonceCounter = rxCounter;
 
     return ProtocolPacket(
       opcode: opcode,

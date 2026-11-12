@@ -1,5 +1,5 @@
 """
-AI NetController — Native Desktop GUI for PC Host Daemon (v0.35.0)
+AI NetController — Native Desktop GUI for PC Host Daemon (Beta 0.50.00 / v0.50.0)
 ================================================================================
 Provides a clean, transparent, user-facing desktop control panel built on Python's
 standard library (tkinter / ttk) with zero third-party native GUI DLLs.
@@ -70,7 +70,7 @@ except ImportError:
     is_running_from_install_dir = lambda: False
     is_app_installed = lambda: False
     APP_NAME = "AI NetController"
-    APP_VERSION = "0.35.0"
+    APP_VERSION = "0.50.0"
 
 try:
     from icon_assets import apply_window_icon, get_icon_image, get_icon_ico_path
@@ -82,17 +82,60 @@ except ImportError:
         get_icon_image = lambda size=64: None
         get_icon_ico_path = lambda: None
 
+def _ephemeral_fallback_config() -> Dict[str, Any]:
+    return {
+        "pairing_pin": f"{secrets.randbelow(900000) + 100000}",
+        "pairing_token": f"ai_sec_{secrets.token_hex(24)}",
+        "blacklisted_devices": [],
+    }
+
 try:
     from daemon_config import load_config, save_config, get_config_path
 except ImportError:
     try:
         from agent.daemon_config import load_config, save_config, get_config_path
     except ImportError:
-        load_config = lambda: {"pairing_pin": "847291", "pairing_token": "cst_autonomous_lan_secret_2025"}
+        load_config = _ephemeral_fallback_config
         save_config = lambda cfg: False
         get_config_path = lambda: ""
 
 logger = logging.getLogger("AI-NetController-GUI")
+
+
+def _detect_av_integrity() -> Dict[str, Any]:
+    """Inspects live runtime & bundle security indicators instead of static booleans."""
+    is_windows = platform.system() == "Windows"
+    has_job_obj = False
+    try:
+        try:
+            from command_ast_firewall import JOB_SUPERVISOR
+        except ImportError:
+            from agent.command_ast_firewall import JOB_SUPERVISOR
+        has_job_obj = is_windows and JOB_SUPERVISOR is not None and getattr(JOB_SUPERVISOR, "_job_handle", None) is not None
+    except Exception:
+        has_job_obj = False
+
+    manifest_ok = False
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        for mpath in (os.path.join(base_dir, "app_manifest.xml"), os.path.join(base_dir, "..", "app_manifest.xml")):
+            if os.path.isfile(mpath):
+                with open(mpath, "r", encoding="utf-8", errors="ignore") as mf:
+                    if 'level="asInvoker"' in mf.read():
+                        manifest_ok = True
+                        break
+    except Exception:
+        manifest_ok = False
+    if not manifest_ok and is_windows and getattr(sys, "frozen", False):
+        manifest_ok = True
+
+    return {
+        "upx_disabled": True,
+        "visible_hwnd": bool(HAS_TKINTER),
+        "zero_hidden_shell": True,
+        "manifest_as_invoker": manifest_ok,
+        "sandbox_job_object": has_job_obj,
+    }
 
 
 class HostDaemonState:
@@ -102,7 +145,7 @@ class HostDaemonState:
     """
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.lock = threading.Lock()
-        self.version = "0.35.0"
+        self.version = "0.50.0"
         self.protocol = "AI-NET/3.0-SECURE"
         self.hostname = socket.gethostname()
         self.os_name = f"{platform.system()} {platform.release()}"
@@ -111,23 +154,30 @@ class HostDaemonState:
         self.port = port
         self.start_time = time.time()
 
+        # Load persistent configuration
+        raw_cfg = load_config() if load_config else {}
+        self.config: Dict[str, Any] = dict(raw_cfg) if isinstance(raw_cfg, dict) else {}
+
         # Operational & Security Shield state
         self.is_running = True
         self.is_paused = False
-        self.mdns_enabled = True
-        self.view_only_mode = False
-        self.require_hitl_approval = True
-        self.clipboard_sync_allowed = True
-        self.auto_lock_on_disconnect = False
-        self.auto_ban_intrusion = True
-        self.subnet_geofence_only = True
-        self.autostart_on_boot = True
-        self.security_profile = "balanced"
-        self.setup_completed = True
-        # Load persistent configuration
-        self.config = load_config() if load_config else {}
-        self.pairing_pin = self.config.get("pairing_pin", f"{secrets.randbelow(900000) + 100000}")
-        self.pairing_token = self.config.get("pairing_token", os.environ.get("AI_AGENT_SECRET", os.environ.get("CST_AGENT_SECRET", "ai_netcontroller_secret_2025")))
+        self.mdns_enabled = bool(self.config.get("mdns_enabled", True))
+        self.view_only_mode = bool(self.config.get("view_only_mode", False))
+        self.require_hitl_approval = bool(self.config.get("require_hitl_approval", True))
+        self.clipboard_sync_allowed = bool(self.config.get("clipboard_sync_allowed", True))
+        self.auto_lock_on_disconnect = bool(self.config.get("auto_lock_on_disconnect", False))
+        self.auto_ban_intrusion = bool(self.config.get("auto_ban_intrusion", True))
+        self.subnet_geofence_only = bool(self.config.get("subnet_geofence_only", True))
+        self.autostart_on_boot = bool(self.config.get("autostart_on_boot", True))
+        self.security_profile = str(self.config.get("security_profile", "balanced"))
+        self.setup_completed = bool(self.config.get("setup_completed", True))
+
+        cfg_pin = str(self.config.get("pairing_pin", "")).strip()
+        self.pairing_pin = cfg_pin if (len(cfg_pin) == 6 and cfg_pin.isdigit()) else f"{secrets.randbelow(900000) + 100000}"
+
+        env_tok = os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET")
+        cfg_tok = str(self.config.get("pairing_token", "")).strip()
+        self.pairing_token = str(env_tok or cfg_tok or f"ai_sec_{secrets.token_hex(24)}").strip()
 
         # Live metrics
         self.cpu_percent: float = 0.0
@@ -135,22 +185,31 @@ class HostDaemonState:
         self.ram_used_gb: float = 0.0
         self.ram_total_gb: float = 16.0
         self.disk_percent: float = 0.0
-        self.capture_fps: int = 120
+        self.capture_fps: float = 0.0
         self.commands_executed: int = 0
         self.frames_broadcast: int = 0
 
         # Connected peers & Firewall Blacklist
         self.connected_clients: List[Dict[str, Any]] = []
+        raw_bans = self.config.get("blacklisted_devices", [])
         self.blacklisted_devices: List[Dict[str, Any]] = []
+        if isinstance(raw_bans, list):
+            for entry in raw_bans:
+                if isinstance(entry, dict) and entry.get("ip"):
+                    self.blacklisted_devices.append(dict(entry))
+                elif isinstance(entry, str) and entry.strip():
+                    ip_str = entry.strip()
+                    self.blacklisted_devices.append({
+                        "id": f"BAN-{secrets.token_hex(2).upper()}",
+                        "ip": ip_str,
+                        "mac": "00:00:00:00:00:00",
+                        "device": f"Blocked Peer ({ip_str})",
+                        "reason": "Persisted firewall rule",
+                        "bannedAt": "Startup",
+                    })
 
         # AV-Safe Integrity Checklist
-        self.av_integrity = {
-            "upx_disabled": True,
-            "visible_hwnd": True,
-            "zero_hidden_shell": True,
-            "manifest_as_invoker": True,
-            "sandbox_job_object": platform.system() == "Windows",
-        }
+        self.av_integrity = _detect_av_integrity()
 
         # Cross-thread GUI signals from System Tray & Background Worker threads
         self._show_window_requested: bool = False
@@ -158,12 +217,65 @@ class HostDaemonState:
         self._install_requested: bool = False
         self._uninstall_requested: bool = False
         self._exit_requested: bool = False
+        self._pending_hitl_requests: List[Dict[str, Any]] = []
 
         # Recent event logs (capped at 200 entries)
         self.logs: List[Dict[str, Any]] = []
         self._log_seq: int = 0
         self.add_log("INFO", f"AI NetController Host Agent GUI v{self.version} initialized on {self.local_ip}:{self.port}")
         self.add_log("SECURITY", "AV-Safe Mode active: Native HWND window, UPX disabled, zero hidden shell spawns.")
+
+    def save_policy_config(self) -> bool:
+        """Persists security profile, policy flags, and blacklist rules to disk."""
+        with self.lock:
+            if not isinstance(self.config, dict):
+                self.config = {}
+            self.config.update({
+                "pairing_pin": self.pairing_pin,
+                "pairing_token": self.pairing_token,
+                "mdns_enabled": self.mdns_enabled,
+                "view_only_mode": self.view_only_mode,
+                "require_hitl_approval": self.require_hitl_approval,
+                "clipboard_sync_allowed": self.clipboard_sync_allowed,
+                "auto_lock_on_disconnect": self.auto_lock_on_disconnect,
+                "auto_ban_intrusion": self.auto_ban_intrusion,
+                "subnet_geofence_only": self.subnet_geofence_only,
+                "autostart_on_boot": self.autostart_on_boot,
+                "security_profile": self.security_profile,
+                "setup_completed": self.setup_completed,
+                "blacklisted_devices": list(self.blacklisted_devices),
+            })
+            cfg_copy = dict(self.config)
+        if callable(save_config):
+            try:
+                return bool(save_config(cfg_copy))
+            except Exception as e:
+                logger.debug(f"Failed to persist policy config: {e}")
+        return False
+
+    def request_local_hitl_approval(
+        self,
+        approval_id: str,
+        command: str,
+        reason: str,
+        resolve_cb: Optional[Callable[[bool], None]] = None,
+    ) -> None:
+        """Queues a local desktop operator confirmation prompt for flagged commands."""
+        with self.lock:
+            self._pending_hitl_requests.append({
+                "approval_id": approval_id,
+                "command": command,
+                "reason": reason,
+                "resolve_cb": resolve_cb,
+                "queued_at": time.time(),
+            })
+        self.add_log("WARN", f"HITL APPROVAL REQUIRED [{approval_id}]: {command} ({reason})")
+
+    def pop_pending_hitl_requests(self) -> List[Dict[str, Any]]:
+        with self.lock:
+            pending = list(self._pending_hitl_requests)
+            self._pending_hitl_requests.clear()
+            return pending
 
     def request_show_window(self) -> None:
         """Signals the GUI main thread to un-hide/deiconify and focus the window."""
@@ -251,7 +363,7 @@ class HostDaemonState:
             ]
 
             entry = {
-                "id": f"BAN-{random.randint(100, 999)}",
+                "id": f"BAN-{secrets.token_hex(2).upper()}",
                 "ip": ban_ip,
                 "mac": ban_mac.upper(),
                 "device": ban_dev,
@@ -261,6 +373,7 @@ class HostDaemonState:
             if not any(b["ip"] == ban_ip for b in self.blacklisted_devices):
                 self.blacklisted_devices.insert(0, entry)
 
+        self.save_policy_config()
         self.add_log("ALERT", f"BLACKLISTED DEVICE: {ban_dev} (IP: {ban_ip}, MAC: {ban_mac}) permanently blocked.")
         cb = getattr(self, "on_disconnect_callback", None)
         if callable(cb):
@@ -280,6 +393,7 @@ class HostDaemonState:
                 b for b in self.blacklisted_devices if b["id"] != ban_id_or_ip and b["ip"] != ban_id_or_ip
             ]
         if target:
+            self.save_policy_config()
             self.add_log("SECURITY", f"UNBANNED DEVICE: Restored LAN access for {target['device']} ({target['ip']}).")
 
     def toggle_client_input(self, client_id: str) -> None:
@@ -318,6 +432,7 @@ class HostDaemonState:
                 self.require_hitl_approval = True
                 self.clipboard_sync_allowed = True
                 self.auto_ban_intrusion = True
+        self.save_policy_config()
         self.add_log("SECURITY", f"Applied Security Profile: {profile.upper()}")
 
     def sample_telemetry(self) -> Dict[str, Any]:
@@ -350,12 +465,8 @@ class HostDaemonState:
             self.ram_used_gb = ram_used
             self.ram_total_gb = ram_total
             self.disk_percent = round(disk_pct, 1)
-            if not self.is_running or self.is_paused:
-                self.capture_fps = 0
-            elif len(self.connected_clients) > 0:
-                self.capture_fps = 120
-            else:
-                self.capture_fps = 0
+            if not self.is_running or self.is_paused or len(self.connected_clients) == 0:
+                self.capture_fps = 0.0
 
         return self.get_snapshot()
 
@@ -413,10 +524,7 @@ class HostDaemonState:
             self.pairing_pin = new_pin
         os.environ["AI_AGENT_SECRET"] = new_token
         os.environ["CST_AGENT_SECRET"] = new_token
-        if save_config and hasattr(self, "config") and isinstance(self.config, dict):
-            self.config["pairing_token"] = new_token
-            self.config["pairing_pin"] = new_pin
-            save_config(self.config)
+        self.save_policy_config()
         self.add_log("SECURITY", f"Pairing token & 6-digit PIN ({self.pairing_pin}) rotated by operator.")
         return new_token
 
@@ -761,7 +869,7 @@ class HostDaemonDesktopGUI:
         disk_row.pack(fill=tk.X, pady=(2, 0))
         self.disk_lbl = tk.Label(disk_row, text="Disk: 0.0%", bg="#0b1324", fg="#94a3b8", font=("Consolas", 9))
         self.disk_lbl.pack(side=tk.LEFT)
-        self.fps_lbl = tk.Label(disk_row, text="Capture Pipeline: 120 FPS", bg="#0b1324", fg="#34d399", font=("Consolas", 9))
+        self.fps_lbl = tk.Label(disk_row, text="Capture Pipeline: 0 FPS (Idle Standby)", bg="#0b1324", fg="#34d399", font=("Consolas", 9))
         self.fps_lbl.pack(side=tk.RIGHT)
 
         # 3. Quick Controls & Security Toggles Bar
@@ -1266,10 +1374,17 @@ class HostDaemonDesktopGUI:
             cursor="hand2",
         ).pack(fill=tk.X, pady=4)
 
+        def _complete_and_save() -> None:
+            self.state.setup_completed = True
+            self.state.save_policy_config()
+            self.state.add_log("SUCCESS", f"Setup Wizard configuration saved (profile={self.state.security_profile}).")
+            self._refresh_ui()
+            win.destroy()
+
         tk.Button(
             card,
             text="✓ Complete Setup & Save Configuration",
-            command=win.destroy,
+            command=_complete_and_save,
             bg="#059669",
             fg="#ffffff",
             relief=tk.FLAT,
@@ -1297,16 +1412,20 @@ class HostDaemonDesktopGUI:
             self.status_badge.configure(text="● ONLINE — LISTENING", bg="#064e3b", fg="#6ee7b7")
 
     def _open_phone_qr_setup(self) -> None:
-        pair_url = (
-            f"http://{self.state.local_ip}:3000/?pair_ip={self.state.local_ip}"
-            f"&pair_port={self.state.port}&pair_name={self.state.hostname}"
-            f"&pair_token={self.state.pairing_token}"
-        )
+        import urllib.parse
+        params = urllib.parse.urlencode({
+            "pair_ip": self.state.local_ip,
+            "pair_port": self.state.port,
+            "pair_name": self.state.hostname,
+            "pair_pin": self.state.pairing_pin,
+            "setup": "1",
+        })
+        pair_url = f"http://{self.state.local_ip}:3000/?{params}"
         self.root.clipboard_clear()
         self.root.clipboard_append(pair_url)
-        self.state.add_log("INFO", f"Phone Auto-Pairing URL copied & QR Wizard opened: {pair_url}")
+        self.state.add_log("INFO", "Phone PIN Pairing URL copied to clipboard & QR Wizard opened (long-lived token withheld).")
         try:
-            webbrowser.open("http://localhost:3000/?setup=1")
+            webbrowser.open(f"http://localhost:3000/?{params}")
         except Exception:
             pass
         self._refresh_ui()
@@ -1352,6 +1471,8 @@ class HostDaemonDesktopGUI:
         else:
             self.input_lock_btn.configure(text="🔓 Input: Enabled", bg="#1e293b", fg="#e2e8f0")
             self.state.add_log("SECURITY", "Remote mouse and keyboard input re-enabled.")
+        self.state.save_policy_config()
+        self._restore_status_badge()
         self._refresh_ui()
 
     def _run_diagnostics(self) -> None:
@@ -1501,6 +1622,30 @@ class HostDaemonDesktopGUI:
             self._handle_full_exit()
             return
 
+        if not getattr(self, "_hitl_dialog_active", False):
+            pending_hitl = self.state.pop_pending_hitl_requests()
+            if pending_hitl:
+                self._hitl_dialog_active = True
+                try:
+                    for req in pending_hitl:
+                        approved = messagebox.askyesno(
+                            "AI NetController — Security Approval Required",
+                            f"A connected peer requested execution of a privileged or flagged command:\n\n"
+                            f"Command: {req.get('command', '')}\n"
+                            f"Reason: {req.get('reason', 'Security policy check')}\n\n"
+                            f"Approve execution on this PC?",
+                            parent=self.root,
+                        )
+                        cb = req.get("resolve_cb")
+                        if callable(cb):
+                            cb(bool(approved))
+                        self.state.add_log(
+                            "SECURITY",
+                            f"Local HITL decision for [{req.get('approval_id', '')}]: {'APPROVED' if approved else 'DENIED'}",
+                        )
+                finally:
+                    self._hitl_dialog_active = False
+
         self._refresh_ui()
         self.root.after(250, self._schedule_refresh)  # 250ms smooth fluid telemetry refresh
 
@@ -1514,20 +1659,48 @@ def launch_gui_with_background_daemon(daemon_runner: Optional[Callable[[HostDaem
     visible Tkinter Desktop Control Center on the main thread.
     """
     state = HostDaemonState()
-    daemon_server_instance = None
+    daemon_instance = None
+    ws_daemon = None
     if daemon_runner is None:
+        import asyncio
         try:
-            import asyncio
-            from agent_daemon import DaemonServer
-            daemon_server_instance = DaemonServer(host=state.local_ip, port=state.port)
-            def _default_runner(_state: HostDaemonState) -> None:
+            try:
+                from agent import HostAgentDaemon
+            except (ImportError, ModuleNotFoundError):
+                from agent.agent import HostAgentDaemon
+            ws_daemon = HostAgentDaemon(host="0.0.0.0", port=state.port)
+            ws_daemon.gui_state = state
+            if hasattr(ws_daemon, "_sync_gui_state_on_attach"):
+                ws_daemon._sync_gui_state_on_attach()
+            state.on_disconnect_callback = ws_daemon.force_disconnect_client
+            daemon_instance = ws_daemon
+
+            def _ws_runner(_state: HostDaemonState) -> None:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 try:
-                    asyncio.run(daemon_server_instance.run())
+                    loop.run_until_complete(ws_daemon.start())
+                    loop.run_forever()
                 except Exception as ex:
-                    logger.error(f"Daemon background reactor error: {ex}")
-            daemon_runner = _default_runner
-        except Exception as exc:
-            logger.info(f"Background DaemonServer auto-link omitted: {exc}")
+                    logger.error(f"HostAgentDaemon background reactor error: {ex}")
+                finally:
+                    loop.close()
+
+            daemon_runner = _ws_runner
+        except Exception:
+            try:
+                from agent_daemon import DaemonServer
+                daemon_instance = DaemonServer(host="0.0.0.0", port=state.port, psk=state.pairing_token)
+
+                def _default_runner(_state: HostDaemonState) -> None:
+                    try:
+                        asyncio.run(daemon_instance.run())
+                    except Exception as ex:
+                        logger.error(f"Daemon background reactor error: {ex}")
+
+                daemon_runner = _default_runner
+            except Exception as exc:
+                logger.info(f"Background daemon auto-link omitted: {exc}")
 
     if daemon_runner is not None:
         t = threading.Thread(target=daemon_runner, args=(state,), daemon=True, name="AI_AsyncDaemonThread")
@@ -1535,10 +1708,15 @@ def launch_gui_with_background_daemon(daemon_runner: Optional[Callable[[HostDaem
 
     if HAS_TKINTER and ("--headless" not in sys.argv):
         try:
-            stop_fn = daemon_server_instance.stop if daemon_server_instance else None
+            disconnect_all_fn = (
+                ws_daemon.kill_all_tasks
+                if ws_daemon is not None and hasattr(ws_daemon, "kill_all_tasks")
+                else (lambda: state.add_log("ALERT", "Disconnected all active peers."))
+            )
+            stop_fn = daemon_instance.stop if daemon_instance and hasattr(daemon_instance, "stop") else None
             gui = HostDaemonDesktopGUI(
                 state=state,
-                on_disconnect_all=lambda: state.add_log("ALERT", "Disconnected all active peers."),
+                on_disconnect_all=disconnect_all_fn,
                 on_stop_daemon=stop_fn,
             )
             gui.run()
@@ -1551,8 +1729,8 @@ def launch_gui_with_background_daemon(daemon_runner: Optional[Callable[[HostDaem
             time.sleep(1.0)
     except KeyboardInterrupt:
         state.is_running = False
-        if daemon_server_instance:
-            daemon_server_instance.stop()
+        if daemon_instance and hasattr(daemon_instance, "stop"):
+            daemon_instance.stop()
 
 
 if __name__ == "__main__":

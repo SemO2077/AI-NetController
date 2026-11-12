@@ -40,6 +40,8 @@ let pingSeq = 0;
 let lastPingTime = 0;
 let awaitingPong = false;
 let missedPings = 0;
+let sessionAuthenticated = false;
+const pendingPings = new Map<number, number>();
 let activeProtocolMode: 'auto' | 'binary' | 'json' = 'auto';
 
 let outboundSeq = 0;
@@ -111,16 +113,38 @@ function calculateJitter(currentRtt: number): number[] {
   return history;
 }
 
-function handlePongReceived() {
-  if (pongTimeoutTimer) {
-    clearTimeout(pongTimeoutTimer);
-    pongTimeoutTimer = null;
+function handlePongReceived(seq?: number) {
+  let startTime = lastPingTime;
+  if (typeof seq === 'number' && seq > 0) {
+    const tracked = pendingPings.get(seq);
+    if (tracked === undefined) {
+      return; // Ignore stale or uncorrelated PONG frames
+    }
+    startTime = tracked;
+    for (const key of pendingPings.keys()) {
+      if (key <= seq) {
+        pendingPings.delete(key);
+      }
+    }
+  } else if (pendingPings.size > 0) {
+    const latestKey = Array.from(pendingPings.keys()).pop();
+    if (latestKey !== undefined) {
+      startTime = pendingPings.get(latestKey) ?? lastPingTime;
+      pendingPings.delete(latestKey);
+    }
   }
-  awaitingPong = false;
+
+  if (pendingPings.size === 0) {
+    if (pongTimeoutTimer) {
+      clearTimeout(pongTimeoutTimer);
+      pongTimeoutTimer = null;
+    }
+    awaitingPong = false;
+  }
   missedPings = 0;
 
   // Ultra-precise RTT computation using performance.now()
-  const rtt = Math.max(1, Math.round(performance.now() - lastPingTime));
+  const rtt = Math.max(1, Math.round(performance.now() - startTime));
   const history = calculateJitter(rtt);
 
   self.postMessage({
@@ -132,7 +156,7 @@ function handlePongReceived() {
 }
 
 function flushOutboundQueue() {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (!socket || socket.readyState !== WebSocket.OPEN || !sessionAuthenticated) return;
   while (outboundQueue.length > 0) {
     const item = outboundQueue.shift();
     if (!item) break;
@@ -151,26 +175,35 @@ function flushOutboundQueue() {
 function sendPing() {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
-  pingSeq++;
-  lastPingTime = performance.now();
+  pingSeq = ((pingSeq + 1) >>> 0) || 1;
+  const sentSeq = pingSeq;
+  const sentAt = performance.now();
+  lastPingTime = sentAt;
+  pendingPings.set(sentSeq, sentAt);
+  if (pendingPings.size > 16) {
+    const oldestKey = pendingPings.keys().next().value;
+    if (oldestKey !== undefined) {
+      pendingPings.delete(oldestKey);
+    }
+  }
   awaitingPong = true;
 
   if (activeProtocolMode === 'binary' || activeProtocolMode === 'auto') {
-    // 1. CST binary ping packet with static pre-allocated buffer (Zero-GC)
-    STATIC_PING_VIEW.setUint32(4, pingSeq, false);
+    // Binary ping packet with static pre-allocated buffer (Zero-GC)
+    STATIC_PING_VIEW.setUint32(4, sentSeq, false);
     try {
       socket.send(STATIC_PING_BUFFER.buffer);
     } catch {
       // ignore
     }
   } else {
-    // 2. Dual-protocol JSON ping for JSON agents/bridges
+    // Dual-protocol JSON ping for JSON agents/bridges
     try {
       socket.send(
         JSON.stringify({
           action: 'PING',
           event: 'PING',
-          seq: pingSeq,
+          seq: sentSeq,
           timestamp: Date.now(),
         })
       );
@@ -179,15 +212,17 @@ function sendPing() {
     }
   }
 
-  // Watchdog: detect delayed or lost pong
+  // Watchdog: detect delayed or lost pong for sentSeq
   if (pongTimeoutTimer) clearTimeout(pongTimeoutTimer);
   pongTimeoutTimer = setTimeout(() => {
-    if (awaitingPong && socket && socket.readyState === WebSocket.OPEN) {
+    if (pendingPings.has(sentSeq) && socket && socket.readyState === WebSocket.OPEN) {
+      pendingPings.delete(sentSeq);
+      awaitingPong = pendingPings.size > 0;
       missedPings++;
       if (missedPings === 1) {
         self.postMessage({ type: 'STATUS', status: 'degraded', missedPings });
       } else if (missedPings >= 2) {
-        // Socket unresponsive - terminate and trigger fast recovery
+        // Socket unresponsive - terminate and trigger recovery
         self.postMessage({ type: 'STATUS', status: 'unresponsive', missedPings });
         try {
           socket.close(1000, 'Heartbeat timeout');
@@ -250,6 +285,10 @@ function establishConnection(url: string, token: string = currentToken) {
   replayBitmap = 0n;
   outboundSeq = 0;
   pingSeq = 0;
+  missedPings = 0;
+  awaitingPong = false;
+  sessionAuthenticated = false;
+  pendingPings.clear();
   activeProtocolMode = 'auto';
 
   // Block insecure ws:// on HTTPS to prevent browser SecurityError exceptions
@@ -258,7 +297,7 @@ function establishConnection(url: string, token: string = currentToken) {
     self.postMessage({
       type: 'STATUS',
       status: 'disconnected',
-      message: 'Браузърът блокира некриптиран ws:// в HTTPS среда. Използвайте wss:// шлюз или локален прокси.',
+      message: 'Browser blocks unencrypted ws:// on HTTPS origins. Use a wss:// gateway or local TLS proxy.',
     });
     autoReconnectEnabled = false;
     return;
@@ -294,7 +333,7 @@ function establishConnection(url: string, token: string = currentToken) {
       reconnectAttempts = 0;
       autoReconnectEnabled = true;
 
-      // Authenticated Handshake Protocol (CST/3.0-SECURE)
+      // Authenticated Handshake Protocol (AI-NET/3.0-SECURE)
       if (currentToken) {
         try {
           ws.send(
@@ -303,7 +342,7 @@ function establishConnection(url: string, token: string = currentToken) {
               token: currentToken,
               protocolVersion: 'AI-NET/3.0-SECURE',
               clientTimestamp: Date.now(),
-              capabilities: ['ai_binary_v3', 'cst_binary_v3', 'tls1_3', 'secure_on', 'hitl_v2', 'panic_kill', 'gemini_multiturn_agent'],
+              capabilities: ['ai_binary_v3', 'tls1_3', 'secure_on', 'hitl_v2', 'panic_kill', 'gemini_multiturn_agent'],
             })
           );
         } catch {
@@ -313,7 +352,6 @@ function establishConnection(url: string, token: string = currentToken) {
 
       self.postMessage({ type: 'STATUS', status: 'connected' });
       startHeartbeat();
-      flushOutboundQueue();
     };
 
     ws.onmessage = (e: MessageEvent) => {
@@ -334,8 +372,13 @@ function establishConnection(url: string, token: string = currentToken) {
 
           // Handle JSON Pong response
           if (json.event === 'PONG' || json.action === 'PONG' || json.type === 'PONG') {
-            handlePongReceived();
+            handlePongReceived(typeof json.seq === 'number' ? json.seq : undefined);
             return;
+          }
+
+          if (json.event === 'AUTHENTICATED') {
+            sessionAuthenticated = true;
+            flushOutboundQueue();
           }
 
           self.postMessage({ type: 'JSON_FRAME', data: json });
@@ -353,15 +396,25 @@ function establishConnection(url: string, token: string = currentToken) {
     ws.onclose = (event) => {
       clearConnectionWatchdog();
       stopHeartbeat();
+      sessionAuthenticated = false;
+      pendingPings.clear();
+      const authRejected = event.code === 1008 || event.code === 4001 || event.code === 4003;
+      if (authRejected) {
+        autoReconnectEnabled = false;
+      }
       self.postMessage({
         type: 'STATUS',
         status: 'disconnected',
         code: event.code,
         wasClean: event.wasClean,
-        message: hadSocketError ? 'Връзката прекъсна или хостът не отговори.' : undefined,
+        message: authRejected
+          ? 'Authentication or security policy rejected by host agent.'
+          : hadSocketError
+          ? 'WebSocket connection dropped or host unreachable.'
+          : undefined,
       });
 
-      if (autoReconnectEnabled) {
+      if (autoReconnectEnabled && !authRejected) {
         scheduleReconnect();
       }
     };
@@ -378,21 +431,21 @@ function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectAttempts++;
 
-  // Failsafe: Gracefully stop rapid reconnect loops after MAX_RECONNECT_ATTEMPTS (3 attempts)
+  // Failsafe: Gracefully stop reconnect loops after MAX_RECONNECT_ATTEMPTS
   if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
     autoReconnectEnabled = false;
     self.postMessage({
       type: 'STATUS',
       status: 'disconnected',
       attempt: reconnectAttempts,
-      message: 'WebSocket сървърът не отговаря на този адрес.',
+      message: 'Host WebSocket agent did not respond at this address.',
     });
     return;
   }
 
-  // Fast exponential backoff: 500ms -> 1000ms -> 1500ms
-  const backoff = Math.min(2000, 500 * reconnectAttempts);
-  const jitterOffset = Math.floor(Math.random() * 100);
+  // Capped exponential backoff with jitter: 1s -> 2s -> 4s ... (cap 30s)
+  const backoff = Math.min(30000, 1000 * Math.pow(2, Math.max(0, reconnectAttempts - 1)));
+  const jitterOffset = Math.floor(Math.random() * 400);
   const delay = backoff + jitterOffset;
 
   self.postMessage({
@@ -483,7 +536,24 @@ function hmacSha256Pure(key: Uint8Array, message: Uint8Array): Uint8Array {
 
 async function respondToBinaryAuthChallenge(nonceBytes: Uint8Array, seq: number) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  const secretStr = currentToken || 'ai_netcontroller_secret_2025';
+  const secretStr = currentToken.trim();
+  if (!secretStr) {
+    autoReconnectEnabled = false;
+    sessionAuthenticated = false;
+    self.postMessage({
+      type: 'JSON_FRAME',
+      data: {
+        event: 'ERROR',
+        error: 'Authentication token required. Set your PSK token or pair using the host PIN before connecting.',
+      },
+    });
+    try {
+      socket.close(4001, 'Missing authentication token');
+    } catch {
+      // ignore
+    }
+    return;
+  }
   const keyData = new TextEncoder().encode(secretStr);
   let sigBytes: Uint8Array;
   if (typeof self !== 'undefined' && self.crypto && self.crypto.subtle) {
@@ -520,19 +590,27 @@ function parseBinaryFrame(bytes: Uint8Array) {
   const seq = view.getUint32(4, false);
   const length = view.getUint32(8, false);
 
-  if (bytes.length < HEADER_SIZE + length) return;
+  if (bytes.length !== HEADER_SIZE + length) return;
 
-  // Skip sequence consumption on OP_PING (0x01), OP_HITL (0x05), OP_AUTH (0x06), and OP_LLM_STREAM (0x0B)
+  // Skip sequence consumption on OP_PING (0x01), OP_HITL (0x05), OP_AUTH (0x06), OP_LLM_STREAM (0x0B), and OP_FRAME_SYNC (0xED)
   // so multi-stage responses sharing a request seq are not dropped by the anti-replay bitmap
-  if (seq > 0 && opcode !== 0x01 && opcode !== 0x05 && opcode !== 0x06 && opcode !== 0x0b && !verifyInboundSequence(seq)) {
+  if (
+    seq > 0 &&
+    opcode !== 0x01 &&
+    opcode !== 0x05 &&
+    opcode !== 0x06 &&
+    opcode !== 0x0b &&
+    opcode !== 0xed &&
+    !verifyInboundSequence(seq)
+  ) {
     return; // Reject replayed or out-of-window binary frame
   }
 
   const payloadSlice = bytes.subarray(HEADER_SIZE, HEADER_SIZE + length);
 
   if (opcode === 0x01) {
-    // Binary OP_PING response
-    handlePongReceived();
+    // Binary OP_PING response correlated by sequence
+    handlePongReceived(seq);
   } else if (opcode === 0x02) {
     // OP_TELEMETRY frame
     try {
@@ -565,7 +643,18 @@ function parseBinaryFrame(bytes: Uint8Array) {
     } else if (length > 0) {
       const statusStr = UTF8_DECODER.decode(payloadSlice);
       if (statusStr.includes('OK_AUTHENTICATED')) {
+        sessionAuthenticated = true;
         self.postMessage({ type: 'JSON_FRAME', data: { event: 'AUTHENTICATED', status: 'OK' } });
+        flushOutboundQueue();
+      } else if (statusStr.includes('AUTH_FAILED') || statusStr.includes('DENIED') || statusStr.includes('ERR')) {
+        sessionAuthenticated = false;
+        autoReconnectEnabled = false;
+        self.postMessage({ type: 'JSON_FRAME', data: { event: 'ERROR', error: statusStr } });
+        try {
+          socket?.close(4001, 'Authentication failed');
+        } catch {
+          // ignore
+        }
       }
     }
   } else if (opcode === 0x07) {
@@ -579,6 +668,23 @@ function parseBinaryFrame(bytes: Uint8Array) {
     // OP_LLM_STREAM chunk
     try {
       self.postMessage({ type: 'JSON_FRAME', data: { event: 'LLM_STREAM', chunk: UTF8_DECODER.decode(payloadSlice), seq } });
+    } catch {
+      // Ignore
+    }
+  } else if (opcode === 0x0d) {
+    // OP_DISPLAY_ENUM multi-monitor display descriptor list
+    try {
+      const parsed = JSON.parse(UTF8_DECODER.decode(payloadSlice));
+      self.postMessage({ type: 'JSON_FRAME', data: { event: 'DISPLAY_ENUM', ...parsed } });
+    } catch {
+      // Ignore
+    }
+  } else if (opcode === 0xed) {
+    // OP_FRAME_SYNC stream resynchronization metadata/ack
+    try {
+      const rawSync = UTF8_DECODER.decode(payloadSlice);
+      const parsedSync = rawSync.startsWith('{') ? JSON.parse(rawSync) : { detail: rawSync };
+      self.postMessage({ type: 'JSON_FRAME', data: { event: 'FRAME_SYNC', seq, ...parsedSync } });
     } catch {
       // Ignore
     }
@@ -635,21 +741,22 @@ self.onmessage = (event: MessageEvent) => {
     }
 
     case 'SEND_JSON': {
-      outboundSeq++;
+      outboundSeq = ((outboundSeq + 1) >>> 0) || 1;
       const envelope = {
         ...payload,
         _seq: outboundSeq,
         _nonce: `${Date.now()}-${outboundSeq}`,
       };
+      const isAuthMsg = payload?.action === 'AUTHENTICATE';
 
-      if (socket && socket.readyState === WebSocket.OPEN) {
+      if (socket && socket.readyState === WebSocket.OPEN && (sessionAuthenticated || isAuthMsg)) {
         try {
           socket.send(JSON.stringify(envelope));
         } catch {
           // send failed
         }
-      } else if (autoReconnectEnabled) {
-        // Enqueue message briefly if socket is reconnecting
+      } else if (autoReconnectEnabled || (socket && socket.readyState === WebSocket.OPEN && !sessionAuthenticated)) {
+        // Queue message until handshake completes or socket reconnects
         if (outboundQueue.length < MAX_QUEUE_SIZE) {
           outboundQueue.push({ type: 'json', payload: envelope });
         }
@@ -658,13 +765,13 @@ self.onmessage = (event: MessageEvent) => {
     }
 
     case 'SEND_BINARY': {
-      if (socket && socket.readyState === WebSocket.OPEN) {
+      if (socket && socket.readyState === WebSocket.OPEN && sessionAuthenticated) {
         try {
           socket.send(payload.buffer);
         } catch {
           // send failed
         }
-      } else if (autoReconnectEnabled) {
+      } else if (autoReconnectEnabled || (socket && socket.readyState === WebSocket.OPEN && !sessionAuthenticated)) {
         if (outboundQueue.length < MAX_QUEUE_SIZE) {
           outboundQueue.push({ type: 'binary', payload: payload.buffer });
         }
@@ -673,27 +780,28 @@ self.onmessage = (event: MessageEvent) => {
     }
 
     case 'SEND_OPCODE': {
-      outboundSeq++;
-      const opcode = Number(payload.opcode || 0x04);
+      outboundSeq = ((outboundSeq + 1) >>> 0) || 1;
+      const opcode = Number(payload.opcode ?? 0x04) & 0xff;
       const rawText = typeof payload.data === 'string' ? payload.data : JSON.stringify(payload.data || {});
       const bodyBytes = new TextEncoder().encode(rawText);
       const packet = new Uint8Array(HEADER_SIZE + bodyBytes.length);
       const view = new DataView(packet.buffer);
       packet[0] = MAGIC_0;
       packet[1] = MAGIC_1;
-      packet[2] = opcode & 0xff;
+      packet[2] = opcode;
       packet[3] = 0x00;
       view.setUint32(4, outboundSeq, false);
       view.setUint32(8, bodyBytes.length, false);
       packet.set(bodyBytes, HEADER_SIZE);
+      const isHandshakeOp = opcode === 0x01 || opcode === 0x06;
 
-      if (socket && socket.readyState === WebSocket.OPEN) {
+      if (socket && socket.readyState === WebSocket.OPEN && (sessionAuthenticated || isHandshakeOp)) {
         try {
           socket.send(packet.buffer);
         } catch {
           // send failed
         }
-      } else if (autoReconnectEnabled) {
+      } else if (autoReconnectEnabled || (socket && socket.readyState === WebSocket.OPEN && !sessionAuthenticated)) {
         if (outboundQueue.length < MAX_QUEUE_SIZE) {
           outboundQueue.push({ type: 'binary', payload: packet.buffer });
         }

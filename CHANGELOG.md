@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [v0.50.0] (Beta 0.50.00) - 2026-11-12
+
+### Security
+- **Zero Hardcoded Credentials & Dynamic Secret Vaulting**: Eliminated hardcoded fallback shared secrets across the Python Host Agent, Express Control Server, Flutter/Dart mobile client, and reference code snippets. Host pairing tokens are generated dynamically per host and sealed with Windows DPAPI (`agent/crypto_vault.py`).
+- **Cryptographic Handshake & Replay Hardening**: Fixed RFC 7748 bit-255 X25519 scalar clamping and Poly1305 AEAD tag verification order in `apps/mobile/lib/security/crypto_channel.dart` and `crypto_engine.dart` so replay windows only advance after authenticated decryption succeeds. Removed fail-open `'AUTH'` substring acceptance in `viewport_stream_widget.dart` and software fallback bypass in `biometric_security_gate.dart`.
+- **Loopback Server & Android WebView Hardening (`apps/web/server.ts`, `scripts/build_android_app.py`)**: Enforced `Host`/`Origin` validation, `HttpOnly; SameSite=Strict` session cookies, strict `Uri.parse()` loopback host allowlisting, `FLAG_DEBUGGABLE`-gated WebView debugging, `setAllowFileAccess(false)`, and removed wildcard CORS on the Android embedded bridge.
+
+### Changed & Fixed
+- **Canonical Wire Protocol (`AI-NET/3.0-SECURE`)**: Aligned binary opcodes across Python, TypeScript, and Dart (`OP_LLM_STREAM = 0x0B`, `OP_DISPLAY_ENUM = 0x0D`, `OP_FRAME_SYNC = 0xED`, `OP_ERROR = 0xEE`).
+- **Removal of Fake Stubs & Synthetic Data**: Removed canned AI chat replies, fake PC action acknowledgments, hardcoded model latency numbers, and synthetic heartbeat waveforms; wired real Gemini HTTPS requests, live `/proc/meminfo` Android host stats, and honest `400`/`501`/`503` errors when required services are unconfigured.
+- **Release & Android Tooling**: Removed synthetic stub APK fallback in `scripts/build_release_binaries.py`, added native GitHub Releases REST API uploading in `scripts/publish_github_release.py`, updated Android builds to `versionCode 500` (`0.50.00-beta`) with `org.json` serialization, and bumped Win32/Web version metadata to `0.50.0`.
+
+---
+
 ## [v0.35.0] - 2026-11-07
 
 ### Added

@@ -83,12 +83,22 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const onSelectHostRef = useRef(onSelectHost);
+  const isPausedRef = useRef(isPaused);
+
+  useEffect(() => {
+    onSelectHostRef.current = onSelectHost;
+  }, [onSelectHost]);
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
 
   // Deep copy for D3
   const [nodes, setNodes] = useState<TopologyNode[]>([]);
   const [links, setLinks] = useState<TopologyLink[]>([]);
 
-  // Topology Signature - Changes ONLY when structural updates occur
+  // Topology Signature - Changes ONLY when structural updates occur (not selection clicks)
   const topologySignature = useMemo(() => {
     return hosts
       .map(
@@ -97,28 +107,11 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
             h.id
           )}`
       )
-      .join('|') + `_${filterMode}_${selectedHostId}`;
-  }, [hosts, filterMode, quarantinedHosts, circuitTrippedHosts, selectedHostId]);
+      .join('|') + `_${filterMode}`;
+  }, [hosts, filterMode, quarantinedHosts, circuitTrippedHosts]);
 
-  // Construct Topology Graph Data (Nodes + Links)
+  // Construct Topology Graph Data (Real Managed Hosts & Subnet Links Only)
   const graphData = useMemo(() => {
-    // Central AI NetController Gateway Node
-    const controllerNode: TopologyNode = {
-      id: 'cst-gateway',
-      name: 'AI NetController Gateway (L3 Switch)',
-      ip: '192.168.1.1',
-      mac: '00:00:C5:71:00:01',
-      os: 'controller',
-      deviceType: 'gateway',
-      isOnline: true,
-      ping: 0.6,
-      cpu: 18,
-      ram: 34,
-      tags: ['Gateway', 'L3 Switch', 'CST/3.0'],
-      isController: true,
-    };
-
-    // Filter hosts based on filterMode
     const visibleHosts = hosts.filter((h) => {
       if (filterMode === 'online') return h.isOnline;
       if (filterMode === 'servers') return h.deviceType === 'server' || h.id.includes('SRV');
@@ -142,76 +135,60 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
       isCircuitTripped: circuitTrippedHosts.includes(h.id),
     }));
 
-    const allNodes: TopologyNode[] = [controllerNode, ...hostNodes];
-
-    // Build realistic network links:
-    // 1. Primary star uplink from Central Gateway to every managed node
-    // 2. Peer cluster links between hosts in same lab cluster / server rack
     const links: TopologyLink[] = [];
+    const subnetOf = (ip?: string) => (ip ? ip.split('.').slice(0, 3).join('.') : '');
 
-    hostNodes.forEach((node) => {
-      const ping = node.ping ?? (node.isOnline ? 12 : 999);
-      let health: TopologyLink['health'] = 'offline';
-      if (node.isOnline) {
-        health = ping <= 25 ? 'healthy' : 'warning';
-      }
-
-      links.push({
-        source: controllerNode.id,
-        target: node.id,
-        latency: ping,
-        health,
-        linkType: 'uplink',
-        throughputMbps: node.isOnline ? (node.deviceType === 'server' ? 1000 : 100) : 0,
-      });
-    });
-
-    // Subnet mesh links between workstations in the same group
     for (let i = 0; i < hostNodes.length; i++) {
       for (let j = i + 1; j < hostNodes.length; j++) {
         const a = hostNodes[i];
         const b = hostNodes[j];
-        const sharedTag = a.tags?.some((t) => b.tags?.includes(t));
-        if (sharedTag && a.isOnline && b.isOnline) {
+        const sharedTag = a.tags?.some((tag) => b.tags?.includes(tag));
+        const sameSubnet = Boolean(subnetOf(a.ip) && subnetOf(a.ip) === subnetOf(b.ip));
+        if (sharedTag || sameSubnet || hostNodes.length <= 4) {
+          const anyOffline = !a.isOnline || !b.isOnline;
+          const maxPing = Math.max(a.ping ?? 0, b.ping ?? 0);
+          const health: TopologyLink['health'] = anyOffline
+            ? 'offline'
+            : maxPing <= 25
+            ? 'healthy'
+            : 'warning';
           links.push({
             source: a.id,
             target: b.id,
-            latency: Math.max(2, Math.abs((a.ping || 10) - (b.ping || 10)) + 1),
-            health: 'healthy',
-            linkType: 'lab_mesh',
-            throughputMbps: 1000,
+            latency: anyOffline ? 999 : Math.max(1, Math.round(((a.ping ?? 1) + (b.ping ?? 1)) / 2)),
+            health,
+            linkType: sharedTag ? 'lab_mesh' : 'peer',
+            throughputMbps: anyOffline ? 0 : 1000,
           });
         }
       }
     }
 
-    return { nodes: allNodes, links };
-  }, [topologySignature]); // Rebuild only when structural topology changes
+    return { nodes: hostNodes, links };
+  }, [topologySignature]);
 
-  // Update telemetry live without D3 teardown
+  // Update telemetry & selection highlight live without D3 teardown
   useEffect(() => {
     if (!svgRef.current) return;
 
-    // Fast DOM updates for latency badges and outer rings without tearing down the simulation
     const svg = d3.select(svgRef.current);
 
     svg.selectAll('.node-latency-badge').text((d: any) => {
-      if (d.isController) return `AI GATEWAY`;
       const host = hosts.find(h => h.id === d.id);
       if (!host || !host.isOnline) return `OFFLINE • ${d.ip}`;
-      return `${host.ping ?? 0}ms • ${d.ip}`;
+      return typeof host.ping === 'number' ? `${host.ping}ms • ${d.ip}` : `ONLINE • ${d.ip}`;
     });
 
     svg.selectAll('.node-outer-ring')
+      .attr('stroke-width', (d: any) => (d.id === selectedHostId ? 3.5 : 1.5))
       .attr('stroke', (d: any) => {
-        if (d.isController) return '#38bdf8';
         const host = hosts.find(h => h.id === d.id);
         if (quarantinedHosts.includes(d.id) || circuitTrippedHosts.includes(d.id)) return '#f43f5e';
         if (!host || !host.isOnline) return 'rgba(255,255,255,0.15)';
         return (host.ping ?? 10) <= 25 ? '#22d3ee' : '#fbbf24';
       });
 
-  }, [hosts, quarantinedHosts, circuitTrippedHosts]);
+  }, [hosts, quarantinedHosts, circuitTrippedHosts, selectedHostId]);
 
   // Aggregate Topology Metrics
   const metrics = useMemo(() => {
@@ -483,8 +460,8 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
       .on('click', (_event, d) => {
         triggerHapticFeedback('light');
         setActiveNode(d);
-        if (!d.isController && onSelectHost) {
-          onSelectHost(d.id);
+        if (!d.isController && onSelectHostRef.current) {
+          onSelectHostRef.current(d.id);
         }
       });
 
@@ -503,7 +480,7 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
     const handleVisibilityChange = () => {
       if (document.hidden) {
         simulation.stop();
-      } else if (!isPaused) {
+      } else if (!isPausedRef.current) {
         simulation.alpha(0.2).restart();
       }
     };
@@ -528,7 +505,7 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       resizeObserver.disconnect();
     };
-  }, [graphData, selectedHostId, onSelectHost]);
+  }, [graphData]);
 
   // Pause / Resume Physics
   const togglePauseSimulation = () => {
@@ -574,7 +551,7 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
                 {language === 'bg' ? 'Мрежова топология (D3.js)' : 'Network Topology (D3.js)'}
               </span>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                CST/3.0
+                AI-NET/3.0
               </span>
             </div>
             <p className="text-[10px] text-slate-400 flex items-center gap-2">

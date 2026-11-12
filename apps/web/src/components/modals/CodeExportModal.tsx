@@ -67,29 +67,40 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [manifest, setManifest] = useState<ReleaseManifest | null>(null);
   const [patchNotes, setPatchNotes] = useState<string>('');
+  const [liveSnippets, setLiveSnippets] = useState<typeof ALL_SNIPPETS>(ALL_SNIPPETS);
+  const [rebuildMessage, setRebuildMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
-    fetch('/api/releases')
-      .then((r) => r.json())
+    fetch('/api/releases', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data) => {
         if (data.manifest) setManifest(data.manifest);
         if (data.patchNotes) setPatchNotes(data.patchNotes);
       })
       .catch(() => {
-        fetch('/releases/v0.35.0/RELEASE_MANIFEST.json')
-          .then((r) => r.json())
+        fetch('/releases/v0.50.0/RELEASE_MANIFEST.json')
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
           .then((m) => setManifest(m))
           .catch(() => {});
       });
+
+    fetch('/api/source-files', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.files) && data.files.length > 0) {
+          setLiveSnippets(data.files);
+        }
+      })
+      .catch(() => {});
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const filteredSnippets =
     selectedCategory === 'all' || selectedCategory === 'releases'
-      ? ALL_SNIPPETS
-      : ALL_SNIPPETS.filter((s) => {
+      ? liveSnippets
+      : liveSnippets.filter((s) => {
           if (selectedCategory === 'crossplatform') {
             return s.filename.startsWith('apps/mobile/') || s.category === 'crossplatform';
           }
@@ -116,7 +127,7 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
         });
 
   const currentFile =
-    filteredSnippets.find((f) => f.filename === activeFilename) || filteredSnippets[0] || ALL_SNIPPETS[0];
+    filteredSnippets.find((f) => f.filename === activeFilename) || filteredSnippets[0] || liveSnippets[0] || ALL_SNIPPETS[0];
 
   const handleCopy = () => {
     triggerHapticFeedback('light');
@@ -128,33 +139,36 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
   const handleRebuildBinaries = async () => {
     triggerHapticFeedback('medium');
     setIsRebuilding(true);
+    setRebuildMessage(null);
     try {
-      const res = await fetch('/api/releases/rebuild', { method: 'POST' });
-      const data = await res.json();
+      const res = await fetch('/api/releases/rebuild', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRebuildMessage(data?.error || `HTTP ${res.status}`);
+        return;
+      }
       if (data.manifest) {
         setManifest(data.manifest);
       }
+      setRebuildMessage(isBg ? 'Бинарните пакети са прекомпилирани.' : 'Release binaries rebuilt.');
     } catch {
-      // Ignore error
+      setRebuildMessage(isBg ? 'Няма връзка с Control Server.' : 'Control server unreachable.');
     } finally {
       setIsRebuilding(false);
     }
   };
 
-  const ghReleaseCommands = `# 1. Tag and push v0.35.0 (triggers .github/workflows/ci.yml automatically)
+  const ghReleaseCommands = `# 1. Tag and push Beta 0.50.00 (v0.50.0)
 git add .
-git commit -m "release: AI NetController v0.35.0 (APK + EXE + Patch Notes)"
-git tag -a v0.35.0 -m "AI NetController v0.35.0"
+git commit -m "release: AI NetController Beta 0.50.00 (v0.50.0)"
+git tag -a v0.50.0 -m "AI NetController v0.50.0 (Beta 0.50.00)"
 git push origin main --tags
 
-# 2. Or publish pre-built binaries directly with GitHub CLI (gh):
-gh release create v0.35.0 \\
-  public/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe \\
-  public/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk \\
-  public/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64_portable.zip \\
-  public/releases/v0.35.0/SHA256SUMS.txt \\
-  --title "AI NetController v0.35.0" \\
-  --notes-file PATCH_NOTES.md`;
+# 2. Publish pre-built binaries to GitHub Releases:
+python scripts/publish_github_release.py`;
 
   const handleCopyGhCommands = () => {
     triggerHapticFeedback('light');
@@ -179,7 +193,7 @@ gh release create v0.35.0 \\
     setIsZipping(true);
     try {
       const zip = new JSZip();
-      ALL_SNIPPETS.forEach((file) => {
+      liveSnippets.forEach((file) => {
         zip.file(file.filename, file.code);
       });
       if (patchNotes) {
@@ -189,7 +203,7 @@ gh release create v0.35.0 \\
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'ai_netcontroller_v0.35.0_source_and_builders.zip';
+      a.download = 'ai_netcontroller_v0.50.0_source_and_builders.zip';
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -201,31 +215,31 @@ gh release create v0.35.0 \\
 
   const artifacts: ReleaseArtifact[] = manifest?.artifacts || [
     {
-      filename: 'AI_NetController_HostAgent_v0.35.0_win64.exe',
+      filename: 'AI_NetController_HostAgent_v0.50.0_win64.exe',
       kind: 'exe',
       platform: 'Windows 10/11 x64 (Standalone Host Agent .EXE)',
-      sizeBytes: 35330608,
-      sizeFormatted: '33.7 MB',
-      sha256: 'pending_build',
-      downloadUrl: '/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe',
+      sizeBytes: 0,
+      sizeFormatted: 'Build Required',
+      sha256: 'not_built_yet',
+      downloadUrl: '/releases/v0.50.0/AI_NetController_HostAgent_v0.50.0_win64.exe',
     },
     {
-      filename: 'AI_NetController_v0.35.0_arm64-v8a.apk',
+      filename: 'AI_NetController_v0.50.0_arm64-v8a.apk',
       kind: 'apk',
-      platform: 'Android 10–15 arm64-v8a (120Hz Mobile Controller .APK)',
-      sizeBytes: 22817627,
-      sizeFormatted: '21.8 MB',
-      sha256: 'pending_build',
-      downloadUrl: '/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk',
+      platform: 'Android 10-15 arm64-v8a (Mobile Controller .APK)',
+      sizeBytes: 0,
+      sizeFormatted: 'Build Required',
+      sha256: 'not_built_yet',
+      downloadUrl: '/releases/v0.50.0/AI_NetController_v0.50.0_arm64-v8a.apk',
     },
     {
-      filename: 'AI_NetController_HostAgent_v0.35.0_win64_portable.zip',
+      filename: 'AI_NetController_HostAgent_v0.50.0_win64_portable.zip',
       kind: 'zip',
       platform: 'Windows Portable Agent Bundle + Internal Runtime (.ZIP)',
-      sizeBytes: 36558735,
-      sizeFormatted: '34.9 MB',
-      sha256: 'pending_build',
-      downloadUrl: '/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64_portable.zip',
+      sizeBytes: 0,
+      sizeFormatted: 'Build Required',
+      sha256: 'not_built_yet',
+      downloadUrl: '/releases/v0.50.0/AI_NetController_HostAgent_v0.50.0_win64_portable.zip',
     },
   ];
 
@@ -244,8 +258,11 @@ gh release create v0.35.0 \\
                   {isBg ? 'БИНАРНИ РЕЛИЙЗИ (.APK / .EXE) И КОД' : 'RELEASE BINARIES (.APK / .EXE) & SOURCE'}
                 </h2>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-[10px] font-mono font-semibold shrink-0">
-                  v0.35.0
+                  Beta v0.50.0
                 </span>
+                {rebuildMessage && (
+                  <span className="text-[11px] font-mono text-cyan-300">{rebuildMessage}</span>
+                )}
               </div>
               <p className="text-xs text-slate-400 font-mono break-words line-clamp-2 sm:truncate">
                 {isBg
@@ -298,7 +315,7 @@ gh release create v0.35.0 \\
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>{isBg ? '🚀 v0.35.0 .APK & .EXE Релийз' : '🚀 v0.35.0 .APK & .EXE Releases'}</span>
+            <span>{isBg ? 'Beta v0.50.0 .APK & .EXE Релийз' : 'Beta v0.50.0 .APK & .EXE Releases'}</span>
           </button>
 
           <button
@@ -362,7 +379,7 @@ gh release create v0.35.0 \\
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>{isBg ? '📚 Архитектура & CI/CD' : '📚 Architecture & CI/CD'}</span>
+            <span>📚 Architecture &amp; CI/CD</span>
           </button>
 
           <button
@@ -377,7 +394,7 @@ gh release create v0.35.0 \\
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>{isBg ? `Всички файлове (${ALL_SNIPPETS.length})` : `All Files (${ALL_SNIPPETS.length})`}</span>
+            <span>{isBg ? `Всички файлове (${liveSnippets.length})` : `All Files (${liveSnippets.length})`}</span>
           </button>
         </div>
 
@@ -390,8 +407,8 @@ gh release create v0.35.0 \\
                   <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>
                     {isBg
-                      ? 'Официални компилирани бинарни пакети (v0.35.0)'
-                      : 'Official Packaged Release Binaries (v0.35.0)'}
+                      ? 'Официални компилирани бинарни пакети (Beta v0.50.0)'
+                      : 'Official Packaged Release Binaries (Beta v0.50.0)'}
                   </span>
                 </h3>
                 <p className="text-xs text-slate-400 font-mono break-words">
@@ -413,7 +430,7 @@ gh release create v0.35.0 \\
                   <span>{isBg ? 'Отвори PC Демон GUI' : 'Open PC Daemon GUI'}</span>
                 </button>
                 <a
-                  href="/releases/v0.35.0/SHA256SUMS.txt"
+                  href="/releases/v0.50.0/SHA256SUMS.txt"
                   download="SHA256SUMS.txt"
                   className="px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-xs font-mono text-cyan-300 flex items-center gap-1.5 transition"
                 >
@@ -519,7 +536,7 @@ gh release create v0.35.0 \\
               <div className="rounded-2xl bg-[#0b1324]/70 border border-white/10 p-4 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-mono font-bold text-emerald-300 uppercase">
-                    📄 PATCH_NOTES.md (v0.35.0)
+                    PATCH_NOTES.md (Beta v0.50.0)
                   </span>
                 </div>
                 <pre className="p-3.5 rounded-xl bg-black/60 border border-white/10 font-mono text-[11px] text-slate-300 max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed">
@@ -596,11 +613,11 @@ gh release create v0.35.0 \\
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
             <span>
               {isBg
-                ? 'v0.35.0 Бинарни пакети готови (.APK & .EXE) • UTF-8'
-                : 'v0.35.0 Binaries Ready (.APK & .EXE) • UTF-8'}
+                ? 'Beta v0.50.0 Бинарни пакети (.APK & .EXE) • UTF-8'
+                : 'Beta v0.50.0 Release Pipeline (.APK & .EXE) • UTF-8'}
             </span>
           </div>
-          <span>CST/3.0-SECURE</span>
+          <span>AI-NET/3.0-SECURE</span>
         </div>
       </div>
     </div>

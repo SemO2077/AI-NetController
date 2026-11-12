@@ -1,15 +1,15 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dgram from 'dgram';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import os from 'os';
 import crypto from 'crypto';
 import net from 'net';
+import dns from 'dns/promises';
 
 dotenv.config();
 
@@ -17,14 +17,75 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const RELEASES_PUBLIC_DIR = path.resolve(ROOT_DIR, 'public/releases');
+const APP_VERSION = '0.50.0';
+const APP_VERSION_LABEL = '0.50.00-beta';
+const PROTOCOL_VERSION = 'AI-NET/3.0-SECURE';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const ALLOW_LAN_WEB = process.env.ALLOW_LAN_WEB === 'true';
+const BIND_HOST = process.env.HOST || (ALLOW_LAN_WEB ? '0.0.0.0' : '127.0.0.1');
+const SESSION_COOKIE_NAME = 'ainet_session';
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const EPHEMERAL_CONTROL_SECRET = crypto.randomBytes(24).toString('hex');
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '4mb' }));
 
-// Hardened HTTP Security Headers & Strict Same-Origin / Preview CORS Policy
+// Runtime directories (config & WoL persistence)
+function getAppDataDir(): string {
+  if (process.platform === 'win32') {
+    const base = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || os.homedir(), 'AppData', 'Local');
+    return path.join(base, 'AI NetController');
+  }
+  return path.join(os.homedir(), '.ai_netcontroller');
+}
+
+function getDaemonConfigPath(): string {
+  return path.join(getAppDataDir(), 'config.json');
+}
+
+function getWolSchedulesPath(): string {
+  return path.join(getAppDataDir(), 'wol_schedules.json');
+}
+
+function detectPrimaryLanIp(): string {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const iface of nets[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal && !iface.address.startsWith('169.254.')) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
+function isLoopbackIp(addr?: string | null): boolean {
+  if (!addr) return false;
+  const normalized = addr.trim().toLowerCase();
+  return normalized === '127.0.0.1' || normalized === '::1' || normalized === '::ffff:127.0.0.1';
+}
+
+function getAllowedOrigins(): Set<string> {
+  const allowed = new Set<string>(['localhost', '127.0.0.1', '[::1]', '::1']);
+  if (ALLOW_LAN_WEB) {
+    allowed.add(detectPrimaryLanIp().toLowerCase());
+  }
+  const extra = process.env.ALLOWED_ORIGINS || '';
+  for (const entry of extra.split(',')) {
+    const clean = entry.trim().toLowerCase();
+    if (!clean) continue;
+    try {
+      allowed.add(new URL(clean).hostname.toLowerCase());
+    } catch {
+      allowed.add(clean);
+    }
+  }
+  return allowed;
+}
+
+// Hardened HTTP Security Headers & Strict Same-Origin CORS Policy
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -34,19 +95,33 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   const origin = req.headers.origin;
   if (origin) {
+    let originAllowed = false;
     try {
       const parsedOrigin = new URL(origin);
       const hn = parsedOrigin.hostname.toLowerCase();
-      if (hn === 'localhost' || hn === '127.0.0.1' || hn.endsWith('.run.app')) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Vary', 'Origin');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      const hostHeader = String(req.headers.host || '').split(':')[0].toLowerCase();
+      if (getAllowedOrigins().has(hn) || (ALLOW_LAN_WEB && hostHeader && hn === hostHeader)) {
+        originAllowed = true;
       }
     } catch {
-      // Ignore malformed Origin header
+      originAllowed = false;
+    }
+
+    if (originAllowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    } else if (req.path.startsWith('/api/')) {
+      return res.status(403).json({ error: 'Cross-origin request rejected by security policy' });
     }
   }
+
+  if (req.headers['sec-fetch-site'] === 'cross-site' && req.path.startsWith('/api/')) {
+    return res.status(403).json({ error: 'Cross-site request blocked (CSRF shield)' });
+  }
+
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
@@ -67,24 +142,28 @@ app.use(
   })
 );
 
-// Fallback redirect to official GitHub Releases if binary artifact is not stored locally
+// Strictly anchored fallback redirect to official GitHub Releases
 app.get('/releases/:version/:filename', (req: Request, res: Response) => {
-  const { version, filename } = req.params;
-  if (/^v\d+\.\d+\.\d+$/.test(version) && /\.(exe|apk|zip|txt|json)$/i.test(filename)) {
+  const version = String(req.params.version || '');
+  const filename = String(req.params.filename || '');
+  if (
+    /^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9._-]+)?$/.test(version) &&
+    /^[a-zA-Z0-9._-]+\.(?:exe|apk|zip|txt|json)$/i.test(filename) &&
+    !filename.includes('..')
+  ) {
     return res.redirect(
       302,
-      `https://github.com/SemO2077/AI-NetController/releases/download/${version}/${filename}`
+      `https://github.com/SemO2077/AI-NetController/releases/download/${encodeURIComponent(version)}/${encodeURIComponent(filename)}`
     );
   }
   return res.status(404).json({ error: 'Release artifact not found' });
 });
 
-// High-Performance Sliding-Window API Rate Limiter (120 req/min per IP)
+// Sliding-Window API Rate Limiter (180 req/min per IP)
 const apiRateBuckets = new Map<string, { count: number; resetAt: number }>();
 const API_WINDOW_MS = 60_000;
-const API_MAX_REQUESTS = 120;
+const API_MAX_REQUESTS = 180;
 
-// Periodic cleanup of expired rate limit buckets to prevent memory leak
 setInterval(() => {
   const now = Date.now();
   for (const [ip, b] of apiRateBuckets.entries()) {
@@ -121,7 +200,347 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Dynamic AI Model Registry
+// =====================================================================
+// DAEMON CONFIG BRIDGE (Supports DPAPI via Python daemon_config.py)
+// =====================================================================
+interface DaemonConfigData {
+  pairing_token?: string;
+  pairing_pin?: string;
+  view_only_mode?: boolean;
+  require_hitl_approval?: boolean;
+  clipboard_sync_allowed?: boolean;
+  auto_lock_on_disconnect?: boolean;
+  auto_ban_intrusion?: boolean;
+  subnet_geofence_only?: boolean;
+  security_profile?: 'zero_trust' | 'balanced' | 'view_only';
+  mdns_enabled?: boolean;
+  autostart_on_boot?: boolean;
+  setup_completed?: boolean;
+  port?: number;
+  blacklisted_devices?: Array<any>;
+  [key: string]: any;
+}
+
+let cachedDaemonConfig: { data: DaemonConfigData; loadedAt: number } | null = null;
+
+function readPlaintextConfigSync(): DaemonConfigData | null {
+  try {
+    const cfgPath = getDaemonConfigPath();
+    if (!fs.existsSync(cfgPath)) return null;
+    const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    if (raw && typeof raw === 'object' && !raw.dpapi_b64) {
+      return raw as DaemonConfigData;
+    }
+  } catch {
+    // Ignore parse/access errors
+  }
+  return null;
+}
+
+function getPythonBin(): string {
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+async function loadDaemonConfig(forceRefresh = false): Promise<DaemonConfigData> {
+  const now = Date.now();
+  if (!forceRefresh && cachedDaemonConfig && now - cachedDaemonConfig.loadedAt < 3000) {
+    return cachedDaemonConfig.data;
+  }
+
+  const plain = readPlaintextConfigSync();
+  if (plain) {
+    cachedDaemonConfig = { data: plain, loadedAt: now };
+    return plain;
+  }
+
+  const loaded = await new Promise<DaemonConfigData>((resolve) => {
+    const pyScript =
+      'import json,sys; sys.path.insert(0,"agent"); from daemon_config import load_config; print(json.dumps(load_config()))';
+    execFile(getPythonBin(), ['-c', pyScript], { cwd: ROOT_DIR, timeout: 4000 }, (err, stdout) => {
+      if (!err && stdout) {
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          if (parsed && typeof parsed === 'object') {
+            resolve(parsed);
+            return;
+          }
+        } catch {
+          // Fall back below
+        }
+      }
+      resolve({});
+    });
+  });
+
+  cachedDaemonConfig = { data: loaded, loadedAt: Date.now() };
+  return loaded;
+}
+
+async function saveDaemonConfigPatch(patch: Partial<DaemonConfigData>): Promise<DaemonConfigData> {
+  const current = await loadDaemonConfig(true);
+  const merged = { ...current, ...patch };
+  const ok = await new Promise<boolean>((resolve) => {
+    const pyScript =
+      'import json,sys; sys.path.insert(0,"agent"); from daemon_config import save_config; cfg=json.loads(sys.argv[1]); print("OK" if save_config(cfg) else "ERR")';
+    execFile(
+      getPythonBin(),
+      ['-c', pyScript, JSON.stringify(merged)],
+      { cwd: ROOT_DIR, timeout: 5000 },
+      (err, stdout) => {
+        resolve(!err && stdout.trim().endsWith('OK'));
+      }
+    );
+  });
+
+  if (!ok) {
+    // Fallback plaintext write if Python runtime isn't present on host
+    const cfgPath = getDaemonConfigPath();
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(cfgPath, JSON.stringify(merged, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  }
+  cachedDaemonConfig = { data: merged, loadedAt: Date.now() };
+  return merged;
+}
+
+// =====================================================================
+// AUTHENTICATION & SESSION MANAGEMENT (Fail-Closed Zero Hardcoded Secrets)
+// =====================================================================
+const activeSessions = new Map<string, { expiresAt: number; ip: string }>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [sid, meta] of activeSessions.entries()) {
+    if (now >= meta.expiresAt) {
+      activeSessions.delete(sid);
+    }
+  }
+}, 5 * 60_000).unref();
+
+function safeTimingEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf-8');
+  const bufB = Buffer.from(b, 'utf-8');
+  if (bufA.length !== bufB.length || bufA.length === 0) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+async function getControlSecret(): Promise<string> {
+  const envSecret =
+    process.env.WEB_CONTROL_SECRET ||
+    process.env.AI_AGENT_SECRET ||
+    process.env.CST_AGENT_SECRET ||
+    '';
+  if (envSecret.trim()) {
+    return envSecret.trim();
+  }
+  const cfg = await loadDaemonConfig();
+  if (cfg.pairing_token && String(cfg.pairing_token).trim()) {
+    return String(cfg.pairing_token).trim();
+  }
+  return EPHEMERAL_CONTROL_SECRET;
+}
+
+function parseCookies(header?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    try {
+      out[k] = decodeURIComponent(v);
+    } catch {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function issueSessionCookie(res: Response, clientIp: string): string {
+  const sid = crypto.randomBytes(24).toString('hex');
+  activeSessions.set(sid, { expiresAt: Date.now() + SESSION_TTL_MS, ip: clientIp });
+  res.setHeader(
+    'Set-Cookie',
+    `${SESSION_COOKIE_NAME}=${sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+  );
+  return sid;
+}
+
+async function isRequestAuthenticated(req: Request): Promise<boolean> {
+  const authHeader = String(req.headers.authorization || '').trim();
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    const token = authHeader.slice(7).trim();
+    const secret = await getControlSecret();
+    if (safeTimingEqual(token, secret)) {
+      return true;
+    }
+  }
+
+  const cookies = parseCookies(req.headers.cookie);
+  const sid = cookies[SESSION_COOKIE_NAME];
+  if (sid) {
+    const sess = activeSessions.get(sid);
+    if (sess && Date.now() < sess.expiresAt) {
+      return true;
+    }
+  }
+
+  // Loopback requests without cross-origin headers are trusted local browser/CLI traffic when using same-origin UI
+  const remoteIp = req.socket.remoteAddress;
+  if (isLoopbackIp(remoteIp)) {
+    return true;
+  }
+
+  return false;
+}
+
+async function requireControlAuth(req: Request, res: Response, next: NextFunction) {
+  if (await isRequestAuthenticated(req)) {
+    return next();
+  }
+  return res.status(401).json({
+    error: 'Authentication required. Sign in with the pairing secret or access from localhost.',
+    requiresAuth: true,
+  });
+}
+
+app.get('/api/auth/session', async (req: Request, res: Response) => {
+  const remoteIp = req.socket.remoteAddress;
+  const authed = await isRequestAuthenticated(req);
+  if (isLoopbackIp(remoteIp)) {
+    const cookies = parseCookies(req.headers.cookie);
+    if (!cookies[SESSION_COOKIE_NAME] || !activeSessions.has(cookies[SESSION_COOKIE_NAME])) {
+      issueSessionCookie(res, String(remoteIp || '127.0.0.1'));
+    }
+    return res.json({ authenticated: true, mode: 'loopback', allowLanWeb: ALLOW_LAN_WEB });
+  }
+  return res.json({ authenticated: authed, mode: authed ? 'session' : 'unauthenticated', allowLanWeb: ALLOW_LAN_WEB });
+});
+
+app.post('/api/auth/session', async (req: Request, res: Response) => {
+  const candidate = String(req.body?.token || '').trim();
+  const secret = await getControlSecret();
+  if (!safeTimingEqual(candidate, secret)) {
+    return res.status(401).json({ error: 'Invalid pairing token or control secret' });
+  }
+  issueSessionCookie(res, String(req.socket.remoteAddress || 'unknown'));
+  return res.json({ authenticated: true, mode: 'token' });
+});
+
+app.post('/api/auth/logout', (req: Request, res: Response) => {
+  const cookies = parseCookies(req.headers.cookie);
+  const sid = cookies[SESSION_COOKIE_NAME];
+  if (sid) activeSessions.delete(sid);
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+  return res.json({ authenticated: false });
+});
+
+// =====================================================================
+// SSRF VALIDATION SHIELD (DNS Resolution + Private CIDR Blocking)
+// =====================================================================
+function isPrivateOrSpecialIp(ip: string): boolean {
+  const clean = ip.toLowerCase().replace(/^\[|\]$/g, '');
+  if (clean.startsWith('::ffff:')) {
+    return isPrivateOrSpecialIp(clean.slice(7));
+  }
+  if (net.isIPv4(clean)) {
+    const parts = clean.split('.').map(Number);
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true;
+    const [a, b] = parts;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+    if (a >= 224) return true; // Multicast & reserved
+    return false;
+  }
+  if (net.isIPv6(clean)) {
+    if (clean === '::' || clean === '::1') return true;
+    if (clean.startsWith('fc') || clean.startsWith('fd')) return true; // Unique local fc00::/7
+    if (/^fe[89ab]/.test(clean)) return true; // Link-local fe80::/10
+    if (clean.startsWith('ff')) return true; // Multicast
+    return false;
+  }
+  return true;
+}
+
+async function validateExternalHttpUrl(
+  rawUrl: string,
+  options: { requireHttps?: boolean; allowLoopback?: boolean } = {}
+): Promise<{ valid: boolean; normalized?: string; error?: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    return { valid: false, error: 'Malformed URL' };
+  }
+
+  if (parsed.username || parsed.password) {
+    return { valid: false, error: 'Embedded credentials in URL are not permitted' };
+  }
+
+  if (options.requireHttps) {
+    if (parsed.protocol !== 'https:') {
+      return { valid: false, error: 'URL must use https://' };
+    }
+  } else if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { valid: false, error: 'URL must use http:// or https://' };
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (
+    host === '169.254.169.254' ||
+    host.startsWith('169.254.') ||
+    host === 'metadata.google.internal' ||
+    host.endsWith('.internal')
+  ) {
+    return { valid: false, error: 'Cloud metadata and link-local hosts are forbidden (SSRF protection)' };
+  }
+
+  if (net.isIP(host)) {
+    const priv = isPrivateOrSpecialIp(host);
+    if (priv && !(options.allowLoopback && (host === '127.0.0.1' || host === '::1'))) {
+      return { valid: false, error: 'Private, loopback, and reserved IP endpoints are forbidden (SSRF protection)' };
+    }
+    return { valid: true, normalized: parsed.toString() };
+  }
+
+  if (host === 'localhost') {
+    if (!options.allowLoopback) {
+      return { valid: false, error: 'Localhost endpoints are restricted to local Ollama providers' };
+    }
+    return { valid: true, normalized: parsed.toString() };
+  }
+
+  try {
+    const records = await dns.lookup(host, { all: true });
+    if (!records || records.length === 0) {
+      return { valid: false, error: 'Hostname could not be resolved' };
+    }
+    for (const rec of records) {
+      if (isPrivateOrSpecialIp(rec.address)) {
+        const isLoop = rec.address === '127.0.0.1' || rec.address === '::1';
+        if (!(options.allowLoopback && isLoop)) {
+          return {
+            valid: false,
+            error: `Resolved address (${rec.address}) falls inside a restricted private/reserved CIDR range (SSRF protection)`,
+          };
+        }
+      }
+    }
+  } catch {
+    return { valid: false, error: 'DNS lookup failed for target hostname' };
+  }
+
+  return { valid: true, normalized: parsed.toString() };
+}
+
+// =====================================================================
+// DYNAMIC AI MODEL REGISTRY (Real Active Models Only)
+// =====================================================================
 export interface AIModelDescriptor {
   id: string;
   name: string;
@@ -133,313 +552,105 @@ export interface AIModelDescriptor {
   apiKeyUrl?: string;
 }
 
+const DEFAULT_OLLAMA_BASE = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+
 let DYNAMIC_MODELS: AIModelDescriptor[] = [
   {
-    id: 'gemini-3.8-flash',
-    name: 'Gemini 3.8 Flash (Default)',
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash (Default)',
     provider: 'gemini',
-    description: 'Ultra-fast multimodal reasoning model for real-time fleet triage and mouse control',
+    description: 'Fast multimodal reasoning model for real-time fleet triage and remote PC orchestration',
     contextWindow: '1.0M tokens',
   },
   {
-    id: 'gemini-3.1-flash-lite',
-    name: 'Gemini 3.1 Flash Lite',
+    id: 'gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro',
     provider: 'gemini',
-    description: 'Lightweight high-efficiency low-latency model for quick sysadmin tasks',
+    description: 'Deep reasoning model for packet inspection, AST firewall auditing, and complex diagnostics',
     contextWindow: '1.0M tokens',
   },
   {
-    id: 'gemini-flash-latest',
-    name: 'Gemini Flash Latest',
+    id: 'gemini-2.0-flash',
+    name: 'Gemini 2.0 Flash',
     provider: 'gemini',
-    description: 'High-speed agentic model with structured tool-use capabilities',
+    description: 'Low-latency agentic model for rapid structured tool execution',
     contextWindow: '1.0M tokens',
   },
   {
     id: 'deepseek-r1:latest',
     name: 'DeepSeek-R1 (Local / Ollama)',
-    provider: 'deepseek',
-    description: 'Reasoning model for offline air-gapped network management',
+    provider: 'ollama',
+    description: 'Local Ollama reasoning model via 127.0.0.1:11434',
     contextWindow: '128k tokens',
+    endpointUrl: DEFAULT_OLLAMA_BASE,
+  },
+  {
+    id: 'qwen2.5-coder:latest',
+    name: 'Qwen 2.5 Coder (Local / Ollama)',
+    provider: 'ollama',
+    description: 'Local coding & shell script assistant via Ollama 127.0.0.1:11434',
+    contextWindow: '128k tokens',
+    endpointUrl: DEFAULT_OLLAMA_BASE,
   },
 ];
 
-// Lazy Server-side initialization of GoogleGenAI SDK
 function getGenAI() {
   return new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY,
     httpOptions: {
       headers: {
-        'User-Agent': 'aistudio-build',
+        'User-Agent': 'ai-netcontroller-server',
       },
     },
   });
 }
 
-// Role-specific System Instructions with Full PC Control, Daemon Security & System Update Capabilities
-const SYSTEM_INSTRUCTIONS: Record<string, string> = {
-  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system update copilot for AI NetController v0.35.0.
-You manage heterogeneous Windows and Linux hosts across local subnets and possess direct remote control over PC mouse, keyboard, media keys, shell commands, Wake-on-LAN, PC Daemon security profiles, and System/AI Model Updates.
+function resolveSupportedGeminiModel(requested?: string): string {
+  if (!requested || typeof requested !== 'string') return 'gemini-2.5-flash';
+  const clean = requested.trim();
+  if (clean === 'gemini-3.8-flash' || clean === 'gemini-3.1-flash-lite' || clean === 'gemini-flash-latest' || clean === 'gemini-pro') {
+    return 'gemini-2.5-flash';
+  }
+  return clean;
+}
 
-Your Executable Action Directives (include these exact tags whenever the user asks to perform an action or when an action is helpful):
+const SYSTEM_INSTRUCTIONS: Record<string, string> = {
+  commander: `You are AI NetController Fleet Commander, the autonomous fleet orchestrator, PC controller, and system diagnostics assistant for AI NetController Beta ${APP_VERSION_LABEL}.
+You manage heterogeneous Windows and Linux hosts across local subnets and dispatch verified remote control actions to the connected Python Host Agent daemon.
+
+Executable Action Directives (emit only when the user requests the corresponding host action):
 1. Remote Mouse Control (Opcode 0x08):
-   - Click: [ACTION:MOUSE_CLICK target=HOST_ID x=960 y=540 button=left] (button can be left, right, middle)
+   - Click: [ACTION:MOUSE_CLICK target=HOST_ID x=960 y=540 button=left]
    - Double Click: [ACTION:MOUSE_DOUBLE_CLICK target=HOST_ID x=960 y=540]
    - Move Cursor: [ACTION:MOUSE_MOVE target=HOST_ID x=960 y=540]
-   - Scroll Wheel: [ACTION:MOUSE_SCROLL target=HOST_ID dy=-300] (negative scrolls down, positive scrolls up)
-2. Remote Keyboard & Keystroke Injection (Opcode 0x08):
+   - Scroll Wheel: [ACTION:MOUSE_SCROLL target=HOST_ID dy=-300]
+2. Remote Keyboard Input (Opcode 0x08):
    - Type Text: [ACTION:KEYBOARD_TYPE target=HOST_ID text="Hello World" press_enter=true]
-   - Hotkey Combo: [ACTION:KEYBOARD_HOTKEY target=HOST_ID keys="ctrl,shift,esc"] (or win,r / alt,tab / ctrl,c / ctrl,v)
-3. Media & Quick OS Actions (Opcode 0x09):
-   - Media/OS: [ACTION:MEDIA_CONTROL target=HOST_ID command=play_pause] (commands: play_pause, volume_up, volume_down, mute, lock_pc)
+   - Hotkey Combo: [ACTION:KEYBOARD_HOTKEY target=HOST_ID keys="ctrl,shift,esc"]
+3. Media & Session Actions (Opcode 0x09):
+   - Media/OS: [ACTION:MEDIA_CONTROL target=HOST_ID command=play_pause] (play_pause, volume_up, volume_down, mute, lock_pc)
 4. Remote Shell Execution (AST Firewall Guarded):
    - Shell Command: [ACTION:SHELL_EXEC target=HOST_ID command="ipconfig /all"]
-5. Power Management & Wake-on-LAN (UDP Port 9 Magic Packet):
+5. Power Management & Wake-on-LAN:
    - Wake Host: [ACTION:WOL target=HOST_ID]
-6. System & AI Model Update Pipeline:
-   - Update All or Component: [ACTION:SYSTEM_UPDATE target=ALL] (or target=deepseek-r1, qwen25-coder, cst-host-agent, ast-security-rules)
-7. PC Daemon Security & Screen Capture:
-   - Daemon Control: [ACTION:DAEMON_CONTROL command=diagnostics] (commands: diagnostics, view_only, balanced, zero_trust, pause, resume)
-   - Live Screen Capture: [ACTION:SCREEN_CAPTURE target=HOST_ID]
+6. System & Daemon Actions:
+   - Daemon Control: [ACTION:DAEMON_CONTROL command=diagnostics] (diagnostics, view_only, balanced, zero_trust, pause, resume)
    - Subnet Rescan: [ACTION:RESCAN]
 
-Always include the matching [ACTION:...] tag(s) when asked to control the PC, click, move the mouse, type, press shortcuts, run shell commands, wake a host, or check/install system & AI updates.
-Be authoritative, concise, and helpful. Format output cleanly in Markdown.`,
+Be concise, accurate, and transparent about host reachability.`,
 
-  diagnostics: `You are AI NetController Protocol & Security Architect, a deep-reasoning network security and cryptographic engineer specialized in the CST/3.0-SECURE protocol.
-Your areas of expertise:
-- CST/3.0-SECURE Binary Wire Protocol (0xC5 0x71 magic header, 12-byte network-endian header, zero-allocation buffers).
-- Anti-Replay Guard with RFC 6479 128-bit sliding bitmap window, monotonic outbound/inbound sequence counters, and timestamp verification.
-- Cryptographic Handshakes (SHA-256 HMAC pre-shared key token verification, TLS 1.3 RFC 8446 transport security).
-- Remote Input Control (Opcode 0x08 mouse/keyboard injection, Opcode 0x09 media session control) & AST Firewall de-obfuscation.
-- You can also emit executable tags such as [ACTION:DAEMON_CONTROL command=diagnostics], [ACTION:SHELL_EXEC target=HOST_ID command="netstat -ano"], or [ACTION:SYSTEM_UPDATE target=ast-security-rules].
-Provide in-depth architectural reasoning, packet hex breakdowns, and rigorous diagnostics.`,
+  diagnostics: `You are AI NetController Protocol & Security Architect specialized in the ${PROTOCOL_VERSION} protocol:
+- Binary Wire Framing (0xC5 0x71 magic header, 12-byte big-endian header).
+- RFC 6479 128-bit sliding-window anti-replay protection & Curve25519 + ChaCha20-Poly1305 AEAD transport.
+- CommandASTFirewall de-obfuscation, LOLBin blocking, and HITL cryptographic approval verification.
+Provide deep protocol analysis and concise actionable diagnostics.`,
 
-  fast_triage: `You are AI NetController Quick Triage, an ultra-fast and low-latency network & PC control assistant.
-You provide instant, high-speed answers and immediate executable action tags for sysadmins and operators:
-- Emit [ACTION:MOUSE_CLICK ...], [ACTION:KEYBOARD_HOTKEY ...], [ACTION:KEYBOARD_TYPE ...], [ACTION:SHELL_EXEC ...], [ACTION:WOL ...], or [ACTION:SYSTEM_UPDATE target=ALL] directly.
-Keep responses concise, direct, and fast with minimal prose.`,
+  fast_triage: `You are AI NetController Quick Triage. Emit concise diagnostics and direct [ACTION:...] directives when requested.`,
 };
 
-// Health and Capabilities Endpoint
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({
-    status: 'online',
-    protocol: 'CST/3.0-SECURE',
-    version: '0.35.0',
-    timestamp: new Date().toISOString(),
-    hasApiKey: Boolean(process.env.GEMINI_API_KEY),
-    models: DYNAMIC_MODELS,
-  });
-});
-
-let cachedReleasesPayload: { data: any; timestamp: number } | null = null;
-const RELEASES_CACHE_TTL_MS = 30_000;
-
-// Release Binaries (.EXE & .APK) & Patch Notes Endpoint
-app.get('/api/releases', (_req: Request, res: Response) => {
-  try {
-    const now = Date.now();
-    if (cachedReleasesPayload && now - cachedReleasesPayload.timestamp < RELEASES_CACHE_TTL_MS) {
-      return res.json(cachedReleasesPayload.data);
-    }
-    const v330Path = path.join(RELEASES_PUBLIC_DIR, 'v0.35.0', 'RELEASE_MANIFEST.json');
-    const v320Path = path.join(RELEASES_PUBLIC_DIR, 'v0.32.0', 'RELEASE_MANIFEST.json');
-    const v310Path = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
-    const v300Path = path.join(RELEASES_PUBLIC_DIR, 'v0.30.0', 'RELEASE_MANIFEST.json');
-    const v290Path = path.join(RELEASES_PUBLIC_DIR, 'v0.29.0', 'RELEASE_MANIFEST.json');
-    const v280Path = path.join(RELEASES_PUBLIC_DIR, 'v0.28.0', 'RELEASE_MANIFEST.json');
-    const v271Path = path.join(RELEASES_PUBLIC_DIR, 'v0.27.1', 'RELEASE_MANIFEST.json');
-    const v270Path = path.join(RELEASES_PUBLIC_DIR, 'v0.27.0', 'RELEASE_MANIFEST.json');
-    const patchNotesPath = path.join(ROOT_DIR, 'PATCH_NOTES.md');
-    const manifest = fs.existsSync(v330Path)
-      ? JSON.parse(fs.readFileSync(v330Path, 'utf-8'))
-      : fs.existsSync(v320Path)
-      ? JSON.parse(fs.readFileSync(v320Path, 'utf-8'))
-      : fs.existsSync(v310Path)
-      ? JSON.parse(fs.readFileSync(v310Path, 'utf-8'))
-      : fs.existsSync(v300Path)
-      ? JSON.parse(fs.readFileSync(v300Path, 'utf-8'))
-      : fs.existsSync(v290Path)
-      ? JSON.parse(fs.readFileSync(v290Path, 'utf-8'))
-      : fs.existsSync(v280Path)
-      ? JSON.parse(fs.readFileSync(v280Path, 'utf-8'))
-      : fs.existsSync(v271Path)
-      ? JSON.parse(fs.readFileSync(v271Path, 'utf-8'))
-      : (fs.existsSync(v270Path) ? JSON.parse(fs.readFileSync(v270Path, 'utf-8')) : null);
-    const legacyManifest = fs.existsSync(v320Path)
-      ? JSON.parse(fs.readFileSync(v320Path, 'utf-8'))
-      : (fs.existsSync(v310Path) ? JSON.parse(fs.readFileSync(v310Path, 'utf-8')) : null);
-    const patchNotes = fs.existsSync(patchNotesPath)
-      ? fs.readFileSync(patchNotesPath, 'utf-8')
-      : '';
-    const payload = {
-      success: true,
-      manifest,
-      legacyManifest,
-      availableVersions: ['v0.35.0', 'v0.32.0', 'v0.31.3', 'v0.31.2', 'v0.31.1', 'v0.30.0', 'v0.29.0', 'v0.28.0', 'v0.27.1', 'v0.27.0'],
-      patchNotes,
-    };
-    cachedReleasesPayload = { data: payload, timestamp: now };
-    return res.json(payload);
-  } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Failed to read release manifest' });
-  }
-});
-
-// Rebuild Release Binaries (.EXE & .APK) on Demand
-app.post('/api/releases/rebuild', (_req: Request, res: Response) => {
-  const scriptPath = path.join(ROOT_DIR, 'scripts', 'build_release_binaries.py');
-  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-  exec(`"${pythonCmd}" "${scriptPath}"`, { timeout: 25000 }, (err, stdout, stderr) => {
-    cachedReleasesPayload = null;
-    if (err) {
-      return res.status(500).json({
-        success: false,
-        error: stderr || err.message,
-      });
-    }
-    const manifestPath = path.join(RELEASES_PUBLIC_DIR, 'v0.35.0', 'RELEASE_MANIFEST.json');
-    const fallbackPath = path.join(RELEASES_PUBLIC_DIR, 'v0.32.0', 'RELEASE_MANIFEST.json');
-    const legacyPath = path.join(RELEASES_PUBLIC_DIR, 'v0.31.3', 'RELEASE_MANIFEST.json');
-    const manifest = fs.existsSync(manifestPath)
-      ? JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
-      : fs.existsSync(fallbackPath)
-      ? JSON.parse(fs.readFileSync(fallbackPath, 'utf-8'))
-      : (fs.existsSync(legacyPath) ? JSON.parse(fs.readFileSync(legacyPath, 'utf-8')) : null);
-    return res.json({
-      success: true,
-      output: stdout.trim(),
-      manifest,
-    });
-  });
-});
-
-// GET AI Models Registry
-app.get('/api/ai/models', (_req: Request, res: Response) => {
-  return res.json({
-    success: true,
-    models: DYNAMIC_MODELS,
-    hasApiKey: Boolean(process.env.GEMINI_API_KEY),
-  });
-});
-
-// POST Add or Update AI Model (Hardened with Full SSRF Protection)
-app.post('/api/ai/models', (req: Request, res: Response) => {
-  try {
-    const { id, name, provider = 'custom', description = '', contextWindow = '128k', endpointUrl, apiKeyUrl } = req.body;
-    if (!id || !name) {
-      return res.status(400).json({ error: 'Model ID and Name are required' });
-    }
-
-    let validatedEndpointUrl: string | undefined;
-    if (endpointUrl) {
-      const rawUrl = String(endpointUrl).trim();
-      let parsed: URL;
-      try {
-        parsed = new URL(rawUrl);
-      } catch {
-        return res.status(400).json({ error: 'Invalid endpointUrl format' });
-      }
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return res.status(400).json({ error: 'endpointUrl must use http:// or https://' });
-      }
-      const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-      const isCloudMetadata =
-        host === '169.254.169.254' ||
-        host.startsWith('169.254.') ||
-        host.startsWith('fe80:') ||
-        host === 'metadata.google.internal' ||
-        host.endsWith('.internal');
-      const isLoopbackOrZero =
-        host === '0.0.0.0' ||
-        host === '::' ||
-        host === '::1' ||
-        host === 'localhost' ||
-        host.startsWith('127.');
-
-      if (isCloudMetadata) {
-        return res.status(400).json({ error: 'Cloud metadata and link-local endpoints are forbidden (SSRF protection)' });
-      }
-      if (isLoopbackOrZero && provider !== 'ollama') {
-        return res.status(400).json({ error: 'Loopback endpoints are restricted to local Ollama provider (SSRF protection)' });
-      }
-      validatedEndpointUrl = parsed.toString();
-    }
-
-    const cleanId = String(id).trim().toLowerCase().replace(/[^a-z0-9_.:-]/g, '-');
-    const existingIndex = DYNAMIC_MODELS.findIndex((m) => m.id === cleanId);
-
-    const newDescriptor: AIModelDescriptor = {
-      id: cleanId,
-      name: String(name).trim(),
-      provider: provider as any,
-      description: String(description).trim() || 'Custom AI Model Endpoint',
-      contextWindow: String(contextWindow).trim() || '128k tokens',
-      isCustom: true,
-      endpointUrl: validatedEndpointUrl,
-      apiKeyUrl: apiKeyUrl ? String(apiKeyUrl).trim() : undefined,
-    };
-
-    if (existingIndex >= 0) {
-      DYNAMIC_MODELS[existingIndex] = newDescriptor;
-    } else {
-      DYNAMIC_MODELS.push(newDescriptor);
-    }
-
-    return res.json({
-      success: true,
-      model: newDescriptor,
-      models: DYNAMIC_MODELS,
-      message: `Model '${newDescriptor.name}' saved successfully.`,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Failed to save model' });
-  }
-});
-
-// DELETE Custom AI Model
-app.delete('/api/ai/models/:id', (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    DYNAMIC_MODELS = DYNAMIC_MODELS.filter((m) => m.id !== id);
-    return res.json({
-      success: true,
-      models: DYNAMIC_MODELS,
-      message: `Model '${id}' removed successfully.`,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Failed to delete model' });
-  }
-});
-
-// POST Test Connection to Model
-app.post('/api/ai/models/test', async (req: Request, res: Response) => {
-  try {
-    const { modelId } = req.body;
-    const model = DYNAMIC_MODELS.find((m) => m.id === modelId) || DYNAMIC_MODELS[0];
-
-    if (!process.env.GEMINI_API_KEY && model.provider === 'gemini') {
-      return res.status(503).json({
-        success: false,
-        error: 'GEMINI_API_KEY is missing in server environment',
-      });
-    }
-
-    return res.json({
-      success: true,
-      modelId: model.id,
-      name: model.name,
-      status: 'online',
-      latencyMs: Math.floor(Math.random() * 25) + 15,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err?.message || 'Model test failed' });
-  }
-});
-
-// Real PC Host Daemon State & Telemetry Store
+// =====================================================================
+// REAL DAEMON TELEMETRY & AUTHENTICATED WEBSOCKET IPC BRIDGE
+// =====================================================================
 interface DaemonLogEntry {
   time: string;
   level: 'INFO' | 'SECURITY' | 'DIAG' | 'WARN' | 'ALERT';
@@ -447,17 +658,14 @@ interface DaemonLogEntry {
 }
 
 const daemonBootTime = Date.now();
+const serverEvents: DaemonLogEntry[] = [];
 
-function detectPrimaryLanIp(): string {
-  const nets = os.networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] || []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address;
-      }
-    }
+function addServerLog(level: DaemonLogEntry['level'], message: string) {
+  const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  serverEvents.push({ time, level, message });
+  if (serverEvents.length > 100) {
+    serverEvents.splice(0, serverEvents.length - 100);
   }
-  return '127.0.0.1';
 }
 
 let prevCpuSnapshot: { idle: number; total: number } | null = null;
@@ -487,24 +695,20 @@ function sampleRealCpuPercent(): number {
 
 let cachedDiskPercent = 0;
 let lastDiskSampleTime = 0;
-let cachedActiveAdapters: Array<{ name: string; ipv4: string; mac: string }> = [];
-let lastAdapterSampleTime = 0;
 
 function sampleRealDiskPercent(): number {
   const now = Date.now();
-  if (now - lastDiskSampleTime < 5000) {
-    return cachedDiskPercent;
-  }
+  if (now - lastDiskSampleTime < 5000) return cachedDiskPercent;
   lastDiskSampleTime = now;
   try {
-    if (typeof fs.statfsSync === 'function') {
+    const statfn = (fs as any).statfsSync;
+    if (typeof statfn === 'function') {
       const rootPath = path.parse(process.cwd()).root || '/';
-      const stat = fs.statfsSync(rootPath);
+      const stat = statfn(rootPath);
       const totalBlocks = Number(stat.blocks || 0);
       const freeBlocks = Number(stat.bfree || 0);
       if (totalBlocks > 0) {
         cachedDiskPercent = Number((((totalBlocks - freeBlocks) / totalBlocks) * 100).toFixed(1));
-        return cachedDiskPercent;
       }
     }
   } catch {
@@ -514,420 +718,721 @@ function sampleRealDiskPercent(): number {
 }
 
 function sampleActiveAdapters(): Array<{ name: string; ipv4: string; mac: string }> {
-  const now = Date.now();
-  if (now - lastAdapterSampleTime < 5000 && cachedActiveAdapters.length > 0) {
-    return cachedActiveAdapters;
-  }
-  lastAdapterSampleTime = now;
   const nets = os.networkInterfaces();
   const activeAdapters: Array<{ name: string; ipv4: string; mac: string }> = [];
   for (const [name, list] of Object.entries(nets)) {
-    for (const net of list || []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        const cleanMac = net.mac && net.mac !== '00:00:00:00:00:00' ? net.mac.toUpperCase() : '';
-        activeAdapters.push({ name, ipv4: net.address, mac: cleanMac });
+    for (const iface of list || []) {
+      if (iface.family === 'IPv4' && !iface.internal && !iface.address.startsWith('169.254.')) {
+        const cleanMac = iface.mac && iface.mac !== '00:00:00:00:00:00' ? iface.mac.toUpperCase() : '';
+        activeAdapters.push({ name, ipv4: iface.address, mac: cleanMac });
       }
     }
   }
-  cachedActiveAdapters = activeAdapters;
   return activeAdapters;
 }
 
-interface DaemonConnectedClient {
-  id: string;
-  ip: string;
-  mac: string;
-  device: string;
-  platform: 'android' | 'ios' | 'web' | 'desktop';
-  auth: string;
-  connectedAt: string;
-  latencyMs: number;
-  commandsSent: number;
-  inputAllowed: boolean;
-  isTrusted: boolean;
+function probeTcpPortWithRtt(ip: string, port: number, timeoutMs = 450): Promise<{ open: boolean; rttMs: number }> {
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    const start = performance.now();
+    let settled = false;
+    const finish = (open: boolean) => {
+      if (settled) return;
+      settled = true;
+      const rttMs = Math.max(1, Math.round(performance.now() - start));
+      try {
+        sock.destroy();
+      } catch {}
+      resolve({ open, rttMs });
+    };
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => finish(true));
+    sock.once('timeout', () => finish(false));
+    sock.once('error', () => finish(false));
+    try {
+      sock.connect(port, ip);
+    } catch {
+      finish(false);
+    }
+  });
 }
 
-interface BlacklistedDeviceEntry {
-  id: string;
-  ip: string;
-  mac: string;
-  device: string;
-  reason: string;
-  bannedAt: string;
-}
-
-const pcDaemonState = {
-  version: '0.35.0',
-  protocol: 'CST/3.0-SECURE',
-  hostname: os.hostname() || 'LOCALHOST',
-  osName: `${os.type()} ${os.release()} (${os.arch()})`,
-  localIp: detectPrimaryLanIp(),
-  port: 8765,
-  isRunning: true,
-  isPaused: false,
-  mdnsEnabled: true,
-  viewOnlyMode: false,
-  requireHitlApproval: true,
-  clipboardSyncAllowed: true,
-  autoLockOnDisconnect: false,
-  autoBanIntrusion: true,
-  subnetGeofenceOnly: true,
-  autoStartOnBoot: true,
-  targetFps: 60 as 60 | 30 | 15,
-  setupCompleted: true,
-  securityProfile: 'balanced' as 'zero_trust' | 'balanced' | 'view_only',
-  pairingPin: String(crypto.randomInt(100000, 1000000)),
-  pairingToken: process.env.CST_AGENT_SECRET || process.env.AI_AGENT_SECRET || 'cst_autonomous_lan_secret_2025',
-  connectedClients: [] as DaemonConnectedClient[],
-  blacklistedDevices: [] as BlacklistedDeviceEntry[],
-  avIntegrity: {
-    upxDisabled: true,
-    visibleHwnd: true,
-    zeroHiddenShell: true,
-    manifestAsInvoker: true,
-    authenticodeReady: true,
-    sandboxJobObject: true,
-  },
-  logs: [] as DaemonLogEntry[],
-};
-
-function addDaemonLog(level: DaemonLogEntry['level'], message: string) {
-  const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
-  pcDaemonState.logs.push({ time, level, message });
-  if (pcDaemonState.logs.length > 100) {
-    pcDaemonState.logs = pcDaemonState.logs.slice(-100);
+async function dispatchLiveAgentCommand(
+  targetHost: string,
+  port: number,
+  messagePayload: Record<string, unknown>,
+  awaitEvent?: string,
+  timeoutMs = 6000
+): Promise<{ ok: boolean; response?: any; error?: string }> {
+  const host = isLoopbackIp(targetHost) || !targetHost ? '127.0.0.1' : targetHost;
+  const probe = await probeTcpPortWithRtt(host, port, 500);
+  if (!probe.open) {
+    return {
+      ok: false,
+      error: `Host Agent daemon is offline (no listener on ws://${host}:${port}). Launch AI_NetController_HostAgent first.`,
+    };
   }
+
+  const secret = await getControlSecret();
+  return new Promise((resolve) => {
+    let ws: WebSocket;
+    let settled = false;
+    let authenticated = false;
+
+    const finish = (result: { ok: boolean; response?: any; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.close(1000, 'Control request complete');
+        }
+      } catch {}
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      finish({ ok: false, error: `Timed out communicating with Host Agent on ws://${host}:${port}` });
+    }, timeoutMs);
+
+    try {
+      ws = new WebSocket(`ws://${host}:${port}`);
+    } catch (err: any) {
+      finish({ ok: false, error: err?.message || 'WebSocket connection initialization failed' });
+      return;
+    }
+
+    ws.addEventListener('open', () => {
+      ws.send(
+        JSON.stringify({
+          action: 'AUTHENTICATE',
+          token: secret,
+          device: 'AI NetController Web Control Console',
+        })
+      );
+    });
+
+    ws.addEventListener('message', (ev) => {
+      if (typeof ev.data !== 'string') return;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+
+      if (!authenticated) {
+        if (parsed.event === 'AUTHENTICATED') {
+          authenticated = true;
+          ws.send(JSON.stringify(messagePayload));
+          if (!awaitEvent) {
+            setTimeout(() => finish({ ok: true, response: parsed }), 40);
+          }
+        } else if (parsed.event === 'ERROR') {
+          finish({ ok: false, error: parsed.error || 'Agent authentication rejected' });
+        }
+        return;
+      }
+
+      if (awaitEvent && parsed.event === awaitEvent) {
+        finish({ ok: true, response: parsed });
+      } else if (parsed.event === 'PANIC_ACK' && messagePayload.action === 'PANIC_KILL_ALL') {
+        finish({ ok: true, response: parsed });
+      } else if (parsed.event === 'ERROR') {
+        finish({ ok: false, error: parsed.error || 'Agent rejected command' });
+      }
+    });
+
+    ws.addEventListener('error', () => {
+      finish({ ok: false, error: `WebSocket error communicating with ws://${host}:${port}` });
+    });
+
+    ws.addEventListener('close', (ev) => {
+      if (!settled) {
+        finish({
+          ok: false,
+          error: ev.reason || `Agent closed connection cleanly (code ${ev.code})`,
+        });
+      }
+    });
+  });
 }
 
-function getDaemonSnapshot() {
+async function getRealDaemonSnapshot() {
+  const cfg = await loadDaemonConfig();
+  const port = Number(cfg.port || process.env.CST_AGENT_PORT || 8765);
+  const localIp = detectPrimaryLanIp();
+  const probe = await probeTcpPortWithRtt('127.0.0.1', port, 300);
+
   const totalMemBytes = os.totalmem();
   const freeMemBytes = os.freemem();
   const usedMemBytes = Math.max(0, totalMemBytes - freeMemBytes);
   const ramTotalGb = Number((totalMemBytes / 1024 ** 3).toFixed(1));
   const ramUsedGb = Number((usedMemBytes / 1024 ** 3).toFixed(1));
   const ramPercent = Number(((usedMemBytes / Math.max(1, totalMemBytes)) * 100).toFixed(1));
-
   const cpus = os.cpus();
-  const cpuPercent = sampleRealCpuPercent();
-  const diskPercent = sampleRealDiskPercent();
 
   const elapsedSec = Math.max(0, Math.floor((Date.now() - daemonBootTime) / 1000));
   const hrs = String(Math.floor(elapsedSec / 3600)).padStart(2, '0');
   const mins = String(Math.floor((elapsedSec % 3600) / 60)).padStart(2, '0');
   const secs = String(elapsedSec % 60).padStart(2, '0');
 
-  const activeAdapters = sampleActiveAdapters();
-  let dynamicPin = pcDaemonState.pairingPin;
-  let dynamicToken = pcDaemonState.pairingToken;
-  try {
-    const isWin = process.platform === 'win32';
-    const baseDir = isWin
-      ? (process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local'))
-      : path.join(os.homedir(), '.ai_netcontroller');
-    const cfgPath = isWin
-      ? path.join(baseDir, 'AI NetController', 'config.json')
-      : path.join(baseDir, 'config.json');
-    if (fs.existsSync(cfgPath)) {
-      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-      if (cfg.pairing_pin) dynamicPin = String(cfg.pairing_pin);
-      if (cfg.pairing_token) dynamicToken = String(cfg.pairing_token);
-    }
-  } catch {
-    // Ignore config read error
-  }
+  const manifestFile = path.join(ROOT_DIR, 'agent', 'app_manifest.xml');
+  const hasManifest =
+    fs.existsSync(manifestFile) && fs.readFileSync(manifestFile, 'utf-8').includes('level="asInvoker"');
+
+  const blacklistedDevices = Array.isArray(cfg.blacklisted_devices) ? cfg.blacklisted_devices : [];
 
   return {
-    ...pcDaemonState,
-    pairingPin: dynamicPin,
-    pairingToken: dynamicToken,
-    wsUri: `ws://${pcDaemonState.localIp}:${pcDaemonState.port}`,
+    version: APP_VERSION,
+    protocol: PROTOCOL_VERSION,
+    hostname: os.hostname() || 'LOCALHOST',
+    osName: `${os.type()} ${os.release()} (${os.arch()})`,
+    localIp,
+    port,
+    isRunning: probe.open,
+    isPaused: !probe.open,
+    agentReachable: probe.open,
+    agentRttMs: probe.open ? probe.rttMs : null,
+    mdnsEnabled: cfg.mdns_enabled !== false,
+    viewOnlyMode: Boolean(cfg.view_only_mode),
+    requireHitlApproval: cfg.require_hitl_approval !== false,
+    clipboardSyncAllowed: cfg.clipboard_sync_allowed !== false,
+    autoLockOnDisconnect: Boolean(cfg.auto_lock_on_disconnect),
+    autoBanIntrusion: cfg.auto_ban_intrusion !== false,
+    subnetGeofenceOnly: cfg.subnet_geofence_only !== false,
+    autoStartOnBoot: cfg.autostart_on_boot !== false,
+    targetFps: Number(cfg.target_fps || 60),
+    setupCompleted: cfg.setup_completed !== false,
+    securityProfile: (cfg.security_profile as 'zero_trust' | 'balanced' | 'view_only') || 'balanced',
+    pairingPin: cfg.pairing_pin ? String(cfg.pairing_pin) : '------',
+    wsUri: `ws://${localIp}:${port}`,
     uptime: `${hrs}:${mins}:${secs}`,
-    cpuPercent,
+    cpuPercent: sampleRealCpuPercent(),
     cpuCores: cpus ? cpus.length : 1,
     ramPercent,
     ramUsedGb,
     ramTotalGb,
-    diskPercent,
-    captureFps: pcDaemonState.isPaused ? 0 : pcDaemonState.connectedClients.length > 0 ? pcDaemonState.targetFps : 0,
-    activeAdapters,
+    diskPercent: sampleRealDiskPercent(),
+    captureFps: 0,
+    connectedClients: [],
+    blacklistedDevices,
+    activeAdapters: sampleActiveAdapters(),
+    avIntegrity: {
+      upxDisabled: true,
+      visibleHwnd: probe.open,
+      zeroHiddenShell: true,
+      manifestAsInvoker: hasManifest,
+      authenticodeReady: process.platform === 'win32',
+      sandboxJobObject: process.platform === 'win32',
+    },
+    logs: [...serverEvents],
   };
 }
 
-// GET PC Daemon GUI Live State & Telemetry
-app.get('/api/daemon/state', (_req: Request, res: Response) => {
-  return res.json({
-    success: true,
-    daemon: getDaemonSnapshot(),
+// Public non-secret health check
+app.get('/api/health', async (_req: Request, res: Response) => {
+  const cfg = await loadDaemonConfig();
+  const port = Number(cfg.port || 8765);
+  const probe = await probeTcpPortWithRtt('127.0.0.1', port, 250);
+  res.json({
+    status: 'online',
+    daemonOnline: probe.open,
+    protocol: PROTOCOL_VERSION,
+    version: APP_VERSION,
+    timestamp: new Date().toISOString(),
+    hasApiKey: Boolean(process.env.GEMINI_API_KEY),
+    models: DYNAMIC_MODELS.map(({ id, name, provider, description, contextWindow, isCustom }) => ({
+      id,
+      name,
+      provider,
+      description,
+      contextWindow,
+      isCustom,
+    })),
   });
 });
 
-// POST PC Daemon GUI Interactive Control Action
-app.post('/api/daemon/action', (req: Request, res: Response) => {
+// =====================================================================
+// RELEASE MANIFESTS, REBUILD & CURATED SOURCE EXPORT
+// =====================================================================
+let cachedReleasesPayload: { data: any; timestamp: number } | null = null;
+const RELEASES_CACHE_TTL_MS = 30_000;
+
+function readFirstAvailableManifest(): any {
+  const candidates = ['v0.50.0', 'v0.35.0', 'v0.32.0', 'v0.31.3', 'v0.30.0'];
+  for (const ver of candidates) {
+    const p = path.join(RELEASES_PUBLIC_DIR, ver, 'RELEASE_MANIFEST.json');
+    if (fs.existsSync(p)) {
+      try {
+        return JSON.parse(fs.readFileSync(p, 'utf-8'));
+      } catch {
+        // Continue
+      }
+    }
+  }
+  return null;
+}
+
+app.get('/api/releases', (_req: Request, res: Response) => {
   try {
-    const { action, port, clientId, ip, mac, device, reason, banId, profile, fps } = req.body || {};
-    const nowTime = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const now = Date.now();
+    if (cachedReleasesPayload && now - cachedReleasesPayload.timestamp < RELEASES_CACHE_TTL_MS) {
+      return res.json(cachedReleasesPayload.data);
+    }
+    const manifest = readFirstAvailableManifest();
+    const patchNotesPath = path.join(ROOT_DIR, 'PATCH_NOTES.md');
+    const patchNotes = fs.existsSync(patchNotesPath) ? fs.readFileSync(patchNotesPath, 'utf-8') : '';
 
-    switch (action) {
-      case 'toggle_pause':
-        pcDaemonState.isPaused = !pcDaemonState.isPaused;
-        addDaemonLog(
-          pcDaemonState.isPaused ? 'WARN' : 'INFO',
-          pcDaemonState.isPaused
-            ? 'Daemon paused by local operator. Incoming remote sessions suspended.'
-            : 'Daemon resumed by local operator. Listening for authenticated peers.'
-        );
-        break;
-      case 'toggle_view_only':
-        pcDaemonState.viewOnlyMode = !pcDaemonState.viewOnlyMode;
-        addDaemonLog(
-          'SECURITY',
-          pcDaemonState.viewOnlyMode
-            ? 'Global View-Only Mode enabled: Remote mouse & keyboard input locked (Opcode 0x08 blocked).'
-            : 'Global Remote mouse & keyboard input unlocked by local operator.'
-        );
-        break;
-      case 'toggle_hitl':
-        pcDaemonState.requireHitlApproval = !pcDaemonState.requireHitlApproval;
-        addDaemonLog(
-          'SECURITY',
-          pcDaemonState.requireHitlApproval
-            ? 'Human-in-the-Loop (HITL) approval gate enabled for administrative commands.'
-            : 'HITL approval gate set to passive audit mode by operator.'
-        );
-        break;
-      case 'toggle_mdns':
-        pcDaemonState.mdnsEnabled = !pcDaemonState.mdnsEnabled;
-        addDaemonLog(
-          'INFO',
-          pcDaemonState.mdnsEnabled
-            ? 'ZeroConf mDNS beacon (_cst-agent._tcp.local.) enabled on LAN.'
-            : 'ZeroConf mDNS beacon muted.'
-        );
-        break;
-      case 'toggle_clipboard_sync':
-        pcDaemonState.clipboardSyncAllowed = !pcDaemonState.clipboardSyncAllowed;
-        addDaemonLog(
-          'SECURITY',
-          pcDaemonState.clipboardSyncAllowed
-            ? 'Bidirectional clipboard sync enabled for trusted peers.'
-            : 'Clipboard sync shield locked: Remote clipboard access blocked.'
-        );
-        break;
-      case 'toggle_auto_lock':
-        pcDaemonState.autoLockOnDisconnect = !pcDaemonState.autoLockOnDisconnect;
-        addDaemonLog(
-          'SECURITY',
-          pcDaemonState.autoLockOnDisconnect
-            ? 'Auto-Lock Workstation on Session Drop enabled (LockWorkStation hook armed).'
-            : 'Auto-Lock Workstation on Session Drop disabled.'
-        );
-        break;
-      case 'toggle_auto_ban':
-        pcDaemonState.autoBanIntrusion = !pcDaemonState.autoBanIntrusion;
-        addDaemonLog(
-          'SECURITY',
-          pcDaemonState.autoBanIntrusion
-            ? 'Intrusion Auto-Ban Shield enabled: IPs with 3 failed auth attempts are automatically blacklisted.'
-            : 'Intrusion Auto-Ban Shield set to log-only mode.'
-        );
-        break;
-      case 'toggle_subnet_geofence':
-        pcDaemonState.subnetGeofenceOnly = !pcDaemonState.subnetGeofenceOnly;
-        addDaemonLog(
-          'SECURITY',
-          pcDaemonState.subnetGeofenceOnly
-            ? 'RFC1918 Private LAN Subnet Geofence enabled: External WAN packets rejected.'
-            : 'Subnet Geofence relaxed to allow VPN/Tailscale/WireGuard peers.'
-        );
-        break;
-      case 'toggle_autostart':
-        pcDaemonState.autoStartOnBoot = !pcDaemonState.autoStartOnBoot;
-        addDaemonLog(
-          'INFO',
-          pcDaemonState.autoStartOnBoot
-            ? 'Windows Startup registration enabled (HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run).'
-            : 'Windows Startup registration removed.'
-        );
-        break;
-      case 'set_target_fps': {
-        const nextFps = Number(fps);
-        if (nextFps === 60 || nextFps === 30 || nextFps === 15) {
-          pcDaemonState.targetFps = nextFps;
-          addDaemonLog('INFO', `TurboJPEG capture pipeline target frame rate set to ${nextFps} FPS.`);
-        }
-        break;
-      }
-      case 'rotate_token':
-        pcDaemonState.pairingToken = `cst_sec_${crypto.randomBytes(12).toString('hex')}`;
-        addDaemonLog('SECURITY', 'Pre-shared HMAC-SHA256 pairing secret rotated by local operator.');
-        break;
-      case 'rotate_pin':
-        pcDaemonState.pairingPin = String(crypto.randomInt(100000, 1000000));
-        addDaemonLog('SECURITY', `New 6-digit ephemeral pairing PIN generated: ${pcDaemonState.pairingPin}`);
-        break;
-      case 'update_port': {
-        const nextPort = Number(port);
-        if (Number.isInteger(nextPort) && nextPort >= 1024 && nextPort <= 65535) {
-          pcDaemonState.port = nextPort;
-          addDaemonLog('INFO', `WebSocket listener rebound to port ${nextPort} (SO_EXCLUSIVEADDRUSE).`);
-        }
-        break;
-      }
-      case 'disconnect_client': {
-        const target = pcDaemonState.connectedClients.find((c) => c.id === clientId || c.ip === ip);
-        pcDaemonState.connectedClients = pcDaemonState.connectedClients.filter(
-          (c) => c.id !== clientId && c.ip !== ip
-        );
-        addDaemonLog(
-          'WARN',
-          `DISCONNECTED DEVICE: Terminated session for ${target?.device || clientId || ip} (${target?.ip || ip}) and revoked session key.`
-        );
-        break;
-      }
-      case 'blacklist_client': {
-        const target = pcDaemonState.connectedClients.find((c) => c.id === clientId || c.ip === ip);
-        const banIp = String(target?.ip || ip || '').trim();
-        if (!banIp) {
-          return res.status(400).json({ error: 'Valid client IP or clientId is required to blacklist a device' });
-        }
-        const banMac = String(target?.mac || mac || 'N/A').trim();
-        const banDevice = target?.device || device || `Blocked Peer (${banIp})`;
-        const banReason = reason || 'Manually disconnected & blacklisted by PC operator';
+    const dirs = fs.existsSync(RELEASES_PUBLIC_DIR)
+      ? fs
+          .readdirSync(RELEASES_PUBLIC_DIR, { withFileTypes: true })
+          .filter((d) => d.isDirectory() && /^v\d+/.test(d.name))
+          .map((d) => d.name)
+          .sort()
+          .reverse()
+      : [];
 
-        // Remove from connected clients immediately
-        pcDaemonState.connectedClients = pcDaemonState.connectedClients.filter(
-          (c) => c.id !== clientId && c.ip !== banIp
-        );
+    const payload = {
+      success: true,
+      manifest,
+      availableVersions: dirs.length > 0 ? dirs : [`v${APP_VERSION}`],
+      patchNotes,
+    };
+    cachedReleasesPayload = { data: payload, timestamp: now };
+    return res.json(payload);
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to read release manifest' });
+  }
+});
 
-        // Add to blacklist if not already present
-        if (!pcDaemonState.blacklistedDevices.some((b) => b.ip === banIp)) {
-          pcDaemonState.blacklistedDevices.unshift({
-            id: `BAN-${crypto.randomInt(100, 1000)}`,
-            ip: banIp,
-            mac: banMac.toUpperCase(),
-            device: banDevice,
-            reason: banReason,
-            bannedAt: nowTime,
-          });
-        }
-        addDaemonLog(
-          'ALERT',
-          `BLACKLISTED DEVICE: ${banDevice} (IP: ${banIp}, MAC: ${banMac}) permanently blocked at socket firewall.`
-        );
-        break;
+app.post('/api/releases/rebuild', requireControlAuth, (_req: Request, res: Response) => {
+  const scriptPath = path.join(ROOT_DIR, 'scripts', 'build_release_binaries.py');
+  if (!fs.existsSync(scriptPath)) {
+    return res.status(404).json({ success: false, error: 'scripts/build_release_binaries.py not found' });
+  }
+  execFile(getPythonBin(), [scriptPath], { cwd: ROOT_DIR, timeout: 120_000 }, (err, stdout, stderr) => {
+    cachedReleasesPayload = null;
+    if (err) {
+      return res.status(500).json({ success: false, error: stderr || err.message });
+    }
+    return res.json({
+      success: true,
+      output: stdout.trim(),
+      manifest: readFirstAvailableManifest(),
+    });
+  });
+});
+
+const EXPORTABLE_SOURCE_MAP: Record<string, { label: string; lang: string; relPath: string }> = {
+  'agent/agent.py': { label: 'Python Host Agent Core (agent.py)', lang: 'python', relPath: 'agent/agent.py' },
+  'agent/command_ast_firewall.py': {
+    label: 'Command AST Firewall (command_ast_firewall.py)',
+    lang: 'python',
+    relPath: 'agent/command_ast_firewall.py',
+  },
+  'agent/crypto_vault.py': { label: 'X25519 + ChaCha20 Vault (crypto_vault.py)', lang: 'python', relPath: 'agent/crypto_vault.py' },
+  'agent/daemon_config.py': { label: 'DPAPI Daemon Config (daemon_config.py)', lang: 'python', relPath: 'agent/daemon_config.py' },
+  'apps/web/src/utils/binaryFramer.ts': {
+    label: 'Web Binary Protocol Framer (binaryFramer.ts)',
+    lang: 'typescript',
+    relPath: 'apps/web/src/utils/binaryFramer.ts',
+  },
+  'apps/web/src/services/wolService.ts': {
+    label: 'Wake-on-LAN Service (wolService.ts)',
+    lang: 'typescript',
+    relPath: 'apps/web/src/services/wolService.ts',
+  },
+  'apps/mobile/lib/protocol/binary_protocol.dart': {
+    label: 'Mobile Binary Protocol (binary_protocol.dart)',
+    lang: 'dart',
+    relPath: 'apps/mobile/lib/protocol/binary_protocol.dart',
+  },
+};
+
+app.get('/api/source-files', requireControlAuth, (req: Request, res: Response) => {
+  const requested = String(req.query.path || '').trim();
+  if (!requested) {
+    return res.json({
+      success: true,
+      files: Object.entries(EXPORTABLE_SOURCE_MAP).map(([id, meta]) => ({
+        id,
+        label: meta.label,
+        language: meta.lang,
+        exists: fs.existsSync(path.resolve(ROOT_DIR, meta.relPath)),
+      })),
+    });
+  }
+  const meta = EXPORTABLE_SOURCE_MAP[requested];
+  if (!meta) {
+    return res.status(404).json({ error: 'Requested source file is not in export whitelist' });
+  }
+  const fullPath = path.resolve(ROOT_DIR, meta.relPath);
+  if (!fullPath.startsWith(ROOT_DIR + path.sep) || !fs.existsSync(fullPath)) {
+    return res.status(404).json({ error: 'Source file not found on disk' });
+  }
+  return res.json({
+    success: true,
+    id: requested,
+    label: meta.label,
+    language: meta.lang,
+    content: fs.readFileSync(fullPath, 'utf-8'),
+  });
+});
+
+// =====================================================================
+// AI MODELS & LIVE INFERENCE ENDPOINTS
+// =====================================================================
+app.get('/api/ai/models', (_req: Request, res: Response) => {
+  return res.json({
+    success: true,
+    models: DYNAMIC_MODELS,
+    hasApiKey: Boolean(process.env.GEMINI_API_KEY),
+    ollamaEndpoint: DEFAULT_OLLAMA_BASE,
+  });
+});
+
+app.post('/api/ai/models', requireControlAuth, async (req: Request, res: Response) => {
+  try {
+    const { id, name, provider = 'custom', description = '', contextWindow = '128k', endpointUrl, apiKeyUrl } = req.body || {};
+    if (!id || !name) {
+      return res.status(400).json({ error: 'Model ID and Name are required' });
+    }
+
+    let validatedEndpointUrl: string | undefined;
+    if (endpointUrl) {
+      const check = await validateExternalHttpUrl(String(endpointUrl), {
+        allowLoopback: provider === 'ollama',
+      });
+      if (!check.valid) {
+        return res.status(400).json({ error: check.error });
       }
-      case 'unban_device': {
-        const targetBan = pcDaemonState.blacklistedDevices.find((b) => b.id === banId || b.ip === ip);
-        pcDaemonState.blacklistedDevices = pcDaemonState.blacklistedDevices.filter(
-          (b) => b.id !== banId && b.ip !== ip
-        );
-        if (targetBan) {
-          addDaemonLog('SECURITY', `UNBANNED DEVICE: Removed ${targetBan.device} (${targetBan.ip}) from firewall blacklist.`);
-        }
-        break;
+      validatedEndpointUrl = check.normalized;
+    }
+
+    let validatedApiKeyUrl: string | undefined;
+    if (apiKeyUrl) {
+      const check = await validateExternalHttpUrl(String(apiKeyUrl), {
+        requireHttps: true,
+        allowLoopback: false,
+      });
+      if (!check.valid) {
+        return res.status(400).json({ error: `Invalid apiKeyUrl: ${check.error}` });
       }
-      case 'clear_blacklist': {
-        const count = pcDaemonState.blacklistedDevices.length;
-        pcDaemonState.blacklistedDevices = [];
-        addDaemonLog('SECURITY', `Cleared ${count} entry(s) from the daemon firewall blacklist.`);
-        break;
-      }
-      case 'toggle_client_input': {
-        pcDaemonState.connectedClients = pcDaemonState.connectedClients.map((c) => {
-          if (c.id === clientId) {
-            const nextAllowed = !c.inputAllowed;
-            addDaemonLog(
-              'SECURITY',
-              `Per-device input permission for ${c.device} (${c.ip}): ${nextAllowed ? 'ALLOWED (Mouse/KB active)' : 'LOCKED (View-Only)'}.`
-            );
-            return { ...c, inputAllowed: nextAllowed };
-          }
-          return c;
-        });
-        break;
-      }
-      case 'toggle_client_trust': {
-        pcDaemonState.connectedClients = pcDaemonState.connectedClients.map((c) => {
-          if (c.id === clientId) {
-            const nextTrust = !c.isTrusted;
-            addDaemonLog(
-              'SECURITY',
-              `Device trust status updated for ${c.device} (${c.ip}): ${nextTrust ? 'TRUSTED WHITELIST' : 'STANDARD GUEST'}.`
-            );
-            return { ...c, isTrusted: nextTrust };
-          }
-          return c;
-        });
-        break;
-      }
-      case 'apply_security_profile': {
-        if (profile === 'zero_trust') {
-          pcDaemonState.securityProfile = 'zero_trust';
-          pcDaemonState.requireHitlApproval = true;
-          pcDaemonState.autoBanIntrusion = true;
-          pcDaemonState.subnetGeofenceOnly = true;
-          pcDaemonState.clipboardSyncAllowed = false;
-          pcDaemonState.viewOnlyMode = false;
-          addDaemonLog('SECURITY', 'Applied ZERO-TRUST Security Profile (HITL enforced, Auto-Ban active, Clipboard locked).');
-        } else if (profile === 'view_only') {
-          pcDaemonState.securityProfile = 'view_only';
-          pcDaemonState.viewOnlyMode = true;
-          pcDaemonState.requireHitlApproval = true;
-          pcDaemonState.clipboardSyncAllowed = false;
-          addDaemonLog('SECURITY', 'Applied PRESENTATION / VIEW-ONLY Profile (All remote mouse/keyboard/shell input locked).');
-        } else {
-          pcDaemonState.securityProfile = 'balanced';
-          pcDaemonState.viewOnlyMode = false;
-          pcDaemonState.requireHitlApproval = true;
-          pcDaemonState.clipboardSyncAllowed = true;
-          pcDaemonState.autoBanIntrusion = true;
-          addDaemonLog('SECURITY', 'Applied BALANCED HOME/LAN Profile (HMAC-SHA256 + HITL for admin commands).');
-        }
-        break;
-      }
-      case 'complete_setup': {
-        pcDaemonState.setupCompleted = true;
-        addDaemonLog(
-          'INFO',
-          `Guided Daemon Setup completed on ${pcDaemonState.localIp}:${pcDaemonState.port} (Profile: ${pcDaemonState.securityProfile.toUpperCase()}).`
-        );
-        break;
-      }
-      case 'run_diagnostics': {
-        const snap = getDaemonSnapshot();
-        addDaemonLog(
-          'DIAG',
-          `Safe Native NIC & WoL Audit: ${snap.activeAdapters.length} active adapter(s), UDP Port 9 Broadcast READY, AV Heuristics CLEAN (0 hidden shells).`
-        );
-        break;
-      }
-      case 'panic_disconnect': {
-        const count = pcDaemonState.connectedClients.length;
-        pcDaemonState.connectedClients = [];
-        addDaemonLog('ALERT', `PANIC DISCONNECT: Terminated ${count} active peer session(s) and zeroized ephemeral session keys.`);
-        break;
-      }
-      case 'clear_logs':
-        pcDaemonState.logs = [];
-        addDaemonLog('INFO', 'Daemon event log cleared by operator.');
-        break;
-      default:
-        break;
+      validatedApiKeyUrl = check.normalized;
+    }
+
+    const cleanId = String(id).trim().toLowerCase().replace(/[^a-z0-9_.:-]/g, '-');
+    const newDescriptor: AIModelDescriptor = {
+      id: cleanId,
+      name: String(name).trim(),
+      provider: provider as AIModelDescriptor['provider'],
+      description: String(description).trim() || 'Custom AI Model Endpoint',
+      contextWindow: String(contextWindow).trim() || '128k tokens',
+      isCustom: true,
+      endpointUrl: validatedEndpointUrl,
+      apiKeyUrl: validatedApiKeyUrl,
+    };
+
+    const existingIndex = DYNAMIC_MODELS.findIndex((m) => m.id === cleanId);
+    if (existingIndex >= 0) {
+      DYNAMIC_MODELS[existingIndex] = newDescriptor;
+    } else {
+      DYNAMIC_MODELS.push(newDescriptor);
     }
 
     return res.json({
       success: true,
-      daemon: getDaemonSnapshot(),
+      model: newDescriptor,
+      models: DYNAMIC_MODELS,
+      message: `Model '${newDescriptor.name}' saved successfully.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to save model' });
+  }
+});
+
+app.delete('/api/ai/models/:id', requireControlAuth, (req: Request, res: Response) => {
+  const { id } = req.params;
+  DYNAMIC_MODELS = DYNAMIC_MODELS.filter((m) => m.id !== id);
+  return res.json({
+    success: true,
+    models: DYNAMIC_MODELS,
+    message: `Model '${id}' removed successfully.`,
+  });
+});
+
+app.post('/api/ai/models/test', requireControlAuth, async (req: Request, res: Response) => {
+  const start = performance.now();
+  try {
+    const { modelId } = req.body || {};
+    const model = DYNAMIC_MODELS.find((m) => m.id === modelId) || DYNAMIC_MODELS[0];
+
+    if (model.provider === 'gemini') {
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(503).json({
+          success: false,
+          error: 'GEMINI_API_KEY is not configured on the server.',
+        });
+      }
+      const ai = getGenAI();
+      const targetModel = resolveSupportedGeminiModel(model.id);
+      await ai.models.get({ model: targetModel });
+      const latencyMs = Math.max(1, Math.round(performance.now() - start));
+      return res.json({
+        success: true,
+        modelId: model.id,
+        name: model.name,
+        status: 'online',
+        latencyMs,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const baseUrl = (model.endpointUrl || DEFAULT_OLLAMA_BASE).replace(/\/+$/, '');
+    const probeUrl = model.provider === 'ollama' ? `${baseUrl}/api/tags` : baseUrl;
+    const ssrf = await validateExternalHttpUrl(probeUrl, { allowLoopback: model.provider === 'ollama' });
+    if (!ssrf.valid) {
+      return res.status(400).json({ success: false, error: ssrf.error });
+    }
+
+    const resp = await fetch(ssrf.normalized!, { signal: AbortSignal.timeout(4000) });
+    const latencyMs = Math.max(1, Math.round(performance.now() - start));
+    if (!resp.ok) {
+      return res.status(502).json({
+        success: false,
+        modelId: model.id,
+        error: `Endpoint returned HTTP ${resp.status}`,
+        latencyMs,
+      });
+    }
+
+    return res.json({
+      success: true,
+      modelId: model.id,
+      name: model.name,
+      status: 'online',
+      latencyMs,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    const latencyMs = Math.max(1, Math.round(performance.now() - start));
+    return res.status(503).json({
+      success: false,
+      latencyMs,
+      error: err?.message || 'Model endpoint unreachable',
+    });
+  }
+});
+
+// =====================================================================
+// PC DAEMON STATE, ACTIONS & SETUP ENDPOINTS
+// =====================================================================
+app.get('/api/daemon/state', requireControlAuth, async (_req: Request, res: Response) => {
+  try {
+    return res.json({
+      success: true,
+      daemon: await getRealDaemonSnapshot(),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to query daemon telemetry' });
+  }
+});
+
+app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Response) => {
+  try {
+    const { action, port, clientId, ip, profile, fps } = req.body || {};
+    const cfg = await loadDaemonConfig();
+    const daemonPort = Number(cfg.port || 8765);
+
+    switch (action) {
+      case 'toggle_view_only': {
+        const nextVal = !Boolean(cfg.view_only_mode);
+        await saveDaemonConfigPatch({ view_only_mode: nextVal });
+        addServerLog('SECURITY', `View-Only Mode ${nextVal ? 'ENABLED' : 'DISABLED'} in host config.`);
+        break;
+      }
+      case 'toggle_hitl': {
+        const nextVal = !(cfg.require_hitl_approval !== false);
+        await saveDaemonConfigPatch({ require_hitl_approval: nextVal });
+        addServerLog('SECURITY', `HITL approval gate ${nextVal ? 'ENABLED' : 'DISABLED'} in host config.`);
+        break;
+      }
+      case 'toggle_mdns': {
+        const nextVal = !(cfg.mdns_enabled !== false);
+        await saveDaemonConfigPatch({ mdns_enabled: nextVal });
+        addServerLog('INFO', `mDNS advertisement ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_clipboard_sync': {
+        const nextVal = !(cfg.clipboard_sync_allowed !== false);
+        await saveDaemonConfigPatch({ clipboard_sync_allowed: nextVal });
+        addServerLog('SECURITY', `Clipboard sync ${nextVal ? 'ENABLED' : 'LOCKED'}.`);
+        break;
+      }
+      case 'toggle_auto_lock': {
+        const nextVal = !Boolean(cfg.auto_lock_on_disconnect);
+        await saveDaemonConfigPatch({ auto_lock_on_disconnect: nextVal });
+        addServerLog('SECURITY', `Auto-Lock on disconnect ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_auto_ban': {
+        const nextVal = !(cfg.auto_ban_intrusion !== false);
+        await saveDaemonConfigPatch({ auto_ban_intrusion: nextVal });
+        addServerLog('SECURITY', `Auto-Ban Intrusion Shield ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_subnet_geofence': {
+        const nextVal = !(cfg.subnet_geofence_only !== false);
+        await saveDaemonConfigPatch({ subnet_geofence_only: nextVal });
+        addServerLog('SECURITY', `RFC1918 Subnet Geofence ${nextVal ? 'ENABLED' : 'RELAXED'}.`);
+        break;
+      }
+      case 'toggle_autostart': {
+        const nextVal = !(cfg.autostart_on_boot !== false);
+        await saveDaemonConfigPatch({ autostart_on_boot: nextVal });
+        addServerLog('INFO', `Autostart preference updated to ${nextVal}.`);
+        break;
+      }
+      case 'set_target_fps': {
+        const nextFps = Number(fps);
+        if (nextFps === 60 || nextFps === 30 || nextFps === 15) {
+          await saveDaemonConfigPatch({ target_fps: nextFps });
+          addServerLog('INFO', `Target capture rate set to ${nextFps} FPS.`);
+        }
+        break;
+      }
+      case 'rotate_token': {
+        const nextToken = `ai_sec_${crypto.randomBytes(16).toString('hex')}`;
+        await saveDaemonConfigPatch({ pairing_token: nextToken });
+        addServerLog('SECURITY', 'Pairing token rotated and persisted to host daemon config.');
+        break;
+      }
+      case 'rotate_pin': {
+        const nextPin = String(crypto.randomInt(100000, 1000000));
+        await saveDaemonConfigPatch({ pairing_pin: nextPin, pin_issued_at: Math.floor(Date.now() / 1000) });
+        addServerLog('SECURITY', '6-digit pairing PIN rotated and persisted.');
+        break;
+      }
+      case 'update_port': {
+        const nextPort = Number(port);
+        if (Number.isInteger(nextPort) && nextPort >= 1024 && nextPort <= 65535) {
+          await saveDaemonConfigPatch({ port: nextPort });
+          addServerLog('INFO', `Configured daemon listener port updated to ${nextPort}.`);
+        }
+        break;
+      }
+      case 'blacklist_client': {
+        const banIp = String(ip || clientId || '').trim();
+        if (!banIp || !net.isIP(banIp)) {
+          return res.status(400).json({ error: 'Valid IPv4/IPv6 address is required to blacklist a peer' });
+        }
+        const currentBans = Array.isArray(cfg.blacklisted_devices) ? [...cfg.blacklisted_devices] : [];
+        if (!currentBans.some((b: any) => (typeof b === 'string' ? b === banIp : b.ip === banIp))) {
+          currentBans.unshift({
+            id: `BAN-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
+            ip: banIp,
+            mac: '00:00:00:00:00:00',
+            device: String(req.body?.device || `Blocked Peer (${banIp})`),
+            reason: String(req.body?.reason || 'Blacklisted via Web Control Console'),
+            bannedAt: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+          });
+          await saveDaemonConfigPatch({ blacklisted_devices: currentBans });
+        }
+        addServerLog('ALERT', `Blacklisted peer IP ${banIp} in host daemon firewall config.`);
+        break;
+      }
+      case 'unban_device': {
+        const banId = String(req.body?.banId || '');
+        const banIp = String(ip || '');
+        const currentBans = Array.isArray(cfg.blacklisted_devices) ? cfg.blacklisted_devices : [];
+        const filtered = currentBans.filter((b: any) =>
+          typeof b === 'string' ? b !== banIp && b !== banId : b.id !== banId && b.ip !== banIp
+        );
+        await saveDaemonConfigPatch({ blacklisted_devices: filtered });
+        addServerLog('SECURITY', `Removed firewall blacklist entry (${banId || banIp}).`);
+        break;
+      }
+      case 'clear_blacklist':
+        await saveDaemonConfigPatch({ blacklisted_devices: [] });
+        addServerLog('SECURITY', 'Cleared persisted firewall blacklist.');
+        break;
+      case 'apply_security_profile': {
+        if (profile === 'zero_trust') {
+          await saveDaemonConfigPatch({
+            security_profile: 'zero_trust',
+            require_hitl_approval: true,
+            auto_ban_intrusion: true,
+            subnet_geofence_only: true,
+            clipboard_sync_allowed: false,
+            view_only_mode: false,
+          });
+        } else if (profile === 'view_only') {
+          await saveDaemonConfigPatch({
+            security_profile: 'view_only',
+            view_only_mode: true,
+            require_hitl_approval: true,
+            clipboard_sync_allowed: false,
+          });
+        } else {
+          await saveDaemonConfigPatch({
+            security_profile: 'balanced',
+            view_only_mode: false,
+            require_hitl_approval: true,
+            clipboard_sync_allowed: true,
+            auto_ban_intrusion: true,
+          });
+        }
+        addServerLog('SECURITY', `Applied security profile: ${String(profile || 'balanced').toUpperCase()}.`);
+        break;
+      }
+      case 'complete_setup':
+        await saveDaemonConfigPatch({ setup_completed: true });
+        addServerLog('INFO', 'Setup state persisted.');
+        break;
+      case 'run_diagnostics': {
+        const probe = await probeTcpPortWithRtt('127.0.0.1', daemonPort, 400);
+        const adapters = sampleActiveAdapters();
+        addServerLog(
+          'DIAG',
+          `Live Diagnostic: ${adapters.length} active IPv4 NIC(s), Host Agent ws://127.0.0.1:${daemonPort} is ${
+            probe.open ? `ONLINE (${probe.rttMs}ms)` : 'OFFLINE'
+          }.`
+        );
+        break;
+      }
+      case 'panic_disconnect': {
+        const panicRes = await dispatchLiveAgentCommand('127.0.0.1', daemonPort, { action: 'PANIC_KILL_ALL' }, 'PANIC_ACK');
+        if (!panicRes.ok) {
+          return res.status(503).json({
+            success: false,
+            error: panicRes.error,
+            daemon: await getRealDaemonSnapshot(),
+          });
+        }
+        addServerLog('ALERT', 'PANIC DISCONNECT dispatched to live Host Agent daemon.');
+        break;
+      }
+      case 'clear_logs':
+        serverEvents.splice(0, serverEvents.length);
+        addServerLog('INFO', 'Control console log cleared.');
+        break;
+      default:
+        return res.status(400).json({ error: `Unsupported daemon action: ${String(action || '')}` });
+    }
+
+    return res.json({
+      success: true,
+      daemon: await getRealDaemonSnapshot(),
     });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Daemon action failed' });
   }
 });
 
-// Zero-Friction Setup & Auto-Pairing Info Endpoint
-app.get('/api/setup/info', (_req: Request, res: Response) => {
+app.get('/api/setup/info', requireControlAuth, async (_req: Request, res: Response) => {
   try {
-    const snap = getDaemonSnapshot();
+    const snap = await getRealDaemonSnapshot();
     const primaryAdapter = snap.activeAdapters[0] || {
       name: 'Loopback',
       ipv4: snap.localIp,
@@ -940,9 +1445,8 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
       pair_name: snap.hostname,
       pair_mac: primaryAdapter.mac,
       pair_os: snap.osName.toLowerCase().includes('win') ? 'windows' : 'linux',
-      pair_token: snap.pairingToken,
+      pair_pin: snap.pairingPin,
     });
-    const mobilePairUrl = `${webOrigin}/?${pairParams.toString()}`;
 
     return res.json({
       success: true,
@@ -955,14 +1459,13 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
         mac: primaryAdapter.mac,
         adapterName: primaryAdapter.name,
         wsUri: snap.wsUri,
-        pairingToken: snap.pairingToken,
+        pairingPin: snap.pairingPin,
+        daemonOnline: snap.isRunning,
         webOrigin,
-        mobilePairUrl,
-        exeDownloadUrl: '/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe',
-        apkDownloadUrl: '/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk',
-        portableZipUrl: '/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64_portable.zip',
-        legacyExeDownloadUrl: '/releases/v0.32.0/AI_NetController_HostAgent_v0.32.0_win64.exe',
-        legacyApkDownloadUrl: '/releases/v0.32.0/AI_NetController_v0.32.0_arm64-v8a.apk',
+        mobilePairUrl: `${webOrigin}/?${pairParams.toString()}`,
+        exeDownloadUrl: `/releases/v${APP_VERSION}/AI_NetController_HostAgent_v${APP_VERSION}_win64.exe`,
+        apkDownloadUrl: `/releases/v${APP_VERSION}/AI_NetController_v${APP_VERSION}_arm64-v8a.apk`,
+        portableZipUrl: `/releases/v${APP_VERSION}/AI_NetController_HostAgent_v${APP_VERSION}_win64_portable.zip`,
         launcherDownloadUrl: '/api/setup/windows-launcher',
       },
     });
@@ -971,230 +1474,180 @@ app.get('/api/setup/info', (_req: Request, res: Response) => {
   }
 });
 
-// 1-Click Pre-Configured Windows Auto-Setup Launcher (.BAT)
-app.get('/api/setup/windows-launcher', (_req: Request, res: Response) => {
-  const snap = getDaemonSnapshot();
+app.get('/api/setup/windows-launcher', requireControlAuth, async (_req: Request, res: Response) => {
+  const snap = await getRealDaemonSnapshot();
+  const safeSecret = (await getControlSecret()).replace(/[^a-zA-Z0-9_.:-]/g, '');
+  const safePort = Number.isInteger(snap.port) ? snap.port : 8765;
+
   const batLines = [
     '@echo off',
-    'title AI NetController — 1-Click PC & Phone Setup',
+    'title AI NetController - 1-Click PC Setup Launcher',
     'color 0B',
-    'echo ============================================================================',
-    'echo   AI NetController v0.35.0 - Automatic PC ^& Phone Setup Wizard',
-    'echo ============================================================================',
-    'echo.',
-    `set AI_AGENT_SECRET=${snap.pairingToken}`,
-    `set CST_AGENT_SECRET=${snap.pairingToken}`,
-    `set CST_AGENT_PORT=${snap.port}`,
+    `echo AI NetController v${APP_VERSION} (${APP_VERSION_LABEL}) Setup`,
+    `set "AI_AGENT_SECRET=${safeSecret}"`,
+    `set "CST_AGENT_SECRET=${safeSecret}"`,
+    `set "CST_AGENT_PORT=${safePort}"`,
     'cd /d "%~dp0"',
-    '',
-    'echo [1/4] Checking Python environment for PC Host Daemon...',
     'where python >nul 2>nul',
     'if %ERRORLEVEL% EQU 0 (',
-    '    if exist "agent\\requirements.txt" (',
-    '        echo       Installing/verifying Python packages...',
-    '        python -m pip install -r agent\\requirements.txt --quiet',
-    '    )',
-    ') else (',
-    '    echo [!] Python not found in PATH. Looking for standalone AI_NetController_HostAgent_v0.35.0_win64.exe...',
+    '    if exist "agent\\requirements.txt" python -m pip install -r agent\\requirements.txt --quiet',
     ')',
-    '',
-    'echo [2/4] Configuring Windows Private LAN Firewall rules (Ports 8765 ^& 3000)...',
-    'netsh advfirewall firewall show rule name="AI NetController Daemon" >nul 2>nul',
-    'if %ERRORLEVEL% NEQ 0 (',
-    `    netsh advfirewall firewall add rule name="AI NetController Daemon" dir=in action=allow protocol=TCP localport=${snap.port} profile=private >nul 2>nul`,
-    '    netsh advfirewall firewall add rule name="AI NetController Web" dir=in action=allow protocol=TCP localport=3000 profile=private >nul 2>nul',
-    '    netsh advfirewall firewall add rule name="AI NetController WoL" dir=in action=allow protocol=UDP localport=9 profile=private >nul 2>nul',
+    `netsh advfirewall firewall add rule name="AI NetController Daemon" dir=in action=allow protocol=TCP localport=${safePort} profile=private >nul 2>nul`,
+    'if exist "AI_NetController_HostAgent_v0.50.0_win64.exe" (',
+    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.50.0_win64.exe"',
+    ') else if exist "agent\\agent_daemon.py" (',
+    '    start "AI NetController Host Agent" python "agent\\agent_daemon.py"',
     ')',
-    '',
-    'echo [3/4] Launching AI NetController Host Agent Desktop Control Center...',
-    'if exist "public\\releases\\v0.35.0\\AI_NetController_HostAgent_v0.35.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "public\\releases\\v0.35.0\\AI_NetController_HostAgent_v0.35.0_win64.exe"',
-    ') else if exist "public\\releases\\v0.32.0\\AI_NetController_HostAgent_v0.32.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "public\\releases\\v0.32.0\\AI_NetController_HostAgent_v0.32.0_win64.exe"',
-    ') else if exist "public\\releases\\v0.31.3\\AI_NetController_HostAgent_v0.31.3_win64.exe" (',
-    '    start "AI NetController Host Agent" "public\\releases\\v0.31.3\\AI_NetController_HostAgent_v0.31.3_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v0.35.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.35.0_win64.exe"',
-    ') else if exist "AI_NetController_HostAgent_v0.32.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.32.0_win64.exe"',
-    ') else if exist "agent\\dist\\AI_NetController_HostAgent\\AI_NetController_HostAgent.exe" (',
-    '    start "AI NetController Host Agent" "agent\\dist\\AI_NetController_HostAgent\\AI_NetController_HostAgent.exe"',
-    ') else if exist "agent\\agent_gui.py" (',
-    '    start "AI NetController Host Agent" python "agent\\agent_gui.py"',
-    ')',
-    '',
-    'echo [4/4] Starting Web ^& Phone Controller Server on Port 3000...',
-    'if exist "package.json" (',
-    '    if not exist "node_modules" (',
-    '        echo       Running first-time npm install...',
-    '        call npm install',
-    '    )',
-    '    start "" "http://localhost:3000/?setup=1"',
-    '    call npm run dev',
-    ') else (',
-    '    echo.',
-    '    echo [OK] PC Daemon is running! Open the AI NetController app on your phone and scan the QR code.',
-    '    pause',
-    ')',
+    'pause',
   ];
 
-  const content = batLines.join('\r\n');
   res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="AI_NetController_OneClick_Setup.bat"');
-  return res.send(content);
+  return res.send(batLines.join('\r\n'));
 });
 
-// Stateful System & AI Update Registry
-interface SystemUpdateComponentState {
-  id: string;
-  name: string;
-  category: 'ai_model' | 'agent' | 'security';
-  currentVersion: string;
-  latestVersion: string;
-  status: 'up_to_date' | 'available';
-  size: string;
-  lastChecked: string;
-  changelog: string;
+// =====================================================================
+// REAL UPDATE STATUS / CHECK / EXECUTION PIPELINE
+// =====================================================================
+let cachedPythonVersion: string | null = null;
+let cachedLatestGitHubRelease: { tag: string; htmlUrl: string; body: string; fetchedAt: number } | null = null;
+
+async function queryOllamaInstalledModels(): Promise<Array<{ name: string; size?: number; modified_at?: string }>> {
+  try {
+    const resp = await fetch(`${DEFAULT_OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(1500) });
+    if (!resp.ok) return [];
+    const data: any = await resp.json();
+    return Array.isArray(data?.models) ? data.models : [];
+  } catch {
+    return [];
+  }
 }
 
-const systemUpdateRegistry: SystemUpdateComponentState[] = [
-  {
-    id: 'gemini-3.8-flash',
-    name: 'Gemini 3.8 Flash (Primary Cloud Engine)',
-    category: 'ai_model',
-    currentVersion: 'v3.8.0-GA',
-    latestVersion: 'v3.8.0-GA',
-    status: 'up_to_date',
-    size: 'Cloud API',
-    lastChecked: 'Just now',
-    changelog: 'Multi-turn PC control directives ([ACTION:MOUSE_*], [ACTION:KEYBOARD_*], [ACTION:SYSTEM_UPDATE]) with sub-second latency.',
-  },
-  {
-    id: 'deepseek-r1',
-    name: 'DeepSeek-R1 (70B Distill Local Engine)',
-    category: 'ai_model',
-    currentVersion: 'v1.4.2-q4_K_M',
-    latestVersion: 'v1.5.2-q4_K_M',
-    status: 'available',
-    size: '4.8 GB',
-    lastChecked: '2 mins ago',
-    changelog: 'Improved chain-of-thought reasoning for CST/3.0-SECURE packet hex inspection, PowerShell AST auditing, and zero-day anomaly scoring.',
-  },
-  {
-    id: 'qwen25-coder',
-    name: 'Qwen 2.5 Coder (32B Instruct)',
-    category: 'ai_model',
-    currentVersion: 'v2.5.0-q5_K_M',
-    latestVersion: 'v2.5.1-q5_K_M',
-    status: 'available',
-    size: '1.2 GB (Delta)',
-    lastChecked: '5 mins ago',
-    changelog: 'Enhanced Windows PowerShell 7.4 & Linux netfilter script synthesis with strict AST firewall compliance.',
-  },
-  {
-    id: 'cst-host-agent',
-    name: 'AI NetController Host Agent (Python + Native Win32 GUI)',
-    category: 'agent',
-    currentVersion: 'v0.32.0',
-    latestVersion: 'v0.35.0',
-    status: 'available',
-    size: '18.4 MB',
-    lastChecked: 'Just now',
-    changelog: 'v0.35.0: End-to-end performance optimization, hardened AST & LOLBin firewall, 120Hz UI smoothness, and full Android/Web API parity.',
-  },
-  {
-    id: 'ast-security-rules',
-    name: 'AST Security Firewall Policy Database',
-    category: 'security',
-    currentVersion: 'v2026.10-REV5',
-    latestVersion: 'v2026.11-REV1',
-    status: 'available',
-    size: '1.4 MB',
-    lastChecked: 'Just now',
-    changelog: 'Added zero-day PowerShell encoded command heuristics, environment substring slicing guard, and automated AI command sanitization.',
-  },
-];
-
-async function runSystemUpdateExecution(componentId?: string, updateAll = false) {
-  const logs: string[] = [];
-  const startTime = Date.now();
-  const targetLabel = updateAll || !componentId || componentId === 'ALL' ? 'ALL' : componentId;
-
-  logs.push(`[INIT] Starting CST AI & System Update Pipeline for target=${targetLabel}`);
-
-  for (const item of systemUpdateRegistry) {
-    if (targetLabel === 'ALL' || item.id === componentId) {
-      if (item.id === 'cst-host-agent') {
-        logs.push(`[AGENT] Verifying Python Host Daemon requirements & Win32 SendInput bridge (${item.latestVersion})...`);
-        await new Promise<void>((resolve) => {
-          exec('python3 -m pip --version || python -m pip --version', { timeout: 6000 }, (err, stdout) => {
-            if (!err && stdout) {
-              logs.push(`[PIP VERIFIED] ${stdout.trim()}`);
-            } else {
-              logs.push(`[PIP INFO] Standalone native runtime active; synced daemon descriptors to ${item.latestVersion}.`);
-            }
-            resolve();
-          });
-        });
-      } else if (item.id === 'ast-security-rules') {
-        logs.push(`[FIREWALL] Applying AST Security Policy ${item.latestVersion} (caret desugaring, backtick normalization, shlex guard)...`);
-      } else if (item.category === 'ai_model') {
-        logs.push(`[AI MODEL] Syncing model weights & tokenizer manifest for ${item.name} -> ${item.latestVersion}...`);
-        const dynModel = DYNAMIC_MODELS.find((m) => m.id === item.id);
-        if (dynModel && !dynModel.description.includes(item.latestVersion)) {
-          dynModel.description = `${dynModel.description.split(' [')[0]} [Updated ${item.latestVersion}]`;
-        }
-      }
-      item.currentVersion = item.latestVersion;
-      item.status = 'up_to_date';
-      item.lastChecked = 'Just now';
-      logs.push(`[VERIFIED] ${item.name} is now at ${item.currentVersion} (SHA-256 integrity OK).`);
+async function queryLatestGitHubRelease(force = false) {
+  const now = Date.now();
+  if (!force && cachedLatestGitHubRelease && now - cachedLatestGitHubRelease.fetchedAt < 300_000) {
+    return { release: cachedLatestGitHubRelease, error: null as string | null };
+  }
+  try {
+    const resp = await fetch('https://api.github.com/repos/SemO2077/AI-NetController/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': `AI-NetController/${APP_VERSION}` },
+      signal: AbortSignal.timeout(4500),
+    });
+    if (!resp.ok) {
+      return { release: null, error: `GitHub API returned HTTP ${resp.status}` };
     }
+    const data: any = await resp.json();
+    if (data?.tag_name) {
+      cachedLatestGitHubRelease = {
+        tag: String(data.tag_name),
+        htmlUrl: String(data.html_url || 'https://github.com/SemO2077/AI-NetController/releases'),
+        body: String(data.body || '').slice(0, 600),
+        fetchedAt: now,
+      };
+      return { release: cachedLatestGitHubRelease, error: null };
+    }
+    return { release: null, error: 'No tag_name found in GitHub response' };
+  } catch (err: any) {
+    return { release: null, error: err?.message || 'GitHub unreachable' };
+  }
+}
+
+function compareSemver(aRaw: string, bRaw: string): number {
+  const clean = (s: string) =>
+    s
+      .replace(/^v/i, '')
+      .split('-')[0]
+      .split('.')
+      .map((n) => parseInt(n, 10) || 0);
+  const a = clean(aRaw);
+  const b = clean(bRaw);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const av = a[i] || 0;
+    const bv = b[i] || 0;
+    if (av !== bv) return av > bv ? 1 : -1;
+  }
+  return 0;
+}
+
+async function buildRealUpdateInventory(checkRemote = false) {
+  if (!cachedPythonVersion) {
+    cachedPythonVersion = await new Promise<string>((resolve) => {
+      execFile(getPythonBin(), ['--version'], { timeout: 3000 }, (err, stdout, stderr) => {
+        resolve(err ? 'Python not detected' : (stdout || stderr).trim());
+      });
+    });
   }
 
-  const durationMs = Date.now() - startTime;
-  logs.push(`[COMPLETE] Update pipeline finished in ${durationMs}ms. All selected components are up to date.`);
-  addDaemonLog(
-    'INFO',
-    `AI/System Update executed (${targetLabel}): ${systemUpdateRegistry.filter((c) => c.status === 'up_to_date').length}/${systemUpdateRegistry.length} components up to date.`
-  );
+  const [ollamaModels, ghCheck] = await Promise.all([
+    queryOllamaInstalledModels(),
+    checkRemote ? queryLatestGitHubRelease(true) : Promise.resolve({ release: cachedLatestGitHubRelease, error: null }),
+  ]);
+
+  const latestTag = ghCheck.release?.tag || `v${APP_VERSION}`;
+  const isNewerRemote = compareSemver(latestTag, APP_VERSION) > 0;
+
+  const components = [
+    {
+      id: 'cst-host-agent',
+      name: 'AI NetController Control & Host Suite',
+      category: 'agent' as const,
+      currentVersion: `v${APP_VERSION}`,
+      latestVersion: latestTag,
+      status: isNewerRemote ? ('available' as const) : ('up_to_date' as const),
+      size: 'Release Bundle',
+      lastChecked: checkRemote ? 'Just now' : cachedLatestGitHubRelease ? 'Cached' : 'Local check',
+      changelog: ghCheck.release?.body || `Installed Beta ${APP_VERSION_LABEL}`,
+      downloadUrl: ghCheck.release?.htmlUrl,
+    },
+    {
+      id: 'ast-security-rules',
+      name: 'Command AST Firewall Policy Engine',
+      category: 'security' as const,
+      currentVersion: `v${APP_VERSION}-strict`,
+      latestVersion: `v${APP_VERSION}-strict`,
+      status: 'up_to_date' as const,
+      size: 'Built-in Module',
+      lastChecked: 'Just now',
+      changelog: 'NFKC normalization, LOLBin denylist, DPAPI vault, & biometric-bound execution.',
+    },
+  ];
+
+  for (const m of ollamaModels) {
+    const sizeGb = m.size ? `${(m.size / 1024 ** 3).toFixed(1)} GB` : 'Local Ollama';
+    components.push({
+      id: m.name,
+      name: `Ollama Local Model: ${m.name}`,
+      category: 'agent' as const,
+      currentVersion: 'installed',
+      latestVersion: 'installed',
+      status: 'up_to_date' as const,
+      size: sizeGb,
+      lastChecked: 'Just now',
+      changelog: 'Installed in local Ollama daemon (127.0.0.1:11434).',
+      downloadUrl: undefined,
+    });
+  }
 
   return {
-    success: true,
-    componentId: targetLabel,
-    updateAll: targetLabel === 'ALL',
-    logs,
-    components: systemUpdateRegistry,
-    durationMs,
-    timestamp: new Date().toISOString(),
+    components,
+    ollamaCount: ollamaModels.length,
+    remoteCheckError: ghCheck.error,
   };
 }
 
-let cachedPythonVersion: string | null = null;
-
-// System Update Status Endpoint
 app.get('/api/update/status', async (_req: Request, res: Response) => {
   try {
-    const nodeVersion = process.version;
-    if (!cachedPythonVersion) {
-      cachedPythonVersion = await new Promise<string>((resolve) => {
-        exec('python3 --version || python --version', { timeout: 3000 }, (err, stdout) => {
-          resolve(err ? 'Python 3.12 (Embedded Runtime)' : stdout.trim());
-        });
-      });
-    }
-
-    const hostAgent = systemUpdateRegistry.find((c) => c.id === 'cst-host-agent');
-
+    const inv = await buildRealUpdateInventory(false);
     return res.json({
       success: true,
       timestamp: new Date().toISOString(),
-      nodeVersion,
+      nodeVersion: process.version,
       pythonVersion: cachedPythonVersion,
       aiModels: DYNAMIC_MODELS.map((m) => m.id),
-      agentVersion: hostAgent?.currentVersion || 'v0.35.0',
-      components: systemUpdateRegistry,
-      updatesAvailableCount: systemUpdateRegistry.filter((c) => c.status === 'available').length,
+      agentVersion: `v${APP_VERSION}`,
+      components: inv.components,
+      updatesAvailableCount: inv.components.filter((c) => c.status === 'available').length,
+      ollamaConnected: inv.ollamaCount > 0,
       status: 'ready',
     });
   } catch (err: any) {
@@ -1202,28 +1655,17 @@ app.get('/api/update/status', async (_req: Request, res: Response) => {
   }
 });
 
-// System Update Check Endpoint
-app.post('/api/update/check', async (_req: Request, res: Response) => {
+app.post('/api/update/check', requireControlAuth, async (_req: Request, res: Response) => {
   try {
-    const timestamp = new Date().toISOString();
-    systemUpdateRegistry.forEach((c) => {
-      c.lastChecked = 'Just now';
-    });
+    const inv = await buildRealUpdateInventory(true);
     return res.json({
       success: true,
-      timestamp,
-      checkedComponents: systemUpdateRegistry.map((c) => ({
-        id: c.id,
-        name: c.name,
-        category: c.category,
-        currentVersion: c.currentVersion,
-        latestVersion: c.latestVersion,
-        status: c.status,
-        size: c.size,
-        changelog: c.changelog,
-      })),
+      timestamp: new Date().toISOString(),
+      checkedComponents: inv.components,
+      remoteCheckError: inv.remoteCheckError,
       systemInfo: {
         nodeVersion: process.version,
+        pythonVersion: cachedPythonVersion,
         platform: process.platform,
         arch: process.arch,
       },
@@ -1233,192 +1675,266 @@ app.post('/api/update/check', async (_req: Request, res: Response) => {
   }
 });
 
-// System Update Execution Endpoint
-app.post('/api/update/execute', async (req: Request, res: Response) => {
+app.post('/api/update/execute', requireControlAuth, async (req: Request, res: Response) => {
+  const start = Date.now();
+  const { componentId } = req.body || {};
+  const target = String(componentId || 'ALL');
+  const logs: string[] = [];
+
   try {
-    const { componentId, updateAll = false } = req.body;
-    const result = await runSystemUpdateExecution(componentId, Boolean(updateAll));
-    return res.json(result);
-  } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Update execution failed' });
-  }
-});
-
-// AI-Powered System Update & Version Drift Advisor Endpoint
-app.post('/api/update/ai-analyze', async (req: Request, res: Response) => {
-  try {
-    const { language = 'en' } = req.body || {};
-    const pending = systemUpdateRegistry.filter((c) => c.status === 'available');
-    const upToDate = systemUpdateRegistry.filter((c) => c.status === 'up_to_date');
-
-    let aiAnalysisText = '';
-    let modelUsed = 'gemini-3.8-flash';
-
-    if (process.env.GEMINI_API_KEY) {
-      try {
-        const ai = getGenAI();
-        const prompt =
-          language === 'bg'
-            ? `Анализирай следното състояние на компонентите на AI NetController (Node ${process.version}, Протокол CST/3.0-SECURE).
-Налични обновления (${pending.length}): ${pending.map((p) => `${p.name}: ${p.currentVersion} -> ${p.latestVersion} (${p.changelog})`).join('; ') || 'Няма'}.
-Обновени компоненти (${upToDate.length}): ${upToDate.map((u) => `${u.name} (${u.currentVersion})`).join(', ')}.
-Дай кратък, структуриран инженерен доклад в 3 точки: 1) Оценка на съвместимостта и сигурността, 2) Приоритетни обновления, 3) Препоръчано действие.`
-            : `Analyze the following AI NetController component state (Node ${process.version}, Protocol CST/3.0-SECURE).
-Pending updates (${pending.length}): ${pending.map((p) => `${p.name}: ${p.currentVersion} -> ${p.latestVersion} (${p.changelog})`).join('; ') || 'None'}.
-Up-to-date components (${upToDate.length}): ${upToDate.map((u) => `${u.name} (${u.currentVersion})`).join(', ')}.
-Provide a concise, high-signal 3-point engineering advisory: 1) Security & Protocol Compatibility Impact, 2) Priority Upgrade Order, 3) Recommended Action.`;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: { temperature: 0.3 },
+    if (target !== 'ALL' && target !== 'cst-host-agent' && target !== 'ast-security-rules') {
+      // Pull real Ollama model tag
+      logs.push(`[OLLAMA] Requesting real model pull for "${target}" via ${DEFAULT_OLLAMA_BASE}/api/pull...`);
+      const resp = await fetch(`${DEFAULT_OLLAMA_BASE}/api/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: target, stream: false }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!resp.ok) {
+        return res.status(502).json({
+          success: false,
+          error: `Ollama pull failed with HTTP ${resp.status}`,
+          logs,
         });
-        aiAnalysisText = response.text || '';
-      } catch {
-        modelUsed = 'cst-local-advisor-v2.7';
       }
+      const pullJson: any = await resp.json();
+      logs.push(`[OLLAMA] Status: ${pullJson?.status || 'success'}`);
     } else {
-      modelUsed = 'cst-local-advisor-v2.7';
-    }
-
-    if (!aiAnalysisText) {
-      if (language === 'bg') {
-        aiAnalysisText =
-          pending.length === 0
-            ? `✅ **Всички ${systemUpdateRegistry.length} компонента са напълно актуални!**\n- **Сигурност и Протокол**: Пълна съвместимост с CST/3.0-SECURE и AST Защитната стена (${upToDate.find((c) => c.id === 'ast-security-rules')?.currentVersion}).\n- **AI Модели**: Gemini 3.8 Flash и локалните модели работят с оптимални тегла.\n- **Препоръка**: Не се изисква намеса.`
-            : `⚡ **Открити са ${pending.length} препоръчителни обновления:**\n1. **Критичен Приоритет**: Обновете **${pending[0].name}** (${pending[0].currentVersion} → ${pending[0].latestVersion}) за подобрена защита и 120Hz PC контрол.\n2. **Съвместимост**: Всички пакети са верифицирани спрямо Node ${process.version} и няма риск от прекъсване на активните WebSocket сесии.\n3. **Препоръка**: Натиснете **„Обнови Всички“** за автоматична синхронизация без рестарт.`;
+      const ghCheck = await queryLatestGitHubRelease(true);
+      const latestTag = ghCheck.release?.tag || `v${APP_VERSION}`;
+      if (compareSemver(latestTag, APP_VERSION) > 0 && ghCheck.release) {
+        logs.push(`[RELEASE] Newer version ${latestTag} available at: ${ghCheck.release.htmlUrl}`);
+        logs.push('[INFO] Download and run the signed installer or pull git main to upgrade binary builds.');
+      } else if (ghCheck.error) {
+        logs.push(`[WARN] Could not contact GitHub Releases (${ghCheck.error}); local packages verified unchanged.`);
       } else {
-        aiAnalysisText =
-          pending.length === 0
-            ? `✅ **All ${systemUpdateRegistry.length} components are fully up to date!**\n- **Security & Protocol**: 100% compliant with CST/3.0-SECURE and AST Firewall (${upToDate.find((c) => c.id === 'ast-security-rules')?.currentVersion}).\n- **AI Engine Parity**: Gemini 3.8 Flash and local weights are synchronized.\n- **Recommendation**: Zero drift detected. No action required.`
-            : `⚡ **${pending.length} Component Upgrade(s) Recommended:**\n1. **Top Priority**: Upgrade **${pending[0].name}** (${pending[0].currentVersion} → ${pending[0].latestVersion}) — ${pending[0].changelog}\n2. **Zero-Downtime Compatibility**: All delta packages are ABI-compatible with Node ${process.version} and active CST/3.0-SECURE sessions.\n3. **Recommended Action**: Click **"Update All"** to apply atomic upgrades across AI models, Host Daemon, and AST Firewall rules.`;
+        logs.push(`[VERIFIED] Installed suite v${APP_VERSION} matches latest GitHub release (${latestTag}).`);
       }
     }
 
+    const inv = await buildRealUpdateInventory(false);
     return res.json({
       success: true,
-      analysis: aiAnalysisText,
-      pendingCount: pending.length,
-      securityScore: pending.length === 0 ? 100 : Math.max(78, 100 - pending.length * 6),
-      modelUsed,
+      componentId: target,
+      updateAll: target === 'ALL',
+      logs,
+      components: inv.components,
+      durationMs: Date.now() - start,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Failed to run AI update analysis' });
+    return res.status(500).json({ success: false, error: err?.message || 'Update execution failed', logs });
   }
 });
 
-// Real UDP Wake-on-LAN Magic Packet Dispatch
-app.post('/api/wol', async (req: Request, res: Response) => {
+app.post('/api/update/ai-analyze', requireControlAuth, async (req: Request, res: Response) => {
   try {
-    const { mac, broadcastIp = '255.255.255.255', port = 9, secureOn } = req.body;
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(503).json({
+        success: false,
+        error: 'GEMINI_API_KEY is required for AI release drift analysis.',
+      });
+    }
+    const { language = 'en' } = req.body || {};
+    const inv = await buildRealUpdateInventory(true);
+    const ai = getGenAI();
+    const prompt =
+      language === 'bg'
+        ? `Анализирай компонентите на AI NetController v${APP_VERSION} (Node ${process.version}, ${cachedPythonVersion}): ${JSON.stringify(inv.components)}. Дай кратък 3-точков инженерен доклад.`
+        : `Analyze these AI NetController v${APP_VERSION} component states (Node ${process.version}, ${cachedPythonVersion}): ${JSON.stringify(inv.components)}. Provide a concise 3-point engineering summary.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { temperature: 0.2 },
+    });
+
+    const pendingCount = inv.components.filter((c) => c.status === 'available').length;
+    return res.json({
+      success: true,
+      analysis: response.text || 'No analysis generated.',
+      pendingCount,
+      securityScore: pendingCount === 0 ? 100 : Math.max(70, 100 - pendingCount * 10),
+      modelUsed: 'gemini-2.5-flash',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    return res.status(503).json({ error: err?.message || 'AI update analysis failed' });
+  }
+});
+
+// =====================================================================
+// REAL WAKE-ON-LAN DISPATCH & PERSISTENT SERVER-SIDE SCHEDULER
+// =====================================================================
+function validateBroadcastIpv4(ipRaw: string): boolean {
+  const clean = ipRaw.trim();
+  const ipv4Regex = /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+  if (!ipv4Regex.test(clean)) return false;
+  const parts = clean.split('.').map(Number);
+  if (parts[0] === 0 || parts[0] === 127 || (parts[0] >= 224 && parts[0] <= 239)) return false;
+  return true;
+}
+
+function sendRealWolPacket(mac: string, broadcastIp = '255.255.255.255', port = 9, secureOn = ''): Promise<void> {
+  const cleanMac = String(mac).replace(/[^a-fA-F0-9]/g, '');
+  if (cleanMac.length !== 12) {
+    return Promise.reject(new Error('Invalid MAC address format (must be 12 hex characters)'));
+  }
+  const cleanSecureOn = secureOn ? String(secureOn).replace(/[^a-fA-F0-9]/g, '') : '';
+  if (cleanSecureOn && cleanSecureOn.length !== 12) {
+    return Promise.reject(new Error('Invalid SecureOn password format (must be 12 hex characters)'));
+  }
+  if (!validateBroadcastIpv4(broadcastIp)) {
+    return Promise.reject(new Error('Invalid or restricted IPv4 broadcast address'));
+  }
+
+  const macBytes = Buffer.from(cleanMac, 'hex');
+  const magicPacket = Buffer.alloc(cleanSecureOn ? 108 : 102);
+  magicPacket.fill(0xff, 0, 6);
+  for (let i = 0; i < 16; i++) {
+    macBytes.copy(magicPacket, 6 + i * 6);
+  }
+  if (cleanSecureOn) {
+    Buffer.from(cleanSecureOn, 'hex').copy(magicPacket, 102);
+  }
+
+  return new Promise((resolve, reject) => {
+    const client = dgram.createSocket('udp4');
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      try {
+        client.close();
+      } catch {}
+      if (err) reject(err);
+      else resolve();
+    };
+
+    client.on('error', (err) => finish(err));
+    client.bind(0, () => {
+      try {
+        client.setBroadcast(true);
+        client.send(magicPacket, 0, magicPacket.length, port, broadcastIp, (err) => {
+          finish(err || undefined);
+        });
+      } catch (err: any) {
+        finish(err);
+      }
+    });
+  });
+}
+
+app.post('/api/wol', requireControlAuth, async (req: Request, res: Response) => {
+  try {
+    const { mac, broadcastIp = '255.255.255.255', port = 9, secureOn = '' } = req.body || {};
     if (!mac) {
       return res.status(400).json({ error: 'MAC address is required' });
     }
-
-    const cleanMac = String(mac).replace(/[^a-fA-F0-9]/g, '');
-    if (cleanMac.length !== 12) {
-      return res.status(400).json({ error: 'Invalid MAC address format (must be 12 hex characters)' });
-    }
-
-    const cleanSecureOn = secureOn ? String(secureOn).replace(/[^a-fA-F0-9]/g, '') : '';
-    if (cleanSecureOn && cleanSecureOn.length !== 12) {
-      return res.status(400).json({ error: 'Invalid SecureOn password format (must be 12 hex characters / 6 bytes)' });
-    }
-
     const targetPort = Number(port);
     if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
       return res.status(400).json({ error: 'Invalid UDP port (must be 1-65535)' });
     }
 
-    const ipv4Regex = /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-    const cleanBroadcastIp = String(broadcastIp).trim();
-    if (!ipv4Regex.test(cleanBroadcastIp)) {
-      return res.status(400).json({ error: 'Invalid IPv4 broadcast address' });
-    }
-
-    const macBytes = Buffer.from(cleanMac, 'hex');
-    const packetSize = cleanSecureOn ? 108 : 102;
-    const magicPacket = Buffer.alloc(packetSize);
-    magicPacket.fill(0xff, 0, 6);
-    for (let i = 0; i < 16; i++) {
-      macBytes.copy(magicPacket, 6 + i * 6);
-    }
-    if (cleanSecureOn) {
-      Buffer.from(cleanSecureOn, 'hex').copy(magicPacket, 102);
-    }
-
-    const client = dgram.createSocket('udp4');
-    client.on('error', (err) => {
-      try {
-        client.close();
-      } catch {}
-      console.error('[WoL Socket Error]:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    });
-
-    client.bind(0, () => {
-      client.setBroadcast(true);
-      client.send(magicPacket, 0, magicPacket.length, targetPort, cleanBroadcastIp, (err) => {
-        client.close();
-        if (res.headersSent) return;
-        if (err) {
-          console.error('[WoL Send Error]:', err);
-          return res.status(500).json({ error: err.message });
-        }
-        console.log(`[WoL Sent] 102-byte Magic Packet sent to ${mac} via ${cleanBroadcastIp}:${targetPort}`);
-        return res.json({
-          success: true,
-          mac,
-          broadcastIp: cleanBroadcastIp,
-          port: targetPort,
-          timestamp: new Date().toISOString(),
-        });
-      });
+    await sendRealWolPacket(String(mac), String(broadcastIp).trim(), targetPort, String(secureOn || ''));
+    addServerLog('INFO', `Dispatched UDP WoL Magic Packet to ${mac} via ${broadcastIp}:${targetPort}`);
+    return res.json({
+      success: true,
+      mac,
+      broadcastIp: String(broadcastIp).trim(),
+      port: targetPort,
+      timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Failed to dispatch Wake-on-LAN packet' });
+    const msg = err?.message || 'Failed to dispatch Wake-on-LAN packet';
+    const isClientErr = /Invalid|required/i.test(msg);
+    return res.status(isClientErr ? 400 : 500).json({ error: msg });
   }
 });
 
-// Probes TCP port with minimal timeout to verify if a real AI NetController daemon is running
-function probeTcpPort(ip: string, port: number, timeoutMs = 350): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    let isDone = false;
-    socket.setTimeout(timeoutMs);
-    socket.once('connect', () => {
-      isDone = true;
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once('timeout', () => {
-      socket.destroy();
-      if (!isDone) {
-        isDone = true;
-        resolve(false);
-      }
-    });
-    socket.once('error', () => {
-      socket.destroy();
-      if (!isDone) {
-        isDone = true;
-        resolve(false);
-      }
-    });
-    try {
-      socket.connect(port, ip);
-    } catch {
-      resolve(false);
-    }
-  });
+interface PersistedWolSchedule {
+  id: string;
+  name: string;
+  time: string;
+  days: string[];
+  targetType: 'single' | 'all' | 'tag' | 'selected';
+  targetHostId?: string;
+  mac?: string;
+  broadcastIp?: string;
+  port?: number;
+  enabled: boolean;
 }
 
-// Real Subnet Network Scan Endpoint -- Only surfaces ACTUAL PCs on the network (zero placeholders / fake computers)
-app.post('/api/hosts/scan', async (_req: Request, res: Response) => {
+function readPersistedWolSchedules(): PersistedWolSchedule[] {
   try {
+    const p = getWolSchedulesPath();
+    if (!fs.existsSync(p)) return [];
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePersistedWolSchedules(list: PersistedWolSchedule[]): void {
+  const p = getWolSchedulesPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(list, null, 2), { encoding: 'utf-8', mode: 0o600 });
+}
+
+const firedScheduleMinuteKey = new Map<string, string>();
+const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+setInterval(async () => {
+  const schedules = readPersistedWolSchedules();
+  if (schedules.length === 0) return;
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const dayKey = WEEKDAY_KEYS[now.getDay()];
+  const minuteStamp = `${now.toDateString()} ${hhmm}`;
+
+  for (const sched of schedules) {
+    if (!sched.enabled || sched.time !== hhmm) continue;
+    if (Array.isArray(sched.days) && sched.days.length > 0 && !sched.days.includes(dayKey)) continue;
+    if (!sched.mac || firedScheduleMinuteKey.get(sched.id) === minuteStamp) continue;
+
+    firedScheduleMinuteKey.set(sched.id, minuteStamp);
+    try {
+      await sendRealWolPacket(sched.mac, sched.broadcastIp || '255.255.255.255', Number(sched.port || 9));
+      addServerLog('INFO', `[WoL Scheduler] Triggered scheduled wake "${sched.name}" (${sched.mac}) at ${hhmm}`);
+    } catch (err: any) {
+      addServerLog('WARN', `[WoL Scheduler] Failed scheduled wake "${sched.name}": ${err?.message}`);
+    }
+  }
+}, 20_000).unref();
+
+app.get('/api/wol/schedules', requireControlAuth, (_req: Request, res: Response) => {
+  return res.json({ success: true, schedules: readPersistedWolSchedules() });
+});
+
+app.post('/api/wol/schedules', requireControlAuth, (req: Request, res: Response) => {
+  const list = Array.isArray(req.body?.schedules) ? req.body.schedules : null;
+  if (!list) {
+    return res.status(400).json({ error: 'schedules array is required' });
+  }
+  writePersistedWolSchedules(list);
+  return res.json({ success: true, schedules: list });
+});
+
+app.delete('/api/wol/schedules/:id', requireControlAuth, (req: Request, res: Response) => {
+  const next = readPersistedWolSchedules().filter((s) => s.id !== req.params.id);
+  writePersistedWolSchedules(next);
+  return res.json({ success: true, schedules: next });
+});
+
+// =====================================================================
+// REAL LAN & ARP SUBNET SCANNER (No Fake Hosts)
+// =====================================================================
+app.post('/api/hosts/scan', requireControlAuth, async (_req: Request, res: Response) => {
+  try {
+    const snap = await getRealDaemonSnapshot();
+    const port = snap.port || 8765;
     const discovered: Array<{
       id: string;
       name: string;
@@ -1426,23 +1942,20 @@ app.post('/api/hosts/scan', async (_req: Request, res: Response) => {
       mac: string;
       os: string;
       isOnline: boolean;
-      ping?: number;
+      ping: number;
     }> = [];
 
-    const snap = getDaemonSnapshot();
     const primaryAdapter = snap.activeAdapters[0] || {
-      name: 'Primary LAN',
+      name: 'Loopback',
       ipv4: snap.localIp,
       mac: '00:00:00:00:00:00',
     };
 
-    // 1. Always verify the actual host PC where the host daemon is running
-    const hostRunning =
-      (await probeTcpPort('127.0.0.1', snap.port, 400).catch(() => false)) ||
-      (await probeTcpPort(snap.localIp, snap.port, 400).catch(() => false)) ||
-      snap.isRunning;
+    const loopbackProbe = await probeTcpPortWithRtt('127.0.0.1', port, 400);
+    const lanSelfProbe =
+      snap.localIp !== '127.0.0.1' ? await probeTcpPortWithRtt(snap.localIp, port, 400) : { open: false, rttMs: 0 };
 
-    if (hostRunning) {
+    if (loopbackProbe.open || lanSelfProbe.open) {
       const realHostname = snap.hostname || os.hostname() || 'Host-PC';
       const safeId = realHostname.toUpperCase().replace(/[^A-Z0-9_-]/g, '-');
       discovered.push({
@@ -1450,71 +1963,69 @@ app.post('/api/hosts/scan', async (_req: Request, res: Response) => {
         name: realHostname,
         ip: snap.localIp !== '127.0.0.1' ? snap.localIp : '127.0.0.1',
         mac: primaryAdapter.mac || '00:00:00:00:00:00',
-        os: 'windows',
+        os: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux',
         isOnline: true,
-        ping: 1,
+        ping: lanSelfProbe.open ? lanSelfProbe.rttMs : loopbackProbe.rttMs,
       });
     }
 
-    // 2. Discover other actual PCs on LAN by querying ARP and verifying port 8765
-    exec('arp -a', async (err, stdout) => {
-      if (!err && stdout) {
-        const lines = stdout.split('\n');
-        const ipMacRegex =
-          /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})/i;
-        const candidateIps: Array<{ ip: string; mac: string }> = [];
+    const arpStdout = await new Promise<string>((resolve) => {
+      execFile('arp', ['-a'], { timeout: 4000 }, (err, stdout) => resolve(err ? '' : stdout || ''));
+    });
 
-        for (const line of lines) {
-          const match = line.match(ipMacRegex);
-          if (match) {
-            const ip = match[1];
-            const mac = match[2].replace(/-/g, ':').toUpperCase();
-            // Drop multicast, broadcast, and already-added local host PC
-            if (
-              !ip.startsWith('224.') &&
-              !ip.startsWith('239.') &&
-              !ip.endsWith('.255') &&
-              mac !== 'FF:FF:FF:FF:FF:FF' &&
-              ip !== snap.localIp &&
-              ip !== '127.0.0.1'
-            ) {
-              candidateIps.push({ ip, mac });
-            }
-          }
-        }
+    if (arpStdout) {
+      const ipMacRegex =
+        /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})/i;
+      const seenIps = new Set<string>(['127.0.0.1', snap.localIp]);
+      const candidates: Array<{ ip: string; mac: string }> = [];
 
-        // Test only candidate devices for active AI NetController daemon on port 8765
-        const probePromises = candidateIps.map(async ({ ip, mac }) => {
-          const isHostActive = await probeTcpPort(ip, snap.port, 350).catch(() => false);
-          if (isHostActive) {
-            discovered.push({
-              id: `PC-${ip.replace(/\./g, '-')}`,
-              name: `PC (${ip})`,
-              ip,
-              mac,
-              os: 'windows',
-              isOnline: true,
-              ping: 4,
-            });
-          }
-        });
-
-        await Promise.allSettled(probePromises);
+      for (const line of arpStdout.split('\n')) {
+        const match = line.match(ipMacRegex);
+        if (!match) continue;
+        const ip = match[1];
+        const mac = match[2].replace(/-/g, ':').toUpperCase();
+        if (seenIps.has(ip) || ip.endsWith('.255') || isPrivateOrSpecialIp(ip) === false) continue;
+        if (ip.startsWith('224.') || ip.startsWith('239.') || mac === 'FF:FF:FF:FF:FF:FF') continue;
+        seenIps.add(ip);
+        candidates.push({ ip, mac });
       }
 
-      return res.json({
-        success: true,
-        count: discovered.length,
-        hosts: discovered,
-        timestamp: new Date().toISOString(),
-      });
+      await Promise.allSettled(
+        candidates.map(async ({ ip, mac }) => {
+          const probe = await probeTcpPortWithRtt(ip, port, 350);
+          if (!probe.open) return;
+          let resolvedName = `Peer (${ip})`;
+          try {
+            const names = await dns.reverse(ip);
+            if (names && names[0]) resolvedName = names[0];
+          } catch {}
+          discovered.push({
+            id: `PC-${ip.replace(/\./g, '-')}`,
+            name: resolvedName,
+            ip,
+            mac,
+            os: 'unknown',
+            isOnline: true,
+            ping: probe.rttMs,
+          });
+        })
+      );
+    }
+
+    return res.json({
+      success: true,
+      count: discovered.length,
+      hosts: discovered,
+      timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to scan subnet' });
   }
 });
 
-// Hardened Shell Command Security & AST Inspector Policy
+// =====================================================================
+// AST COMMAND FIREWALL & SINGLE-USE HITL CONFIRMATION TOKEN GATE
+// =====================================================================
 export interface CommandInspectionResult {
   allowed: boolean;
   blocked: boolean;
@@ -1548,27 +2059,29 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
     };
   }
 
-  // Normalize Windows CMD caret (^), PowerShell backtick (`), and interstitial quotes before inspection
   const deobfuscatedCmd = trimmed
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
     .replace(/\^(.)/g, '$1')
     .replace(/`([a-zA-Z0-9])/g, '$1')
     .replace(/(?<=\w)["']+(?=\w)/g, '');
 
   const hasEvasionArtifacts = deobfuscatedCmd !== trimmed;
 
-  // Unconditionally block catastrophic / remote-code-execution / obfuscation vectors
   const criticalBlockPatterns = [
-    /:\(\)\s*\{\s*:\|:&\s*\}\s*;?\s*:/, // Fork bomb
-    /\bmkfs(?:\.[a-z0-9]+)?\b/i, // Filesystem formatting
-    /\bdd\s+if=/i, // Raw block device overwrite
-    /\b(?:curl|wget)\b.*\|\s*(?:ba)?sh\b/i, // Remote script pipe execution
-    /\b(?:nc|ncat|netcat)\b.*-e\b/i, // Reverse shell
-    /\b(?:powershell|pwsh)(?:\.exe)?\b.*\s-(?:e|en|enc|encodedcommand)\b/i, // Base64 encoded PowerShell
-    /\b(?:iex|invoke-expression)\b/i, // PowerShell dynamic eval
-    /\brm\s+-[rRfF]+\s+(?:\/|\*)\b/, // Root filesystem deletion
-    /%[a-zA-Z0-9_]+:~\d+,\d+%/, // Windows CMD environment variable substring slicing evasion
-    /\b(?:0x[0-9a-f]{8}|0[0-7]{10,})\b/i, // Hex/octal IP encoding evasion
-    /\b(?:certutil\s+.*-urlcache|bitsadmin\s+.*\/transfer|mshta\s+https?:|regsvr32\s+.*\/i:https?:)/i, // Windows LOLBin abuse
+    /:\(\)\s*\{\s*:\|:&\s*\}\s*;?\s*:/,
+    /\bmkfs(?:\.[a-z0-9]+)?\b/i,
+    /\bdd\s+if=/i,
+    /\b(?:curl|wget)\b.*\|\s*(?:ba)?sh\b/i,
+    /\b(?:nc|ncat|netcat)\b.*-e\b/i,
+    /\b(?:powershell|pwsh)(?:\.exe)?\b.*\s-(?:e|en|enc|encodedcommand)\b/i,
+    /\b(?:iex|invoke-expression)\b/i,
+    /\brm\s+-[rRfF]+\s+(?:\/|\*)\b/,
+    /%[a-zA-Z0-9_]+:~-?\d+,-?\d+%/,
+    /\$env:[a-zA-Z0-9_]+/i,
+    /![a-zA-Z0-9_]+!/,
+    /\b(?:0x[0-9a-f]{8}|0[0-7]{10,})\b/i,
+    /\b(?:certutil\s+.*-urlcache|bitsadmin\s+.*\/transfer|mshta\s+https?:|regsvr32\s+.*\/i:https?:|rundll32\s+javascript:)/i,
   ];
 
   for (const pattern of criticalBlockPatterns) {
@@ -1598,7 +2111,7 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
       requiresConfirmation: true,
       riskLevel: 'HIGH',
       sanitizedCmd: deobfuscatedCmd,
-      reason: 'High-risk command requires Human-in-the-Loop approval',
+      reason: 'High-risk command requires Human-in-the-Loop confirmation token',
     };
   }
 
@@ -1611,11 +2124,14 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
   };
 }
 
+const pendingCommandConfirmations = new Map<string, { command: string; expiresAt: number }>();
+
 const SCRUBBED_CHILD_ENV_KEYS = new Set([
   'GEMINI_API_KEY',
   'API_KEY',
   'CST_AGENT_SECRET',
   'AI_AGENT_SECRET',
+  'WEB_CONTROL_SECRET',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
   'GITHUB_TOKEN',
@@ -1632,10 +2148,9 @@ function createSafeChildEnv(): NodeJS.ProcessEnv {
   return safeEnv;
 }
 
-// Real Command Execution Endpoint (Hardened with AST Firewall Policy v2026.11-REV1)
-app.post('/api/command/execute', async (req: Request, res: Response) => {
+app.post('/api/command/execute', requireControlAuth, async (req: Request, res: Response) => {
   try {
-    const { command, hostId } = req.body;
+    const { command, hostId, hostIp, confirmationId } = req.body || {};
     const inspection = inspectCommandSecurity(command);
 
     if (inspection.blocked) {
@@ -1646,48 +2161,86 @@ app.post('/api/command/execute', async (req: Request, res: Response) => {
       });
     }
 
-    if (inspection.requiresConfirmation && !req.body.confirmed) {
-      return res.status(403).json({
-        error: inspection.reason,
-        requiresConfirmation: true,
-        riskLevel: inspection.riskLevel,
+    if (inspection.requiresConfirmation) {
+      const pending = confirmationId ? pendingCommandConfirmations.get(String(confirmationId)) : undefined;
+      const validToken =
+        pending && Date.now() < pending.expiresAt && pending.command === inspection.sanitizedCmd;
+      if (!validToken) {
+        const nextConfirmId = crypto.randomBytes(16).toString('hex');
+        pendingCommandConfirmations.set(nextConfirmId, {
+          command: inspection.sanitizedCmd,
+          expiresAt: Date.now() + 120_000,
+        });
+        return res.status(403).json({
+          error: inspection.reason,
+          requiresConfirmation: true,
+          confirmationId: nextConfirmId,
+          riskLevel: inspection.riskLevel,
+        });
+      }
+      pendingCommandConfirmations.delete(String(confirmationId));
+    }
+
+    const cfg = await loadDaemonConfig();
+    const daemonPort = Number(cfg.port || 8765);
+    const targetIp = String(hostIp || '127.0.0.1');
+
+    // Route execution through the live sandboxed Python Host Agent if available
+    const agentExec = await dispatchLiveAgentCommand(
+      targetIp,
+      daemonPort,
+      {
+        action: 'EXECUTE_PROMPT',
+        command: inspection.sanitizedCmd,
+        command_id: `cmd-${Date.now()}`,
+      },
+      'EXECUTION_RESULT',
+      15_000
+    );
+
+    if (agentExec.ok && agentExec.response) {
+      return res.json({
+        success: agentExec.response.status === 'success',
+        output: agentExec.response.output || '',
+        durationMs: agentExec.response.execution_time_ms || 0,
+        hostId,
+        viaAgent: true,
+        timestamp: new Date().toISOString(),
       });
     }
 
-    const rawCmd = inspection.sanitizedCmd;
-    const startTime = Date.now();
-    exec(rawCmd, { timeout: 15000, maxBuffer: 1024 * 1024, env: createSafeChildEnv() }, (error, stdout, stderr) => {
-      const durationMs = Date.now() - startTime;
-      return res.json({
-        success: !error,
-        output: stdout || stderr || (error ? error.message : 'Command executed with 0 exit code'),
-        durationMs,
-        hostId,
-        timestamp: new Date().toISOString(),
-      });
+    // If explicitly targeting localhost and Python daemon isn't running, execute directly only on SAFE non-chaining commands
+    if (isLoopbackIp(targetIp) && !inspection.requiresConfirmation) {
+      const startTime = Date.now();
+      exec(
+        inspection.sanitizedCmd,
+        { timeout: 15000, maxBuffer: 1024 * 1024, env: createSafeChildEnv() },
+        (error, stdout, stderr) => {
+          return res.json({
+            success: !error,
+            output: stdout || stderr || (error ? error.message : 'Command executed with exit code 0'),
+            durationMs: Date.now() - startTime,
+            hostId,
+            viaAgent: false,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      );
+      return;
+    }
+
+    return res.status(503).json({
+      success: false,
+      error: agentExec.error || 'Target Host Agent daemon is offline',
     });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Command execution failed' });
   }
 });
 
-// Normalize deprecated model IDs to current supported Gemini 3.8 / 3.1 models
-function resolveSupportedGeminiModel(requested?: string): string {
-  if (!requested || typeof requested !== 'string') return 'gemini-3.8-flash';
-  const clean = requested.trim();
-  if (
-    clean === 'gemini-1.5-flash' ||
-    clean === 'gemini-1.5-pro' ||
-    clean === 'gemini-2.0-flash' ||
-    clean === 'gemini-2.5-flash' ||
-    clean === 'gemini-pro'
-  ) {
-    return 'gemini-3.8-flash';
-  }
-  return clean;
-}
-
-// Structured AI Action Directive Interface
+// =====================================================================
+// REAL PC CONTROL EXECUTION (Routes directly to Python Host Agent)
+// =====================================================================
 export interface ParsedAiAction {
   id: string;
   type:
@@ -1710,6 +2263,7 @@ export interface ParsedAiAction {
     | 'rescan'
     | 'lab_mode';
   target?: string;
+  hostIp?: string;
   x?: number;
   y?: number;
   dy?: number;
@@ -1722,7 +2276,6 @@ export interface ParsedAiAction {
   rawTag: string;
 }
 
-// Parse all [ACTION:...] directives from AI response text
 function parseActionDirectives(text: string): ParsedAiAction[] {
   const actions: ParsedAiAction[] = [];
   const tagRegex = /\[ACTION:([A-Z_]+)([^\]]*)\]/gi;
@@ -1742,7 +2295,7 @@ function parseActionDirectives(text: string): ParsedAiAction[] {
     idx += 1;
     const rawKind = match[1].toUpperCase();
     const attrStr = match[2] || '';
-    const target = parseAttr(attrStr, 'target') || 'WORKSTATION-01';
+    const target = parseAttr(attrStr, 'target') || 'LOCALHOST';
     const id = `ai-act-${Date.now()}-${idx}`;
     const rawTag = match[0];
 
@@ -1827,12 +2380,7 @@ function parseActionDirectives(text: string): ParsedAiAction[] {
         });
         break;
       case 'WOL':
-        actions.push({
-          id,
-          type: 'wol',
-          target,
-          rawTag,
-        });
+        actions.push({ id, type: 'wol', target, rawTag });
         break;
       case 'SYSTEM_UPDATE':
         actions.push({
@@ -1851,12 +2399,7 @@ function parseActionDirectives(text: string): ParsedAiAction[] {
         });
         break;
       case 'SCREEN_CAPTURE':
-        actions.push({
-          id,
-          type: 'screen_capture',
-          target,
-          rawTag,
-        });
+        actions.push({ id, type: 'screen_capture', target, rawTag });
         break;
       case 'RESCAN':
         actions.push({ id, type: 'rescan', rawTag });
@@ -1864,653 +2407,363 @@ function parseActionDirectives(text: string): ParsedAiAction[] {
       case 'LAB_MODE':
         actions.push({ id, type: 'lab_mode', rawTag });
         break;
-      default:
-        break;
     }
   }
 
   return actions;
 }
 
-// Unified Server-Side Executor for PC Control, Shell, WoL, Daemon & System Update Actions
-async function executePcControlAction(action: Partial<ParsedAiAction> & { type: string; mac?: string }): Promise<{
-  success: boolean;
-  actionType: string;
-  target: string;
-  summary: string;
-  output?: string;
-  opcode?: string;
-  durationMs: number;
-  blockedByViewOnly?: boolean;
-  timestamp: string;
-}> {
+async function executePcControlAction(action: Partial<ParsedAiAction> & { type: string; mac?: string; hostIp?: string }) {
   const startTime = Date.now();
-  const target = action.target || pcDaemonState.hostname || 'WORKSTATION-01';
+  const cfg = await loadDaemonConfig();
+  const daemonPort = Number(cfg.port || 8765);
+  const target = action.target || os.hostname() || 'LOCALHOST';
+  const targetIp = String(action.hostIp || '127.0.0.1');
+
   const isInputAction = [
     'mouse_click',
     'mouse_move',
     'mouse_double_click',
     'mouse_scroll',
     'keyboard_type',
+    'type_text',
     'keyboard_hotkey',
+    'key_combo',
     'media_control',
+    'lock_pc',
   ].includes(action.type);
 
-  if (isInputAction && pcDaemonState.viewOnlyMode) {
-    addDaemonLog(
-      'SECURITY',
-      `BLOCKED AI PC CONTROL (${action.type.toUpperCase()} on ${target}): Daemon is in View-Only Mode.`
-    );
+  if (isInputAction && cfg.view_only_mode) {
     return {
       success: false,
+      statusCode: 403,
       actionType: action.type,
       target,
-      summary: 'Blocked by PC Daemon View-Only Mode. Disable View-Only Mode in PC Daemon GUI to allow remote mouse/keyboard input.',
+      summary: 'Blocked by Host Daemon View-Only Mode.',
       blockedByViewOnly: true,
       durationMs: Date.now() - startTime,
       timestamp: new Date().toISOString(),
     };
   }
 
-  if (isInputAction && (!pcDaemonState.isRunning || pcDaemonState.isPaused)) {
+  if (action.type === 'wol') {
+    try {
+      await sendRealWolPacket(String(action.mac || ''), '255.255.255.255', 9);
+      return {
+        success: true,
+        statusCode: 200,
+        actionType: 'wol',
+        target,
+        opcode: 'UDP:9 (MAGIC_PACKET)',
+        summary: `Sent UDP Wake-on-LAN Magic Packet to ${target}`,
+        output: `Magic packet broadcast on UDP port 9 for ${action.mac}`,
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        statusCode: 400,
+        actionType: 'wol',
+        target,
+        summary: err?.message || 'Wake-on-LAN failed',
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  if (action.type === 'terminal_command' || action.type === 'shell_exec') {
+    const rawCmd = String(action.command || 'whoami').trim();
+    const inspection = inspectCommandSecurity(rawCmd);
+    if (inspection.blocked) {
+      return {
+        success: false,
+        statusCode: 403,
+        actionType: 'shell_exec',
+        target,
+        summary: `Blocked by AST Firewall: "${rawCmd}"`,
+        output: inspection.reason,
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
+    const execRes = await dispatchLiveAgentCommand(
+      targetIp,
+      daemonPort,
+      { action: 'EXECUTE_PROMPT', command: inspection.sanitizedCmd, command_id: `ai-${Date.now()}` },
+      'EXECUTION_RESULT',
+      15_000
+    );
+    if (!execRes.ok) {
+      return {
+        success: false,
+        statusCode: 503,
+        offline: true,
+        actionType: 'shell_exec',
+        target,
+        summary: execRes.error || 'Host Agent daemon offline',
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
     return {
-      success: false,
-      actionType: action.type,
+      success: execRes.response?.status === 'success',
+      statusCode: 200,
+      actionType: 'shell_exec',
       target,
-      summary: 'PC Daemon listener is currently paused. Resume the listener in PC Daemon GUI.',
+      opcode: '0x04 (SHELL_EXEC)',
+      summary: `Executed "${inspection.sanitizedCmd}" on ${target}`,
+      output: execRes.response?.output || '',
       durationMs: Date.now() - startTime,
       timestamp: new Date().toISOString(),
     };
   }
 
-  // Increment telemetry counter on first active connected client
-  if (pcDaemonState.connectedClients.length > 0) {
-    pcDaemonState.connectedClients[0].commandsSent += 1;
-  }
-
-  switch (action.type) {
-    case 'mouse_click': {
-      const x = Number.isFinite(action.x) ? Number(action.x) : 960;
-      const y = Number.isFinite(action.y) ? Number(action.y) : 540;
-      const btn = action.button || 'left';
-      const msg = `Opcode 0x08 Win32 SendInput: Mouse ${btn.toUpperCase()} CLICK at (${x}, ${y}) on ${target}`;
-      addDaemonLog('INFO', `[AI-CONTROL] ${msg}`);
-      return {
-        success: true,
-        actionType: 'mouse_click',
-        target,
-        opcode: '0x08 (MOUSE_CLICK)',
-        summary: `Clicked ${btn} mouse button at (${x}, ${y}) on ${target}`,
-        output: msg,
-        durationMs: Math.max(2, Date.now() - startTime),
-        timestamp: new Date().toISOString(),
+  if (isInputAction) {
+    let wsInputPayload: Record<string, unknown>;
+    if (action.type === 'mouse_click' || action.type === 'mouse_double_click') {
+      wsInputPayload = {
+        action: 'INPUT_EVENT',
+        kind: action.type === 'mouse_double_click' ? 'dblclick' : 'click',
+        x: Number.isFinite(action.x) ? Number(action.x) : 960,
+        y: Number.isFinite(action.y) ? Number(action.y) : 540,
+        button: action.button || 'left',
       };
-    }
-    case 'mouse_double_click': {
-      const x = Number.isFinite(action.x) ? Number(action.x) : 960;
-      const y = Number.isFinite(action.y) ? Number(action.y) : 540;
-      const msg = `Opcode 0x08 Win32 SendInput: Mouse DOUBLE-CLICK at (${x}, ${y}) on ${target}`;
-      addDaemonLog('INFO', `[AI-CONTROL] ${msg}`);
-      return {
-        success: true,
-        actionType: 'mouse_double_click',
-        target,
-        opcode: '0x08 (MOUSE_DBLCLK)',
-        summary: `Double-clicked at (${x}, ${y}) on ${target}`,
-        output: msg,
-        durationMs: Math.max(2, Date.now() - startTime),
-        timestamp: new Date().toISOString(),
+    } else if (action.type === 'mouse_move') {
+      wsInputPayload = {
+        action: 'INPUT_EVENT',
+        kind: 'move',
+        x: Number.isFinite(action.x) ? Number(action.x) : 960,
+        y: Number.isFinite(action.y) ? Number(action.y) : 540,
       };
-    }
-    case 'mouse_move': {
-      const x = Number.isFinite(action.x) ? Number(action.x) : 960;
-      const y = Number.isFinite(action.y) ? Number(action.y) : 540;
-      const msg = `Opcode 0x08 Win32 SendInput: Cursor moved smoothly (120Hz) to (${x}, ${y}) on ${target}`;
-      addDaemonLog('INFO', `[AI-CONTROL] ${msg}`);
-      return {
-        success: true,
-        actionType: 'mouse_move',
-        target,
-        opcode: '0x08 (MOUSE_MOVE)',
-        summary: `Moved cursor to (${x}, ${y}) on ${target}`,
-        output: msg,
-        durationMs: Math.max(1, Date.now() - startTime),
-        timestamp: new Date().toISOString(),
+    } else if (action.type === 'mouse_scroll') {
+      wsInputPayload = {
+        action: 'INPUT_EVENT',
+        kind: 'scroll',
+        dy: Number.isFinite(action.dy) ? Number(action.dy) : -300,
       };
-    }
-    case 'mouse_scroll': {
-      const dy = Number.isFinite(action.dy) ? Number(action.dy) : -300;
-      const direction = dy < 0 ? 'DOWN' : 'UP';
-      const msg = `Opcode 0x08 Win32 SendInput: Mouse wheel scrolled ${direction} (dy=${dy}) on ${target}`;
-      addDaemonLog('INFO', `[AI-CONTROL] ${msg}`);
-      return {
-        success: true,
-        actionType: 'mouse_scroll',
-        target,
-        opcode: '0x08 (MOUSE_WHEEL)',
-        summary: `Scrolled mouse wheel ${direction} (${dy}px) on ${target}`,
-        output: msg,
-        durationMs: Math.max(2, Date.now() - startTime),
-        timestamp: new Date().toISOString(),
+    } else if (action.type === 'type_text' || action.type === 'keyboard_type') {
+      wsInputPayload = {
+        action: 'INPUT_EVENT',
+        kind: 'type',
+        text: String(action.text || ''),
+        press_enter: action.pressEnter !== false,
       };
-    }
-    case 'type_text':
-    case 'keyboard_type': {
-      const text = String(action.text || '');
-      const pressEnter = action.pressEnter !== false;
-      const safePreview = text.length > 48 ? `${text.slice(0, 48)}...` : text;
-      const msg = `Opcode 0x08 Win32 SendInput: Typed "${safePreview}"${pressEnter ? ' + [ENTER]' : ''} on ${target}`;
-      addDaemonLog('INFO', `[AI-CONTROL] ${msg}`);
-      return {
-        success: true,
-        actionType: 'keyboard_type',
-        target,
-        opcode: '0x08 (KEYBD_UNICODE)',
-        summary: `Typed "${safePreview}"${pressEnter ? ' + Enter' : ''} on ${target}`,
-        output: msg,
-        durationMs: Math.max(3, Date.now() - startTime),
-        timestamp: new Date().toISOString(),
-      };
-    }
-    case 'key_combo':
-    case 'keyboard_hotkey': {
+    } else if (action.type === 'key_combo' || action.type === 'keyboard_hotkey') {
       const rawKeys = (action as any).keys;
       const keys = Array.isArray(rawKeys)
         ? rawKeys
-        : String(rawKeys || action.command || 'ctrl,c').split(',');
-      const combo = keys.map((k: string) => k.trim().toUpperCase()).join(' + ');
-      const msg = `Opcode 0x08 Win32 SendInput: Injected shortcut [${combo}] on ${target}`;
-      addDaemonLog('INFO', `[AI-CONTROL] ${msg}`);
-      return {
-        success: true,
-        actionType: 'keyboard_hotkey',
-        target,
-        opcode: '0x08 (KEYBD_HOTKEY)',
-        summary: `Sent keyboard shortcut [${combo}] to ${target}`,
-        output: msg,
-        durationMs: Math.max(2, Date.now() - startTime),
-        timestamp: new Date().toISOString(),
-      };
-    }
-    case 'lock_pc':
-    case 'media_control': {
+        : String(rawKeys || action.command || 'ctrl,c')
+            .split(',')
+            .map((k) => k.trim())
+            .filter(Boolean);
+      wsInputPayload = { action: 'INPUT_EVENT', kind: 'hotkey', keys };
+    } else {
       const cmd = action.type === 'lock_pc' ? 'lock_pc' : String(action.command || 'play_pause').toLowerCase();
-      const msg = `Opcode 0x09 OS Media/Session Control: Executed [${cmd.toUpperCase()}] on ${target}`;
-      addDaemonLog('INFO', `[AI-CONTROL] ${msg}`);
-      return {
-        success: true,
-        actionType: 'media_control',
-        target,
-        opcode: '0x09 (MEDIA_SESSION)',
-        summary: `Executed media/OS action [${cmd.toUpperCase()}] on ${target}`,
-        output: msg,
-        durationMs: Math.max(2, Date.now() - startTime),
-        timestamp: new Date().toISOString(),
-      };
+      wsInputPayload = { action: 'INPUT_EVENT', kind: 'media', command: cmd };
     }
-    case 'terminal_command':
-    case 'shell_exec': {
-      const rawCmd = String(action.command || 'whoami').trim();
-      const inspection = inspectCommandSecurity(rawCmd);
 
-      if (inspection.blocked) {
-        addDaemonLog('SECURITY', `[AI-CONTROL] Permanently blocked critical command: "${rawCmd}"`);
-        return {
-          success: false,
-          actionType: 'shell_exec',
-          target,
-          opcode: '0x05 (SHELL_FIREWALL_BLOCK)',
-          summary: `Blocked by AST Security Firewall: "${rawCmd}"`,
-          output: inspection.reason || 'Command blocked by security policy.',
-          durationMs: Date.now() - startTime,
-          timestamp: new Date().toISOString(),
-        };
-      }
-
-      if (inspection.requiresConfirmation && pcDaemonState.requireHitlApproval) {
-        addDaemonLog('WARN', `[AI-CONTROL] High-risk command "${rawCmd}" held for HITL operator confirmation.`);
-        return {
-          success: false,
-          actionType: 'shell_exec',
-          target,
-          opcode: '0x05 (SHELL_HITL_HOLD)',
-          summary: `Held high-risk command "${rawCmd}" for Human-in-the-Loop approval`,
-          output: 'Requires operator confirmation under active HITL security policy.',
-          durationMs: Date.now() - startTime,
-          timestamp: new Date().toISOString(),
-        };
-      }
-
-      const execTargetCmd = inspection.sanitizedCmd;
-      const output = await new Promise<string>((resolve) => {
-        exec(execTargetCmd, { timeout: 8000, maxBuffer: 512 * 1024, env: createSafeChildEnv() }, (err, stdout, stderr) => {
-          const out = (stdout || stderr || (err ? err.message : 'Executed (exit code 0)')).trim();
-          resolve(out.slice(0, 1200));
-        });
-      });
-
-      addDaemonLog('INFO', `[AI-CONTROL] Executed shell command "${execTargetCmd}" on ${target}`);
+    const sendRes = await dispatchLiveAgentCommand(targetIp, daemonPort, wsInputPayload);
+    if (!sendRes.ok) {
       return {
-        success: true,
-        actionType: 'shell_exec',
-        target,
-        opcode: '0x05 (SHELL_EXEC)',
-        summary: `Executed "${execTargetCmd}" on ${target}`,
-        output,
-        durationMs: Date.now() - startTime,
-        timestamp: new Date().toISOString(),
-      };
-    }
-    case 'wol': {
-      const cleanMac = String(action.mac || '').replace(/[^a-fA-F0-9]/g, '');
-      if (cleanMac.length !== 12) {
-        addDaemonLog('WARN', `[AI-CONTROL] Rejected missing or invalid MAC "${action.mac || ''}" for WoL target ${target}`);
-        return {
-          success: false,
-          actionType: 'wol',
-          target,
-          opcode: 'UDP:9 (MAGIC_PACKET)',
-          summary: `Invalid or missing MAC address for ${target}`,
-          output: 'Invalid MAC address format (expected 12 hex characters)',
-          durationMs: Date.now() - startTime,
-          timestamp: new Date().toISOString(),
-        };
-      }
-
-      const macBytes = Buffer.from(cleanMac, 'hex');
-      const magicPacket = Buffer.alloc(102);
-      magicPacket.fill(0xff, 0, 6);
-      for (let i = 0; i < 16; i++) {
-        macBytes.copy(magicPacket, 6 + i * 6);
-      }
-
-      let sendSucceeded = false;
-      await new Promise<void>((resolve) => {
-        const client = dgram.createSocket('udp4');
-        let settled = false;
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          try {
-            client.close();
-          } catch {}
-          resolve();
-        };
-        const safetyTimer = setTimeout(finish, 1500);
-        client.on('error', (err) => {
-          clearTimeout(safetyTimer);
-          console.warn('[AI-CONTROL] UDP WoL socket warning:', err.message);
-          finish();
-        });
-        client.bind(0, () => {
-          try {
-            client.setBroadcast(true);
-            client.send(magicPacket, 0, magicPacket.length, 9, '255.255.255.255', (err) => {
-              if (!err) sendSucceeded = true;
-              clearTimeout(safetyTimer);
-              finish();
-            });
-          } catch {
-            clearTimeout(safetyTimer);
-            finish();
-          }
-        });
-      });
-
-      addDaemonLog('INFO', `[AI-CONTROL] Dispatched 102-byte UDP Port 9 Magic Packet to wake ${target}`);
-      return {
-        success: sendSucceeded,
-        actionType: 'wol',
-        target,
-        opcode: 'UDP:9 (MAGIC_PACKET)',
-        summary: sendSucceeded
-          ? `Sent 102-byte Wake-on-LAN Magic Packet to ${target}`
-          : `Failed to broadcast Wake-on-LAN packet to ${target}`,
-        output: sendSucceeded
-          ? `Magic Packet (6x 0xFF + 16x MAC) broadcast on UDP Port 9 for ${target}`
-          : 'UDP broadcast failed on local socket',
-        durationMs: Date.now() - startTime,
-        timestamp: new Date().toISOString(),
-      };
-    }
-    case 'system_update': {
-      const compId = action.componentId || 'ALL';
-      const res = await runSystemUpdateExecution(compId, compId === 'ALL');
-      return {
-        success: true,
-        actionType: 'system_update',
-        target: compId,
-        opcode: 'OTA_SYNC',
-        summary: `Completed System & AI Update (${compId}) in ${res.durationMs}ms`,
-        output: res.logs.join('\n'),
-        durationMs: res.durationMs,
-        timestamp: new Date().toISOString(),
-      };
-    }
-    case 'daemon_control': {
-      const cmd = String(action.command || 'diagnostics').toLowerCase();
-      if (cmd === 'view_only') {
-        pcDaemonState.viewOnlyMode = true;
-        pcDaemonState.securityProfile = 'view_only';
-        addDaemonLog('SECURITY', '[AI-CONTROL] Enabled PC Daemon View-Only Mode.');
-      } else if (cmd === 'balanced') {
-        pcDaemonState.viewOnlyMode = false;
-        pcDaemonState.securityProfile = 'balanced';
-        addDaemonLog('SECURITY', '[AI-CONTROL] Applied Balanced LAN Security Profile.');
-      } else if (cmd === 'zero_trust') {
-        pcDaemonState.viewOnlyMode = false;
-        pcDaemonState.securityProfile = 'zero_trust';
-        pcDaemonState.requireHitlApproval = true;
-        addDaemonLog('SECURITY', '[AI-CONTROL] Applied Zero-Trust Security Profile.');
-      } else if (cmd === 'pause') {
-        pcDaemonState.isPaused = true;
-        addDaemonLog('WARN', '[AI-CONTROL] Paused PC Daemon listener.');
-      } else if (cmd === 'resume') {
-        pcDaemonState.isRunning = true;
-        pcDaemonState.isPaused = false;
-        addDaemonLog('INFO', '[AI-CONTROL] Resumed PC Daemon listener.');
-      } else {
-        addDaemonLog('DIAG', '[AI-CONTROL] Ran Native NIC, WoL & AV Heuristics Audit: 100% CLEAN.');
-      }
-      const daemonStateStr = !pcDaemonState.isRunning ? 'STOPPED' : pcDaemonState.isPaused ? 'PAUSED' : 'RUNNING';
-      return {
-        success: true,
-        actionType: 'daemon_control',
-        target: pcDaemonState.hostname,
-        opcode: 'DAEMON_IPC',
-        summary: `Executed PC Daemon action [${cmd.toUpperCase()}]`,
-        output: `Daemon Status: ${daemonStateStr} | Profile: ${pcDaemonState.securityProfile.toUpperCase()} | View-Only: ${pcDaemonState.viewOnlyMode}`,
-        durationMs: Date.now() - startTime,
-        timestamp: new Date().toISOString(),
-      };
-    }
-    case 'screen_capture': {
-      addDaemonLog('INFO', `[AI-CONTROL] Captured TurboJPEG live frame from ${target} (${pcDaemonState.targetFps} FPS pipeline).`);
-      return {
-        success: true,
-        actionType: 'screen_capture',
-        target,
-        opcode: '0x04 (FRAME_SYNC)',
-        summary: `Captured live screen frame from ${target}`,
-        output: `TurboJPEG frame captured at ${pcDaemonState.targetFps} FPS.`,
-        durationMs: Math.max(4, Date.now() - startTime),
-        timestamp: new Date().toISOString(),
-      };
-    }
-    default:
-      return {
-        success: true,
+        success: false,
+        statusCode: 503,
+        offline: true,
         actionType: action.type,
         target,
-        summary: `Executed ${action.type} on ${target}`,
+        summary: sendRes.error || 'Host Agent daemon offline',
         durationMs: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       };
+    }
+
+    addServerLog('INFO', `Dispatched real ${action.type} event to Host Agent on ${targetIp}:${daemonPort}`);
+    return {
+      success: true,
+      statusCode: 200,
+      actionType: action.type,
+      target,
+      opcode: '0x08 (LIVE_INPUT)',
+      summary: `Delivered ${action.type} event to ${target}`,
+      output: `Dispatched to ws://${targetIp}:${daemonPort}`,
+      durationMs: Date.now() - startTime,
+      timestamp: new Date().toISOString(),
+    };
   }
+
+  return {
+    success: false,
+    statusCode: 400,
+    actionType: action.type,
+    target,
+    summary: `Action "${action.type}" requires direct live channel execution on client`,
+    durationMs: Date.now() - startTime,
+    timestamp: new Date().toISOString(),
+  };
 }
 
-// Direct PC Control Execution Endpoint (Used by AI Copilot Action Chips & Remote Control Deck)
-app.post('/api/pc-control/execute', async (req: Request, res: Response) => {
+app.post('/api/pc-control/execute', requireControlAuth, async (req: Request, res: Response) => {
   try {
     const actionPayload = req.body;
     if (!actionPayload || !actionPayload.type) {
       return res.status(400).json({ error: 'Action type is required' });
     }
     const result = await executePcControlAction(actionPayload);
-    return res.json({
+    return res.status(result.statusCode || 200).json({
       ...result,
-      daemon: getDaemonSnapshot(),
+      daemon: await getRealDaemonSnapshot(),
     });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to execute PC control action' });
   }
 });
 
-// Deterministic Smart Local Fallback Responder when offline or when GEMINI_API_KEY is unset
-function generateSmartLocalFallbackReply(userText: string, targetHost: string): string {
-  const lower = userText.toLowerCase();
-
-  if (lower.includes('update') || lower.includes('upgrade') || lower.includes('обнов') || lower.includes('ъпдейт')) {
-    const pending = systemUpdateRegistry.filter((c) => c.status === 'available');
-    return `### 🔄 AI System & Model Update Orchestrator\nI inspected the **AI NetController Update Registry**:\n- **Pending Updates**: **${pending.length}** component(s) (${pending.map((p) => `${p.name} → \`${p.latestVersion}\``).join(', ') || 'All components are up to date'})\n- **Host Daemon**: \`${pcDaemonState.version}\` on \`${pcDaemonState.localIp}:${pcDaemonState.port}\`\n\nExecuting atomic update synchronization now:\n[ACTION:SYSTEM_UPDATE target=ALL]`;
-  }
-
-  if (lower.includes('task manager') || lower.includes('диспечер') || lower.includes('задачи')) {
-    return `### 📊 Opening Task Manager (\`Ctrl+Shift+Esc\`)\nLaunching **Task Manager** on **${targetHost}** via hardware keystroke injection:\n[ACTION:KEYBOARD_HOTKEY target=${targetHost} keys="ctrl,shift,esc"]`;
-  }
-
-  if (lower.includes('desktop') || lower.includes('minimize') || lower.includes('работен плот') || lower.includes('минимизирай')) {
-    return `### 🖥️ Show Desktop (\`Win+D\`)\nToggling **Show Desktop** on **${targetHost}**:\n[ACTION:KEYBOARD_HOTKEY target=${targetHost} keys="win,d"]`;
-  }
-
-  if (lower.includes('explorer') || lower.includes('files') || lower.includes('folder') || lower.includes('файлов') || lower.includes('папка')) {
-    return `### 📁 Opening File Explorer (\`Win+E\`)\nLaunching **File Explorer** on **${targetHost}**:\n[ACTION:KEYBOARD_HOTKEY target=${targetHost} keys="win,e"]`;
-  }
-
-  if (lower.includes('browser') || lower.includes('chrome') || lower.includes('google') || lower.includes('youtube') || lower.includes('браузър')) {
-    const urlMatch = /(https?:\/\/[^\s]+|[a-z0-9.-]+\.(?:com|org|net|bg|io)[^\s]*)/i.exec(userText);
-    const targetUrl = urlMatch ? (urlMatch[1].startsWith('http') ? urlMatch[1] : `https://${urlMatch[1]}`) : 'https://www.google.com';
-    return `### 🌐 Launching Web Browser\nOpening **${targetUrl}** on **${targetHost}**:\n[ACTION:SHELL_EXEC target=${targetHost} command="start ${targetUrl}"]`;
-  }
-
-  if (lower.includes('close window') || lower.includes('alt+f4') || lower.includes('alt f4') || lower.includes('затвори прозорец')) {
-    return `### ✕ Closing Active Window (\`Alt+F4\`)\nSending **Alt+F4** to close the active foreground window on **${targetHost}**:\n[ACTION:KEYBOARD_HOTKEY target=${targetHost} keys="alt,f4"]`;
-  }
-
-  if (lower.includes('switch') || (lower.includes('alt') && lower.includes('tab')) || lower.includes('превключи прозорец')) {
-    return `### ⇄ Switching Active Window (\`Alt+Tab\`)\nSwitching active application window on **${targetHost}**:\n[ACTION:KEYBOARD_HOTKEY target=${targetHost} keys="alt,tab"]`;
-  }
-
-  if (lower.includes('lock') || lower.includes('заключи')) {
-    return `### 🔒 Locking Workstation (\`Win+L\`)\nLocking **${targetHost}** session immediately:\n[ACTION:MEDIA_CONTROL target=${targetHost} command=lock_pc]`;
-  }
-
-  if (lower.includes('mute') || lower.includes('volume') || lower.includes('play') || lower.includes('pause') || lower.includes('звук') || lower.includes('пауза')) {
-    const mediaCmd = lower.includes('mute') || lower.includes('заглуши')
-      ? 'mute'
-      : lower.includes('up') || lower.includes('увеличи')
-      ? 'volume_up'
-      : lower.includes('down') || lower.includes('намали')
-      ? 'volume_down'
-      : 'play_pause';
-    return `### 🔊 Media & Audio Control (\`Opcode 0x09\`)\nExecuting **${mediaCmd.toUpperCase()}** on **${targetHost}**:\n[ACTION:MEDIA_CONTROL target=${targetHost} command=${mediaCmd}]`;
-  }
-
-  if (lower.includes('double click') || lower.includes('двоен клик')) {
-    const coords = /(\d{2,4})\s*[,x\s]\s*(\d{2,4})/.exec(userText);
-    const x = coords ? Number(coords[1]) : 960;
-    const y = coords ? Number(coords[2]) : 540;
-    return `### 🖱️ Remote Mouse Double-Click (\`Opcode 0x08\`)\nDispatching hardware-accelerated Win32 \`SendInput\` double-click to **${targetHost}** at coordinates **(${x}, ${y})**:\n[ACTION:MOUSE_DOUBLE_CLICK target=${targetHost} x=${x} y=${y}]`;
-  }
-
-  if (lower.includes('right click') || lower.includes('десен бутон') || lower.includes('десен клик') || lower.includes('hold')) {
-    const coords = /(\d{2,4})\s*[,x\s]\s*(\d{2,4})/.exec(userText);
-    const x = coords ? Number(coords[1]) : 960;
-    const y = coords ? Number(coords[2]) : 540;
-    return `### 🖱️ Remote Right-Click (\`Opcode 0x08\`)\nDispatching right mouse click to **${targetHost}** at **(${x}, ${y})**:\n[ACTION:MOUSE_CLICK target=${targetHost} x=${x} y=${y} button=right]`;
-  }
-
-  if (lower.includes('click') || lower.includes('клик') || lower.includes('tap') || lower.includes('натисни')) {
-    const coords = /(\d{2,4})\s*[,x\s]\s*(\d{2,4})/.exec(userText);
-    const x = coords ? Number(coords[1]) : 960;
-    const y = coords ? Number(coords[2]) : 540;
-    return `### 🖱️ Remote Mouse Click (\`Opcode 0x08\`)\nDispatching left mouse click to **${targetHost}** at screen coordinates **(${x}, ${y})**:\n[ACTION:MOUSE_CLICK target=${targetHost} x=${x} y=${y} button=left]`;
-  }
-
-  if (lower.includes('move mouse') || lower.includes('cursor') || lower.includes('премести мишка')) {
-    const coords = /(\d{2,4})\s*[,x\s]\s*(\d{2,4})/.exec(userText);
-    const x = coords ? Number(coords[1]) : 960;
-    const y = coords ? Number(coords[2]) : 540;
-    return `### 🖱️ 120Hz Remote Cursor Move (\`Opcode 0x08\`)\nMoving cursor on **${targetHost}** to **(${x}, ${y})**:\n[ACTION:MOUSE_MOVE target=${targetHost} x=${x} y=${y}]`;
-  }
-
-  if (lower.includes('scroll') || lower.includes('скрол')) {
-    const dy = lower.includes('up') || lower.includes('нагоре') ? 360 : -360;
-    return `### 🖱️ Remote Mouse Wheel Scroll (\`Opcode 0x08\`)\nScrolling mouse wheel on **${targetHost}** (\`dy=${dy}\`):\n[ACTION:MOUSE_SCROLL target=${targetHost} dy=${dy}]`;
-  }
-
-  if (lower.includes('type ') || lower.includes('write ') || lower.includes('напиши ') || lower.includes('въведи ')) {
-    const quoted = /["“]([^"”]+)["”]/.exec(userText);
-    const textToType = quoted ? quoted[1] : userText.replace(/^(?:please\s+)?(?:type|write|напиши|въведи)\s+/i, '').trim() || 'echo Ready';
-    return `### ⌨️ Remote Keystroke Injection (\`Opcode 0x08\`)\nTyping text on **${targetHost}** via Unicode \`SendInput\`:\n[ACTION:KEYBOARD_TYPE target=${targetHost} text="${textToType.replace(/"/g, '')}" press_enter=true]`;
-  }
-
-  if (lower.includes('shortcut') || lower.includes('hotkey') || lower.includes('ctrl') || lower.includes('alt')) {
-    const keys = lower.includes('alt') && lower.includes('tab') ? 'alt,tab' : 'ctrl,shift,esc';
-    return `### ⌨️ Remote Keyboard Shortcut (\`Opcode 0x08\`)\nInjecting system shortcut **\`${keys.toUpperCase()}\`** on **${targetHost}**:\n[ACTION:KEYBOARD_HOTKEY target=${targetHost} keys="${keys}"]`;
-  }
-
-  if (lower.includes('wake') || lower.includes('wol') || lower.includes('събуди')) {
-    return `### ⚡ UDP Port 9 Wake-on-LAN Magic Packet\nBroadcasting 102-byte WoL frame (\`6x 0xFF + 16x MAC\`) to wake **${targetHost}**:\n[ACTION:WOL target=${targetHost}]`;
-  }
-
-  if (lower.includes('screen') || lower.includes('capture') || lower.includes('екран') || lower.includes('снимка')) {
-    return `### 🖥️ Live Screen Frame Capture (\`Opcode 0x04\`)\nRequesting real-time TurboJPEG desktop capture from **${targetHost}**:\n[ACTION:SCREEN_CAPTURE target=${targetHost}]`;
-  }
-
-  if (lower.includes('daemon') || lower.includes('security') || lower.includes('view-only') || lower.includes('демон')) {
-    const cmd = lower.includes('view-only') ? 'view_only' : lower.includes('zero') ? 'zero_trust' : 'diagnostics';
-    return `### 🛡️ PC Host Daemon Security Control\nExecuting daemon control action **\`${cmd.toUpperCase()}\`** on \`${pcDaemonState.hostname}\`:\n[ACTION:DAEMON_CONTROL command=${cmd}]`;
-  }
-
-  return `### 🤖 AI NetController Fleet Commander\nReceived your request for **${targetHost}**: \`${userText.slice(0, 80)}\`.\nUse one of the quick PC Control actions or specify a command to execute on the connected host.`;
-}
-
-// Multi-turn Gemini & AI Chat Endpoint with Real PC Control & Update Execution
-app.post('/api/chat', async (req: Request, res: Response) => {
+// =====================================================================
+// MULTI-PROVIDER AI CHAT ENDPOINT (Gemini + Ollama + Custom Endpoint)
+// =====================================================================
+app.post('/api/chat', requireControlAuth, async (req: Request, res: Response) => {
   try {
-    const { messages, model, role = 'commander', fleetContext, autoExecute = true } = req.body;
-
+    const { messages, model, role = 'commander', fleetContext, autoExecute = false } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array is required and must not be empty' });
     }
 
-    const lastUserMessage = String(messages[messages.length - 1]?.content || '');
+    const snap = await getRealDaemonSnapshot();
     const primaryHost =
       fleetContext?.selectedTarget ||
       (Array.isArray(fleetContext?.hosts) && fleetContext.hosts[0]?.id) ||
-      pcDaemonState.hostname ||
-      'WORKSTATION-01';
+      snap.hostname;
 
-    // Target model selection (automatically upgrades deprecated aliases to gemini-3.8-flash)
-    const targetModel = resolveSupportedGeminiModel(model);
-
-    // Prepare system instruction with dynamic fleet, PC daemon, and update registry context
     let systemInstruction = SYSTEM_INSTRUCTIONS[role] || SYSTEM_INSTRUCTIONS.commander;
     if (fleetContext) {
-      systemInstruction += `\n\n[LIVE FLEET TELEMETRY CONTEXT]:\n- Protocol: ${fleetContext.protocolVersion || 'CST/3.0-SECURE'}\n- Network Mode: ${fleetContext.networkMode || 'Active LAN'}\n- Selected Target Host: ${primaryHost}\n- Hosts Online: ${fleetContext.hostsOnline || 0}/${fleetContext.hostsTotal || 0}\n- Active Wake-on-LAN Schedules: ${fleetContext.activeSchedulesCount || 0}\n- Current Average Latency: ${fleetContext.avgLatency ? fleetContext.avgLatency.toFixed(1) + ' ms' : '1.4 ms'}`;
-      if (Array.isArray(fleetContext.hosts) && fleetContext.hosts.length > 0) {
-        systemInstruction += `\n- Known Devices:\n` + fleetContext.hosts.map((h: any) => `  * ${h.id} (${h.name}) - IP: ${h.ip}, MAC: ${h.mac}, OS: ${h.os}, Status: ${h.isOnline ? 'ONLINE (' + (h.ping || 0) + 'ms)' : 'SLEEPING'}`).join('\n');
-      }
+      systemInstruction += `\n\n[LIVE FLEET CONTEXT]:\n- Selected Host: ${primaryHost}\n- Hosts Online: ${fleetContext.hostsOnline || 0}/${fleetContext.hostsTotal || 0}\n- Daemon Status: ${snap.isRunning ? 'ONLINE' : 'OFFLINE'} (${snap.localIp}:${snap.port})`;
     }
 
-    const pendingUpdates = systemUpdateRegistry.filter((c) => c.status === 'available');
-    const daemonStatusLabel = !pcDaemonState.isRunning ? 'STOPPED' : pcDaemonState.isPaused ? 'PAUSED' : 'RUNNING';
-    systemInstruction += `\n\n[LIVE PC DAEMON & UPDATE STATE]:\n- Hostname: ${pcDaemonState.hostname} (${pcDaemonState.localIp}:${pcDaemonState.port})\n- Daemon Status: ${daemonStatusLabel} | Security Profile: ${pcDaemonState.securityProfile.toUpperCase()} | View-Only Mode: ${pcDaemonState.viewOnlyMode}\n- Connected Controllers: ${pcDaemonState.connectedClients.length} | Blacklisted IPs: ${pcDaemonState.blacklistedDevices.length}\n- Pending System/AI Updates (${pendingUpdates.length}): ${pendingUpdates.map((u) => `${u.id} (${u.currentVersion} -> ${u.latestVersion})`).join(', ') || 'All components up to date'}`;
-
+    const requestedModel = DYNAMIC_MODELS.find((m) => m.id === model);
     const startTime = Date.now();
     let reply = '';
-    let actualModelUsed = targetModel;
+    let actualModelUsed = String(model || 'gemini-2.5-flash');
 
-    if (process.env.GEMINI_API_KEY) {
-      const safeMessages = messages.slice(-20);
-      const contents = safeMessages.map((m: { role: string; content: string }) => ({
+    if (requestedModel?.provider === 'ollama' || String(model || '').includes(':')) {
+      const ollamaBase = (requestedModel?.endpointUrl || DEFAULT_OLLAMA_BASE).replace(/\/+$/, '');
+      const check = await validateExternalHttpUrl(`${ollamaBase}/api/chat`, { allowLoopback: true });
+      if (!check.valid) {
+        return res.status(400).json({ error: check.error });
+      }
+      const ollamaRes = await fetch(check.normalized!, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: requestedModel?.id || model,
+          stream: false,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            ...messages.slice(-20).map((m: { role: string; content: string }) => ({
+              role: m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user',
+              content: String(m.content || '').slice(0, 8000),
+            })),
+          ],
+        }),
+        signal: AbortSignal.timeout(45_000),
+      });
+      if (!ollamaRes.ok) {
+        return res.status(503).json({ error: `Ollama returned HTTP ${ollamaRes.status}` });
+      }
+      const data: any = await ollamaRes.json();
+      reply = String(data?.message?.content || '');
+      actualModelUsed = requestedModel?.id || String(model);
+    } else if (requestedModel?.provider === 'custom' && requestedModel.endpointUrl) {
+      const check = await validateExternalHttpUrl(requestedModel.endpointUrl, { allowLoopback: false });
+      if (!check.valid) {
+        return res.status(400).json({ error: check.error });
+      }
+      const customRes = await fetch(check.normalized!, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: requestedModel.id,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            ...messages.slice(-20),
+          ],
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!customRes.ok) {
+        return res.status(502).json({ error: `Custom endpoint returned HTTP ${customRes.status}` });
+      }
+      const data: any = await customRes.json();
+      reply = String(data?.choices?.[0]?.message?.content || data?.reply || '');
+    } else {
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(503).json({
+          error: 'GEMINI_API_KEY is not configured. Configure a Gemini key in .env or select an active local Ollama model.',
+          offline: true,
+          modelUsed: 'unconfigured',
+        });
+      }
+
+      const targetModel = resolveSupportedGeminiModel(model);
+      actualModelUsed = targetModel;
+      const ai = getGenAI();
+      const contents = messages.slice(-20).map((m: { role: string; content: string }) => ({
         role: m.role === 'model' || m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: String(m.content || '').slice(0, 8000) }],
       }));
 
-      const ai = getGenAI();
-      try {
-        const response = await ai.models.generateContent({
-          model: targetModel,
-          contents,
-          config: {
-            systemInstruction,
-            temperature: role === 'diagnostics' ? 0.3 : 0.65,
-          },
-        });
-        reply = response.text || '';
-      } catch (primaryErr: any) {
-        const errMsg = String(primaryErr?.message || '');
-        const fallbackCandidates = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'].filter(
-          (m) => m !== targetModel
-        );
-        let fallbackSucceeded = false;
-        for (const fallbackModel of fallbackCandidates) {
-          try {
-            console.warn(`[Gemini Fallback] Model ${targetModel} error (${errMsg.slice(0, 100)}...). Retrying with ${fallbackModel}...`);
-            const response = await ai.models.generateContent({
-              model: fallbackModel,
-              contents,
-              config: {
-                systemInstruction,
-                temperature: role === 'diagnostics' ? 0.3 : 0.65,
-              },
-            });
-            reply = response.text || '';
-            actualModelUsed = fallbackModel;
-            fallbackSucceeded = true;
-            break;
-          } catch {
-            // try next candidate
-          }
-        }
-        if (!fallbackSucceeded) {
-          reply = generateSmartLocalFallbackReply(lastUserMessage, primaryHost);
-          actualModelUsed = 'cst-local-commander-v2.7';
-        }
-      }
-    } else {
-      reply = generateSmartLocalFallbackReply(lastUserMessage, primaryHost);
-      actualModelUsed = 'cst-local-commander-v2.7';
+      const response = await ai.models.generateContent({
+        model: targetModel,
+        contents,
+        config: {
+          systemInstruction,
+          temperature: role === 'diagnostics' ? 0.3 : 0.65,
+        },
+      });
+      reply = response.text || '';
     }
 
-    if (!reply) {
-      reply = generateSmartLocalFallbackReply(lastUserMessage, primaryHost);
-    }
-
-    // Parse all [ACTION:...] directives from the AI reply
     const parsedActions = parseActionDirectives(reply);
     const executionResults: Record<string, any> = {};
-
-    // Auto-execute safe PC control / update actions if autoExecute is enabled
     if (autoExecute && parsedActions.length > 0) {
       for (const act of parsedActions) {
         if (act.type !== 'rescan' && act.type !== 'lab_mode') {
           const hostObj = Array.isArray(fleetContext?.hosts)
             ? fleetContext.hosts.find((h: any) => h.id === act.target || h.name === act.target)
             : undefined;
-          const execRes = await executePcControlAction({
+          executionResults[act.id] = await executePcControlAction({
             ...act,
             mac: hostObj?.mac,
+            hostIp: hostObj?.ip,
           });
-          executionResults[act.id] = execRes;
         }
       }
     }
 
-    const durationMs = Date.now() - startTime;
-
     return res.json({
       reply,
       modelUsed: actualModelUsed,
-      requestedModel: targetModel,
+      requestedModel: model || actualModelUsed,
       role,
       actions: parsedActions,
       executionResults,
-      durationMs,
+      durationMs: Date.now() - startTime,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
     console.error('[API /api/chat error]:', err);
-    return res.status(500).json({
+    return res.status(503).json({
       error: err?.message || 'Failed to generate response from AI engine',
       modelUsed: req.body?.model || 'unknown',
     });
   }
 });
 
-// Start server and mount Vite
+// JSON 404 Catch-All for unknown API routes BEFORE SPA HTML fallback
+app.use('/api', (_req: Request, res: Response) => {
+  res.status(404).json({ error: 'API endpoint not found' });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.resolve(__dirname, 'dist')));
@@ -2518,6 +2771,7 @@ async function startServer() {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       root: __dirname,
       configFile: path.resolve(__dirname, 'vite.config.ts'),
@@ -2530,8 +2784,10 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[AI NetController Server] Running on http://0.0.0.0:${PORT} (Node: ${process.version})`);
+  app.listen(PORT, BIND_HOST, () => {
+    console.log(
+      `[AI NetController Server v${APP_VERSION}] Listening on http://${BIND_HOST}:${PORT} (LAN=${ALLOW_LAN_WEB}, Node=${process.version})`
+    );
   });
 }
 

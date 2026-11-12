@@ -179,6 +179,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   const [copiedIp, setCopiedIp] = useState(false);
   const [copiedUri, setCopiedUri] = useState(false);
   const [dispatchedAction, setDispatchedAction] = useState<string | null>(null);
+  const [confirmRestart, setConfirmRestart] = useState(false);
 
   const handleCopyMac = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -208,6 +209,13 @@ const HostCardComponent: React.FC<HostCardProps> = ({
 
   const handleQuickAction = (e: React.MouseEvent, actionId: string, command: string) => {
     e.stopPropagation();
+    if (actionId === 'restart' && !confirmRestart) {
+      triggerHapticFeedback('warning');
+      setConfirmRestart(true);
+      setTimeout(() => setConfirmRestart(false), 3500);
+      return;
+    }
+    setConfirmRestart(false);
     triggerHapticFeedback('medium');
     setDispatchedAction(actionId);
     if (onQuickCommand) {
@@ -280,7 +288,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
       icon: Sparkles,
       command:
         host.os === 'windows'
-          ? 'ipconfig /flushdns && wsreset.exe'
+          ? 'ipconfig /flushdns'
           : 'resolvectl flush-caches && sync',
       variant: 'default' as const,
     },
@@ -296,7 +304,13 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     },
     {
       id: 'restart',
-      label: currentLang === 'bg' ? 'Рестартирай' : 'Restart Host',
+      label: confirmRestart
+        ? currentLang === 'bg'
+          ? 'Потвърди рестарт?'
+          : 'Confirm Restart?'
+        : currentLang === 'bg'
+        ? 'Рестартирай'
+        : 'Restart Host',
       icon: RotateCcw,
       command:
         host.os === 'windows'
@@ -309,19 +323,10 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   return (
     <div className={`${isExpanded ? 'lg:col-span-2' : ''} contain-paint-layout`}>
       <div
-        role="button"
-        tabIndex={0}
         onClick={() => {
           triggerHapticFeedback('light');
           onSelect(host.id);
           onToggleExpand(host.id);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onSelect(host.id);
-            onToggleExpand(host.id);
-          }
         }}
         className={`
           glass-liquid w-full max-w-full rounded-2xl p-3.5 sm:p-4 text-left cursor-pointer select-none relative overflow-hidden

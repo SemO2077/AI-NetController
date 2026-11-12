@@ -82,6 +82,8 @@ export const WolModal: React.FC<WolModalProps> = ({
   const [isAddingSchedule, setIsAddingSchedule] = useState(false);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [recentlyFiredId, setRecentlyFiredId] = useState<string | null>(null);
+  const [confirmDeleteScheduleId, setConfirmDeleteScheduleId] = useState<string | null>(null);
+  const [confirmRestoreDefaults, setConfirmRestoreDefaults] = useState(false);
 
   // Form State for Adding/Editing Schedule
   const [formName, setFormName] = useState('');
@@ -167,13 +169,33 @@ export const WolModal: React.FC<WolModalProps> = ({
   };
 
   const handleDeleteSchedule = (id: string) => {
+    if (confirmDeleteScheduleId !== id) {
+      triggerHapticFeedback('light');
+      setConfirmDeleteScheduleId(id);
+      setTimeout(() => {
+        setConfirmDeleteScheduleId((curr) => (curr === id ? null : curr));
+      }, 3500);
+      return;
+    }
     triggerHapticFeedback('medium');
+    setConfirmDeleteScheduleId(null);
     const updated = schedules.filter((s) => s.id !== id);
     persistSchedules(updated);
+    fetch(`/api/wol/schedules/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    }).catch(() => {});
   };
 
   const handleRestoreDefaults = () => {
+    if (!confirmRestoreDefaults) {
+      triggerHapticFeedback('light');
+      setConfirmRestoreDefaults(true);
+      setTimeout(() => setConfirmRestoreDefaults(false), 3500);
+      return;
+    }
     triggerHapticFeedback('medium');
+    setConfirmRestoreDefaults(false);
     persistSchedules(DEFAULT_WOL_SCHEDULES);
   };
 
@@ -1051,10 +1073,23 @@ export const WolModal: React.FC<WolModalProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleDeleteSchedule(schedule.id)}
-                                className="p-2 text-slate-400 hover:text-rose-400 rounded-xl hover:bg-white/5 transition cursor-pointer"
-                                title={isBg ? 'Изтрий' : 'Delete'}
+                                className={`p-2 rounded-xl transition cursor-pointer flex items-center gap-1 ${
+                                  confirmDeleteScheduleId === schedule.id
+                                    ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300'
+                                    : 'text-slate-400 hover:text-rose-400 hover:bg-white/5'
+                                }`}
+                                title={
+                                  confirmDeleteScheduleId === schedule.id
+                                    ? (isBg ? 'Натиснете отново за изтриване' : 'Click again to confirm delete')
+                                    : (isBg ? 'Изтрий' : 'Delete')
+                                }
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
+                                {confirmDeleteScheduleId === schedule.id && (
+                                  <span className="text-[10px] font-mono font-bold">
+                                    {isBg ? 'Потвърди?' : 'Confirm?'}
+                                  </span>
+                                )}
                               </button>
                             </div>
                           </div>

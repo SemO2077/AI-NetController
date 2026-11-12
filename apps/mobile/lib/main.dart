@@ -477,7 +477,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           hostName: targetLabel,
           command: trimmed,
           status: targetHost != null && targetHost.isOnline
-              ? 'Dispatched over CST/3.0-SECURE WebSocket (Port 8765)'
+              ? 'Dispatched over AI-NET/3.0-SECURE WebSocket (Port 8765)'
               : 'Queued — awaiting online host agent connection',
         ),
       );
@@ -1103,8 +1103,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           icon: Icons.verified_rounded,
           title: 'AI NetController Mobile',
           subtitle:
-              'Impeller 120Hz Hardware Engine • CST/3.0-SECURE Protocol',
-          trailing: const Text('v0.32.0',
+              'Impeller 120Hz Hardware Engine • AI-NET/3.0-SECURE Protocol',
+          trailing: const Text('Beta 0.50.00',
               style: TextStyle(
                   color: CyberColors.success,
                   fontFamily: 'monospace',

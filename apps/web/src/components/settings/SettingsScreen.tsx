@@ -123,20 +123,28 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
     }>
   >([
     {
-      id: 'gemini-3.8-flash',
-      name: 'Gemini 3.8 Flash (Recommended)',
-      nameBg: 'Gemini 3.8 Flash (Препоръчителен)',
-      description: 'Ultra-fast multimodal reasoning model for real-time fleet triage & control',
+      id: 'gemini-2.5-flash',
+      name: 'Gemini 2.5 Flash (Recommended)',
+      nameBg: 'Gemini 2.5 Flash (Препоръчителен)',
+      description: 'Fast multimodal reasoning model for real-time fleet triage & control',
       descriptionBg:
-        'Свръхбърз мултимодален модел за диагностика на флота и управление в реално време',
+        'Бърз мултимодален модел за диагностика на флота и управление в реално време',
       provider: 'gemini',
     },
     {
-      id: 'gemini-3.1-flash-lite',
-      name: 'Gemini 3.1 Flash Lite',
-      nameBg: 'Gemini 3.1 Flash Lite',
-      description: 'Lightweight high-efficiency low-latency model for quick sysadmin tasks',
-      descriptionBg: 'Лек и високоефективен модел с ниско закъснение за бързи системни задачи',
+      id: 'gemini-2.5-pro',
+      name: 'Gemini 2.5 Pro',
+      nameBg: 'Gemini 2.5 Pro',
+      description: 'Deep reasoning and complex PowerShell/Linux orchestration model',
+      descriptionBg: 'Модел за дълбоко разсъждение и сложна PowerShell/Linux оркестрация',
+      provider: 'gemini',
+    },
+    {
+      id: 'gemini-2.0-flash',
+      name: 'Gemini 2.0 Flash',
+      nameBg: 'Gemini 2.0 Flash',
+      description: 'Lightweight low-latency model for quick sysadmin tasks',
+      descriptionBg: 'Лек модел с ниско закъснение за бързи системни задачи',
       provider: 'gemini',
     },
     {
@@ -157,6 +165,21 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
     },
   ]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch('/api/ai/models', { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && Array.isArray(data?.models) && data.models.length > 0) {
+          setModelsList(data.models);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleTestModel = async (modelId: string) => {
     setIsTestingModel(true);
     setTestResult(null);
@@ -164,13 +187,16 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
       const res = await fetch('/api/ai/models/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ modelId }),
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
         setTestResult(`⚡ Online (${data.latencyMs}ms)`);
       } else {
-        setTestResult(`⚠️ ${data.error || (language === 'bg' ? 'Неуспешен тест' : 'Test failed')}`);
+        setTestResult(
+          `⚠️ ${data.error || (!res.ok ? `HTTP ${res.status}` : language === 'bg' ? 'Неуспешен тест' : 'Test failed')}`
+        );
       }
     } catch {
       setTestResult(language === 'bg' ? '⚠️ Грешка при връзка' : '⚠️ Connection error');
@@ -187,6 +213,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
       const res = await fetch('/api/ai/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           id: newModelId,
           name: newModelName,
@@ -194,8 +221,8 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
           description: newModelDesc || 'Custom Model Endpoint',
         }),
       });
-      const data = await res.json();
-      if (data.success && data.models) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.models) {
         setModelsList(data.models);
         setSelectedModel(data.model.id);
         setNewModelId('');
@@ -203,9 +230,11 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
         setNewModelDesc('');
         setIsAddModelOpen(false);
         triggerHapticFeedback('medium');
+      } else {
+        setTestResult(`⚠️ ${data.error || `HTTP ${res.status}`}`);
       }
-    } catch (err) {
-      console.error('Failed to save model:', err);
+    } catch {
+      setTestResult(language === 'bg' ? '⚠️ Грешка при запазване' : '⚠️ Failed to save model');
     }
   };
 
@@ -321,7 +350,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                 {language === 'bg' ? 'Системен & AI Център' : 'System & AI Center'}
               </div>
               <div className="text-[11px] text-cyan-300 font-mono truncate mt-0.5">
-                v0.35.0 • OTA Sync
+                Beta v0.50.0 • AI-NET/3.0
               </div>
             </div>
           </button>
@@ -608,7 +637,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                               required
                               value={newModelId}
                               onChange={(e) => setNewModelId(e.target.value)}
-                              placeholder="e.g. gemini-3.8-flash or ollama/llama3.3"
+                              placeholder="e.g. gemini-2.5-flash or ollama/llama3.3"
                               className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
                             />
                           </div>

@@ -44,6 +44,24 @@ export function useFleetState() {
   const [isScanning, setIsScanning] = useState(false);
   const [wolSchedules, setWolSchedules] = useState<WolSchedule[]>(() => loadWolSchedules());
 
+  // Hydrate WoL schedules from backend scheduler if running behind web control server
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof fetch !== 'function') return;
+    let cancelled = false;
+    fetch('/api/wol/schedules', { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data && Array.isArray(data.schedules) && data.schedules.length > 0) {
+          setWolSchedules(data.schedules);
+          saveWolSchedules(data.schedules);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Automatically persist hosts state whenever changed
   useEffect(() => {
     try {
@@ -60,12 +78,12 @@ export function useFleetState() {
     setHosts((prev) =>
       prev.map((h) => {
         if (h.id === data.hostname || h.ip === data.ip || (data.targetId && h.id === data.targetId)) {
-          const newPing = typeof data.ping === 'number' ? data.ping : (h.ping ?? 4);
+          const newPing = typeof data.ping === 'number' ? data.ping : h.ping;
           const prevHistory = (h.latencyHistory || []).filter((p) => p.timestamp >= cutoff);
-          const updatedHistory: LatencyDataPoint[] = [
-            ...prevHistory.slice(-19),
-            { timestamp: now, latency: newPing },
-          ];
+          const updatedHistory: LatencyDataPoint[] =
+            typeof newPing === 'number'
+              ? [...prevHistory.slice(-19), { timestamp: now, latency: newPing }]
+              : prevHistory;
 
           return {
             ...h,
@@ -94,17 +112,38 @@ export function useFleetState() {
     logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'info', 'Сканиране за mDNS услуги и локални LAN устройства...');
 
     try {
-      const res = await fetch('/api/hosts/scan', { method: 'POST' });
+      const res = await fetch('/api/hosts/scan', { method: 'POST', credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         if (data.hosts && Array.isArray(data.hosts) && data.hosts.length > 0) {
           setHosts((prev) => {
-            const existingIps = new Set(prev.map((h) => h.ip));
-            const existingMacs = new Set(prev.map((h) => h.mac.toUpperCase()));
-            const newDiscovered: HostDevice[] = [];
-
+            const discoveredByIp = new Map<string, any>();
+            const discoveredByMac = new Map<string, any>();
             data.hosts.forEach((dh: any) => {
-              if (!existingIps.has(dh.ip) && !existingMacs.has(dh.mac.toUpperCase())) {
+              if (dh.ip) discoveredByIp.set(dh.ip, dh);
+              if (dh.mac) discoveredByMac.set(String(dh.mac).toUpperCase(), dh);
+            });
+
+            const existingIps = new Set(prev.map((h) => h.ip));
+            const existingMacs = new Set(prev.map((h) => (h.mac || '').toUpperCase()));
+            const updatedPrev = prev.map((h) => {
+              const match = discoveredByIp.get(h.ip) || discoveredByMac.get((h.mac || '').toUpperCase());
+              if (!match) return h;
+              const measuredPing = typeof match.ping === 'number' ? match.ping : h.ping;
+              return {
+                ...h,
+                isOnline: true,
+                name: h.name || match.name,
+                mac: h.mac || match.mac,
+                ping: measuredPing,
+                lastSeen: 'Active (LAN scan)',
+              };
+            });
+
+            const newDiscovered: HostDevice[] = [];
+            data.hosts.forEach((dh: any) => {
+              const macUpper = String(dh.mac || '').toUpperCase();
+              if (!existingIps.has(dh.ip) && (!macUpper || !existingMacs.has(macUpper))) {
                 newDiscovered.push({
                   id: dh.id,
                   name: dh.name,
@@ -126,9 +165,8 @@ export function useFleetState() {
 
             if (newDiscovered.length > 0) {
               logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'success', `Открити ${newDiscovered.length} нови устройства на подмрежата!`);
-              return [...prev, ...newDiscovered];
             }
-            return prev;
+            return [...updatedPrev, ...newDiscovered];
           });
         }
         logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'success', `Сканирането завърши успешно.`);
@@ -189,6 +227,7 @@ export function useFleetState() {
           } else {
             const res = await fetch('/api/wol', {
               method: 'POST',
+              credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 mac: payload.mac,
@@ -327,19 +366,21 @@ export function useFleetState() {
   }, []);
 
   const deleteHost = useCallback((hostId: string) => {
-    setHosts((prev) => {
-      const next = prev.filter((h) => h.id !== hostId);
-      setSelectedTarget((prevTarget) =>
-        prevTarget === hostId ? (next[0]?.id || '') : prevTarget
-      );
-      return next;
-    });
+    setHosts((prev) => prev.filter((h) => h.id !== hostId));
     logStore.addLog('SYSTEM_MDNS', hostId, 'warn', `Хост ${hostId} беше премахнат от флота.`);
   }, []);
 
   const updateSchedules = useCallback((s: WolSchedule[]) => {
     setWolSchedules(s);
     saveWolSchedules(s);
+    if (typeof window !== 'undefined' && typeof fetch === 'function') {
+      fetch('/api/wol/schedules', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedules: s }),
+      }).catch(() => {});
+    }
   }, []);
 
   const activeWolSchedulesCount = useMemo(

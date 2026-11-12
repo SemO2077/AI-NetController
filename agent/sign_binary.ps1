@@ -32,9 +32,18 @@ if (-Not $cert) {
 
 # 2. Apply Authenticode SHA-256 Digital Signature
 Write-Host "[2/3] Applying SHA-256 Authenticode Signature to $ExePath..." -ForegroundColor Cyan
-Set-AuthenticodeSignature -FilePath $ExePath -Certificate $cert -HashAlgorithm SHA256 | Out-Null
+$setSig = Set-AuthenticodeSignature -FilePath $ExePath -Certificate $cert -HashAlgorithm SHA256
+if (-Not $setSig) {
+    Write-Host "[ERROR] Set-AuthenticodeSignature failed for $ExePath." -ForegroundColor Red
+    exit 1
+}
 
 $sig = Get-AuthenticodeSignature -FilePath $ExePath
+if (-Not $sig -or $sig.Status -eq 'NotSigned' -or $sig.Status -eq 'HashMismatch' -or -Not $sig.SignerCertificate) {
+    Write-Host "[ERROR] Authenticode verification failed (Status: $($sig.Status)) for $ExePath." -ForegroundColor Red
+    exit 1
+}
+Write-Host "      Signature Status     : $($sig.Status)" -ForegroundColor Green
 Write-Host "      Signature Certificate: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
 Write-Host "      Signature Thumbprint : $($sig.SignerCertificate.Thumbprint)" -ForegroundColor Green
 

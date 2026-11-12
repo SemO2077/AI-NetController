@@ -53,7 +53,7 @@ class TestStandaloneImportIsolation(unittest.TestCase):
     def test_03_standalone_exe_executes_shortcut_flag_outside_repo(self):
         """Execute the packaged standalone EXE from a temporary directory with --create-shortcut."""
         exe_path = os.path.join(
-            REPO_ROOT, "public", "releases", "v0.35.0", "AI_NetController_HostAgent_v0.35.0_win64.exe"
+            REPO_ROOT, "public", "releases", "v0.50.0", "AI_NetController_HostAgent_v0.50.0_win64.exe"
         )
         if os.path.exists(exe_path):
             with tempfile.TemporaryDirectory() as td:

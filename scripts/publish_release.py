@@ -4,7 +4,7 @@ AI NetController - Release Publisher Dispatcher
 Forwards release publishing calls to GitHub (default) or GitLab.
 
 Usage:
-    python scripts/publish_release.py [--tag v0.35.0] [--platform github|gitlab]
+    python scripts/publish_release.py [--tag v0.50.0] [--platform github|gitlab]
 """
 import sys
 import subprocess

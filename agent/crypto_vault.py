@@ -344,12 +344,15 @@ class HostCryptoVault:
     Manages twin directional keys (TX/RX) and sliding anti-replay window.
     """
     def __init__(self, psk_secret: bytes):
-        self.psk = bytearray(psk_secret)
+        if not psk_secret or len(psk_secret) == 0:
+            raise ValueError("Pre-shared key (PSK) must not be empty.")
+        self.psk: Optional[bytearray] = bytearray(psk_secret)
         self.k_send: Optional[bytearray] = None
         self.k_recv: Optional[bytearray] = None
-        self._send_cipher: Optional[ Any ] = None
-        self._recv_cipher: Optional[ Any ] = None
+        self._send_cipher: Optional[Any] = None
+        self._recv_cipher: Optional[Any] = None
         self.is_established: bool = False
+        self._closed: bool = False
         self.tx_seq: int = 0
         self.replay_guard = SlidingWindowReplayProtector(WINDOW_SIZE)
 
@@ -357,9 +360,11 @@ class HostCryptoVault:
         if HAS_CRYPTOGRAPHY_ACCEL:
             self._priv_obj = x25519.X25519PrivateKey.generate()
             self._pub_bytes = self._priv_obj.public_key().public_bytes_raw()
-            self._priv_bytes = None
+            self._priv_bytes: Optional[bytearray] = None
         else:
-            self._priv_bytes, self._pub_bytes = FallbackCurve25519.generate_keypair()
+            priv_b, pub_b = FallbackCurve25519.generate_keypair()
+            self._priv_bytes = bytearray(priv_b)
+            self._pub_bytes = pub_b
             self._priv_obj = None
 
         self.host_nonce_n2 = secrets.token_bytes(SALT_SIZE)
@@ -369,6 +374,8 @@ class HostCryptoVault:
         Creates Opcode 0x06 Handshake Payload:
         [11B MAGIC] [32B HOST_PUBKEY] [16B NONCE_N2]
         """
+        if self._closed:
+            raise RuntimeError("HostCryptoVault has been closed.")
         payload = bytearray()
         payload.extend(PROTOCOL_MAGIC)
         payload.extend(self._pub_bytes)
@@ -381,6 +388,8 @@ class HostCryptoVault:
         [32B CLIENT_PUBKEY] [16B CLIENT_NONCE_N1] [32B HMAC_PROOF]
         Validates PSK knowledge in constant-time and computes twin session keys.
         """
+        if self._closed or self.is_established or not self.psk:
+            return False
         if len(client_payload) < 80:
             return False
 
@@ -390,7 +399,7 @@ class HostCryptoVault:
 
         # Constant-time verification of pre-shared key knowledge
         proof_data = PROTOCOL_MAGIC + self._pub_bytes + client_pub + client_n1 + self.host_nonce_n2
-        expected_hmac = hmac.new(self.psk, proof_data, hashlib.sha256).digest()
+        expected_hmac = hmac.new(bytes(self.psk), proof_data, hashlib.sha256).digest()
 
         if not hmac.compare_digest(client_hmac, expected_hmac):
             return False
@@ -400,8 +409,10 @@ class HostCryptoVault:
             if HAS_CRYPTOGRAPHY_ACCEL and self._priv_obj:
                 peer_pub_obj = x25519.X25519PublicKey.from_public_bytes(client_pub)
                 shared_secret = bytearray(self._priv_obj.exchange(peer_pub_obj))
+            elif self._priv_bytes is not None:
+                shared_secret = bytearray(FallbackCurve25519.compute_shared_secret(bytes(self._priv_bytes), client_pub))
             else:
-                shared_secret = bytearray(FallbackCurve25519.compute_shared_secret(self._priv_bytes, client_pub))
+                return False
         except Exception:
             return False
 
@@ -413,9 +424,7 @@ class HostCryptoVault:
         salt = client_n1 + self.host_nonce_n2
 
         # Derive Twin Symmetric Keys (Separation of Send & Receive keys)
-        # Host Send Key = Client Receive Key
         host_tx = hkdf_extract_and_expand(salt, bytes(shared_secret), CTX_HOST_TX, KEY_SIZE)
-        # Host Receive Key = Client Send Key
         host_rx = hkdf_extract_and_expand(salt, bytes(shared_secret), CTX_CLIENT_TX, KEY_SIZE)
 
         self.k_send = bytearray(host_tx)
@@ -425,9 +434,10 @@ class HostCryptoVault:
             self._recv_cipher = ChaCha20Poly1305(bytes(self.k_recv))
         self.is_established = True
 
-        # Secure zeroization of intermediate ephemeral shared secret
+        # Secure zeroization of intermediate ephemeral secret and private key material
         scrub_memory(shared_secret)
-        if self._priv_bytes:
+        self._priv_obj = None
+        if self._priv_bytes is not None:
             scrub_memory(self._priv_bytes)
             self._priv_bytes = None
 
@@ -436,15 +446,18 @@ class HostCryptoVault:
     def encrypt_frame(self, plaintext: bytes, aad: bytes = b"", seq: Optional[int] = None) -> Tuple[bytes, int]:
         """
         Encrypts an outgoing binary frame with ChaCha20-Poly1305.
-        Generates a 12-byte IV containing the 32-bit sequence number.
-        Returns (12-byte IV + Ciphertext + 16-byte Tag, sequence_number).
+        Enforces strictly monotonic positive sequence numbers to prevent nonce reuse.
         """
-        if not self.is_established or not self.k_send:
-            raise RuntimeError("Cryptographic handshake has not been established.")
+        if self._closed or not self.is_established or not self.k_send:
+            raise RuntimeError("Cryptographic handshake has not been established or vault is closed.")
 
         if seq is None:
             self.tx_seq += 1
             seq = self.tx_seq
+        else:
+            if not isinstance(seq, int) or isinstance(seq, bool) or seq <= self.tx_seq or seq <= 0:
+                raise ValueError("Sequence number must be a strictly increasing positive integer to prevent nonce reuse.")
+            self.tx_seq = seq
 
         # Nonce format: 4 zero bytes + 8-byte big-endian sequence
         nonce = struct.pack(">IQ", 0, seq)
@@ -460,9 +473,8 @@ class HostCryptoVault:
         """
         Decrypts an incoming frame. Verifies AEAD tag and checks sequence number
         against RFC 6479 sliding replay window.
-        Returns (plaintext, sequence_number) or None if verification fails.
         """
-        if not self.is_established or not self.k_recv or len(framed_payload) < 28:
+        if self._closed or not self.is_established or not self.k_recv or len(framed_payload) < 28:
             return None
 
         nonce = framed_payload[:12]
@@ -489,15 +501,21 @@ class HostCryptoVault:
             return None
 
     def close(self):
-        """Zeroizes keys upon session termination."""
-        if self.k_send:
+        """Zeroizes all keys and permanently seals this vault instance."""
+        self._closed = True
+        if self.k_send is not None:
             scrub_memory(self.k_send)
             self.k_send = None
-        if self.k_recv:
+        if self.k_recv is not None:
             scrub_memory(self.k_recv)
             self.k_recv = None
-        if self.psk:
+        if self.psk is not None:
             scrub_memory(self.psk)
+            self.psk = None
+        if self._priv_bytes is not None:
+            scrub_memory(self._priv_bytes)
+            self._priv_bytes = None
+        self._priv_obj = None
         self._send_cipher = None
         self._recv_cipher = None
         self.is_established = False

@@ -32,11 +32,14 @@ interface SetupInfo {
   mac: string;
   adapterName: string;
   wsUri: string;
-  pairingToken: string;
+  pairingPin?: string;
+  pairingToken?: string;
+  daemonOnline?: boolean;
   webOrigin: string;
   mobilePairUrl: string;
   exeDownloadUrl: string;
   apkDownloadUrl: string;
+  portableZipUrl?: string;
   launcherDownloadUrl: string;
 }
 
@@ -51,6 +54,7 @@ interface QuickSetupModalProps {
     os: 'windows' | 'linux';
     wsUri: string;
     pairingToken?: string;
+    pairingPin?: string;
   }) => void;
   isConnected?: boolean;
 }
@@ -87,9 +91,9 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
   const fetchSetupDetails = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/setup/info');
+      const res = await fetch('/api/setup/info', { credentials: 'include' });
       const data = await res.json();
-      if (data.success && data.setup) {
+      if (res.ok && data.success && data.setup) {
         setSetupInfo(data.setup);
         setCustomIp((prev) => prev || data.setup.localIp);
       }
@@ -111,7 +115,8 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
   const effectivePort = setupInfo?.daemonPort || 8765;
   const effectiveHostname = setupInfo?.hostname || 'LOCAL-HOST';
   const effectiveMac = setupInfo?.mac || '';
-  const effectiveToken = setupInfo?.pairingToken || 'cst_autonomous_lan_secret_2025';
+  const effectivePin = setupInfo?.pairingPin || '';
+  const effectiveToken = setupInfo?.pairingToken || '';
   const effectiveWsUri = `ws://${effectiveIp}:${effectivePort}`;
 
   const effectiveMobilePairUrl = React.useMemo(() => {
@@ -125,11 +130,11 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
       pair_port: String(effectivePort),
       pair_name: effectiveHostname,
       pair_mac: effectiveMac,
-      pair_os: 'windows',
-      pair_token: effectiveToken,
+      pair_os: setupInfo?.osName?.toLowerCase().includes('linux') ? 'linux' : 'windows',
+      ...(effectivePin ? { pair_pin: effectivePin } : {}),
     });
     return `${baseOrigin}/?${params.toString()}`;
-  }, [effectiveIp, effectivePort, effectiveHostname, effectiveMac, effectiveToken]);
+  }, [effectiveIp, effectivePort, effectiveHostname, effectiveMac, effectivePin, setupInfo?.osName]);
 
   // Generate crisp QR Code whenever effectiveMobilePairUrl changes
   useEffect(() => {
@@ -169,7 +174,8 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
       mac: effectiveMac,
       os: setupInfo?.osName?.toLowerCase().includes('linux') ? 'linux' : 'windows',
       wsUri: effectiveWsUri,
-      pairingToken: effectiveToken,
+      pairingToken: effectiveToken || undefined,
+      pairingPin: effectivePin || undefined,
     });
     setIsPairedSuccess(true);
     setTimeout(() => setIsPairedSuccess(false), 3500);
@@ -403,7 +409,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                             ? 'Вариант Б: Самостоятелен Windows .EXE файл'
                             : 'Option B: Standalone Windows Executable (.EXE)'}
                         </span>
-                        <span className="text-[10px] font-mono text-slate-400">v0.35.0</span>
+                        <span className="text-[10px] font-mono text-slate-400">v0.50.0 (Beta)</span>
                       </div>
                       <p className="text-[11px] text-slate-400 leading-snug">
                         {isBg
@@ -412,13 +418,13 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </p>
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <a
-                          href={setupInfo?.exeDownloadUrl || '/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe'}
-                          download="AI_NetController_HostAgent_v0.35.0_win64.exe"
+                          href={setupInfo?.exeDownloadUrl || '/releases/v0.50.0/AI_NetController_HostAgent_v0.50.0_win64.exe'}
+                          download="AI_NetController_HostAgent_v0.50.0_win64.exe"
                           onClick={() => triggerHapticFeedback('medium')}
                           className="min-h-[42px] px-4 py-2 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center gap-2 transition cursor-pointer"
                         >
                           <Download className="w-4 h-4 text-emerald-400" />
-                          <span>{isBg ? 'Изтегли AI_NetController_HostAgent_v0.35.0_win64.exe' : 'Download AI_NetController_HostAgent_v0.35.0_win64.exe'}</span>
+                          <span>{isBg ? 'Изтегли AI_NetController_HostAgent_v0.50.0_win64.exe' : 'Download AI_NetController_HostAgent_v0.50.0_win64.exe'}</span>
                         </a>
                       </div>
                     </div>
@@ -551,8 +557,8 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </button>
 
                       <a
-                        href={setupInfo?.apkDownloadUrl || '/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk'}
-                        download="AI_NetController_v0.35.0_arm64-v8a.apk"
+                        href={setupInfo?.apkDownloadUrl || '/releases/v0.50.0/AI_NetController_v0.50.0_arm64-v8a.apk'}
+                        download="AI_NetController_v0.50.0_arm64-v8a.apk"
                         onClick={() => triggerHapticFeedback('medium')}
                         className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                       >

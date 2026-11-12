@@ -1,6 +1,7 @@
 import { HostDevice, Weekday, WolPacketPayload, WolSchedule } from '../types';
 
-export const STORAGE_KEY_WOL_SCHEDULES = 'cst_wol_schedules_config_v1';
+export const STORAGE_KEY_WOL_SCHEDULES = 'ai_netcontroller_wol_schedules_v1';
+export const LEGACY_STORAGE_KEY_WOL_SCHEDULES = 'cst_wol_schedules_config_v1';
 
 export const DEFAULT_WOL_SCHEDULES: WolSchedule[] = [];
 
@@ -15,7 +16,7 @@ export const TEST_WOL_SCHEDULES: WolSchedule[] = [
     enabled: true,
     broadcastIp: '192.168.1.255',
     port: 9,
-    notes: 'Automated recurring wake-up for University CST Lab workstations prior to morning 08:30 practical sessions',
+    notes: 'Automated recurring wake-up for workstation nodes prior to morning 08:30 sessions',
     createdTimestamp: 1726140000000
   },
   {
@@ -149,7 +150,9 @@ export function localizeWolSchedule(
 export function loadWolSchedules(): WolSchedule[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_WOL_SCHEDULES);
+    const raw =
+      localStorage.getItem(STORAGE_KEY_WOL_SCHEDULES) ||
+      localStorage.getItem(LEGACY_STORAGE_KEY_WOL_SCHEDULES);
     if (!raw) {
       return [];
     }

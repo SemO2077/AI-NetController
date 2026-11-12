@@ -34,8 +34,9 @@ import { wolHistoryStore } from '../../store/wolHistoryStore';
 
 export type BotRole = 'commander' | 'diagnostics' | 'fast_triage';
 export type GeminiModelId =
-  | 'gemini-3.8-flash'
-  | 'gemini-3.1-flash-lite'
+  | 'gemini-2.5-flash'
+  | 'gemini-2.5-pro'
+  | 'gemini-2.0-flash'
   | 'gemini-flash-latest'
   | string;
 
@@ -138,7 +139,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       {
         id: 'commander' as BotRole,
         label: language === 'bg' ? 'Флот' : 'Fleet',
-        model: (selectedModel || 'gemini-3.8-flash') as GeminiModelId,
+        model: (selectedModel || 'gemini-2.5-flash') as GeminiModelId,
         icon: Sparkles,
         placeholder:
           language === 'bg'
@@ -148,7 +149,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       {
         id: 'diagnostics' as BotRole,
         label: language === 'bg' ? 'Одит' : 'Audit',
-        model: (selectedModel || 'gemini-3.8-flash') as GeminiModelId,
+        model: (selectedModel || 'gemini-2.5-flash') as GeminiModelId,
         icon: Shield,
         placeholder:
           language === 'bg'
@@ -158,7 +159,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       {
         id: 'fast_triage' as BotRole,
         label: language === 'bg' ? 'Бързо' : 'Quick',
-        model: (selectedModel || 'gemini-3.8-flash') as GeminiModelId,
+        model: (selectedModel || 'gemini-2.5-flash') as GeminiModelId,
         icon: Terminal,
         placeholder:
           language === 'bg'
@@ -207,7 +208,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         role: 'model',
         content: welcomeText,
         timestamp: Date.now(),
-        modelUsed: selectedModel || 'gemini-3.8-flash',
+        modelUsed: selectedModel || 'gemini-2.5-flash',
       },
     ];
   });
@@ -216,7 +217,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     setMessages((prev) =>
       prev.map((m) =>
         m.id === 'welcome'
-          ? { ...m, content: welcomeText, modelUsed: selectedModel || 'gemini-3.8-flash' }
+          ? { ...m, content: welcomeText, modelUsed: selectedModel || 'gemini-2.5-flash' }
           : m
       )
     );
@@ -566,17 +567,44 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         );
       }
 
-      const res = await fetch('/api/pc-control/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...action.payload,
-          type: action.type,
-          target: action.target || primaryHost?.id || '',
-          mac: action.payload?.mac || primaryHost?.mac || '',
-        }),
-      });
-      const data = await res.json();
+      const postControl = async (confirmationId?: string) =>
+        fetch('/api/pc-control/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            ...action.payload,
+            type: action.type,
+            target: action.target || primaryHost?.id || '',
+            mac: action.payload?.mac || primaryHost?.mac || '',
+            ...(confirmationId ? { confirmationId } : {}),
+          }),
+        });
+
+      let res = await postControl();
+      let data = await res.json().catch(() => ({} as any));
+      if (res.status === 403 && data?.requiresConfirmation && data?.confirmationId) {
+        const promptText =
+          language === 'bg'
+            ? `Високорисково действие: ${action.label || action.type}\nПотвърдете изпълнението?`
+            : `High-risk action: ${action.label || action.type}\nConfirm execution?`;
+        if (window.confirm(promptText)) {
+          res = await postControl(data.confirmationId);
+          data = await res.json().catch(() => ({} as any));
+        } else {
+          data = {
+            ...data,
+            success: false,
+            summary: language === 'bg' ? 'Отказано от потребителя.' : 'Cancelled by operator.',
+          };
+        }
+      } else if (!res.ok && data?.success !== false) {
+        data = {
+          ...data,
+          success: false,
+          summary: data?.error || data?.summary || `HTTP ${res.status}`,
+        };
+      }
 
       if (action.type === 'wol') {
         const targetHost =
@@ -666,7 +694,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
 
     try {
       const fleetContext = {
-        protocolVersion: 'CST/3.0-SECURE',
+        protocolVersion: 'AI-NET/3.0-SECURE',
         networkMode: isRealWsConnected ? 'Live Real WebSocket' : 'Active LAN',
         selectedTarget: primaryHost?.id || 'UNSET',
         hostsTotal: hosts.length,
@@ -699,6 +727,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
@@ -731,7 +760,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
           } else if (act.type === 'wol') {
             const execRes = Array.isArray(data.executionResults)
               ? data.executionResults[idx]
-              : undefined;
+              : data.executionResults?.[act.id];
             const isSuccess = execRes ? Boolean(execRes.success) : true;
             const targetHost =
               hosts.find((h) => h.id === act.target || h.name === act.target) || primaryHost;
@@ -1162,7 +1191,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                           ? `AI Действия (${msg.actions.length})`
                           : `AI Directives (${msg.actions.length})`}
                       </span>
-                      <span>CST/3.0-SECURE</span>
+                      <span>AI-NET/3.0-SECURE</span>
                     </div>
 
                     <div className="grid grid-cols-1 gap-2">

@@ -65,11 +65,11 @@ except (ImportError, ModuleNotFoundError):
     )
     from agent_gui import HostDaemonState
 
-SHARED_SECRET = b"cst_thesis_2026_secret_key"
-
-
 class TestAndroidAppConnectionAndControl(unittest.IsolatedAsyncioTestCase):
     """Verifies end-to-end Android mobile app connectivity and PC control."""
+
+    def _daemon_secret(self) -> bytes:
+        return str(self.daemon.pairing_token).strip().encode("utf-8")
 
     async def asyncSetUp(self):
         # Bind daemon to random loopback port to avoid conflicts
@@ -110,8 +110,8 @@ class TestAndroidAppConnectionAndControl(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(opcode, OP_AUTH)
             self.assertEqual(len(payload), 16, "Nonce challenge must be 16 bytes")
 
-            # 2. Compute HMAC-SHA256 using mobile shared secret
-            digest = hmac.new(SHARED_SECRET, payload, hashlib.sha256).digest()
+            # 2. Compute HMAC-SHA256 using live daemon pairing token
+            digest = hmac.new(self._daemon_secret(), payload, hashlib.sha256).digest()
             reply_packet = pack_packet(OP_AUTH, digest, seq=seq)
             await ws.send(reply_packet)
 
@@ -121,8 +121,8 @@ class TestAndroidAppConnectionAndControl(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(op, OP_AUTH)
             auth_str = auth_payload.decode("utf-8", errors="replace")
             self.assertTrue(
-                "OK" in auth_str or "AUTH" in auth_str,
-                f"Expected auth confirmation, got {auth_str}",
+                auth_str in ("AUTH_OK", "OK_AUTHENTICATED"),
+                f"Expected explicit AUTH_OK confirmation, got {auth_str}",
             )
 
     async def test_02_remote_pc_controlling(self):
@@ -132,44 +132,44 @@ class TestAndroidAppConnectionAndControl(unittest.IsolatedAsyncioTestCase):
             # Complete auth
             challenge = await ws.recv()
             _, _, _, seq, _, nonce = unpack_packet(challenge)
-            digest = hmac.new(SHARED_SECRET, nonce, hashlib.sha256).digest()
+            digest = hmac.new(self._daemon_secret(), nonce, hashlib.sha256).digest()
             await ws.send(pack_packet(OP_AUTH, digest, seq=seq))
             await ws.recv()  # Auth ack
 
             # 1. Test OP_VIEWPORT_RESIZE (mobile screen dimension 1080x2400)
             resize_payload = struct.pack("!II", 1080, 2400)
-            await ws.send(pack_packet(OP_VIEWPORT_RESIZE, resize_payload))
+            await ws.send(pack_packet(OP_VIEWPORT_RESIZE, resize_payload, seq=1))
 
             # 2. Test Mouse Move (JSON payload)
             move_cmd = json.dumps({"action": "move", "dx": 15.0, "dy": -10.0}).encode("utf-8")
-            await ws.send(pack_packet(OP_INPUT, move_cmd))
+            await ws.send(pack_packet(OP_INPUT, move_cmd, seq=2))
 
             # 3. Test Mouse Click (Left click)
             click_cmd = json.dumps({"action": "click", "button": "left"}).encode("utf-8")
-            await ws.send(pack_packet(OP_INPUT, click_cmd))
+            await ws.send(pack_packet(OP_INPUT, click_cmd, seq=3))
 
             # 4. Test Mouse Right Click
             rclick_cmd = json.dumps({"action": "click", "button": "right"}).encode("utf-8")
-            await ws.send(pack_packet(OP_INPUT, rclick_cmd))
+            await ws.send(pack_packet(OP_INPUT, rclick_cmd, seq=4))
 
             # 5. Test Mouse Scroll Wheel
             scroll_cmd = json.dumps({"action": "scroll", "dy": -150}).encode("utf-8")
-            await ws.send(pack_packet(OP_INPUT, scroll_cmd))
+            await ws.send(pack_packet(OP_INPUT, scroll_cmd, seq=5))
 
             # 6. Test Typing Text
             type_cmd = json.dumps({"action": "type", "text": "hello", "press_enter": False}).encode("utf-8")
-            await ws.send(pack_packet(OP_INPUT, type_cmd))
+            await ws.send(pack_packet(OP_INPUT, type_cmd, seq=6))
 
             # 7. Test Hotkey Combination (Ctrl+C)
             hotkey_cmd = json.dumps({"action": "hotkey", "keys": ["ctrl", "c"]}).encode("utf-8")
-            await ws.send(pack_packet(OP_INPUT, hotkey_cmd))
+            await ws.send(pack_packet(OP_INPUT, hotkey_cmd, seq=7))
 
             # 8. Test Compact 6-byte binary struct (event_type=1: move, dx=25, dy=25, btn=0)
             bin_struct = struct.pack("!BhhB", 1, 25, 25, 0)
-            await ws.send(pack_packet(OP_INPUT, bin_struct))
+            await ws.send(pack_packet(OP_INPUT, bin_struct, seq=8))
 
             # 9. Test Ping / Latency check
-            await ws.send(pack_packet(OP_PING, b""))
+            await ws.send(pack_packet(OP_PING, b"", seq=9))
             pong = await asyncio.wait_for(ws.recv(), timeout=2.0)
             m, op, fl, sq, ln, _ = unpack_packet(pong)
             self.assertEqual(op, OP_PING)
@@ -241,18 +241,18 @@ class TestAndroidAppConnectionAndControl(unittest.IsolatedAsyncioTestCase):
             json_ack = json.loads(await ws.recv())
             self.assertEqual(json_ack.get("event"), "AUTHENTICATED")
             # Immediately follow with binary OP_AUTH
-            digest = hmac.new(SHARED_SECRET, nonce, hashlib.sha256).digest()
+            digest = hmac.new(self._daemon_secret(), nonce, hashlib.sha256).digest()
             await ws.send(pack_packet(OP_AUTH, digest, seq=seq))
             bin_ack = await ws.recv()
             _, op, _, _, _, payload = unpack_packet(bin_ack)
             self.assertEqual(op, OP_AUTH)
-            self.assertIn(b"OK", payload)
+            self.assertEqual(payload, b"OK_AUTHENTICATED")
 
         # Case B: Binary arrives first, then JSON AUTH
         async with websockets.connect(uri) as ws:
             challenge = await ws.recv()
             _, _, _, seq, _, nonce = unpack_packet(challenge)
-            digest = hmac.new(SHARED_SECRET, nonce, hashlib.sha256).digest()
+            digest = hmac.new(self._daemon_secret(), nonce, hashlib.sha256).digest()
             await ws.send(pack_packet(OP_AUTH, digest, seq=seq))
             bin_ack = await ws.recv()
             _, op, _, _, _, payload = unpack_packet(bin_ack)

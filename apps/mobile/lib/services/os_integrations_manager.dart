@@ -17,15 +17,19 @@ import 'package:quick_actions/quick_actions.dart';
 void widgetBackgroundCallback(Uri? uri) async {
   if (uri == null) return;
   if (uri.host == 'wake_pc' || uri.path.contains('wake')) {
-    final String? mac = uri.queryParameters['mac'] ?? '00:1B:44:11:3A:B7';
-    final String? ip = uri.queryParameters['ip'] ?? '192.168.1.105';
-    final String? routerIp = uri.queryParameters['router'] ?? '192.168.1.1';
+    final String? mac = uri.queryParameters['mac']?.trim();
+    final String? ip = uri.queryParameters['ip']?.trim();
+    final String? routerIp = uri.queryParameters['router']?.trim();
+    if (mac == null || mac.isEmpty || ip == null || ip.isEmpty) {
+      debugPrint('Wake widget aborted: missing target MAC or IP in widget URI');
+      return;
+    }
 
     // Directly execute Gratuitous ARP + Magic Packet in background isolate
     await OsIntegrationsManager.instance.sendGratuitousArpAndWake(
-      targetMac: mac!,
-      targetIp: ip!,
-      routerIp: routerIp!,
+      targetMac: mac,
+      targetIp: ip,
+      routerIp: routerIp ?? '',
     );
   }
 }

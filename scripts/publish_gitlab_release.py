@@ -5,7 +5,7 @@ Uploads standalone release binaries to GitLab Generic Packages and creates or up
 a GitLab Release with permanent direct asset download links.
 
 Usage:
-    python scripts/publish_gitlab_release.py [--project-id <id|group/project>] [--tag v0.35.0] [--dry-run]
+    python scripts/publish_gitlab_release.py [--project-id <id|group/project>] [--tag v0.50.0] [--dry-run]
 """
 
 import argparse
@@ -25,9 +25,9 @@ def get_current_version() -> str:
     if os.path.exists(pkg_json_path):
         with open(pkg_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            ver = data.get("version", "0.35.0")
+            ver = data.get("version", "0.50.0")
             return f"v{ver}" if not ver.startswith("v") else ver
-    return "v0.35.0"
+    return "v0.50.0"
 
 
 def get_gitlab_token() -> Optional[str]:
@@ -50,7 +50,7 @@ def main():
         default=os.environ.get("CI_SERVER_URL", "https://gitlab.com"),
         help="GitLab host base URL",
     )
-    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.35.0)")
+    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.50.0)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate release publication")
     args = parser.parse_args()
 
@@ -106,10 +106,10 @@ def main():
     uploaded_links = []
     # Sort files so executables and packages come first
     priority_order = [
-        "AI_NetController_HostAgent_v0.35.0_win64.exe",
-        "AI_NetController_HostAgent_v0.35.0_win64_portable.zip",
-        "AI_NetController_v0.35.0.apk",
-        "AI_NetController_v0.35.0_arm64-v8a.apk",
+        f"AI_NetController_HostAgent_{target_tag}_win64.exe",
+        f"AI_NetController_HostAgent_{target_tag}_win64_portable.zip",
+        f"AI_NetController_{target_tag}.apk",
+        f"AI_NetController_{target_tag}_arm64-v8a.apk",
         "SHA256SUMS.txt",
         "RELEASE_MANIFEST.json",
         "PATCH_NOTES.md",
@@ -121,10 +121,10 @@ def main():
             files_to_upload.append(extra)
 
     labels = {
-        "AI_NetController_HostAgent_v0.35.0_win64.exe": "Windows Host Agent (Standalone .EXE)",
-        "AI_NetController_HostAgent_v0.35.0_win64_portable.zip": "Windows Host Agent (Portable .ZIP)",
-        "AI_NetController_v0.35.0.apk": "Android Universal Companion (.APK)",
-        "AI_NetController_v0.35.0_arm64-v8a.apk": "Android arm64-v8a Companion (.APK)",
+        f"AI_NetController_HostAgent_{target_tag}_win64.exe": "Windows Host Agent (Standalone .EXE)",
+        f"AI_NetController_HostAgent_{target_tag}_win64_portable.zip": "Windows Host Agent (Portable .ZIP)",
+        f"AI_NetController_{target_tag}.apk": "Android Universal Companion (.APK)",
+        f"AI_NetController_{target_tag}_arm64-v8a.apk": "Android arm64-v8a Companion (.APK)",
         "SHA256SUMS.txt": "SHA-256 Checksums",
         "RELEASE_MANIFEST.json": "Release Manifest (JSON)",
         "PATCH_NOTES.md": "Patch Notes (Markdown)",

@@ -1,6 +1,6 @@
 # Setup Guide
 
-This guide walks through setting up, configuring, and deploying **AI NetController** (`v0.35.0`) on Windows, Linux/macOS, and Android devices.
+This guide walks through setting up, configuring, and deploying **AI NetController** (`v0.50.0` / Beta `0.50.00`) on Windows, Linux/macOS, and Android devices.
 
 ---
 
@@ -74,7 +74,7 @@ The Windows Host Agent runs as a local daemon on port `8765`, streaming telemetr
 
 ### Option A: Standalone Executable (Recommended)
 
-1. Download `AI_NetController_HostAgent_v0.35.0_win64.exe` from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.35.0).
+1. Download `AI_NetController_HostAgent_v0.50.0_win64.exe` from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.50.0).
 2. Execute the file to launch the **AI NetController Desktop Control Center GUI**.
 3. The WebSocket server automatically begins listening on `ws://0.0.0.0:8765`.
 
@@ -139,10 +139,10 @@ This file preserves:
 
 ## 5. Installing the Android Companion App
 
-1. Download `AI_NetController_v0.35.0_arm64-v8a.apk` (or the universal `AI_NetController_v0.35.0.apk`) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.35.0).
+1. Download `AI_NetController_v0.50.0_arm64-v8a.apk` (or the universal `AI_NetController_v0.50.0.apk`) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.50.0).
 2. Sideload the APK onto your Android device:
    ```bash
-   adb install -r public/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk
+   adb install -r public/releases/v0.50.0/AI_NetController_v0.50.0_arm64-v8a.apk
    ```
 3. Ensure the mobile device is connected to the same local Wi-Fi subnet as the Windows host.
 4. Launch the application to scan for active host agents via mDNS or subnet ping sweeps.

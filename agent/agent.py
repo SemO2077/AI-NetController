@@ -98,19 +98,45 @@ except ImportError:
 try:
     from host_file_writer import HostFileWriter
 except ImportError:
-    HostFileWriter = None
+    try:
+        from agent.host_file_writer import HostFileWriter
+    except ImportError:
+        HostFileWriter = None
 
 try:
     from command_ast_firewall import CommandASTFirewall
 except ImportError:
-    CommandASTFirewall = None
+    try:
+        from agent.command_ast_firewall import CommandASTFirewall
+    except ImportError:
+        CommandASTFirewall = None
 
 try:
     from network_fuzzer_shield import NetworkFuzzerShield, ChaosProfile, ConnectionState
 except ImportError:
-    NetworkFuzzerShield = None
-    ChaosProfile = None
-    ConnectionState = None
+    try:
+        from agent.network_fuzzer_shield import NetworkFuzzerShield, ChaosProfile, ConnectionState
+    except ImportError:
+        NetworkFuzzerShield = None
+        ChaosProfile = None
+        ConnectionState = None
+
+try:
+    from multi_monitor_streamer import MultiMonitorStreamer
+except ImportError:
+    try:
+        from agent.multi_monitor_streamer import MultiMonitorStreamer
+    except ImportError:
+        MultiMonitorStreamer = None
+
+try:
+    from crypto_vault import HostCryptoVault, SlidingWindowReplayProtector
+except ImportError:
+    try:
+        from agent.crypto_vault import HostCryptoVault, SlidingWindowReplayProtector
+    except ImportError:
+        HostCryptoVault = None
+        SlidingWindowReplayProtector = None
 
 try:
     import pyperclip
@@ -129,14 +155,26 @@ try:
         register_windows_uninstaller,
     )
 except ImportError:
-    SingleInstanceGuard = None
-    check_port_available = None
-    create_desktop_shortcut = None
-    create_start_menu_shortcut = None
-    show_uninstall_dialog = None
-    show_install_dialog = None
-    perform_full_uninstall = None
-    register_windows_uninstaller = None
+    try:
+        from agent.windows_integration import (
+            SingleInstanceGuard,
+            check_port_available,
+            create_desktop_shortcut,
+            create_start_menu_shortcut,
+            show_uninstall_dialog,
+            show_install_dialog,
+            perform_full_uninstall,
+            register_windows_uninstaller,
+        )
+    except ImportError:
+        SingleInstanceGuard = None
+        check_port_available = None
+        create_desktop_shortcut = None
+        create_start_menu_shortcut = None
+        show_uninstall_dialog = None
+        show_install_dialog = None
+        perform_full_uninstall = None
+        register_windows_uninstaller = None
 
 try:
     from icon_assets import get_icon_image
@@ -152,11 +190,17 @@ except ImportError:
     try:
         from agent.daemon_config import load_config, save_config, get_config_path, rotate_token, regenerate_pin
     except ImportError:
-        load_config = lambda: {"pairing_pin": "847291", "pairing_token": "cst_autonomous_lan_secret_2025"}
+        def _ephemeral_config():
+            return {
+                "pairing_pin": f"{secrets.randbelow(900000) + 100000}",
+                "pairing_token": f"ainet_{secrets.token_hex(24)}",
+                "pin_issued_at": int(time.time()),
+            }
+        load_config = _ephemeral_config
         save_config = lambda cfg: False
         get_config_path = lambda: ""
-        rotate_token = lambda: "cst_autonomous_lan_secret_2025"
-        regenerate_pin = lambda: "847291"
+        rotate_token = lambda: f"ainet_{secrets.token_hex(24)}"
+        regenerate_pin = lambda: f"{secrets.randbelow(900000) + 100000}"
 
 # Configure logging with high-performance minimal formatter
 logging.basicConfig(
@@ -174,8 +218,9 @@ _HEADER_STRUCT = struct.Struct('!2sBBII')  # Total: 12 bytes
 HEADER_SIZE = _HEADER_STRUCT.size
 MAX_PAYLOAD_SIZE = 10 * 1024 * 1024  # 10 MB maximum allowed payload
 MAX_NONCE_AGE_SECONDS = 10.0  # Nonce expiry time for auth handshake
+PIN_TTL_SECONDS = 900.0  # Pairing PIN expires after 15 minutes unless regenerated
 
-# Binary Opcodes (1 - 10, 238) - Part 1.2 Protocol Specification
+# Canonical Binary Opcodes
 OP_PING = 0x01            # 1: Ping / Heartbeat
 OP_TELEMETRY = 0x02       # 2: Telemetry Frame (CPU, RAM, Disks, GPU, Active Process)
 OP_FRAME = 0x03           # 3: Screen Frame (Compressed JPEG Payload)
@@ -187,12 +232,14 @@ OP_INPUT = 0x08           # 8: Remote Virtual Input (Trackpad & Keystrokes)
 OP_AUDIO = 0x09           # 9: Remote Audio & Media Session Control
 OP_VIEWPORT_RESIZE = 0x0A # 10: Viewport Bounds Negotiation
 OP_LLM_STREAM = 0x0B      # 11: Local LLM Chunk Stream
-OP_FILE_TRANSFER = 0x0C    # 12: Chunked Zero-Trust File Transfer (Opcode 0x0C)
+OP_FILE_TRANSFER = 0x0C   # 12: Chunked Zero-Trust File Transfer
+OP_DISPLAY_ENUM = 0x0D    # 13: Multi-Monitor Display Enumeration & Switching
+OP_FRAME_SYNC = 0xED      # 237: Keyframe / Stream Resynchronization Request
 OP_ERR = 0xEE             # 238: Structured Error Packet
 
-# Pre-shared secret key for HMAC-SHA256 authentication
-# In production, this can be loaded from an encrypted environment variable or config.json
-SHARED_SECRET = os.environ.get("AI_AGENT_SECRET", os.environ.get("CST_AGENT_SECRET", "ai_netcontroller_secret_2025")).encode('utf-8')
+# Explicit environment secret override (optional, never hardcoded)
+_env_secret_raw = os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET") or ""
+SHARED_SECRET = _env_secret_raw.strip().encode("utf-8")
 
 # High-risk command keywords requiring Human-In-The-Loop confirmation
 CRITICAL_COMMAND_PATTERNS = {
@@ -321,6 +368,18 @@ class WindowsJobSupervisor:
                 self.kernel32.CloseHandle(proc_handle)
         return False
 
+    def reset(self):
+        """Terminates active child processes inside Job Object and opens a fresh supervisor handle."""
+        if not self.is_windows or not self.kernel32:
+            return
+        if self.job_handle:
+            try:
+                self.kernel32.TerminateJobObject(self.job_handle, 1)
+            except Exception as e:
+                logger.error("Error terminating job object: %s", e)
+            self.close()
+        self.__init__(memory_limit_mb=getattr(self, "memory_limit_mb", 256))
+
     def close(self):
         """Clean up the job object handle upon agent termination."""
         if self.job_handle and self.kernel32:
@@ -373,11 +432,21 @@ class AdaptiveScreenPipeline:
     - Thread-safe screen capture with clean resource disposal.
     """
     def __init__(self, target_resolution: Tuple[int, int] = (1280, 720)):
+        if platform.system() == "Windows":
+            try:
+                ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+            except Exception:
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except Exception:
+                    pass
         self.target_res = target_resolution
         self.last_frame_hash = 0
         self.grid_hashes: List[int] = []
         self.consecutive_static = 0
         self.jpeg_quality = 50
+        self.monitor_index = 1
+        self.force_keyframe = False
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ScreenEncoder")
         self.is_running = True
 
@@ -399,9 +468,13 @@ class AdaptiveScreenPipeline:
         """Returns thread-local mss instance."""
         if not hasattr(self._local, 'sct') or self._local.sct is None:
             if mss:
-                self._local.sct = mss.MSS()
-                with self._sct_lock:
-                    self._worker_scts.append(self._local.sct)
+                try:
+                    self._local.sct = mss.MSS()
+                    with self._sct_lock:
+                        self._worker_scts.append(self._local.sct)
+                except Exception as exc:
+                    logger.debug("MSS initialization failed in worker: %s", exc)
+                    self._local.sct = None
             else:
                 self._local.sct = None
         return self._local.sct
@@ -411,24 +484,34 @@ class AdaptiveScreenPipeline:
         w = max(320, min(3840, width))
         h = max(240, min(2160, height))
         self.target_res = (w, h)
+        self.force_keyframe = True
         logger.info(f"Screen grabber resolution dynamically matched to {w}x{h}")
 
-    def _grab_and_compress(self) -> Optional[Tuple[bytes, bool]]:
+    def set_quality(self, quality: int):
+        """Clamps and updates JPEG stream compression quality (15..95)."""
+        self.jpeg_quality = max(15, min(95, int(quality)))
+        self.force_keyframe = True
+
+    def _grab_and_compress(self) -> Tuple[Optional[bytes], bool]:
         """Worker function running inside ThreadPoolExecutor."""
         sct = self._get_mss()
-        if not sct:
-            return None
+        if not sct or not getattr(sct, "monitors", None):
+            return None, False
 
         try:
-            # Capture primary display (monitors[1]) or virtual desktop (monitors[0])
-            monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+            idx = self.monitor_index if 1 <= self.monitor_index < len(sct.monitors) else (1 if len(sct.monitors) > 1 else 0)
+            monitor = sct.monitors[idx]
             raw_shot = sct.grab(monitor)
             raw_mv = memoryview(raw_shot.raw)
 
+            force_send = self.force_keyframe
+            if force_send:
+                self.force_keyframe = False
+                self.consecutive_static = 0
 
             # Fast Adler-32 and 8x8 Spatial Grid Delta Hash check (C-contiguous buffer)
             current_hash = zlib.adler32(bytes(raw_mv[::2048]))
-            is_static = (current_hash == self.last_frame_hash)
+            is_static = (not force_send) and (current_hash == self.last_frame_hash)
             self.last_frame_hash = current_hash
 
             # Short-circuit idle static frames without recomputing 64-block CRC32 grid
@@ -574,38 +657,47 @@ class AstCommandInspector:
 # =====================================================================
 class HostAgentDaemon:
     def __init__(self, host: str = "0.0.0.0", port: int = 8765, gui_state: Any = None):
-        self.host = host
-        self.port = port
+        self.config = load_config() if load_config else {}
+        self.host = host or self.config.get("bind_host", "0.0.0.0")
+        self.port = port or int(self.config.get("port", 8765))
         self.gui_state = gui_state
         self._hostname = socket.gethostname()
         self._os_name = platform.system()
         self.clients: Set[WebSocketServerProtocol] = set()
         self.authenticated_clients: Set[WebSocketServerProtocol] = set()
-        # Persistent configuration (credentials, security policies, port)
-        self.config = load_config() if load_config else {}
-        self.pairing_pin = self.config.get("pairing_pin", "847291")
-        self.pairing_token = self.config.get("pairing_token", "cst_autonomous_lan_secret_2025")
+        self._client_vaults: Dict[WebSocketServerProtocol, Any] = {}
+        self._client_replay: Dict[WebSocketServerProtocol, Any] = {}
+        self._ws_write_locks: Dict[WebSocketServerProtocol, asyncio.Lock] = {}
+        self._background_tasks: List[asyncio.Task] = []
+
+        # Persistent credentials & policies (CSPRNG only, never hardcoded fallbacks)
+        self.pairing_pin: str = str(self.config.get("pairing_pin") or f"{secrets.randbelow(900000) + 100000}")
+        self.pairing_token: str = str(self.config.get("pairing_token") or f"ainet_{secrets.token_hex(24)}")
+        self.pin_issued_at: float = float(self.config.get("pin_issued_at") or time.time())
+        self.view_only_mode: bool = bool(self.config.get("view_only_mode", False))
+        self.require_hitl_approval: bool = bool(self.config.get("require_hitl_approval", True))
+        self.clipboard_sync_allowed: bool = bool(self.config.get("clipboard_sync_allowed", True))
+        self.auto_lock_on_disconnect: bool = bool(self.config.get("auto_lock_on_disconnect", False))
+        self.auto_ban_intrusion: bool = bool(self.config.get("auto_ban_intrusion", True))
+        self.subnet_geofence_only: bool = bool(self.config.get("subnet_geofence_only", True))
+        self.security_profile: str = str(self.config.get("security_profile", "balanced"))
+        self.is_paused: bool = False
+        self.blacklisted_ips: Set[str] = set(
+            str(x).strip() for x in (self.config.get("blacklisted_devices") or []) if str(x).strip()
+        )
         if self.gui_state is not None:
-            # Bidirectional sync with GUI state
-            gui_pin = getattr(self.gui_state, "pairing_pin", None)
-            gui_tok = getattr(self.gui_state, "pairing_token", None)
-            if gui_pin:
-                self.pairing_pin = gui_pin
-            else:
-                self.gui_state.pairing_pin = self.pairing_pin
-            if gui_tok:
-                self.pairing_token = gui_tok
-            else:
-                self.gui_state.pairing_token = self.pairing_token
+            self._sync_gui_state_on_attach()
+
         # Per-connection nonce tracking: ws -> (nonce_bytes, timestamp)
         self.active_nonces: Dict[WebSocketServerProtocol, Tuple[bytes, float]] = {}
         self.screen_pipeline = AdaptiveScreenPipeline()
+        self.multi_monitor = MultiMonitorStreamer() if MultiMonitorStreamer else None
         self.zeroconf: Optional[AsyncZeroconf] = None
         self.service_info: Optional[ServiceInfo] = None
         self.server = None
         self.is_running = True
-        self.view_only_mode = False
-        self.pending_approvals: Dict[str, asyncio.Future] = {}
+        self.capture_fps: float = 0.0
+        self.pending_approvals: Dict[str, Dict[str, Any]] = {}
         self.tray_icon = None
         self.file_writer = HostFileWriter() if HostFileWriter else None
         chaos_enabled = os.environ.get("AI_CHAOS_MODE", os.environ.get("CST_CHAOS_MODE", "0")) == "1"
@@ -613,6 +705,48 @@ class HostAgentDaemon:
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread_id: Optional[int] = None
         self._failed_auth_attempts: Dict[str, List[float]] = {}
+
+    def _sync_gui_state_on_attach(self) -> None:
+        if self.gui_state is None:
+            return
+        self.gui_state.pairing_pin = self.pairing_pin
+        self.gui_state.pairing_token = self.pairing_token
+        self.gui_state.view_only_mode = self.view_only_mode
+        self.gui_state.require_hitl_approval = self.require_hitl_approval
+        self.gui_state.clipboard_sync_allowed = self.clipboard_sync_allowed
+        self.gui_state.auto_lock_on_disconnect = self.auto_lock_on_disconnect
+        self.gui_state.auto_ban_intrusion = self.auto_ban_intrusion
+        self.gui_state.subnet_geofence_only = self.subnet_geofence_only
+
+    def _refresh_runtime_policies(self) -> None:
+        """Synchronizes live policy toggles and credentials from gui_state or persisted config."""
+        if self.gui_state is not None:
+            gui_tok = getattr(self.gui_state, "pairing_token", None)
+            gui_pin = getattr(self.gui_state, "pairing_pin", None)
+            if gui_tok and gui_tok != self.pairing_token:
+                self.pairing_token = str(gui_tok).strip()
+            if gui_pin and gui_pin != self.pairing_pin:
+                self.pairing_pin = str(gui_pin).strip()
+                self.pin_issued_at = time.time()
+            self.view_only_mode = bool(getattr(self.gui_state, "view_only_mode", self.view_only_mode))
+            self.require_hitl_approval = bool(getattr(self.gui_state, "require_hitl_approval", self.require_hitl_approval))
+            self.clipboard_sync_allowed = bool(getattr(self.gui_state, "clipboard_sync_allowed", self.clipboard_sync_allowed))
+            self.auto_ban_intrusion = bool(getattr(self.gui_state, "auto_ban_intrusion", self.auto_ban_intrusion))
+            self.subnet_geofence_only = bool(getattr(self.gui_state, "subnet_geofence_only", self.subnet_geofence_only))
+            self.is_paused = bool(getattr(self.gui_state, "is_paused", False))
+
+    def _is_client_blacklisted(self, client_ip: str) -> bool:
+        if client_ip in self.blacklisted_ips:
+            return True
+        if self.gui_state is not None and hasattr(self.gui_state, "is_ip_blacklisted"):
+            return bool(self.gui_state.is_ip_blacklisted(client_ip))
+        return False
+
+    async def _ws_send(self, ws: WebSocketServerProtocol, data: Any) -> None:
+        """Serializes concurrent writes onto a WebSocket transport cleanly."""
+        lock = self._ws_write_locks.setdefault(ws, asyncio.Lock())
+        async with lock:
+            await ws.send(data)
 
     def force_disconnect_client(self, client_id_or_ip: str):
         """Forcefully disconnects active client socket by id or IP in real time."""
@@ -633,98 +767,158 @@ class HostAgentDaemon:
             _close_matching()
 
     def _record_auth_failure(self, client_ip: str, client_id: str):
-        """Records authentication failure, logging alerts and triggering auto-ban if threshold exceeded."""
+        """Records authentication failure, enforcing headless & GUI auto-ban thresholds."""
+        self._refresh_runtime_policies()
         now = time.time()
-        failures = self._failed_auth_attempts.setdefault(client_ip, [])
-        failures = [t for t in failures if now - t < 60.0]
+        failures = [t for t in self._failed_auth_attempts.get(client_ip, []) if now - t < 60.0]
         failures.append(now)
         self._failed_auth_attempts[client_ip] = failures
+        if len(self._failed_auth_attempts) > 1024:
+            oldest_ip = next(iter(self._failed_auth_attempts))
+            self._failed_auth_attempts.pop(oldest_ip, None)
+
         if self.gui_state is not None:
             self.gui_state.add_log("ALERT", f"Failed authentication attempt from {client_id}")
-            if len(failures) >= 3 and getattr(self.gui_state, "auto_ban_intrusion", True):
+
+        if len(failures) >= 3 and self.auto_ban_intrusion:
+            self.blacklisted_ips.add(client_ip)
+            try:
+                cfg = load_config() if load_config else {}
+                bl = list(cfg.get("blacklisted_devices") or [])
+                if client_ip not in bl:
+                    bl.append(client_ip)
+                    cfg["blacklisted_devices"] = bl
+                    if save_config:
+                        save_config(cfg)
+            except Exception as exc:
+                logger.debug("Could not persist auto-ban for %s: %s", client_ip, exc)
+            if self.gui_state is not None and hasattr(self.gui_state, "blacklist_client"):
                 self.gui_state.blacklist_client(
                     client_ip,
                     device_name=f"Intruder ({client_ip})",
-                    reason="Auto-ban: 3+ failed authentication attempts within 60s"
+                    reason="Auto-ban: 3+ failed authentication attempts within 60s",
                 )
-                logger.warning(f"AUTO-BAN TRIGGERED: Blacklisted {client_ip} due to 3+ failed auth attempts.")
+            logger.warning("AUTO-BAN TRIGGERED: Blacklisted %s due to 3+ failed auth attempts.", client_ip)
 
     def _get_current_secret(self) -> bytes:
-        """Dynamically retrieves active shared secret allowing live rotation."""
-        return os.environ.get("AI_AGENT_SECRET", os.environ.get("CST_AGENT_SECRET", "ai_netcontroller_secret_2025")).encode('utf-8')
+        """Returns configured persistent/env strong token (never a static hardcoded string)."""
+        self._refresh_runtime_policies()
+        env_sec = (os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET") or "").strip()
+        if env_sec:
+            return env_sec.encode("utf-8")
+        return str(self.pairing_token).strip().encode("utf-8")
 
     def _get_valid_secrets(self) -> List[bytes]:
-        """Returns all valid pairing secrets/tokens for HMAC and JSON authentication."""
-        secrets_list = [
-            self._get_current_secret(),
-            b"cst_autonomous_lan_secret_2025",
-            b"cst_thesis_2026_secret_key",
-            b"ai_netcontroller_secret_2025",
-        ]
-        if getattr(self, "pairing_token", None):
+        """Returns active strong secrets for HMAC and token auth (excludes weak 6-digit PINs)."""
+        self._refresh_runtime_policies()
+        secrets_list: List[bytes] = []
+        env_sec = (os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET") or "").strip()
+        if env_sec:
+            secrets_list.append(env_sec.encode("utf-8"))
+        if self.pairing_token:
             tok_b = str(self.pairing_token).strip().encode("utf-8")
             if tok_b and tok_b not in secrets_list:
                 secrets_list.append(tok_b)
-        if getattr(self, "pairing_pin", None):
-            pin_b = str(self.pairing_pin).strip().encode("utf-8")
-            if pin_b and pin_b not in secrets_list:
-                secrets_list.append(pin_b)
         if self.gui_state is not None:
             tok = getattr(self.gui_state, "pairing_token", None)
-            pin = getattr(self.gui_state, "pairing_pin", None)
             if tok:
-                tok_bytes = str(tok).strip().encode("utf-8")
-                if tok_bytes and tok_bytes not in secrets_list:
-                    secrets_list.append(tok_bytes)
-            if pin:
-                pin_bytes = str(pin).strip().encode("utf-8")
-                if pin_bytes and pin_bytes not in secrets_list:
-                    secrets_list.append(pin_bytes)
+                tok_b = str(tok).strip().encode("utf-8")
+                if tok_b and tok_b not in secrets_list:
+                    secrets_list.append(tok_b)
         return secrets_list
+
+    def _is_valid_pairing_pin(self, candidate: bytes) -> bool:
+        """Verifies short-lived 6-digit pairing PIN for explicit PAIR onboarding only."""
+        self._refresh_runtime_policies()
+        if not self.pairing_pin:
+            return False
+        if (time.time() - self.pin_issued_at) > PIN_TTL_SECONDS:
+            return False
+        pin_b = str(self.pairing_pin).strip().encode("utf-8")
+        return bool(pin_b) and hmac.compare_digest(candidate, pin_b)
 
     async def start(self):
         """Bootstraps mDNS advertisement, system tray icon, and WebSocket server."""
         self.loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
-        logger.info("Initializing AI NetController Host Agent & OS Bridge...")
+        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.50.0)...")
         await self._start_mdns()
         self._start_system_tray()
+
+        ssl_ctx = None
+        cert_file = os.environ.get("AI_TLS_CERT") or os.environ.get("SSL_CERT_FILE")
+        key_file = os.environ.get("AI_TLS_KEY") or os.environ.get("SSL_KEY_FILE")
+        if cert_file and key_file and os.path.isfile(cert_file) and os.path.isfile(key_file):
+            import ssl
+            ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_ctx.load_cert_chain(cert_file, key_file)
+            logger.info("TLS enabled for WebSocket transport (%s)", cert_file)
 
         if websockets is not None:
             self.server = await websockets.serve(
                 self.handle_connection,
                 self.host,
                 self.port,
+                ssl=ssl_ctx,
                 max_size=MAX_PAYLOAD_SIZE,
                 ping_interval=20,
                 ping_timeout=15
             )
-            logger.info(f"Binary WebSocket Listener active on ws://{self.host}:{self.port}")
+            proto = "wss" if ssl_ctx else "ws"
+            logger.info(f"Binary WebSocket Listener active on {proto}://{self.host}:{self.port}")
         else:
             self.server = await asyncio.start_server(
                 self._handle_stdlib_ws_client,
                 self.host,
-                self.port
+                self.port,
+                ssl=ssl_ctx,
             )
             logger.info(f"Stdlib RFC-6455 WebSocket Listener active on ws://{self.host}:{self.port}")
 
-        # Start telemetry loop in background
-        asyncio.create_task(self._telemetry_heartbeat_loop())
-        # Start screen broadcasting loop in background
-        asyncio.create_task(self._screen_stream_loop())
+        self._background_tasks.append(asyncio.create_task(self._telemetry_heartbeat_loop()))
+        self._background_tasks.append(asyncio.create_task(self._screen_stream_loop()))
+
+    @staticmethod
+    def _is_origin_allowed(origin_header: Optional[str]) -> bool:
+        """Validates WebSocket Origin header to prevent cross-site WebSocket hijacking (CSWSH)."""
+        if not origin_header:
+            return True  # Native Android/Python WS clients do not send browser Origin
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(origin_header)
+            scheme = (parsed.scheme or "").lower()
+            if scheme in ("capacitor", "app", "file", "ionic"):
+                return True
+            hn = (parsed.hostname or "").lower()
+            if hn in ("localhost", "127.0.0.1", "::1") or hn.endswith(".local"):
+                return True
+            return is_local_or_private_ip(hn)
+        except Exception:
+            return False
 
     async def _handle_stdlib_ws_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """Zero-dependency RFC 6455 WebSocket fallback when `websockets` package is not installed."""
+        """Zero-dependency RFC 6455 WebSocket fallback with Origin check, control frames, and write lock."""
         try:
             key = None
+            origin_hdr = None
             while True:
                 line = await asyncio.wait_for(reader.readline(), timeout=5.0)
                 if not line or line == b'\r\n':
                     break
                 line_str = line.decode('utf-8', errors='ignore')
-                if line_str.lower().startswith('sec-websocket-key:'):
+                lower = line_str.lower()
+                if lower.startswith('sec-websocket-key:'):
                     key = line_str.split(':', 1)[1].strip()
+                elif lower.startswith('origin:'):
+                    origin_hdr = line_str.split(':', 1)[1].strip()
+            if origin_hdr and not self._is_origin_allowed(origin_hdr):
+                writer.write(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                await writer.drain()
+                writer.close()
+                return
             if not key:
+                writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+                await writer.drain()
                 writer.close()
                 return
             accept_val = base64.b64encode(
@@ -744,28 +938,40 @@ class HostAgentDaemon:
             class _StdlibWsAdapter:
                 def __init__(self):
                     self.remote_address = peer
+                    self.request_headers = {"Origin": origin_hdr} if origin_hdr else {}
                     self._closed = False
+                    self._write_lock = asyncio.Lock()
+
+                async def _send_raw_frame(self, first_byte: int, payload: bytes):
+                    async with self._write_lock:
+                        if self._closed:
+                            return
+                        frame = bytearray([first_byte])
+                        plen = len(payload)
+                        if plen < 126:
+                            frame.append(plen)
+                        elif plen <= 0xFFFF:
+                            frame.append(126)
+                            frame.extend(struct.pack("!H", plen))
+                        else:
+                            frame.append(127)
+                            frame.extend(struct.pack("!Q", plen))
+                        frame.extend(payload)
+                        writer.write(frame)
+                        await writer.drain()
 
                 async def send(self, data):
-                    if self._closed:
-                        return
                     is_bin = isinstance(data, (bytes, bytearray))
                     payload = bytes(data) if is_bin else str(data).encode('utf-8')
-                    frame = bytearray([0x82 if is_bin else 0x81])
-                    plen = len(payload)
-                    if plen < 126:
-                        frame.append(plen)
-                    elif plen <= 0xFFFF:
-                        frame.append(126)
-                        frame.extend(struct.pack("!H", plen))
-                    else:
-                        frame.append(127)
-                        frame.extend(struct.pack("!Q", plen))
-                    frame.extend(payload)
-                    writer.write(frame)
-                    await writer.drain()
+                    await self._send_raw_frame(0x82 if is_bin else 0x81, payload)
 
                 async def close(self, code: int = 1000, reason: str = ""):
+                    if not self._closed:
+                        try:
+                            close_body = struct.pack("!H", code) + reason.encode("utf-8")[:120]
+                            await self._send_raw_frame(0x88, close_body)
+                        except Exception:
+                            pass
                     self._closed = True
                     try:
                         writer.close()
@@ -777,34 +983,37 @@ class HostAgentDaemon:
                     return self
 
                 async def __anext__(self):
-                    if self._closed:
-                        raise StopAsyncIteration
-                    try:
-                        head = await reader.readexactly(2)
-                        b1, b2 = head[0], head[1]
-                        opcode = b1 & 0x0F
-                        if opcode == 0x08:
+                    while not self._closed:
+                        try:
+                            head = await reader.readexactly(2)
+                            b1, b2 = head[0], head[1]
+                            opcode = b1 & 0x0F
+                            is_masked = (b2 & 0x80) != 0
+                            length = b2 & 0x7F
+                            if length == 126:
+                                length = struct.unpack("!H", await reader.readexactly(2))[0]
+                            elif length == 127:
+                                length = struct.unpack("!Q", await reader.readexactly(8))[0]
+                            if length > MAX_PAYLOAD_SIZE:
+                                raise ValueError(f"Frame payload length {length} exceeds MAX_PAYLOAD_SIZE")
+                            mask_key = await reader.readexactly(4) if is_masked else b""
+                            raw_payload = await reader.readexactly(length)
+                            if is_masked and length > 0:
+                                repeated_mask = (mask_key * ((length // 4) + 1))[:length]
+                                raw_payload = bytes(a ^ b for a, b in zip(raw_payload, repeated_mask))
+                            if opcode == 0x08:  # CLOSE
+                                raise StopAsyncIteration
+                            if opcode == 0x09:  # PING -> PONG
+                                await self._send_raw_frame(0x8A, raw_payload)
+                                continue
+                            if opcode == 0x0A:  # PONG -> ignore
+                                continue
+                            if opcode == 0x01:
+                                return raw_payload.decode('utf-8', errors='replace')
+                            return raw_payload
+                        except Exception:
                             raise StopAsyncIteration
-                        is_masked = (b2 & 0x80) != 0
-                        length = b2 & 0x7F
-                        if length == 126:
-                            length = struct.unpack("!H", await reader.readexactly(2))[0]
-                        elif length == 127:
-                            length = struct.unpack("!Q", await reader.readexactly(8))[0]
-                        if length > MAX_PAYLOAD_SIZE:
-                            raise ValueError(f"Frame payload length {length} exceeds MAX_PAYLOAD_SIZE")
-                        mask_key = await reader.readexactly(4) if is_masked else b""
-                        raw_payload = await reader.readexactly(length)
-                        if is_masked and length > 0:
-                            repeated_mask = (mask_key * ((length // 4) + 1))[:length]
-                            raw_payload = (
-                                int.from_bytes(raw_payload, "big") ^ int.from_bytes(repeated_mask, "big")
-                            ).to_bytes(length, "big")
-                        if opcode == 0x01:
-                            return raw_payload.decode('utf-8', errors='replace')
-                        return raw_payload
-                    except Exception:
-                        raise StopAsyncIteration
+                    raise StopAsyncIteration
 
             adapter = _StdlibWsAdapter()
             await self.handle_connection(adapter)
@@ -826,7 +1035,7 @@ class HostAgentDaemon:
 
             desc = {
                 'os': platform.system(),
-                'version': '0.35.0',
+                'version': '0.50.0',
                 'ai': 'ollama-bridge',
                 'hostname': hostname
             }
@@ -861,7 +1070,6 @@ class HostAgentDaemon:
             return
 
         def run_tray():
-            # Load Android-matching icon for system tray
             img = get_icon_image(64)
             if not img:
                 img = Image.new('RGBA', (64, 64), (7, 12, 24, 255))
@@ -887,12 +1095,20 @@ class HostAgentDaemon:
                     self.gui_state.view_only_mode = self.view_only_mode
                     state_txt = "ENABLED (Remote Input Locked)" if self.view_only_mode else "DISABLED (Remote Input Allowed)"
                     self.gui_state.add_log("SECURITY", f"View-Only Mode from System Tray: {state_txt}")
+                try:
+                    cfg = load_config() if load_config else {}
+                    cfg["view_only_mode"] = self.view_only_mode
+                    if save_config:
+                        save_config(cfg)
+                except Exception:
+                    pass
 
             def _toggle_pause():
+                self.is_paused = not self.is_paused
                 if self.gui_state:
-                    self.gui_state.is_paused = not getattr(self.gui_state, "is_paused", False)
-                    status = "PAUSED" if self.gui_state.is_paused else "RESUMED"
-                    self.gui_state.add_log("WARN" if self.gui_state.is_paused else "INFO", f"Daemon {status} from System Tray.")
+                    self.gui_state.is_paused = self.is_paused
+                    status = "PAUSED" if self.is_paused else "RESUMED"
+                    self.gui_state.add_log("WARN" if self.is_paused else "INFO", f"Daemon {status} from System Tray.")
 
             def _add_desktop_shortcut():
                 if create_desktop_shortcut:
@@ -916,21 +1132,21 @@ class HostAgentDaemon:
                 self.stop()
 
             menu = pystray.Menu(
-                pystray.MenuItem("🖥️ Open Control Center", _show_gui, default=True),
-                pystray.MenuItem("🚀 Install AI NetController to PC...", _install),
+                pystray.MenuItem("Open Control Center", _show_gui, default=True),
+                pystray.MenuItem("Install AI NetController to PC...", _install),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("AI NetController v0.35.0", lambda: None, enabled=False),
-                pystray.MenuItem(lambda text: f"● Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
-                pystray.MenuItem(lambda text: f"🌐 Port: {self.port} (WebSocket)", lambda: None, enabled=False),
+                pystray.MenuItem("AI NetController Beta 0.50.00", lambda: None, enabled=False),
+                pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
+                pystray.MenuItem(lambda text: f"Port: {self.port} (WebSocket)", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem(lambda text: "▶ Resume Daemon" if getattr(self.gui_state, "is_paused", False) else "⏸ Pause Daemon", _toggle_pause),
-                pystray.MenuItem(lambda text: "🔓 Allow Remote Input" if self.view_only_mode else "🔒 Lock Input (View-Only)", _toggle_view_only),
-                pystray.MenuItem("⚡ Panic: Disconnect All", lambda: self.kill_all_tasks()),
+                pystray.MenuItem(lambda text: "Resume Daemon" if self.is_paused else "Pause Daemon", _toggle_pause),
+                pystray.MenuItem(lambda text: "Allow Remote Input" if self.view_only_mode else "Lock Input (View-Only)", _toggle_view_only),
+                pystray.MenuItem("Panic: Disconnect All", lambda: self.kill_all_tasks()),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("📌 Add Desktop Shortcut", _add_desktop_shortcut),
-                pystray.MenuItem("🗑️ Uninstall AI NetController...", _uninstall),
+                pystray.MenuItem("Add Desktop Shortcut", _add_desktop_shortcut),
+                pystray.MenuItem("Uninstall AI NetController...", _uninstall),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("❌ Exit & Shut Down", _exit_agent)
+                pystray.MenuItem("Exit & Shut Down", _exit_agent)
             )
             self.tray_icon = pystray.Icon(
                 "AI_NetController_Agent",
@@ -953,79 +1169,142 @@ class HostAgentDaemon:
         tray_thread.start()
 
     def kill_all_tasks(self):
-        """Emergency Panic Switch: Terminates all active child processes, approvals, and AI jobs."""
-        logger.warning("PANIC TRIGGERED: Aborting all active AI tasks and sub-processes.")
-        def _resolve_approvals():
-            for approval_id, fut in list(self.pending_approvals.items()):
-                if not fut.done():
+        """Emergency Panic Switch: Terminates all active child processes, approvals, vaults, and sockets."""
+        logger.warning("PANIC TRIGGERED: Aborting all active tasks, approvals, and client sessions.")
+
+        def _panic_abort_async():
+            for approval_id, entry in list(self.pending_approvals.items()):
+                fut = entry.get("future") if isinstance(entry, dict) else entry
+                if fut and not fut.done():
                     fut.set_result(False)
             self.pending_approvals.clear()
 
-        if self.loop and self.loop.is_running() and threading.get_ident() != self._loop_thread_id:
-            self.loop.call_soon_threadsafe(_resolve_approvals)
-        else:
-            _resolve_approvals()
+            for ws in list(self.clients):
+                try:
+                    asyncio.create_task(ws.close(code=1008, reason="Emergency panic disconnect"))
+                except Exception:
+                    pass
+            self.authenticated_clients.clear()
+            for v in self._client_vaults.values():
+                try:
+                    v.close()
+                except Exception:
+                    pass
+            self._client_vaults.clear()
+            if self.gui_state is not None:
+                with self.gui_state.lock:
+                    self.gui_state.connected_clients.clear()
+                self.gui_state.add_log("ALERT", "Emergency PANIC triggered: disconnected all sessions & terminated subprocesses.")
 
-        if platform.system() == "Windows" and JOB_SUPERVISOR.kernel32 and JOB_SUPERVISOR.job_handle:
-            try:
-                JOB_SUPERVISOR.kernel32.TerminateJobObject(JOB_SUPERVISOR.job_handle, 1)
-                logger.info("Windows Job Object terminated all child processes.")
-            except Exception as e:
-                logger.error(f"Error terminating job object: {e}")
+        if self.loop and self.loop.is_running() and threading.get_ident() != self._loop_thread_id:
+            self.loop.call_soon_threadsafe(_panic_abort_async)
+        else:
+            _panic_abort_async()
+
+        if platform.system() == "Windows":
+            JOB_SUPERVISOR.reset()
+
+    def _is_client_input_allowed(self, ws: WebSocketServerProtocol) -> bool:
+        """Checks global view-only policy and per-client inputAllowed lock."""
+        self._refresh_runtime_policies()
+        if self.view_only_mode:
+            return False
+        if self.gui_state is not None:
+            peer = getattr(ws, "remote_address", None)
+            p_ip = peer[0] if peer else ""
+            p_port = str(peer[1]) if peer and len(peer) > 1 else ""
+            cid = f"{p_ip}:{p_port}"
+            with self.gui_state.lock:
+                client_entry = next(
+                    (c for c in self.gui_state.connected_clients if c.get("id") == cid or c.get("ip") == p_ip),
+                    None,
+                )
+                if client_entry and not client_entry.get("inputAllowed", True):
+                    return False
+        return True
+
+    def _register_authenticated_client(self, ws: WebSocketServerProtocol, client_ip: str, resolved_client_id: str, label: str) -> None:
+        self.authenticated_clients.add(ws)
+        self.active_nonces.pop(ws, None)
+        if SlidingWindowReplayProtector is not None:
+            self._client_replay[ws] = SlidingWindowReplayProtector(128)
+        if self.chaos_shield:
+            self.chaos_shield.transition_state(resolved_client_id, ConnectionState.AUTHENTICATED_STREAMING)
+        if self.gui_state is not None:
+            with self.gui_state.lock:
+                if not any(c.get("id") == resolved_client_id for c in self.gui_state.connected_clients):
+                    self.gui_state.connected_clients.append({
+                        "id": resolved_client_id,
+                        "ip": client_ip,
+                        "mac": "N/A",
+                        "device": label,
+                        "connectedAt": time.strftime("%H:%M:%S"),
+                        "latencyMs": 1,
+                        "isTrusted": True,
+                        "inputAllowed": not self.view_only_mode,
+                    })
 
     # =================================================================
     # CLIENT CONNECTION LIFECYCLE
     # =================================================================
     async def handle_connection(self, ws: WebSocketServerProtocol, path: str = ""):
-        """Manages lifecycle of connected Flutter or Web clients."""
+        """Manages lifecycle of connected Mobile or Web clients with zero-trust gates."""
+        self._refresh_runtime_policies()
         client_ip = ws.remote_address[0] if ws.remote_address else "unknown"
         client_port = ws.remote_address[1] if ws.remote_address and len(ws.remote_address) > 1 else id(ws)
         client_id = f"{client_ip}:{client_port}"
 
-        if self.gui_state is not None:
-            if getattr(self.gui_state, "is_paused", False):
-                await ws.close(code=1013, reason="Daemon is paused by host operator")
-                return
-            if hasattr(self.gui_state, "is_ip_blacklisted") and self.gui_state.is_ip_blacklisted(client_ip):
-                logger.warning(f"Rejected connection from blacklisted IP: {client_ip}")
-                await ws.close(code=1008, reason="IP address is blacklisted")
-                return
-            if getattr(self.gui_state, "subnet_geofence_only", False) and not is_local_or_private_ip(client_ip):
-                logger.warning(f"Rejected connection from non-local IP {client_ip} by Subnet Geofencing.")
-                await ws.close(code=1008, reason="Subnet geofence policy violation")
-                return
+        req_headers = getattr(ws, "request_headers", None)
+        if req_headers is None and getattr(ws, "request", None) is not None:
+            req_headers = getattr(ws.request, "headers", None)
+        origin = req_headers.get("Origin") if req_headers else None
+        if origin and not self._is_origin_allowed(origin):
+            logger.warning("Rejected untrusted WebSocket Origin '%s' from %s", origin, client_id)
+            await ws.close(code=1008, reason="WebSocket Origin not permitted")
+            return
+
+        if self.is_paused:
+            await ws.close(code=1013, reason="Daemon is paused by host operator")
+            return
+        if self._is_client_blacklisted(client_ip):
+            logger.warning("Rejected connection from blacklisted IP: %s", client_ip)
+            await ws.close(code=1008, reason="IP address is blacklisted")
+            return
+        if self.subnet_geofence_only and not is_local_or_private_ip(client_ip):
+            logger.warning("Rejected non-local IP %s by Subnet Geofencing.", client_ip)
+            await ws.close(code=1008, reason="Subnet geofence policy violation")
+            return
 
         self.clients.add(ws)
-        logger.info(f"Client connected from {client_id}")
+        self._ws_write_locks[ws] = asyncio.Lock()
+        logger.info("Client connected from %s", client_id)
 
-        # Register with SRE Chaos Shield and arm 3000ms watchdog (keyed by unique client session)
         if self.chaos_shield:
             self.chaos_shield.register_client(client_id, lambda: asyncio.create_task(ws.close(code=1008)))
             self.chaos_shield.transition_state(client_id, ConnectionState.AUTH_PENDING)
 
-        # Send an immediate cryptographic authentication challenge
         nonce = secrets.token_bytes(16)
         self.active_nonces[ws] = (nonce, time.time())
-        await ws.send(pack_packet(OP_AUTH, nonce, seq=0))
+        await self._ws_send(ws, pack_packet(OP_AUTH, nonce, seq=0))
 
         try:
             async for message in ws:
-                if self.gui_state is not None:
-                    if getattr(self.gui_state, "is_paused", False):
-                        await self._send_error(ws, "Daemon paused by host operator")
-                        await ws.close(code=1013, reason="Daemon is paused by host operator")
-                        break
-                    if hasattr(self.gui_state, "is_ip_blacklisted") and self.gui_state.is_ip_blacklisted(client_ip):
-                        await self._send_error(ws, "IP address is blacklisted")
-                        await ws.close(code=1008, reason="IP address is blacklisted")
-                        break
+                self._refresh_runtime_policies()
+                if self.is_paused:
+                    await self._send_error(ws, "Daemon paused by host operator")
+                    await ws.close(code=1013, reason="Daemon is paused by host operator")
+                    break
+                if self._is_client_blacklisted(client_ip):
+                    await self._send_error(ws, "IP address is blacklisted")
+                    await ws.close(code=1008, reason="IP address is blacklisted")
+                    break
+
                 if not isinstance(message, bytes):
-                    # Proactively handle JSON ping heartbeat, web authentication, and JSON command frames
                     try:
                         text_data = json.loads(message)
                         action = str(text_data.get("action") or text_data.get("event") or "").upper()
                         if action == "PING":
-                            await ws.send(json.dumps({
+                            await self._ws_send(ws, json.dumps({
                                 "event": "PONG",
                                 "action": "PONG",
                                 "timestamp": time.time(),
@@ -1034,62 +1313,53 @@ class HostAgentDaemon:
                             continue
                         elif action in ("AUTHENTICATE", "PAIR", "AUTH"):
                             if ws in self.authenticated_clients:
-                                effective_tok = getattr(self, "pairing_token", "") or (getattr(self.gui_state, "pairing_token", "") if self.gui_state else "")
-                                await ws.send(json.dumps({
+                                await self._ws_send(ws, json.dumps({
                                     "event": "AUTHENTICATED",
                                     "status": "OK",
                                     "protocol": "AI-NET/3.0-SECURE",
                                     "timestamp": time.time(),
-                                    "pairingToken": effective_tok
+                                    "pairingToken": self.pairing_token
                                 }))
                                 continue
 
-                            candidate_token = str(
-                                text_data.get("token") or
-                                text_data.get("pin") or
-                                text_data.get("pair_pin") or
-                                text_data.get("pair_token") or
-                                text_data.get("secret") or ""
-                            ).strip().encode("utf-8", errors="replace")
+                            candidate_raw = str(
+                                text_data.get("token")
+                                or text_data.get("pin")
+                                or text_data.get("pair_pin")
+                                or text_data.get("pair_token")
+                                or text_data.get("secret")
+                                or ""
+                            ).strip()
+                            candidate_token = candidate_raw.encode("utf-8", errors="replace")
 
                             valid_tokens = self._get_valid_secrets()
-                            if any(hmac.compare_digest(candidate_token, vt) for vt in valid_tokens):
-                                self.authenticated_clients.add(ws)
-                                self.active_nonces.pop(ws, None)
-                                if self.chaos_shield:
-                                    self.chaos_shield.transition_state(client_id, ConnectionState.AUTHENTICATED_STREAMING)
+                            token_ok = any(hmac.compare_digest(candidate_token, vt) for vt in valid_tokens)
+                            # Allow 6-digit PIN strictly for explicit PAIR flow within PIN TTL
+                            pin_ok = (action == "PAIR") and self._is_valid_pairing_pin(candidate_token)
+
+                            if token_ok or pin_ok:
+                                label = str(text_data.get("device") or f"Remote Client ({client_ip})")
+                                self._register_authenticated_client(ws, client_ip, client_id, label)
                                 if self.gui_state is not None:
-                                    with self.gui_state.lock:
-                                        if not any(c.get("id") == client_id for c in self.gui_state.connected_clients):
-                                            self.gui_state.connected_clients.append({
-                                                "id": client_id,
-                                                "ip": client_ip,
-                                                "mac": "N/A",
-                                                "device": str(text_data.get("device") or f"Remote Client ({client_ip})"),
-                                                "connectedAt": time.strftime("%H:%M:%S"),
-                                                "latencyMs": 1,
-                                                "isTrusted": True,
-                                                "inputAllowed": not self.view_only_mode,
-                                            })
-                                    self.gui_state.add_log("SECURITY", f"Client {client_id} authenticated via JSON {action} handshake.")
-                                effective_tok = getattr(self, "pairing_token", "") or (getattr(self.gui_state, "pairing_token", "") if self.gui_state else "")
-                                await ws.send(json.dumps({
+                                    self.gui_state.add_log("SECURITY", f"Client {client_id} authenticated via JSON {action}.")
+                                await self._ws_send(ws, json.dumps({
                                     "event": "AUTHENTICATED",
                                     "status": "OK",
                                     "protocol": "AI-NET/3.0-SECURE",
                                     "timestamp": time.time(),
-                                    "pairingToken": effective_tok
+                                    "pairingToken": self.pairing_token
                                 }))
-                                logger.info(f"Client {client_id} authenticated via JSON {action} handshake.")
+                                logger.info("Client %s authenticated via JSON %s handshake.", client_id, action)
                             else:
-                                logger.warning(f"JSON Authentication failed from {client_id}")
+                                logger.warning("JSON Authentication failed from %s", client_id)
                                 self._record_auth_failure(client_ip, client_id)
-                                await ws.send(json.dumps({
+                                await self._ws_send(ws, json.dumps({
                                     "event": "ERROR",
-                                    "error": "Invalid authentication token or PIN",
+                                    "error": "Invalid authentication token or expired PIN",
                                     "code": 401
                                 }))
                                 await ws.close(code=1008, reason="Authentication failed")
+                                break
                             continue
                         elif ws in self.authenticated_clients:
                             if action == "EXECUTE_PROMPT":
@@ -1099,16 +1369,11 @@ class HostAgentDaemon:
                                     asyncio.create_task(self._process_json_shell_command(ws, cmd_str, cmd_id))
                                 continue
                             elif action == "APPROVAL_RESPONSE":
-                                approval_id = str(text_data.get("approval_id") or text_data.get("command_id") or "")
-                                approved = bool(text_data.get("approved", False))
-                                if approval_id in self.pending_approvals:
-                                    fut = self.pending_approvals[approval_id]
-                                    if not fut.done():
-                                        fut.set_result(approved)
+                                await self._process_hitl_response(message.encode("utf-8"), ws)
                                 continue
                             elif action in ("PANIC_KILL_ALL", "PANIC"):
                                 self.kill_all_tasks()
-                                await ws.send(json.dumps({
+                                await self._ws_send(ws, json.dumps({
                                     "event": "PANIC_ACK",
                                     "status": "terminated",
                                     "timestamp": time.time()
@@ -1124,13 +1389,16 @@ class HostAgentDaemon:
                     except Exception:
                         pass
 
-                    # Drop non-binary frames to enforce strict protocol
                     await self._send_error(ws, "Binary protocol framing required (12-byte header)")
                     continue
 
-                # Pass through Chaos Fuzzer Shield (Packet Loss, Jitter, Reordering Simulation)
+                # Pass through Chaos Fuzzer Shield (state validation + keyframe sync + optional fault simulation)
                 if self.chaos_shield:
-                    filtered = await self.chaos_shield.filter_incoming_packet(client_id, message)
+                    filtered = await self.chaos_shield.filter_incoming_packet(
+                        client_id,
+                        message,
+                        on_keyframe_request=lambda _cid: setattr(self.screen_pipeline, "force_keyframe", True),
+                    )
                     if filtered is None:
                         continue
                     message = filtered
@@ -1144,12 +1412,21 @@ class HostAgentDaemon:
 
                 opcode, flags, seq, length = parsed
 
-                # Strict payload length validation to prevent OOM
                 if length > MAX_PAYLOAD_SIZE or len(message) < HEADER_SIZE + length:
                     await self._send_error(ws, "Payload size exceeds limit or frame truncated")
                     continue
 
                 payload = message[HEADER_SIZE:HEADER_SIZE + length]
+
+                # Decrypt AEAD envelope if client established HostCryptoVault session and flag 0x02 is set
+                vault = self._client_vaults.get(ws)
+                if vault is not None and vault.is_established and (flags & 0x02):
+                    aad = message[:HEADER_SIZE]
+                    dec = vault.decrypt_frame(payload, aad=aad)
+                    if dec is None:
+                        await self._send_error(ws, "AEAD decryption or replay check failed")
+                        continue
+                    payload, _ = dec
 
                 # =====================================================
                 # STRICT AUTHENTICATION FIREWALL
@@ -1158,31 +1435,52 @@ class HostAgentDaemon:
                     if opcode == OP_AUTH:
                         await self._process_auth(ws, payload, client_id)
                     elif opcode == OP_PING:
-                        # Allow ping/pong heartbeat for transport liveness before full session auth
-                        await ws.send(pack_packet(OP_PING, b'PONG', seq=seq))
+                        await self._ws_send(ws, pack_packet(OP_PING, b'PONG', seq=seq))
                     else:
-                        # Reject any command from unauthenticated client
-                        logger.warning(f"Unauthenticated attempt on opcode {opcode} from {client_id}. Dropping.")
+                        logger.warning("Unauthenticated attempt on opcode 0x%02X from %s. Dropping.", opcode, client_id)
                         await self._send_error(ws, "Authentication required. Complete OP_AUTH handshake first.")
                         await ws.close(code=1008, reason="Authentication failed")
                         break
                     continue
 
+                # Replay check on operational binary frames (seq >= 1, no duplicates)
+                if opcode not in (OP_PING, OP_AUTH, OP_FRAME_SYNC):
+                    replay_guard = self._client_replay.get(ws)
+                    if replay_guard is not None and not replay_guard.validate_and_update(seq):
+                        logger.warning("Replay or invalid zero sequence (%d) on opcode 0x%02X from %s", seq, opcode, client_id)
+                        await self._send_error(ws, f"Invalid or replayed sequence number: {seq}")
+                        continue
+
                 # =====================================================
                 # AUTHENTICATED OPCODES
                 # =====================================================
                 if opcode == OP_PING:
-                    await ws.send(pack_packet(OP_PING, b'PONG', seq=seq))
+                    await self._ws_send(ws, pack_packet(OP_PING, b'PONG', seq=seq))
 
                 elif opcode == OP_AUTH:
-                    # Client sent OP_AUTH packet when already authenticated (e.g. dual handshake or confirmation)
-                    await ws.send(pack_packet(OP_AUTH, b'OK_AUTHENTICATED', seq=seq))
+                    vault = self._client_vaults.get(ws)
+                    if vault is None and HostCryptoVault is not None and payload == b"INIT_ECDH_VAULT":
+                        secrets_list = self._get_valid_secrets()
+                        if secrets_list:
+                            vault = HostCryptoVault(secrets_list[0])
+                            self._client_vaults[ws] = vault
+                            await self._ws_send(ws, pack_packet(OP_AUTH, vault.create_handshake_challenge(), seq=seq, flags=0x01))
+                            continue
+                    if vault is not None and not vault.is_established and len(payload) >= 80:
+                        if vault.complete_handshake(payload):
+                            await self._ws_send(ws, pack_packet(OP_AUTH, b'OK_ECDH_VAULT', seq=seq, flags=0x01))
+                        else:
+                            vault.close()
+                            self._client_vaults.pop(ws, None)
+                            await self._send_error(ws, "ECDH vault handshake verification failed")
+                        continue
+                    await self._ws_send(ws, pack_packet(OP_AUTH, b'OK_AUTHENTICATED', seq=seq))
 
                 elif opcode == OP_SHELL:
                     asyncio.create_task(self._process_shell_command(ws, payload, seq))
 
                 elif opcode == OP_HITL:
-                    await self._process_hitl_response(payload)
+                    await self._process_hitl_response(payload, ws)
 
                 elif opcode == OP_CLIP:
                     await self._process_clipboard(ws, payload)
@@ -1191,11 +1489,11 @@ class HostAgentDaemon:
                     await self._process_virtual_input(payload, ws)
 
                 elif opcode == OP_AUDIO:
-                    # Distinguish between Audio Control and legacy Viewport Resize
-                    if len(payload) == 8 or b'"width"' in payload:
+                    stripped = payload.lstrip()
+                    if (len(payload) == 8 and not stripped.startswith(b'{')) or b'"width"' in payload:
                         await self._process_viewport_resize(payload)
                     else:
-                        await self._process_audio_control(payload)
+                        await self._process_audio_control(payload, ws)
 
                 elif opcode == OP_VIEWPORT_RESIZE:
                     await self._process_viewport_resize(payload)
@@ -1204,20 +1502,29 @@ class HostAgentDaemon:
                     asyncio.create_task(self._process_ollama_query(ws, payload, seq))
 
                 elif opcode == OP_FILE_TRANSFER:
-                    if self.file_writer:
-                        ack_packet = self.file_writer.handle_packet(payload)
-                        await ws.send(ack_packet)
+                    if not self._is_client_input_allowed(ws):
+                        await self._send_error(ws, "File upload blocked while View-Only Mode or input lock is active")
+                    elif self.file_writer:
+                        ack_packet = await self.file_writer.handle_packet_async(payload)
+                        await self._ws_send(ws, ack_packet)
                     else:
                         await self._send_error(ws, "File transfer service inactive")
 
+                elif opcode == OP_DISPLAY_ENUM:
+                    await self._process_display_enum(ws, payload, seq)
+
+                elif opcode == OP_FRAME_SYNC:
+                    self.screen_pipeline.force_keyframe = True
+                    self.screen_pipeline.consecutive_static = 0
+
                 else:
-                    await self._send_error(ws, f"Unknown opcode: {opcode}")
+                    await self._send_error(ws, f"Unknown opcode: 0x{opcode:02X}")
 
         except Exception as e:
             if websockets is not None and isinstance(e, websockets.exceptions.ConnectionClosed):
                 pass
             else:
-                logger.error(f"Error handling client {client_ip}: {e}")
+                logger.error("Error handling client %s: %s", client_ip, e)
         finally:
             if self.chaos_shield:
                 await self.chaos_shield.cleanup_and_scrub(client_id)
@@ -1226,10 +1533,23 @@ class HostAgentDaemon:
                     self.gui_state.connected_clients = [
                         c for c in self.gui_state.connected_clients if c.get("id") != client_id
                     ]
+            vault = self._client_vaults.pop(ws, None)
+            if vault is not None:
+                try:
+                    vault.close()
+                except Exception:
+                    pass
+            self._client_replay.pop(ws, None)
+            self._ws_write_locks.pop(ws, None)
             self.clients.discard(ws)
             self.authenticated_clients.discard(ws)
             self.active_nonces.pop(ws, None)
-            logger.info(f"Client disconnected: {client_id}")
+            if self.auto_lock_on_disconnect and not self.authenticated_clients and platform.system() == "Windows":
+                try:
+                    ctypes.windll.user32.LockWorkStation()
+                except Exception:
+                    pass
+            logger.info("Client disconnected: %s", client_id)
 
     # =================================================================
     # AUTHENTICATION & HANDSHAKE
@@ -1237,9 +1557,12 @@ class HostAgentDaemon:
     async def _process_auth(self, ws: WebSocketServerProtocol, payload: bytes, client_id: Optional[str] = None):
         """
         Validates HMAC-SHA256 signature using constant-time comparison.
-        Prevents timing attacks via hmac.compare_digest.
-        Accepts both 32-byte (HMAC-only) and 64-byte (HMAC + Client X25519 PubKey) payloads.
+        Always resolves client identity before auth validation to prevent UnboundLocalError.
         """
+        client_ip = ws.remote_address[0] if ws.remote_address else "unknown"
+        client_port = ws.remote_address[1] if ws.remote_address and len(ws.remote_address) > 1 else id(ws)
+        resolved_client_id = client_id or f"{client_ip}:{client_port}"
+
         nonce_info = self.active_nonces.get(ws)
         if not nonce_info:
             await self._send_error(ws, "Handshake state invalid")
@@ -1247,99 +1570,154 @@ class HostAgentDaemon:
             return
 
         nonce, timestamp = nonce_info
-        # Check nonce expiration
         if time.time() - timestamp > MAX_NONCE_AGE_SECONDS:
             await self._send_error(ws, "Authentication nonce expired")
             await ws.close(code=1008)
             return
 
         if len(payload) < 32:
+            self._record_auth_failure(client_ip, resolved_client_id)
             await self._send_error(ws, "Auth payload too short (minimum 32 bytes)")
             await ws.close(code=1008)
             return
 
-        # Slice first 32 bytes for HMAC; remaining bytes (if any) are the optional
-        # client X25519 public key used by the advanced ECDH handshake variant.
         client_hmac = payload[:32]
-        # client_ecdh_pubkey = payload[32:64] if len(payload) >= 64 else None  # reserved for future ECDH upgrade
-
-        # Constant-time comparison against all valid pairing secrets prevents timing attacks
+        valid_secrets = self._get_valid_secrets()
         is_valid_hmac = any(
             hmac.compare_digest(client_hmac, hmac.new(sec, nonce, hashlib.sha256).digest())
-            for sec in self._get_valid_secrets()
+            for sec in valid_secrets
         )
         if is_valid_hmac:
-            self.authenticated_clients.add(ws)
-            self.active_nonces.pop(ws, None)  # Single-use nonce
-            client_ip = ws.remote_address[0] if ws.remote_address else "unknown"
-            client_port = ws.remote_address[1] if ws.remote_address and len(ws.remote_address) > 1 else id(ws)
-            resolved_client_id = client_id or f"{client_ip}:{client_port}"
-            if self.chaos_shield:
-                self.chaos_shield.transition_state(resolved_client_id, ConnectionState.AUTHENTICATED_STREAMING)
+            self._register_authenticated_client(ws, client_ip, resolved_client_id, f"Binary Peer ({client_ip})")
             if self.gui_state is not None:
-                with self.gui_state.lock:
-                    if not any(c.get("id") == resolved_client_id for c in self.gui_state.connected_clients):
-                        self.gui_state.connected_clients.append({
-                            "id": resolved_client_id,
-                            "ip": client_ip,
-                            "mac": "N/A",
-                            "device": f"Binary Peer ({client_ip})",
-                            "connectedAt": time.strftime("%H:%M:%S"),
-                            "latencyMs": 1,
-                            "isTrusted": True,
-                            "inputAllowed": not self.view_only_mode,
-                        })
                 self.gui_state.add_log("SECURITY", f"Client {resolved_client_id} authenticated via HMAC-SHA256.")
-            await ws.send(pack_packet(OP_AUTH, b'OK_AUTHENTICATED'))
-            logger.info(f"Client {resolved_client_id} authenticated successfully.")
+            await self._ws_send(ws, pack_packet(OP_AUTH, b'OK_AUTHENTICATED'))
+            logger.info("Client %s authenticated successfully.", resolved_client_id)
         else:
-            logger.warning(f"HMAC Authentication failed from {ws.remote_address}")
+            logger.warning("HMAC Authentication failed from %s", resolved_client_id)
             self._record_auth_failure(client_ip, resolved_client_id)
             await self._send_error(ws, "Invalid HMAC signature")
             await ws.close(code=1008, reason="Authentication failed")
 
+    async def _send_encrypted_or_plain(self, ws: WebSocketServerProtocol, opcode: int, payload: bytes, seq: int = 0) -> None:
+        vault = self._client_vaults.get(ws)
+        if vault is not None and vault.is_established:
+            # Build provisional header with plaintext/envelope length unknown? Wait: compute nonce+ct length first
+            # Encrypt payload with AAD binding opcode and seq
+            aad = _HEADER_STRUCT.pack(MAGIC, opcode, 0x02, seq, len(payload))
+            enc_payload, _ = vault.encrypt_frame(payload, aad=aad)
+            await self._ws_send(ws, pack_packet(opcode, enc_payload, seq=seq, flags=0x02))
+            return
+        await self._ws_send(ws, pack_packet(opcode, payload, seq=seq))
+
     # =================================================================
     # COMMAND EXECUTION & HITL CONTAINMENT
     # =================================================================
+    async def _request_hitl_approval(
+        self,
+        ws: WebSocketServerProtocol,
+        cmd_str: str,
+        reason: str,
+        seq: int = 0,
+        is_binary: bool = False,
+        client_cmd_id: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Generates a server-bound HITL challenge tied to this WebSocket session,
+        prompts the local GUI operator if present, and awaits verification.
+        """
+        approval_id = secrets.token_hex(12)
+        challenge_nonce = secrets.token_hex(16)
+        fut = asyncio.get_running_loop().create_future()
+        self.pending_approvals[approval_id] = {
+            "future": fut,
+            "ws": ws,
+            "nonce": challenge_nonce,
+            "command": cmd_str,
+        }
+
+        if self.gui_state is not None and hasattr(self.gui_state, "request_local_hitl_approval"):
+            self.gui_state.request_local_hitl_approval(
+                approval_id=approval_id,
+                command=cmd_str,
+                reason=reason,
+                resolve_cb=lambda ok, aid=approval_id: self.resolve_local_hitl(aid, ok),
+            )
+
+        hitl_event = {
+            "event": "APPROVAL_REQUIRED",
+            "approval_id": approval_id,
+            "command_id": client_cmd_id or approval_id,
+            "challenge_nonce": challenge_nonce,
+            "command": cmd_str,
+            "proposed_command": cmd_str,
+            "reason": reason,
+            "explanation": reason,
+            "risk_level": "HIGH",
+            "requires_signature": self.security_profile == "strict",
+            "target_id": self._hostname,
+            "timestamp": time.time(),
+        }
+        try:
+            if is_binary:
+                await self._send_encrypted_or_plain(ws, OP_HITL, json.dumps(hitl_event).encode("utf-8"), seq=seq)
+            else:
+                await self._ws_send(ws, json.dumps(hitl_event))
+            approved = await asyncio.wait_for(fut, timeout=30.0)
+        except asyncio.TimeoutError:
+            approved = False
+        finally:
+            self.pending_approvals.pop(approval_id, None)
+        return bool(approved), approval_id
+
+    def resolve_local_hitl(self, approval_id: str, approved: bool) -> None:
+        """Called by trusted local host GUI operator dialog to approve or deny pending HITL request."""
+        def _resolve():
+            entry = self.pending_approvals.get(approval_id)
+            if entry:
+                fut = entry.get("future")
+                if fut and not fut.done():
+                    fut.set_result(bool(approved))
+        if self.loop and self.loop.is_running() and threading.get_ident() != self._loop_thread_id:
+            self.loop.call_soon_threadsafe(_resolve)
+        else:
+            _resolve()
+
     async def _process_json_shell_command(self, ws: WebSocketServerProtocol, cmd_str: str, command_id: str):
-        """Executes JSON EXECUTE_PROMPT commands with HITL safety gate and returns JSON EXECUTION_RESULT."""
-        if self.view_only_mode or (self.gui_state is not None and getattr(self.gui_state, "view_only_mode", False)):
-            await ws.send(json.dumps({
+        """Executes JSON EXECUTE_PROMPT commands with AST + HITL safety gate."""
+        if not self._is_client_input_allowed(ws):
+            await self._ws_send(ws, json.dumps({
                 "event": "EXECUTION_RESULT",
                 "command_id": command_id,
                 "status": "rejected",
-                "output": "Shell execution forbidden while host is in View-Only Mode.",
+                "output": "Shell execution forbidden while host is in View-Only Mode or client input is locked.",
                 "exit_code": -1,
                 "timestamp": int(time.time())
             }))
             return
 
-        is_dangerous, reason = AstCommandInspector.inspect(cmd_str)
-        if is_dangerous:
-            fut = asyncio.get_running_loop().create_future()
-            self.pending_approvals[command_id] = fut
-            hitl_event = {
-                "event": "APPROVAL_REQUIRED",
-                "approval_id": command_id,
-                "command_id": command_id,
-                "command": cmd_str,
-                "proposed_command": cmd_str,
-                "reason": reason,
-                "explanation": reason,
-                "risk_level": "HIGH",
-                "target_id": socket.gethostname(),
-                "timestamp": time.time()
-            }
-            await ws.send(json.dumps(hitl_event))
-            try:
-                approved = await asyncio.wait_for(fut, timeout=30.0)
-            except asyncio.TimeoutError:
-                approved = False
-            finally:
-                self.pending_approvals.pop(command_id, None)
+        if CommandASTFirewall is not None:
+            is_allowed, risk, _, fw_reason = CommandASTFirewall.inspect_and_sanitize(cmd_str)
+            if not is_allowed or risk == "BLOCKED":
+                await self._ws_send(ws, json.dumps({
+                    "event": "EXECUTION_RESULT",
+                    "command_id": command_id,
+                    "status": "rejected",
+                    "output": f"Security Firewall Block: {fw_reason}",
+                    "exit_code": -1,
+                    "risk_level": "BLOCKED",
+                    "timestamp": int(time.time())
+                }))
+                return
+        else:
+            risk = "SAFE"
 
+        is_dangerous, reason = AstCommandInspector.inspect(cmd_str)
+        biometric_approved = False
+        if is_dangerous or risk == "REQUIRES_BIOMETRIC":
+            approved, _ = await self._request_hitl_approval(ws, cmd_str, reason, is_binary=False, client_cmd_id=command_id)
             if not approved:
-                await ws.send(json.dumps({
+                await self._ws_send(ws, json.dumps({
                     "event": "EXECUTION_RESULT",
                     "command_id": command_id,
                     "status": "rejected",
@@ -1348,15 +1726,22 @@ class HostAgentDaemon:
                     "timestamp": int(time.time())
                 }))
                 return
+            biometric_approved = True
 
         try:
             t0 = time.perf_counter()
-            exec_res = await CommandASTFirewall.execute_sandboxed(cmd_str, timeout_sec=15.0)
+            if CommandASTFirewall is None:
+                raise RuntimeError("CommandASTFirewall unavailable")
+            exec_res = await CommandASTFirewall.execute_sandboxed(
+                cmd_str,
+                timeout_sec=15.0,
+                biometric_approved=biometric_approved,
+            )
             if self.gui_state is not None:
                 with self.gui_state.lock:
                     self.gui_state.commands_executed += 1
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
-            await ws.send(json.dumps({
+            await self._ws_send(ws, json.dumps({
                 "event": "EXECUTION_RESULT",
                 "command_id": command_id,
                 "status": "success" if exec_res["success"] else "error",
@@ -1367,7 +1752,7 @@ class HostAgentDaemon:
                 "timestamp": int(time.time())
             }))
         except Exception as e:
-            await ws.send(json.dumps({
+            await self._ws_send(ws, json.dumps({
                 "event": "EXECUTION_RESULT",
                 "command_id": command_id,
                 "status": "error",
@@ -1377,55 +1762,46 @@ class HostAgentDaemon:
             }))
 
     async def _process_shell_command(self, ws: WebSocketServerProtocol, payload: bytes, seq: int):
-        """Executes shell commands inside sandbox Job Object with strict execution timeout."""
-        if self.view_only_mode or (self.gui_state is not None and getattr(self.gui_state, "view_only_mode", False)):
+        """Executes shell commands inside sandbox Job Object with strict AST + HITL gates."""
+        if not self._is_client_input_allowed(ws):
             resp = json.dumps({
                 "event": "EXECUTION_RESULT",
                 "command_id": f"cmd-{seq or int(time.time() * 1000)}",
                 "status": "rejected",
-                "output": "Shell execution forbidden while host is in View-Only Mode.",
+                "output": "Shell execution forbidden while host is in View-Only Mode or client input is locked.",
                 "exit_code": -1,
                 "is_terminal": True,
                 "timestamp": int(time.time())
             }).encode('utf-8')
-            await ws.send(pack_packet(OP_SHELL, resp, seq=seq))
+            await self._send_encrypted_or_plain(ws, OP_SHELL, resp, seq=seq)
             return
 
         cmd_str = payload.decode('utf-8', errors='replace').strip()
         if not cmd_str:
             return
 
-        # Inspect command safety
+        if CommandASTFirewall is not None:
+            is_allowed, risk, _, fw_reason = CommandASTFirewall.inspect_and_sanitize(cmd_str)
+            if not is_allowed or risk == "BLOCKED":
+                resp = json.dumps({
+                    "event": "EXECUTION_RESULT",
+                    "command_id": f"cmd-{seq or int(time.time() * 1000)}",
+                    "status": "rejected",
+                    "output": f"Security Firewall Block: {fw_reason}",
+                    "exit_code": -1,
+                    "risk_level": "BLOCKED",
+                    "is_terminal": True,
+                    "timestamp": int(time.time())
+                }).encode("utf-8")
+                await self._send_encrypted_or_plain(ws, OP_SHELL, resp, seq=seq)
+                return
+        else:
+            risk = "SAFE"
+
         is_dangerous, reason = AstCommandInspector.inspect(cmd_str)
-
-        if is_dangerous:
-            # Trigger Human-in-the-Loop confirmation request
-            approval_id = secrets.token_hex(8)
-            fut = asyncio.get_running_loop().create_future()
-            self.pending_approvals[approval_id] = fut
-
-            hitl_event = {
-                "event": "APPROVAL_REQUIRED",
-                "approval_id": approval_id,
-                "command_id": approval_id,
-                "command": cmd_str,
-                "proposed_command": cmd_str,
-                "reason": reason,
-                "explanation": reason,
-                "risk_level": "HIGH",
-                "target_id": socket.gethostname(),
-                "timestamp": time.time()
-            }
-            await ws.send(pack_packet(OP_HITL, json.dumps(hitl_event).encode('utf-8'), seq=seq))
-
-            try:
-                # 30-second timeout for human approval
-                approved = await asyncio.wait_for(fut, timeout=30.0)
-            except asyncio.TimeoutError:
-                approved = False
-            finally:
-                self.pending_approvals.pop(approval_id, None)
-
+        biometric_approved = False
+        if is_dangerous or risk == "REQUIRES_BIOMETRIC":
+            approved, approval_id = await self._request_hitl_approval(ws, cmd_str, reason, seq=seq, is_binary=True)
             if not approved:
                 resp = json.dumps({
                     "event": "EXECUTION_RESULT",
@@ -1433,15 +1809,21 @@ class HostAgentDaemon:
                     "status": "rejected",
                     "output": "Execution denied by operator (HITL Safety Gate).",
                     "exit_code": -1,
+                    "is_terminal": True,
                     "timestamp": int(time.time())
                 }).encode('utf-8')
-                await ws.send(pack_packet(OP_SHELL, resp, seq=seq))
+                await self._send_encrypted_or_plain(ws, OP_SHELL, resp, seq=seq)
                 return
+            biometric_approved = True
 
-        # Execute command with 15-second execution timeout
-        # Delegate execution safely to CommandASTFirewall with AST inspection and escalating timeout
         try:
-            exec_res = await CommandASTFirewall.execute_sandboxed(cmd_str, timeout_sec=15.0)
+            if CommandASTFirewall is None:
+                raise RuntimeError("CommandASTFirewall unavailable")
+            exec_res = await CommandASTFirewall.execute_sandboxed(
+                cmd_str,
+                timeout_sec=15.0,
+                biometric_approved=biometric_approved,
+            )
             if self.gui_state is not None:
                 with self.gui_state.lock:
                     self.gui_state.commands_executed += 1
@@ -1456,7 +1838,7 @@ class HostAgentDaemon:
                 "is_terminal": True,
                 "timestamp": int(time.time())
             }
-            await ws.send(pack_packet(OP_SHELL, json.dumps(result).encode('utf-8'), seq=seq))
+            await self._send_encrypted_or_plain(ws, OP_SHELL, json.dumps(result).encode('utf-8'), seq=seq)
 
         except Exception as e:
             err_msg = json.dumps({
@@ -1468,80 +1850,108 @@ class HostAgentDaemon:
                 "is_terminal": True,
                 "timestamp": int(time.time())
             }).encode('utf-8')
-            await ws.send(pack_packet(OP_SHELL, err_msg, seq=seq))
+            await self._send_encrypted_or_plain(ws, OP_SHELL, err_msg, seq=seq)
 
-    async def _process_hitl_response(self, payload: bytes):
-        """Handles operator approval / rejection from Android or Web controller."""
+    async def _process_hitl_response(self, payload: bytes, ws: Optional[WebSocketServerProtocol] = None):
+        """Handles HITL challenge responses with session binding and secret HMAC proof."""
         try:
             data = json.loads(payload.decode('utf-8'))
-            approval_id = data.get("approval_id") or data.get("command_id")
+            approval_id = str(data.get("approval_id") or data.get("command_id") or "")
             approved = bool(data.get("approved", False))
+            provided_sig = str(data.get("signature") or data.get("approval_hmac") or "").strip().lower()
 
-            if approval_id in self.pending_approvals:
-                fut = self.pending_approvals[approval_id]
-                if not fut.done():
-                    fut.set_result(approved)
+            entry = self.pending_approvals.get(approval_id)
+            if not entry:
+                return
+            if ws is not None and entry.get("ws") is not None and entry["ws"] is not ws:
+                logger.warning("Blocked cross-session HITL approval attempt for %s", approval_id)
+                return
+
+            fut = entry.get("future")
+            if not fut or fut.done():
+                return
+
+            if not approved:
+                fut.set_result(False)
+                return
+
+            if self.security_profile == "strict":
+                logger.warning("Remote HITL approval ignored under strict profile (local host approval required)")
+                return
+
+            # Require HMAC-SHA256 signature over approval_id:nonce:command using pairing secret
+            nonce = str(entry.get("nonce") or "")
+            cmd = str(entry.get("command") or "")
+            proof_msg = f"{approval_id}:{nonce}:{cmd}".encode("utf-8")
+            sig_ok = bool(provided_sig) and any(
+                hmac.compare_digest(
+                    provided_sig,
+                    hmac.new(sec, proof_msg, hashlib.sha256).hexdigest().lower(),
+                )
+                for sec in self._get_valid_secrets()
+            )
+            if not sig_ok:
+                logger.warning("Rejected unsigned/forged remote HITL approval for %s", approval_id)
+                if self.gui_state is not None:
+                    self.gui_state.add_log("ALERT", f"Blocked unverified remote HITL self-approval for '{cmd[:40]}'")
+                fut.set_result(False)
+                return
+
+            fut.set_result(True)
         except Exception as e:
-            logger.debug(f"HITL response parse error: {e}")
+            logger.debug("HITL response parse error: %s", e)
 
     async def _process_clipboard(self, ws: WebSocketServerProtocol, payload: bytes):
         """
-        Opcode 0x07: Bidirectional Clipboard Synchronization.
-        Writes to host clipboard if payload is present, and echoes host clipboard text back to client.
+        Opcode 0x07: Bidirectional Clipboard Synchronization (safe across non-Tk threads).
         """
-        if self.gui_state is not None and not getattr(self.gui_state, "clipboard_sync_allowed", True):
+        self._refresh_runtime_policies()
+        if not self.clipboard_sync_allowed:
             logger.info("Clipboard sync ignored: disabled by host security policy.")
             return
         try:
+            loop = asyncio.get_running_loop()
             if payload:
+                if not self._is_client_input_allowed(ws):
+                    logger.info("Clipboard write rejected: host in View-Only Mode or client input locked.")
+                    return
                 text = payload.decode('utf-8', errors='replace')
                 if pyperclip:
-                    pyperclip.copy(text)
-                else:
-                    try:
-                        import tkinter as tk
-                        r = tk.Tk()
-                        r.withdraw()
-                        r.clipboard_clear()
-                        r.clipboard_append(text)
-                        r.update()
-                        r.destroy()
-                    except Exception:
-                        pass
+                    await loop.run_in_executor(None, pyperclip.copy, text)
+                elif platform.system() == "Windows":
+                    import subprocess
+                    await loop.run_in_executor(
+                        None,
+                        lambda: subprocess.run(["clip"], input=text.encode("utf-16-le"), check=False, timeout=2.0),
+                    )
+                elif platform.system() == "Darwin":
+                    import subprocess
+                    await loop.run_in_executor(
+                        None,
+                        lambda: subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False, timeout=2.0),
+                    )
 
-            # Retrieve active clipboard and send back to client
             host_clip = ""
             if pyperclip:
                 try:
-                    host_clip = pyperclip.paste()
+                    host_clip = await loop.run_in_executor(None, pyperclip.paste)
                 except Exception:
                     pass
             if host_clip:
-                await ws.send(pack_packet(OP_CLIP, host_clip.encode('utf-8')))
+                await self._send_encrypted_or_plain(ws, OP_CLIP, host_clip.encode('utf-8'))
         except Exception as e:
-            logger.debug(f"Clipboard sync error: {e}")
+            logger.debug("Clipboard sync error: %s", e)
 
     async def _process_virtual_input(self, payload: bytes, ws: Optional[WebSocketServerProtocol] = None):
         """
         Opcode 0x08: Remote Virtual Input (Trackpad, Mouse & Keystroke Forwarding).
-        Supports both compact 6-byte binary struct (Flutter/mobile) and JSON payloads (Web console).
-        Binary format: struct.pack("!BhhB", event_type, dx, dy, button_code)
-          event_type: 1=move, 2=click, 3=scroll
-          button_code: 1=left, 2=right
         """
         try:
-            if self.view_only_mode or (self.gui_state is not None and getattr(self.gui_state, "view_only_mode", False)):
-                logger.info("Remote input ignored: Host is in View-Only Mode.")
+            if ws is not None and not self._is_client_input_allowed(ws):
+                logger.info("Remote input ignored: View-Only Mode or client input locked.")
                 return
-
-            if self.gui_state is not None and ws is not None:
-                peer = getattr(ws, "remote_address", None)
-                p_ip = peer[0] if peer else ""
-                with self.gui_state.lock:
-                    client_entry = next((c for c in self.gui_state.connected_clients if c.get("ip") == p_ip), None)
-                    if client_entry and not client_entry.get("inputAllowed", True):
-                        logger.info(f"Remote input ignored: Device {client_entry.get('device')} ({p_ip}) input is locked.")
-                        return
+            elif ws is None and (self.view_only_mode or (self.gui_state is not None and getattr(self.gui_state, "view_only_mode", False))):
+                return
 
             if not pyautogui:
                 logger.debug("pyautogui not installed - input forwarding skipped")
@@ -1549,7 +1959,6 @@ class HostAgentDaemon:
 
             loop = asyncio.get_running_loop()
 
-            # Compact binary struct path (6 bytes, does not start with '{')
             if len(payload) == 6 and not payload.startswith(b'{'):
                 event_type, dx, dy, btn_code = struct.unpack("!BhhB", payload)
                 btn = "right" if btn_code == 2 else "left"
@@ -1591,7 +2000,7 @@ class HostAgentDaemon:
                 elif action == "click_at":
                     x = int(data.get("x", 0))
                     y = int(data.get("y", 0))
-                    btn = data.get("button", "left")
+                    btn = str(data.get("button", "left")).lower()
                     pyautogui.click(x=x, y=y, button=btn, _pause=False)
                 elif action in ("double_click", "mouse_double_click"):
                     x = data.get("x")
@@ -1625,111 +2034,145 @@ class HostAgentDaemon:
                     text = str(data.get("text", ""))
                     press_enter = bool(data.get("press_enter", data.get("pressEnter", False)))
                     if text:
-                        pyautogui.typewrite(text, _pause=False)
+                        pyautogui.write(text, _pause=False)
                     if press_enter:
                         pyautogui.press('enter', _pause=False)
                 elif action in ("key", "key_press"):
-                    key = str(data.get("key", ""))
-                    if key:
+                    key = str(data.get("key", "")).lower()
+                    if key and key in getattr(pyautogui, "KEYBOARD_KEYS", {key}):
                         pyautogui.press(key, _pause=False)
                 elif action in ("hotkey", "key_combo", "keyboard_hotkey"):
                     raw_keys = data.get("keys", [])
                     if isinstance(raw_keys, str):
-                        keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+                        keys = [k.strip().lower() for k in raw_keys.split(",") if k.strip()]
                     elif isinstance(raw_keys, list):
-                        keys = [str(k).strip() for k in raw_keys if str(k).strip()]
+                        keys = [str(k).strip().lower() for k in raw_keys if str(k).strip()]
                     else:
                         keys = []
-                    if keys:
+                    valid_keyset = set(getattr(pyautogui, "KEYBOARD_KEYS", []))
+                    if keys and (not valid_keyset or all(k in valid_keyset for k in keys)):
                         pyautogui.hotkey(*keys, _pause=False)
 
             await loop.run_in_executor(None, _exec_json_input)
         except Exception as e:
-            logger.debug(f"Virtual input injection error: {e}")
+            logger.debug("Virtual input injection error: %s", e)
 
-    async def _process_audio_control(self, payload: bytes):
+    async def _process_audio_control(self, payload: bytes, ws: Optional[WebSocketServerProtocol] = None):
         """
-        Opcode 0x09: Remote Audio & Media Session Control.
-        Supports both compact 2-byte binary struct (Flutter/mobile) and JSON payloads (Web console).
-        Binary format: struct.pack("!BB", action_code, volume_pct)
-          action_code: 1=volume_up, 2=volume_down, 3=mute, 4=play_pause
+        Opcode 0x09: Remote Audio & Media Session Control (subject to View-Only / input lock).
         """
+        if ws is not None and not self._is_client_input_allowed(ws):
+            logger.info("Audio/Lock control ignored: host is in View-Only Mode or client input locked.")
+            return
         try:
-            # Compact binary struct path (2 bytes, does not start with '{')
             if len(payload) == 2 and not payload.startswith(b'{'):
-                action_code, vol_pct = struct.unpack("!BB", payload)
+                action_code, _vol_pct = struct.unpack("!BB", payload)
                 _AUDIO_ACTION_MAP = {1: "volume_up", 2: "volume_down", 3: "mute", 4: "play_pause"}
                 action = _AUDIO_ACTION_MAP.get(action_code, "")
             else:
                 data = json.loads(payload.decode('utf-8'))
                 action = str(data.get("action") or data.get("command") or data.get("type") or "").lower()
 
-            if platform.system() == "Windows":
-                VK_VOLUME_MUTE = 0xAD
-                VK_VOLUME_DOWN = 0xAE
-                VK_VOLUME_UP = 0xAF
-                VK_MEDIA_PLAY_PAUSE = 0xB3
-                user32 = ctypes.windll.user32
+            loop = asyncio.get_running_loop()
 
-                if action in ("volume_up", "vol_up"):
-                    user32.keybd_event(VK_VOLUME_UP, 0, 0, 0)
-                    user32.keybd_event(VK_VOLUME_UP, 0, 2, 0)
-                elif action in ("volume_down", "vol_down"):
-                    user32.keybd_event(VK_VOLUME_DOWN, 0, 0, 0)
-                    user32.keybd_event(VK_VOLUME_DOWN, 0, 2, 0)
-                elif action in ("mute", "volume_mute"):
-                    user32.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
-                    user32.keybd_event(VK_VOLUME_MUTE, 0, 2, 0)
-                elif action == "play_pause":
-                    user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
-                    user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
-                elif action in ("lock_pc", "lock"):
-                    user32.LockWorkStation()
-            elif platform.system() == "Linux":
-                import subprocess
-                if action in ("volume_up", "vol_up"):
-                    subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "5%+"], check=False)
-                elif action in ("volume_down", "vol_down"):
-                    subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "5%-"], check=False)
-                elif action in ("mute", "volume_mute"):
-                    subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "toggle"], check=False)
-                elif action == "play_pause":
-                    subprocess.run(["playerctl", "play-pause"], check=False)
-                elif action in ("lock_pc", "lock"):
-                    subprocess.run(["loginctl", "lock-session"], check=False)
+            def _exec_audio():
+                if platform.system() == "Windows":
+                    VK_VOLUME_MUTE = 0xAD
+                    VK_VOLUME_DOWN = 0xAE
+                    VK_VOLUME_UP = 0xAF
+                    VK_MEDIA_PLAY_PAUSE = 0xB3
+                    user32 = ctypes.windll.user32
+                    if action in ("volume_up", "vol_up"):
+                        user32.keybd_event(VK_VOLUME_UP, 0, 0, 0)
+                        user32.keybd_event(VK_VOLUME_UP, 0, 2, 0)
+                    elif action in ("volume_down", "vol_down"):
+                        user32.keybd_event(VK_VOLUME_DOWN, 0, 0, 0)
+                        user32.keybd_event(VK_VOLUME_DOWN, 0, 2, 0)
+                    elif action in ("mute", "volume_mute"):
+                        user32.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
+                        user32.keybd_event(VK_VOLUME_MUTE, 0, 2, 0)
+                    elif action == "play_pause":
+                        user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
+                        user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
+                    elif action in ("lock_pc", "lock"):
+                        user32.LockWorkStation()
+                elif platform.system() == "Linux":
+                    import subprocess
+                    if action in ("volume_up", "vol_up"):
+                        subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "5%+"], check=False, timeout=3.0)
+                    elif action in ("volume_down", "vol_down"):
+                        subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "5%-"], check=False, timeout=3.0)
+                    elif action in ("mute", "volume_mute"):
+                        subprocess.run(["amixer", "-D", "pulse", "sset", "Master", "toggle"], check=False, timeout=3.0)
+                    elif action == "play_pause":
+                        subprocess.run(["playerctl", "play-pause"], check=False, timeout=3.0)
+                    elif action in ("lock_pc", "lock"):
+                        subprocess.run(["loginctl", "lock-session"], check=False, timeout=3.0)
+
+            await loop.run_in_executor(None, _exec_audio)
         except Exception as e:
-            logger.debug(f"Audio control error: {e}")
+            logger.debug("Audio control error: %s", e)
 
     async def _process_viewport_resize(self, payload: bytes):
         """
-        Handles 0x09 (VIEWPORT_RESIZE) control packet from Flutter client.
-        Dynamically adjusts frame downsampling to match physical client screen dimensions.
+        Handles 0x0A (VIEWPORT_RESIZE) control packet cleanly for both JSON and 8-byte binary structs.
         """
         try:
-            if len(payload) >= 8:
-                width, height = struct.unpack('!II', payload[:8])
+            stripped = payload.lstrip()
+            if stripped.startswith(b'{'):
+                data = json.loads(stripped.decode('utf-8'))
+                if "width" in data and "height" in data:
+                    self.screen_pipeline.set_target_resolution(int(data["width"]), int(data["height"]))
+                if "quality" in data:
+                    self.screen_pipeline.set_quality(int(data["quality"]))
+                if "monitor" in data:
+                    self.screen_pipeline.monitor_index = max(1, int(data["monitor"]))
+                    self.screen_pipeline.force_keyframe = True
+                    self.screen_pipeline.consecutive_static = 0
+            elif len(payload) == 8:
+                width, height = struct.unpack('!II', payload)
                 self.screen_pipeline.set_target_resolution(width, height)
-            elif payload.startswith(b'{'):
-                # JSON fallback if client passes JSON payload
-                data = json.loads(payload.decode('utf-8'))
-                w = int(data.get("width", 1280))
-                h = int(data.get("height", 720))
-                self.screen_pipeline.set_target_resolution(w, h)
         except Exception as e:
-            logger.debug(f"Viewport resize decode error: {e}")
+            logger.debug("Viewport resize decode error: %s", e)
+
+    async def _process_display_enum(self, ws: WebSocketServerProtocol, payload: bytes, seq: int):
+        """Opcode 0x0D: Enumerates monitors or switches active capture monitor."""
+        try:
+            if payload:
+                stripped = payload.lstrip()
+                if stripped.startswith(b'{'):
+                    data = json.loads(stripped.decode('utf-8'))
+                    if "monitor" in data:
+                        idx = max(1, int(data["monitor"]))
+                        self.screen_pipeline.monitor_index = idx
+                        self.screen_pipeline.force_keyframe = True
+                        self.screen_pipeline.consecutive_static = 0
+                        if self.multi_monitor:
+                            self.multi_monitor.switch_monitor(idx)
+                elif len(payload) == 1:
+                    idx = max(1, payload[0])
+                    self.screen_pipeline.monitor_index = idx
+                    self.screen_pipeline.force_keyframe = True
+                    self.screen_pipeline.consecutive_static = 0
+            monitors = self.multi_monitor.enumerate_monitors() if self.multi_monitor else [
+                {"index": 1, "width": self.screen_pipeline.target_res[0], "height": self.screen_pipeline.target_res[1], "left": 0, "top": 0, "label": "Display 1"}
+            ]
+            resp = json.dumps({"monitors": monitors, "active": self.screen_pipeline.monitor_index}).encode("utf-8")
+            await self._send_encrypted_or_plain(ws, OP_DISPLAY_ENUM, resp, seq=seq)
+        except Exception as exc:
+            await self._send_error(ws, f"Display enumeration error: {exc}")
 
     # =================================================================
     # LOCAL OLLAMA AI STREAMING BRIDGE
     # =================================================================
     async def _process_ollama_query(self, ws: WebSocketServerProtocol, payload: bytes, seq: int):
-        """Connects to local Ollama server (deepseek-r1 / qwen2.5-coder) and streams chunks."""
+        """Connects to local Ollama server and streams chunks back cleanly."""
         import urllib.request
         try:
             req_data = json.loads(payload.decode('utf-8'))
             model = req_data.get("model", "qwen2.5-coder:32b")
             prompt = req_data.get("prompt", "")
 
-            # Query local Ollama HTTP API
             url = "http://127.0.0.1:11434/api/generate"
             body = json.dumps({"model": model, "prompt": prompt, "stream": True}).encode('utf-8')
             req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
@@ -1744,57 +2187,73 @@ class HostAgentDaemon:
                         if line:
                             chunk = json.loads(line.decode('utf-8'))
                             token = chunk.get("response", "")
-                            asyncio.run_coroutine_threadsafe(
-                                ws.send(pack_packet(OP_LLM_STREAM, token.encode('utf-8'), seq=seq)),
-                                loop
-                            )
+                            if token:
+                                asyncio.run_coroutine_threadsafe(
+                                    self._send_encrypted_or_plain(ws, OP_LLM_STREAM, token.encode('utf-8'), seq=seq),
+                                    loop
+                                )
                             if chunk.get("done", False):
                                 break
 
             await loop.run_in_executor(None, sync_stream)
         except Exception as e:
             err_json = json.dumps({"error": f"Ollama local bridge error: {e}"}).encode('utf-8')
-            await ws.send(pack_packet(OP_LLM_STREAM, err_json, seq=seq))
+            await self._send_encrypted_or_plain(ws, OP_LLM_STREAM, err_json, seq=seq)
 
     # =================================================================
     # STREAMING & HEARTBEAT BACKGROUND LOOPS
     # =================================================================
     async def _screen_stream_loop(self):
-        """Streams desktop frames at adaptive framerates only to authenticated clients."""
+        """Streams desktop frames at adaptive framerates with live FPS measurement."""
+        frame_seq = 0
+        fps_window_start = time.perf_counter()
+        fps_frame_count = 0
         while self.is_running:
             if not self.authenticated_clients:
+                self.capture_fps = 0.0
+                if self.gui_state is not None:
+                    self.gui_state.capture_fps = 0.0
+                fps_window_start = time.perf_counter()
+                fps_frame_count = 0
                 await asyncio.sleep(0.5)
                 continue
 
             frame = await self.screen_pipeline.get_next_frame()
             if frame:
+                frame_seq += 1
+                fps_frame_count += 1
+                now = time.perf_counter()
+                elapsed = now - fps_window_start
+                if elapsed >= 1.0:
+                    self.capture_fps = round(fps_frame_count / elapsed, 1)
+                    fps_window_start = now
+                    fps_frame_count = 0
+                    if self.gui_state is not None:
+                        self.gui_state.capture_fps = self.capture_fps
+
                 if self.gui_state is not None:
                     with self.gui_state.lock:
                         self.gui_state.frames_broadcast += 1
-                packet = pack_packet(OP_FRAME, frame)
-                # Send to authenticated clients concurrently to prevent slow-client head-of-line blocking
+
                 clients_snapshot = list(self.authenticated_clients)
                 if clients_snapshot:
                     results = await asyncio.gather(
-                        *(ws.send(packet) for ws in clients_snapshot),
+                        *(self._send_encrypted_or_plain(ws, OP_FRAME, frame, seq=frame_seq) for ws in clients_snapshot),
                         return_exceptions=True
                     )
                     for ws, res in zip(clients_snapshot, results):
                         if isinstance(res, Exception):
                             self.authenticated_clients.discard(ws)
 
-            # Adaptive sleep based on motion (120Hz high refresh rate pipeline)
             if self.screen_pipeline.consecutive_static > 2:
-                await asyncio.sleep(0.5)  # Drop to 2 FPS when desktop is idle
+                await asyncio.sleep(0.5)
             else:
-                await asyncio.sleep(0.008)  # Smooth 120 FPS under active screen movement (8.33ms)
+                await asyncio.sleep(0.016)  # ~60 FPS cap under active motion
 
     async def _telemetry_heartbeat_loop(self):
-        """
-        Periodically dispatches hardware CPU/RAM metrics to authenticated clients.
-        Includes Smart Power & Idle Sentinel tracking when no clients are connected.
-        """
+        """Periodically dispatches hardware CPU/RAM/FPS telemetry with monotonic seq."""
         idle_seconds = 0
+        telem_seq = 0
         while self.is_running:
             await asyncio.sleep(2.0)
             if not self.authenticated_clients:
@@ -1803,7 +2262,7 @@ class HostAgentDaemon:
                     if cpu_chk < 5.0:
                         idle_seconds += 2
                         if idle_seconds % 300 == 0:
-                            logger.info(f"Smart Power Sentinel: Host idle for {idle_seconds}s (CPU: {cpu_chk}%). Maintaining low-power standby.")
+                            logger.info("Smart Power Sentinel: Host idle for %ds (CPU: %.1f%%).", idle_seconds, cpu_chk)
                     else:
                         idle_seconds = 0
                 except Exception:
@@ -1811,6 +2270,7 @@ class HostAgentDaemon:
                 continue
 
             idle_seconds = 0
+            telem_seq += 1
             try:
                 cpu = psutil.cpu_percent(interval=None) if psutil else 0.0
                 ram = psutil.virtual_memory().percent if psutil else 0.0
@@ -1818,36 +2278,66 @@ class HostAgentDaemon:
                     "hostname": self._hostname,
                     "cpu_percent": cpu,
                     "ram_percent": ram,
+                    "capture_fps": self.capture_fps,
                     "os": self._os_name,
+                    "version": "0.50.0",
                     "status": "ready"
                 }
                 payload = json.dumps(telemetry).encode('utf-8')
-                packet = pack_packet(OP_TELEMETRY, payload)
-
                 clients_snapshot = list(self.authenticated_clients)
                 if clients_snapshot:
                     results = await asyncio.gather(
-                        *(ws.send(packet) for ws in clients_snapshot),
+                        *(self._send_encrypted_or_plain(ws, OP_TELEMETRY, payload, seq=telem_seq) for ws in clients_snapshot),
                         return_exceptions=True
                     )
                     for ws, res in zip(clients_snapshot, results):
                         if isinstance(res, Exception):
                             self.authenticated_clients.discard(ws)
             except Exception as e:
-                logger.debug(f"Telemetry error: {e}")
+                logger.debug("Telemetry error: %s", e)
 
     async def _send_error(self, ws: WebSocketServerProtocol, msg: str):
         """Sends an OP_ERR frame to a client."""
         try:
-            await ws.send(pack_packet(OP_ERR, msg.encode('utf-8')))
+            await self._ws_send(ws, pack_packet(OP_ERR, msg.encode('utf-8')))
         except Exception:
             pass
 
     def stop(self):
-        """Clean shutdown hook for OS signals."""
+        """Clean shutdown hook closing background tasks, WebSockets, vaults, and hardware handles."""
         logger.info("Stopping AI NetController Host Agent Daemon...")
         self.is_running = False
+
+        def _cleanup_loop_resources():
+            for t in list(self._background_tasks):
+                if not t.done():
+                    t.cancel()
+            self._background_tasks.clear()
+            for ws in list(self.clients):
+                try:
+                    asyncio.create_task(ws.close(code=1001, reason="Daemon shutting down"))
+                except Exception:
+                    pass
+            for v in self._client_vaults.values():
+                try:
+                    v.close()
+                except Exception:
+                    pass
+            self._client_vaults.clear()
+            if self.server:
+                try:
+                    self.server.close()
+                except Exception:
+                    pass
+
+        if self.loop and self.loop.is_running() and threading.get_ident() != self._loop_thread_id:
+            self.loop.call_soon_threadsafe(_cleanup_loop_resources)
+        else:
+            _cleanup_loop_resources()
+
         self.screen_pipeline.close()
+        if self.multi_monitor:
+            self.multi_monitor.close()
         JOB_SUPERVISOR.close()
 
         if self.tray_icon:
@@ -1869,9 +2359,6 @@ class HostAgentDaemon:
                     asyncio.run(self.zeroconf.async_close())
             except Exception:
                 pass
-
-        if self.server:
-            self.server.close()
 
 # =====================================================================
 # ENTRY POINT
@@ -1897,7 +2384,6 @@ def main():
             print(f"Start Menu shortcut: {msg2}")
         sys.exit(0)
 
-    # Checks & Balances: Single-instance mutex lock
     guard = None
     if SingleInstanceGuard:
         guard = SingleInstanceGuard()
@@ -1907,11 +2393,10 @@ def main():
 
     daemon = HostAgentDaemon()
 
-    # Pre-flight port availability verification
     if check_port_available:
         is_avail, port_msg = check_port_available(daemon.port, daemon.host)
         if not is_avail:
-            logger.warning(f"Port pre-flight notice: {port_msg}")
+            logger.warning("Port pre-flight notice: %s", port_msg)
 
     try:
         if "--headless" not in sys.argv:
@@ -1920,6 +2405,7 @@ def main():
                 if HAS_TKINTER:
                     gui_state = HostDaemonState(host=daemon.host, port=daemon.port)
                     daemon.gui_state = gui_state
+                    daemon._sync_gui_state_on_attach()
                     gui_state.on_disconnect_callback = daemon.force_disconnect_client
 
                     def _run_ws_daemon():
@@ -1929,7 +2415,7 @@ def main():
                             loop.run_until_complete(daemon.start())
                             loop.run_forever()
                         except Exception as exc:
-                            logger.error(f"Async daemon loop error: {exc}")
+                            logger.error("Async daemon loop error: %s", exc)
                         finally:
                             loop.close()
 
@@ -1944,7 +2430,7 @@ def main():
                     gui.run()
                     return
             except Exception as e:
-                logger.info(f"Desktop GUI fallback to console mode: {e}")
+                logger.info("Desktop GUI fallback to console mode: %s", e)
 
         try:
             async def _run_headless():

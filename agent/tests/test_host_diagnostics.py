@@ -20,7 +20,7 @@ Implements production-grade pytest assertions and benchmarks for:
 - TC-10: Process Supervision & Job Objects (KILL_ON_JOB_CLOSE / POSIX process groups)
 - TC-11: Virtual Trackpad & Media Controls (Opcodes 0x08/0x09 OS input execution)
 - TC-12: Chunked Zero-Trust File Transfer (64KB chunks & SHA-256 parity)
-- TC-13: Multi-Monitor Display Enumeration (Opcode 0x0B & dynamic display switching)
+- TC-13: Multi-Monitor Display Enumeration (Opcode 0x0D & dynamic display switching)
 - TC-14: Presentation Fail-Safe Demo Mode (Offline loopback sandbox simulation)
 ================================================================================
 """
@@ -214,7 +214,7 @@ class TestBinaryWireProtocol(unittest.TestCase):
         return opcode, flags, seq, payload
 
     def test_valid_opcodes_roundtrip(self):
-        opcodes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0xEE]
+        opcodes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0xED, 0xEE]
         for op in opcodes:
             dummy_payload = f"Payload-for-op-{op}".encode("utf-8")
             raw = self.pack(op, flags=0, seq=100 + op, payload=dummy_payload)
@@ -473,7 +473,7 @@ class TestASTCommandFirewall(unittest.TestCase):
         "dir", "dir C:\\Windows", "uptime", "whoami", "hostname",
         "ipconfig /all", "netstat -ano", "systeminfo", "tasklist",
         "echo AI NetController Active", "ping 127.0.0.1 -n 4", "tracert 1.1.1.1",
-        "route print", "get-date", "date /t", "ver", "type nul > test.log",
+        "where python", "get-date", "date /t", "ver", "git --version",
         "python --version", "git status", "winget list"
     ]
 
@@ -679,7 +679,7 @@ class TestChunkedFileTransfer(unittest.TestCase):
 # ==============================================================================
 class TestMultiMonitorEnumeration(unittest.TestCase):
     """
-    Validates Opcode 0x0B display enumeration and dynamic screen switching.
+    Validates Opcode 0x0D display enumeration and dynamic screen switching.
     """
 
     def test_monitor_enumeration_schema(self):

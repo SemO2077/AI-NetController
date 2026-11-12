@@ -22,12 +22,12 @@ class BinaryOpcode {
   static const int viewportResize =
       0x0A; // 10: Dynamic Viewport Dimension Negotiation
   static const int displayEnum =
-      0x0B; // 11: Multi-Monitor Display Enumeration & Context Switching
+      0x0D; // 13: Multi-Monitor Display Enumeration & Context Switching
   static const int llmStream = 0x0B; // 11: Local LLM Chunk Stream (matches agent.py OP_LLM_STREAM)
   static const int fileTransfer =
       0x0C; // 12: Chunked Zero-Trust File Transfer (Opcode 0x0C)
   static const int frameSync =
-      0xEE; // 238: Keyframe Resynchronization Signal (Opcode 0xEE)
+      0xED; // 237: Keyframe Resynchronization Signal (Opcode 0xED)
   static const int error = 0xEE; // 238: Structured Error Frame
 }
 

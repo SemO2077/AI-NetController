@@ -38,9 +38,11 @@ void main() {
           BinaryOpcode.input, // 0x08
           BinaryOpcode.audio, // 0x09
           BinaryOpcode.viewportResize, // 0x0A
-          BinaryOpcode.displayEnum, // 0x0B
+          BinaryOpcode.llmStream, // 0x0B
           BinaryOpcode.fileTransfer, // 0x0C
-          BinaryOpcode.frameSync, // 0xEE
+          BinaryOpcode.displayEnum, // 0x0D
+          BinaryOpcode.frameSync, // 0xED
+          BinaryOpcode.error, // 0xEE
         ];
 
         for (final opcode in allOpcodes) {

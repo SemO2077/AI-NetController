@@ -84,6 +84,14 @@ except (ImportError, ModuleNotFoundError):
             raise err
 
 try:
+    from daemon_config import load_config
+except (ImportError, ModuleNotFoundError):
+    try:
+        from agent.daemon_config import load_config
+    except (ImportError, ModuleNotFoundError):
+        load_config = None
+
+try:
     from windows_integration import (
         SingleInstanceGuard,
         check_port_available,
@@ -226,33 +234,53 @@ class WoLDoctor:
     def audit_hardware_configuration() -> Dict[str, Any]:
         report: Dict[str, Any] = {
             "platform": platform.system(),
-            "wol_ready": True,
+            "wol_ready": False,
+            "udp_broadcast_ready": False,
             "warnings": [],
             "adapters": []
         }
+
+        has_up_routable_adapter = False
+        wol_driver_disabled = False
 
         try:
             import psutil
             stats = psutil.net_if_stats()
             addrs = psutil.net_if_addrs()
+            link_family = getattr(psutil, "AF_LINK", getattr(socket, "AF_PACKET", -1))
 
             _VIRTUAL_NIC_PREFIXES = ("lo", "vethernet", "wsl", "docker", "br-", "virbr", "vboxnet", "vmnet", "loopback")
 
             for nic_name, nic_stat in stats.items():
                 if nic_name.lower().startswith(_VIRTUAL_NIC_PREFIXES):
                     continue
+                nic_addrs = addrs.get(nic_name, [])
                 ipv4_addrs = [
-                    a.address for a in addrs.get(nic_name, [])
+                    a.address for a in nic_addrs
                     if a.family == socket.AF_INET
                 ]
+                mac_addrs = [
+                    a.address for a in nic_addrs
+                    if a.family == link_family and getattr(a, "address", "")
+                ]
+                primary_ip = ipv4_addrs[0] if ipv4_addrs else "N/A"
                 adapter_info = {
                     "Name": nic_name,
                     "Status": "Up" if nic_stat.isup else "Down",
                     "LinkSpeed": f"{nic_stat.speed} Mbps" if nic_stat.speed else "Auto",
                     "MTU": nic_stat.mtu,
-                    "IPv4": ipv4_addrs[0] if ipv4_addrs else "N/A",
+                    "IPv4": primary_ip,
+                    "MAC": mac_addrs[0].replace("-", ":").upper() if mac_addrs else "N/A",
                 }
                 report["adapters"].append(adapter_info)
+
+                if (
+                    nic_stat.isup
+                    and ipv4_addrs
+                    and not ipv4_addrs[0].startswith("127.")
+                    and not ipv4_addrs[0].startswith("169.254.")
+                ):
+                    has_up_routable_adapter = True
 
                 if nic_stat.isup and nic_stat.speed > 0 and nic_stat.speed < 100:
                     report["warnings"].append(
@@ -261,9 +289,64 @@ class WoLDoctor:
 
             if not report["adapters"]:
                 report["warnings"].append("No active non-loopback network interfaces detected.")
-                report["wol_ready"] = False
+            elif not has_up_routable_adapter:
+                report["warnings"].append("No active physical adapter holds a routable IPv4 LAN address.")
+
+            # Verify UDP Magic Packet broadcast socket capability
+            test_sock = None
+            try:
+                test_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                report["udp_broadcast_ready"] = True
+            except Exception as sock_err:
+                report["warnings"].append(f"UDP broadcast socket unavailable: {sock_err}")
+            finally:
+                if test_sock is not None:
+                    try:
+                        test_sock.close()
+                    except Exception:
+                        pass
+
+            # On Windows, inspect NIC class registry for *WakeOnMagicPacket without spawning shells
+            if IS_WINDOWS:
+                try:
+                    import winreg
+                    net_class_key = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}"
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, net_class_key) as root_k:
+                        idx = 0
+                        while idx < 64:
+                            try:
+                                sub_name = winreg.EnumKey(root_k, idx)
+                                idx += 1
+                            except OSError:
+                                break
+                            if not sub_name.isdigit():
+                                continue
+                            try:
+                                with winreg.OpenKey(root_k, sub_name) as sub_k:
+                                    desc, _ = winreg.QueryValueEx(sub_k, "DriverDesc")
+                                    try:
+                                        womp, _ = winreg.QueryValueEx(sub_k, "*WakeOnMagicPacket")
+                                        if str(womp) == "0":
+                                            wol_driver_disabled = True
+                                            report["warnings"].append(
+                                                f"Windows NIC '{desc}' has Wake on Magic Packet disabled (*WakeOnMagicPacket=0)."
+                                            )
+                                    except FileNotFoundError:
+                                        pass
+                            except OSError:
+                                continue
+                except Exception as reg_err:
+                    logger.debug(f"Windows WoL registry inspection skipped: {reg_err}")
+
+            report["wol_ready"] = bool(
+                has_up_routable_adapter
+                and report["udp_broadcast_ready"]
+                and not wol_driver_disabled
+            )
         except Exception as e:
             report["warnings"].append(f"NIC telemetry inspection notice: {str(e)}")
+            report["wol_ready"] = False
 
         return report
 
@@ -282,24 +365,36 @@ class WoLDoctor:
         results = {"ipv4": False, "ipv6": False}
 
         # 1. IPv4 Broadcast
+        s4 = None
         try:
             s4 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s4.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             s4.sendto(magic_payload, (subnet_bcast, port))
-            s4.close()
             results["ipv4"] = True
         except Exception as e:
             logger.error(f"IPv4 WoL transmission failure: {e}")
+        finally:
+            if s4 is not None:
+                try:
+                    s4.close()
+                except Exception:
+                    pass
 
         # 2. IPv6 Link-Local / Node-Local Multicast
+        s6 = None
         try:
             s6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
             # ff02::1 = All nodes link-local multicast
             s6.sendto(magic_payload, ("ff02::1", port, 0, 0))
-            s6.close()
             results["ipv6"] = True
         except Exception as e:
             logger.debug(f"IPv6 WoL transmission skipped or unavailable: {e}")
+        finally:
+            if s6 is not None:
+                try:
+                    s6.close()
+                except Exception:
+                    pass
 
         return results
 
@@ -457,8 +552,19 @@ class DaemonServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 8765, psk: Optional[str] = None):
         self.host = host
         self.port = port
-        resolved_psk = psk or os.environ.get("CST_AGENT_SECRET", "CST_SECURE_TOKEN_2026")
-        self.psk = resolved_psk.encode("utf-8")
+        cfg = load_config() if callable(load_config) else {}
+        resolved_psk = (
+            psk
+            or os.environ.get("AI_AGENT_SECRET")
+            or os.environ.get("CST_AGENT_SECRET")
+            or (cfg.get("pairing_token") if isinstance(cfg, dict) else None)
+        )
+        if not resolved_psk or not str(resolved_psk).strip():
+            raise ValueError(
+                "Refusing to start DaemonServer without a provisioned pairing secret "
+                "(set AI_AGENT_SECRET or provision daemon_config)."
+            )
+        self.psk = str(resolved_psk).strip().encode("utf-8")
         self.running = False
         self.vault: Optional[HostCryptoVault] = None
         self.thread_pool = ThreadPoolExecutor(max_workers=4)
@@ -553,10 +659,10 @@ class DaemonServer:
         vault = HostCryptoVault(self.psk)
 
         try:
-            # 1. Send Opcode 0x06 Handshake Challenge
+            # 1. Send Opcode 0x06 Handshake Challenge (Canonical 0xC5 0x71 Framing)
             challenge = vault.create_handshake_challenge()
-            # 12-byte binary header: [0x55, 0xAA, 0x06, Flags=0, Seq=0, Length]
-            header = struct.pack(">BBBBII", 0x55, 0xAA, 0x06, 0x00, 0, len(challenge))
+            # 12-byte binary header: [0xC5, 0x71, 0x06, Flags=0, Seq=0, Length]
+            header = struct.pack(">BBBBII", 0xC5, 0x71, 0x06, 0x00, 0, len(challenge))
             await loop.sock_sendall(client_sock, header + challenge)
 
             # 2. Receive Handshake Response (exact 12-byte header + payload)
@@ -565,8 +671,8 @@ class DaemonServer:
                 client_sock.close()
                 return
 
-            _, _, opcode, _, _, payload_len = struct.unpack(">BBBBII", resp_header)
-            if opcode != 0x06 or payload_len <= 0 or payload_len > 4096:
+            m0, m1, opcode, _, _, payload_len = struct.unpack(">BBBBII", resp_header)
+            if m0 != 0xC5 or m1 != 0x71 or opcode != 0x06 or payload_len <= 0 or payload_len > 4096:
                 client_sock.close()
                 return
 
@@ -591,7 +697,7 @@ class DaemonServer:
                         if seq1 == seq2:
                             last_sent_frame_seq = seq1
                             encrypted_payload, seq = vault.encrypt_frame(frame_bytes)
-                            hdr = struct.pack(">BBBBII", 0x55, 0xAA, 0x01, 0x02, seq, len(encrypted_payload))
+                            hdr = struct.pack(">BBBBII", 0xC5, 0x71, 0x03, 0x01, seq, len(encrypted_payload))
                             await loop.sock_sendall(client_sock, hdr + encrypted_payload)
 
         except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError):
@@ -667,7 +773,10 @@ def main():
     except Exception as e:
         logger.warning(f"WebSocket daemon fallback notice: {e}")
 
-    daemon = DaemonServer(port=8766 if ws_daemon else 8765)
+    daemon = DaemonServer(
+        port=8766 if ws_daemon else 8765,
+        psk=getattr(ws_daemon, "pairing_token", None) if ws_daemon else None,
+    )
 
     def _stop_all():
         if ws_daemon:
@@ -685,8 +794,11 @@ def main():
                     gui_state = HostDaemonState(host="0.0.0.0", port=8765)
                     if ws_daemon:
                         ws_daemon.gui_state = gui_state
-                        ws_daemon.pairing_token = gui_state.pairing_token
-                        ws_daemon.pairing_pin = gui_state.pairing_pin
+                        if hasattr(ws_daemon, "_sync_gui_state_on_attach"):
+                            ws_daemon._sync_gui_state_on_attach()
+                        else:
+                            ws_daemon.pairing_token = gui_state.pairing_token
+                            ws_daemon.pairing_pin = gui_state.pairing_pin
                         if hasattr(ws_daemon, "force_disconnect_client"):
                             gui_state.on_disconnect_callback = ws_daemon.force_disconnect_client
 

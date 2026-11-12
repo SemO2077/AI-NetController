@@ -42,7 +42,7 @@ export const TEST_MOCK_HOSTS: CyberHostDevice[] = [
     diskUsage: '342 GB / 1000 GB (34%)',
     persistentInstructions: [
       'Default browser is Brave (C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe)',
-      'Project files are located in D:\\Projects\\CST_Graduation',
+      'Project files are located in D:\\Projects\\AI_NetController',
       'Direct termination of the PostgreSQL service is strictly prohibited'
     ],
     sessionInstructions: [

@@ -14,7 +14,7 @@ import { QuickSetupModal } from './QuickSetupModal';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 import { OnboardingModal } from './OnboardingModal';
 import { useTranslation } from '../../i18n/useTranslation';
-import { saveAuthToken } from '../../services/securityService';
+import { pairHostWithPin, saveAuthToken } from '../../services/securityService';
 
 // Props passed from Root Hook state
 interface ModalManagerProps {
@@ -168,9 +168,6 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
         onClose={closeModal}
         isConnected={props.isConnected}
         onAutoPairHost={(hostData) => {
-          if (hostData.pairingToken) {
-            saveAuthToken(hostData.pairingToken);
-          }
           if (props.onAddHost) {
             props.onAddHost({
               id: hostData.id,
@@ -187,7 +184,16 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
           if (props.setWsUrl) {
             props.setWsUrl(hostData.wsUri);
           }
-          if (props.onConnectWs) {
+          if (hostData.pairingToken) {
+            saveAuthToken(hostData.pairingToken);
+            if (props.onConnectWs) {
+              props.onConnectWs(hostData.wsUri);
+            }
+          } else if (hostData.pairingPin) {
+            void pairHostWithPin(hostData.wsUri, hostData.pairingPin).then(() => {
+              props.onConnectWs?.(hostData.wsUri);
+            });
+          } else if (props.onConnectWs) {
             props.onConnectWs(hostData.wsUri);
           }
         }}

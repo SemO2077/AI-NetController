@@ -465,10 +465,13 @@ const WolEnergyCalculatorComponent: React.FC<WolEnergyCalculatorProps> = ({
                   <input
                     type="number"
                     step={0.01}
-                    min={0.01}
-                    max={2.0}
+                    min={0}
+                    max={10.0}
                     value={kwhRate}
-                    onChange={(e) => setKwhRate(Number(e.target.value))}
+                    onChange={(e) => {
+                      const parsed = Number(e.target.value);
+                      setKwhRate(Number.isFinite(parsed) ? Math.max(0, Math.min(10.0, parsed)) : 0);
+                    }}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-400/50"
                   />
                 </div>

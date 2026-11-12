@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# AI NetController — 1-Click Linux Setup Launcher (v0.35.0)
+# AI NetController — 1-Click Linux Setup Launcher (Beta 0.50.00 / v0.50.0)
 # ==============================================================================
 set -e
 
 echo "============================================================================"
-echo "  AI NetController v0.35.0 — 1-Click Linux Setup Launcher"
+echo "  AI NetController v0.50.0 (Beta 0.50.00) — 1-Click Linux Setup Launcher"
 echo "============================================================================"
 echo ""
 

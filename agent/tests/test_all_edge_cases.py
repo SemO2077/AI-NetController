@@ -32,7 +32,8 @@ from crypto_handshake import HostCryptoSession, AuthenticatedCipher, derive_sess
 from command_ast_firewall import CommandASTFirewall
 from host_file_writer import (
     HostFileWriter, CMD_INIT, CMD_CHUNK, CMD_FINISH, CMD_ABORT,
-    STATUS_OK, STATUS_PROGRESS, STATUS_COMPLETED, STATUS_ERR_CHECKSUM, STATUS_ERR_TRAVERSAL
+    STATUS_OK, STATUS_PROGRESS, STATUS_COMPLETED, STATUS_ERR_CHECKSUM, STATUS_ERR_TRAVERSAL,
+    STATUS_ERR_IO,
 )
 
 # Protocol Constants
@@ -429,7 +430,7 @@ class TestChunkedTransferEdgeCases(unittest.TestCase):
         """Rejects transfer if any chunk payload is tampered with (SHA-256 failure)."""
         chunk1 = b"PART_1_VALID_DATA"
         chunk2_valid = b"PART_2_VALID_DATA"
-        chunk2_corrupt = b"PART_2_TAMPERED_DATA"
+        chunk2_corrupt = b"PART_2_TAMPERED_X"
 
         full_valid = chunk1 + chunk2_valid
         expected_sha = hashlib.sha256(full_valid).hexdigest()
@@ -493,13 +494,13 @@ class TestProcessSupervisionEdgeCases(unittest.TestCase):
     def test_escalating_termination_cleanliness(self):
         """Ensures timed-out subprocesses are cleanly killed without resource leaks."""
         async def run_timeout_test():
-            # Command that attempts to sleep indefinitely
-            infinite_cmd = f'"{sys.executable}" -c "import time; time.sleep(60)"'
+            # Safe long-running command that hits timeout and exercises escalating kill
+            infinite_cmd = "ping 127.0.0.1 -n 30" if sys.platform.startswith("win") else "sleep 30"
             t0 = time.perf_counter()
             res = await CommandASTFirewall.execute_sandboxed(infinite_cmd, timeout_sec=1.0)
             elapsed = time.perf_counter() - t0
 
-            # Must terminate within ~2.5 seconds (timeout + escalating sigterm/sigkill)
+            # Must terminate within ~4 seconds (timeout + escalating sigterm/sigkill)
             self.assertLess(elapsed, 4.0, f"Process termination took too long: {elapsed}s")
             self.assertFalse(res["success"], "Timed-out process must report success=False")
             self.assertTrue(
@@ -542,13 +543,50 @@ class TestHostDaemonGuiAndAvHardening(unittest.TestCase):
 
     def test_pyinstaller_spec_antivirus_compliance(self):
         spec_path = AGENT_DIR / "build_agent.spec"
+        manifest_path = AGENT_DIR / "app_manifest.xml"
         self.assertTrue(spec_path.exists(), "build_agent.spec must exist")
+        self.assertTrue(manifest_path.exists(), "app_manifest.xml must exist")
         spec_content = spec_path.read_text(encoding="utf-8")
+        manifest_content = manifest_path.read_text(encoding="utf-8")
         # Must NEVER enable UPX packing (major cause of Win32/Wacatac.B!ml false positives)
         self.assertNotIn("upx=True", spec_content, "upx=True triggers AV false positives and must be False")
         self.assertGreaterEqual(spec_content.count("upx=False"), 2, "Both EXE and COLLECT must set upx=False")
         self.assertIn("'agent_gui'", spec_content)
-        self.assertIn("PerMonitorV2", spec_content)
+        self.assertIn("app_manifest.xml", spec_content)
+        self.assertIn("PerMonitorV2", manifest_content)
+
+    def test_firewall_and_release_no_stub_contracts(self):
+        # 1. Verify AST firewall blocks/holds inline python execution & route modification
+        allowed_py, risk_py, _, _ = CommandASTFirewall.inspect_and_sanitize('python -c "import os"')
+        self.assertTrue(allowed_py)
+        self.assertEqual(risk_py, "REQUIRES_BIOMETRIC")
+
+        allowed_rt, risk_rt, _, _ = CommandASTFirewall.inspect_and_sanitize("route print")
+        self.assertTrue(allowed_rt)
+        self.assertEqual(risk_rt, "REQUIRES_BIOMETRIC")
+
+        # 2. Verify build_release_binaries.py never fabricates a minimal stub APK
+        build_rel = (AGENT_DIR.parent / "scripts" / "build_release_binaries.py").read_text(encoding="utf-8")
+        self.assertNotIn("0x0103", build_rel)
+        self.assertIn("build_android_app.py", build_rel)
+
+    def test_chunk_bounds_error_closes_file_handle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = HostFileWriter(download_dir=Path(tmp))
+            data = b"ABCDEF"
+            sha = hashlib.sha256(data).hexdigest()
+            tid = 999
+            init_p = struct.pack("!BIQ", CMD_INIT, tid, len(data)) + sha.encode("ascii") + b"bounds.bin"
+            writer.handle_packet(init_p)
+            # Chunk exceeds declared size (len 6 vs offset 4 + len 5 = 9)
+            bad_chunk = struct.pack("!BIQ", CMD_CHUNK, tid, 4) + b"12345"
+            ack = writer.handle_packet(bad_chunk)
+            _, status, _ = struct.unpack("!IBQ", ack[12:25])
+            self.assertEqual(status, STATUS_ERR_IO)
+            tr = writer.active_transfers.get(tid)
+            self.assertIsNotNone(tr)
+            self.assertIsNone(tr.file_handle)
+            tr.abort()
 
 
 # ==============================================================================

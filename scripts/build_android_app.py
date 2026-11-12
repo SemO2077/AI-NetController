@@ -18,15 +18,15 @@ IS_WIN = os.name == "nt"
 
 def _resolve_sdk_dir():
     for cand in [
-        r"C:\Users\Lenovo\AppData\Local\Android\Sdk",
         os.environ.get("ANDROID_HOME", ""),
         os.environ.get("ANDROID_SDK_ROOT", ""),
+        r"C:\Users\Lenovo\AppData\Local\Android\Sdk",
         "/usr/local/lib/android/sdk",
         os.path.expanduser("~/Android/Sdk"),
     ]:
         if cand and os.path.isdir(cand):
             return cand
-    return r"C:\Users\Lenovo\AppData\Local\Android\Sdk"
+    return os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or r"C:\Users\Lenovo\AppData\Local\Android\Sdk"
 
 def _resolve_build_tools(sdk_dir):
     bt_root = os.path.join(sdk_dir, "build-tools")
@@ -44,27 +44,30 @@ def _resolve_build_tools(sdk_dir):
 
 def _resolve_android_jar(sdk_dir):
     plat_root = os.path.join(sdk_dir, "platforms")
-    pref = os.path.join(plat_root, "android-34", "android.jar")
+    pref = os.path.join(plat_root, "android-35", "android.jar")
     if os.path.isfile(pref):
         return pref
+    pref34 = os.path.join(plat_root, "android-34", "android.jar")
+    if os.path.isfile(pref34):
+        return pref34
     if os.path.isdir(plat_root):
         for d in sorted(os.listdir(plat_root), reverse=True):
             cand = os.path.join(plat_root, d, "android.jar")
             if os.path.isfile(cand):
                 return cand
-    return pref
+    return pref34
 
 def _resolve_jdk_dir():
-    win_jbr = r"C:\Program Files\Android\Android Studio\jbr"
-    if IS_WIN and os.path.isdir(win_jbr):
-        return win_jbr
     env_java = os.environ.get("JAVA_HOME", "")
     if env_java and os.path.isdir(env_java):
         return env_java
+    win_jbr = r"C:\Program Files\Android\Android Studio\jbr"
+    if IS_WIN and os.path.isdir(win_jbr):
+        return win_jbr
     javac_bin = shutil.which("javac")
     if javac_bin:
         return os.path.dirname(os.path.dirname(os.path.realpath(javac_bin)))
-    return win_jbr
+    return env_java or win_jbr
 
 SDK_DIR = _resolve_sdk_dir()
 JDK_DIR = _resolve_jdk_dir()
@@ -131,11 +134,12 @@ def setup_staging():
 
     # Copy web dist into assets/dist
     shutil.copytree(WEB_DIST, os.path.join(STAGE_DIR, "assets", "dist"), dirs_exist_ok=True)
-    # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/v0.35.0
-    rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.35.0")
+    # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/<tag>
+    rel_tag = _get_release_tag()
+    rel_src = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
     if not os.path.exists(rel_src):
-        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.32.0")
-    rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", "v0.35.0")
+        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.50.0")
+    rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", rel_tag)
     os.makedirs(rel_dst, exist_ok=True)
     for meta_file in ("RELEASE_MANIFEST.json", "SHA256SUMS.txt", "PATCH_NOTES.md"):
         src_p = os.path.join(rel_src, meta_file)
@@ -143,14 +147,37 @@ def setup_staging():
             shutil.copy2(src_p, os.path.join(rel_dst, meta_file))
     print(f"[OK] Copied web assets to staging: {len(os.listdir(os.path.join(STAGE_DIR, 'assets', 'dist')))} items")
 
+
+def _get_release_tag():
+    pkg_json = os.path.join(ROOT_DIR, "package.json")
+    if os.path.exists(pkg_json):
+        try:
+            with open(pkg_json, "r", encoding="utf-8") as f:
+                v = str(json.load(f).get("version", "0.50.0")).strip()
+                return f"v{v}" if not v.startswith("v") else v
+        except Exception:
+            pass
+    return "v0.50.0"
+
+
+def _get_version_name():
+    ver = _get_release_tag().lstrip("v")
+    if ver == "0.50.0":
+        return "0.50.00-beta"
+    return ver
+
+
 def create_android_manifest():
-    manifest_content = """<?xml version="1.0" encoding="utf-8"?>
+    ver_name = _get_version_name()
+    parts = [int(p) for p in _get_release_tag().lstrip("v").split(".")[:3] if p.isdigit()]
+    ver_code = str(parts[0] * 1000 + parts[1] * 10 + parts[2]) if len(parts) == 3 else "500"
+    manifest_content = f"""<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cst.autonomouslan"
-    android:versionCode="350"
-    android:versionName="0.35.0">
+    android:versionCode="{ver_code}"
+    android:versionName="{ver_name}">
 
-    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -166,7 +193,7 @@ def create_android_manifest():
         android:theme="@style/AppTheme"
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:supportsRtl="true">
 
         <activity
@@ -301,6 +328,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.res.AssetManager;
 import android.graphics.Color;
 import android.graphics.Insets;
@@ -315,6 +343,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
+import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -324,6 +353,9 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -342,39 +374,61 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.security.SecureRandom;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import javax.net.ssl.HttpsURLConnection;
 
 public class MainActivity extends Activity {
     private static final String TAG = "AINetController";
+    private static final String APP_VERSION = "__APP_VERSION__";
+    private static final String RELEASE_TAG = "__RELEASE_TAG__";
     private WebView webView;
     private ServerSocket localServer;
     private final ExecutorService httpPool = Executors.newFixedThreadPool(12);
     private int localPort = 0;
     private volatile boolean isRunning = true;
+    private volatile boolean isLocalOriginLoaded = false;
     private final long startTimeMs = System.currentTimeMillis();
 
-    // Stateful native daemon simulator for /api/daemon/state & /api/daemon/action
+    // Local device daemon controller state & per-launch credentials
     private volatile boolean daemonRunning = true;
     private volatile boolean daemonTlsActive = true;
     private volatile String daemonHitlMode = "strict";
     private volatile boolean daemonViewOnly = false;
-    private volatile String daemonPin = String.valueOf(100000 + new SecureRandom().nextInt(900000));
-    private volatile String daemonToken = "ai_sec_" + Integer.toHexString(new SecureRandom().nextInt(0x7fffffff));
+    private volatile String daemonPin = generatePin();
+    private volatile String daemonToken = generateHexToken("ai_sec_", 16);
+    private final String bridgeSessionToken = generateHexToken("bridge_", 24);
+
+    private static String generatePin() {
+        return String.valueOf(100000 + new SecureRandom().nextInt(900000));
+    }
+
+    private static String generateHexToken(String prefix, int numBytes) {
+        byte[] bytes = new byte[numBytes];
+        new SecureRandom().nextBytes(bytes);
+        StringBuilder sb = new StringBuilder(prefix);
+        for (byte b : bytes) {
+            sb.append(String.format(Locale.US, "%02x", b & 0xff));
+        }
+        return sb.toString();
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -499,19 +553,21 @@ public class MainActivity extends Activity {
         webView.setVerticalScrollBarEnabled(false);
         webView.setHorizontalScrollBarEnabled(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            WebView.setWebContentsDebuggingEnabled(true);
+            boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+            WebView.setWebContentsDebuggingEnabled(isDebuggable);
         }
         root.addView(webView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ));
 
+        CookieManager.getInstance().setAcceptCookie(true);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
-        settings.setAllowFileAccess(true);
-        settings.setAllowContentAccess(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
         // HTML5 Mobile Viewport: Enables dynamic 1:1 scaling according to viewport-fit=cover
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
@@ -521,7 +577,7 @@ public class MainActivity extends Activity {
         settings.setTextZoom(100);
         try {
             String baseUa = settings.getUserAgentString();
-            settings.setUserAgentString((baseUa != null ? baseUa : "") + " AI_NetController_Android/0.35.0");
+            settings.setUserAgentString((baseUa != null ? baseUa : "") + " AI_NetController_Android/" + APP_VERSION);
         } catch (Throwable ignored) {}
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -542,13 +598,14 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
 
-        // Native Android Bridge: Haptics, Clipboard, UDP Wake-on-LAN, LAN IP Discovery
+        // Native Android Bridge: Haptics, Clipboard, UDP Wake-on-LAN, LAN IP Discovery (loopback-gated)
         webView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void vibrate(int durationMs) {
+                if (!isLocalOriginLoaded) return;
                 try {
                     int ms = Math.max(5, Math.min(durationMs, 60));
                     Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
@@ -564,12 +621,13 @@ public class MainActivity extends Activity {
 
             @JavascriptInterface
             public boolean sendWolUdp(String mac, String bcast, int port) {
+                if (!isLocalOriginLoaded) return false;
                 return sendNativeWol(mac, bcast, port, null);
             }
 
             @JavascriptInterface
             public boolean copyToClipboard(final String text) {
-                if (text == null) return false;
+                if (!isLocalOriginLoaded || text == null) return false;
                 try {
                     runOnUiThread(new Runnable() {
                         @Override
@@ -591,6 +649,7 @@ public class MainActivity extends Activity {
 
             @JavascriptInterface
             public String getLanIp() {
+                if (!isLocalOriginLoaded) return "127.0.0.1";
                 return detectDeviceLanIp();
             }
         }, "AndroidBridge");
@@ -617,18 +676,39 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPermissionRequest(PermissionRequest request) {
-                request.grant(request.getResources());
+                try {
+                    Uri origin = request.getOrigin();
+                    if (origin != null && "http".equalsIgnoreCase(origin.getScheme())
+                        && "127.0.0.1".equals(origin.getHost()) && origin.getPort() == localPort) {
+                        request.grant(request.getResources());
+                        return;
+                    }
+                } catch (Throwable ignored) {}
+                request.deny();
             }
         });
 
         webView.setWebViewClient(new WebViewClient() {
+            private boolean isTrustedLoopbackUrl(String rawUrl) {
+                if (rawUrl == null) return false;
+                try {
+                    Uri u = Uri.parse(rawUrl);
+                    String scheme = u.getScheme() != null ? u.getScheme().toLowerCase(Locale.US) : "";
+                    return "http".equals(scheme) && "127.0.0.1".equals(u.getHost()) && u.getPort() == localPort;
+                } catch (Throwable ignored) {
+                    return false;
+                }
+            }
+
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                isLocalOriginLoaded = isTrustedLoopbackUrl(url);
                 Log.i(TAG, "onPageStarted: " + url);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                isLocalOriginLoaded = isTrustedLoopbackUrl(url);
                 Log.i(TAG, "onPageFinished: " + url);
             }
 
@@ -639,8 +719,8 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                if (url == null) return false;
-                if (url.startsWith("http://127.0.0.1") || url.startsWith("ws://") || url.startsWith("wss://")) {
+                if (url == null) return true;
+                if (isTrustedLoopbackUrl(url)) {
                     return false;
                 }
                 if (url.startsWith("http://") || url.startsWith("https://")) {
@@ -650,7 +730,7 @@ public class MainActivity extends Activity {
                         return true;
                     } catch (Throwable ignored) {}
                 }
-                return false;
+                return true;
             }
         });
 
@@ -780,24 +860,32 @@ public class MainActivity extends Activity {
         // 1. Try ip neigh show
         Process proc = null;
         try {
-            proc = Runtime.getRuntime().exec(new String[]{"ip", "neigh", "show"});
-            BufferedReader br = new BufferedReader(new InputStreamReader(proc.getInputStream()));
-            String line;
-            while ((line = br.readLine()) != null) {
-                String[] parts = line.trim().split("\\s+");
-                if (parts.length >= 5) {
-                    String ip = parts[0];
-                    for (int i = 1; i < parts.length - 1; i++) {
-                        if ("lladdr".equalsIgnoreCase(parts[i])) {
-                            String mac = parts[i + 1].toUpperCase();
-                            if (mac.matches("([0-9A-F]{2}:){5}[0-9A-F]{2}") && !mac.equals("00:00:00:00:00:00")) {
-                                ipToMac.put(ip, mac);
+            proc = new ProcessBuilder("ip", "neigh", "show").redirectErrorStream(true).start();
+            try (BufferedReader br = new BufferedReader(
+                    new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String[] parts = line.trim().split("\\s+");
+                    if (parts.length >= 5) {
+                        String ip = parts[0];
+                        for (int i = 1; i < parts.length - 1; i++) {
+                            if ("lladdr".equalsIgnoreCase(parts[i])) {
+                                String mac = parts[i + 1].toUpperCase(Locale.US);
+                                if (mac.matches("([0-9A-F]{2}:){5}[0-9A-F]{2}") && !mac.equals("00:00:00:00:00:00")) {
+                                    ipToMac.put(ip, mac);
+                                }
                             }
                         }
                     }
                 }
             }
-            br.close();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!proc.waitFor(2, TimeUnit.SECONDS)) {
+                    proc.destroy();
+                }
+            } else {
+                proc.waitFor();
+            }
         } catch (Throwable ignored) {
         } finally {
             if (proc != null) {
@@ -806,20 +894,18 @@ public class MainActivity extends Activity {
         }
 
         // 2. Try /proc/net/arp fallback
-        try {
-            BufferedReader br = new BufferedReader(new FileReader("/proc/net/arp"));
+        try (BufferedReader br = new BufferedReader(new FileReader("/proc/net/arp"))) {
             String line;
             while ((line = br.readLine()) != null) {
                 String[] tokens = line.trim().split("\\s+");
                 if (tokens.length >= 4) {
                     String ip = tokens[0];
-                    String mac = tokens[3].toUpperCase();
+                    String mac = tokens[3].toUpperCase(Locale.US);
                     if (mac.matches("([0-9A-F]{2}:){5}[0-9A-F]{2}") && !mac.equals("00:00:00:00:00:00")) {
                         ipToMac.put(ip, mac);
                     }
                 }
             }
-            br.close();
         } catch (Throwable ignored) {}
 
         return ipToMac;
@@ -843,7 +929,7 @@ public class MainActivity extends Activity {
 
             futures.add(pool.submit(new Callable<String>() {
                 @Override
-                public String call() {
+                public String call() throws Exception {
                     long t0 = System.currentTimeMillis();
                     boolean agentOpen = isTcpPortOpen(candidateIp, 8765, 175);
                     boolean webOpen = !agentOpen && isTcpPortOpen(candidateIp, 3000, 160);
@@ -878,24 +964,35 @@ public class MainActivity extends Activity {
                             conn.setConnectTimeout(220);
                             conn.setReadTimeout(220);
                             if (conn.getResponseCode() == 200) {
-                                BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                                StringBuilder infoSb = new StringBuilder();
-                                String ln;
-                                while ((ln = r.readLine()) != null) infoSb.append(ln);
-                                r.close();
-                                String infoJson = infoSb.toString();
-                                String hName = extractJsonString(infoJson, "hostname");
-                                String hMac = extractJsonString(infoJson, "mac");
-                                String hOs = extractJsonString(infoJson, "os");
-                                if (hName != null && !hName.isEmpty()) name = hName;
-                                if (hMac != null && hMac.length() == 17) mac = hMac.toUpperCase();
-                                if (hOs != null && !hOs.isEmpty()) os = hOs;
+                                try (BufferedReader r = new BufferedReader(
+                                        new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                                    StringBuilder infoSb = new StringBuilder();
+                                    String ln;
+                                    while ((ln = r.readLine()) != null) infoSb.append(ln);
+                                    JSONObject infoObj = new JSONObject(infoSb.toString());
+                                    String hName = infoObj.optString("hostname", "");
+                                    String hMac = infoObj.optString("mac", "");
+                                    String hOs = infoObj.optString("osName", infoObj.optString("os", ""));
+                                    if (!hName.isEmpty()) name = hName;
+                                    if (hMac.length() == 17) mac = hMac.toUpperCase(Locale.US);
+                                    if (!hOs.isEmpty()) os = hOs;
+                                }
                             }
+                            conn.disconnect();
                         } catch (Throwable ignored) {}
                     }
 
-                    String safeId = name.toUpperCase().replaceAll("[^A-Z0-9-_]", "-");
-                    return "{\"id\":\"" + safeId + "\",\"name\":\"" + escapeJson(name) + "\",\"ip\":\"" + candidateIp + "\",\"mac\":\"" + mac + "\",\"port\":" + port + ",\"os\":\"" + os + "\",\"isOnline\":true,\"ping\":" + pingMs + "}";
+                    String safeId = name.toUpperCase(Locale.US).replaceAll("[^A-Z0-9-_]", "-");
+                    JSONObject hostJson = new JSONObject();
+                    hostJson.put("id", safeId);
+                    hostJson.put("name", name);
+                    hostJson.put("ip", candidateIp);
+                    hostJson.put("mac", mac);
+                    hostJson.put("port", port);
+                    hostJson.put("os", os);
+                    hostJson.put("isOnline", true);
+                    hostJson.put("ping", pingMs);
+                    return hostJson.toString();
                 }
             }));
         }
@@ -926,48 +1023,52 @@ public class MainActivity extends Activity {
     }
 
     private static boolean isTcpPortOpen(String ip, int port, int timeoutMs) {
-        Socket s = new Socket();
-        try {
+        try (Socket s = new Socket()) {
             s.connect(new InetSocketAddress(ip, port), timeoutMs);
-            s.close();
             return true;
         } catch (Throwable e) {
-            try { s.close(); } catch (Throwable ignored) {}
             return false;
         }
     }
 
     private static String escapeJson(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
+        String quoted = JSONObject.quote(s);
+        return quoted.substring(1, quoted.length() - 1);
     }
 
-    private static String extractJsonString(String json, String key) {
-        if (json == null) return null;
-        String pattern = "\"" + key + "\"\\s*:\\s*\"([^\"]*)\"";
-        Matcher m = Pattern.compile(pattern).matcher(json);
-        if (m.find()) return m.group(1);
-        return null;
+    private static JSONObject parseJsonObject(String json) {
+        if (json == null || json.trim().isEmpty()) return new JSONObject();
+        try {
+            return new JSONObject(json);
+        } catch (Throwable ignored) {
+            return new JSONObject();
+        }
     }
 
-    private static String extractJsonNumber(String json, String key) {
-        if (json == null) return null;
-        String pattern = "\"" + key + "\"\\s*:\\s*([0-9]+)";
-        Matcher m = Pattern.compile(pattern).matcher(json);
-        if (m.find()) return m.group(1);
-        return null;
+    private static String httpReasonPhrase(int code) {
+        switch (code) {
+            case 200: return "OK";
+            case 204: return "No Content";
+            case 400: return "Bad Request";
+            case 401: return "Unauthorized";
+            case 403: return "Forbidden";
+            case 404: return "Not Found";
+            case 500: return "Internal Server Error";
+            case 501: return "Not Implemented";
+            case 503: return "Service Unavailable";
+            default: return code >= 400 ? "Error" : "OK";
+        }
     }
 
     private static void sendJsonResponse(OutputStream out, int code, String json) throws Exception {
-        byte[] data = json.getBytes("UTF-8");
-        String headers = "HTTP/1.1 " + code + " OK\r\n" +
+        byte[] data = json.getBytes(StandardCharsets.UTF_8);
+        String headers = "HTTP/1.1 " + code + " " + httpReasonPhrase(code) + "\r\n" +
             "Content-Type: application/json; charset=utf-8\r\n" +
             "Content-Length: " + data.length + "\r\n" +
-            "Access-Control-Allow-Origin: *\r\n" +
-            "Access-Control-Allow-Methods: GET, POST, OPTIONS, PUT, DELETE\r\n" +
-            "Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With\r\n" +
-            "Cache-Control: no-cache\r\n\r\n";
-        out.write(headers.getBytes("UTF-8"));
+            "Cache-Control: no-store\r\n" +
+            "X-Content-Type-Options: nosniff\r\n\r\n";
+        out.write(headers.getBytes(StandardCharsets.UTF_8));
         out.write(data);
         out.flush();
     }
@@ -991,100 +1092,270 @@ public class MainActivity extends Activity {
     private String buildDaemonStateJson() {
         String lanIp = detectDeviceLanIp();
         long uptimeSec = Math.max(1L, (System.currentTimeMillis() - startTimeMs) / 1000L);
-        return "{" +
-            "\"status\":\"" + (daemonRunning ? "running" : "stopped") + "\"," +
-            "\"isRunning\":" + daemonRunning + "," +
-            "\"isPaused\":" + (!daemonRunning) + "," +
-            "\"version\":\"0.35.0\"," +
-            "\"protocol\":\"CST/3.0-SECURE\"," +
-            "\"hostname\":\"ANDROID-CONTROLLER\"," +
-            "\"osName\":\"Android " + Build.VERSION.RELEASE + " (" + escapeJson(Build.MODEL) + ")\"," +
-            "\"os\":\"Android " + Build.VERSION.RELEASE + " (" + escapeJson(Build.MODEL) + ")\"," +
-            "\"localIp\":\"" + lanIp + "\"," +
-            "\"ip\":\"" + lanIp + "\"," +
-            "\"mac\":\"\"," +
-            "\"port\":8765," +
-            "\"wsUri\":\"ws://" + lanIp + ":8765\"," +
-            "\"uptime\":\"" + uptimeSec + "s\"," +
-            "\"uptimeSeconds\":" + uptimeSec + "," +
-            "\"mdnsEnabled\":true," +
-            "\"viewOnlyMode\":" + daemonViewOnly + "," +
-            "\"requireHitlApproval\":true," +
-            "\"cpuPercent\":0," +
-            "\"cpuCores\":8," +
-            "\"ramPercent\":0," +
-            "\"ramUsedGb\":0," +
-            "\"ramTotalGb\":8," +
-            "\"diskPercent\":0," +
-            "\"captureFps\":60," +
-            "\"connectedClients\":[]," +
-            "\"blacklistedDevices\":[]," +
-            "\"activeAdapters\":[{\"name\":\"wlan0\",\"ipv4\":\"" + lanIp + "\",\"mac\":\"\"}]," +
-            "\"avIntegrity\":{\"upxDisabled\":true,\"visibleHwnd\":true,\"zeroHiddenShell\":true,\"manifestAsInvoker\":true,\"authenticodeReady\":true,\"sandboxJobObject\":true}," +
-            "\"security\":{\"tlsActive\":" + daemonTlsActive + ",\"hitlMode\":\"" + daemonHitlMode + "\",\"viewOnlyMode\":" + daemonViewOnly + "}," +
-            "\"pairingPin\":\"" + daemonPin + "\"," +
-            "\"pairingToken\":\"" + daemonToken + "\"," +
-            "\"logs\":[]" +
-        "}";
+        int cpuCores = Math.max(1, Runtime.getRuntime().availableProcessors());
+
+        long memTotalKb = 0L;
+        long memAvailKb = 0L;
+        try (BufferedReader br = new BufferedReader(new FileReader("/proc/meminfo"))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.startsWith("MemTotal:")) {
+                    String[] p = line.trim().split("\\s+");
+                    if (p.length >= 2) memTotalKb = Long.parseLong(p[1]);
+                } else if (line.startsWith("MemAvailable:")) {
+                    String[] p = line.trim().split("\\s+");
+                    if (p.length >= 2) memAvailKb = Long.parseLong(p[1]);
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        double ramTotalGb = memTotalKb > 0 ? Math.round((memTotalKb / 1048576.0) * 100.0) / 100.0 : 0.0;
+        double ramUsedGb = (memTotalKb > 0 && memAvailKb >= 0 && memTotalKb >= memAvailKb)
+                ? Math.round(((memTotalKb - memAvailKb) / 1048576.0) * 100.0) / 100.0
+                : 0.0;
+        int ramPercent = (memTotalKb > 0 && memAvailKb >= 0 && memTotalKb >= memAvailKb)
+                ? (int) Math.round(((memTotalKb - memAvailKb) * 100.0) / memTotalKb)
+                : 0;
+
+        int diskPercent = 0;
+        try {
+            android.os.StatFs statFs = new android.os.StatFs(getFilesDir().getAbsolutePath());
+            long totalBytes = statFs.getTotalBytes();
+            long availBytes = statFs.getAvailableBytes();
+            if (totalBytes > 0) {
+                diskPercent = (int) Math.round(((totalBytes - availBytes) * 100.0) / totalBytes);
+            }
+        } catch (Throwable ignored) {}
+
+        String hostModel = (Build.MANUFACTURER != null ? Build.MANUFACTURER : "Android") + " " + (Build.MODEL != null ? Build.MODEL : "Device");
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("status", daemonRunning ? "running" : "stopped");
+            obj.put("isRunning", daemonRunning);
+            obj.put("isPaused", !daemonRunning);
+            obj.put("version", APP_VERSION);
+            obj.put("protocol", "AI-NET/3.0-SECURE");
+            obj.put("hostname", hostModel.trim());
+            obj.put("osName", "Android " + Build.VERSION.RELEASE + " (" + Build.MODEL + ")");
+            obj.put("os", "Android " + Build.VERSION.RELEASE + " (" + Build.MODEL + ")");
+            obj.put("localIp", lanIp);
+            obj.put("ip", lanIp);
+            obj.put("mac", "");
+            obj.put("port", 8765);
+            obj.put("wsUri", "ws://" + lanIp + ":8765");
+            obj.put("uptime", uptimeSec + "s");
+            obj.put("uptimeSeconds", uptimeSec);
+            obj.put("mdnsEnabled", false);
+            obj.put("viewOnlyMode", daemonViewOnly);
+            obj.put("requireHitlApproval", true);
+            obj.put("cpuPercent", 0);
+            obj.put("cpuCores", cpuCores);
+            obj.put("ramPercent", ramPercent);
+            obj.put("ramUsedGb", ramUsedGb);
+            obj.put("ramTotalGb", ramTotalGb);
+            obj.put("diskPercent", diskPercent);
+            obj.put("captureFps", 0);
+            obj.put("connectedClients", new JSONArray());
+            obj.put("blacklistedDevices", new JSONArray());
+            JSONArray adapters = new JSONArray();
+            if (!"127.0.0.1".equals(lanIp)) {
+                JSONObject wlan = new JSONObject();
+                wlan.put("name", "wlan0");
+                wlan.put("ipv4", lanIp);
+                wlan.put("mac", "");
+                adapters.put(wlan);
+            }
+            obj.put("activeAdapters", adapters);
+            JSONObject sec = new JSONObject();
+            sec.put("tlsActive", daemonTlsActive);
+            sec.put("hitlMode", daemonHitlMode);
+            sec.put("viewOnlyMode", daemonViewOnly);
+            obj.put("security", sec);
+            obj.put("pairingPin", daemonPin);
+            obj.put("pairingToken", daemonToken);
+            obj.put("logs", new JSONArray());
+            return obj.toString();
+        } catch (Throwable e) {
+            return "{\"status\":\"error\",\"error\":\"" + escapeJson(e.getMessage()) + "\"}";
+        }
     }
 
-    private String buildSmartChatJson(String body) {
-        String lower = body != null ? body.toLowerCase() : "";
-        boolean isBg = false;
-        if (body != null) {
-            for (int i = 0; i < body.length(); i++) {
-                char c = body.charAt(i);
-                if (c >= 0x0400 && c <= 0x04FF) {
-                    isBg = true;
-                    break;
+    private static String readAllStream(InputStream is) {
+        if (is == null) return "";
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line);
+            return sb.toString();
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private void handleGeminiChat(OutputStream out, String body, String headerApiKey) throws Exception {
+        JSONObject req = parseJsonObject(body);
+        String apiKey = req.optString("apiKey", req.optString("geminiApiKey", "")).trim();
+        if (apiKey.isEmpty() && headerApiKey != null) apiKey = headerApiKey.trim();
+        if (apiKey.isEmpty()) {
+            sendJsonResponse(out, 400, "{\"error\":\"MISSING_API_KEY\",\"message\":\"Gemini API key is required. Configure your API key in Settings.\"}");
+            return;
+        }
+
+        String model = req.optString("model", "gemini-2.5-flash").trim();
+        if (model.isEmpty() || !model.matches("[a-zA-Z0-9._-]+")) {
+            sendJsonResponse(out, 400, "{\"error\":\"INVALID_MODEL\",\"message\":\"Invalid Gemini model identifier.\"}");
+            return;
+        }
+
+        JSONArray contents = new JSONArray();
+        JSONArray inputMsgs = req.optJSONArray("messages");
+        if (inputMsgs != null) {
+            for (int i = 0; i < inputMsgs.length(); i++) {
+                JSONObject m = inputMsgs.optJSONObject(i);
+                if (m == null) continue;
+                String role = m.optString("role", "user");
+                if ("assistant".equalsIgnoreCase(role)) role = "model";
+                if (!"user".equals(role) && !"model".equals(role)) continue;
+                String text = m.optString("content", m.optString("text", "")).trim();
+                if (text.isEmpty()) {
+                    JSONArray parts = m.optJSONArray("parts");
+                    if (parts != null && parts.length() > 0) {
+                        JSONObject p0 = parts.optJSONObject(0);
+                        if (p0 != null) text = p0.optString("text", "").trim();
+                    }
+                }
+                if (!text.isEmpty()) {
+                    JSONObject item = new JSONObject();
+                    item.put("role", role);
+                    item.put("parts", new JSONArray().put(new JSONObject().put("text", text)));
+                    contents.put(item);
                 }
             }
         }
-
-        // Extract selectedTarget or first host id if present
-        String targetId = extractJsonString(body, "selectedTarget");
-        if (targetId == null || targetId.isEmpty()) {
-            targetId = "HOST";
+        String prompt = req.optString("prompt", req.optString("message", "")).trim();
+        if (contents.length() == 0 && !prompt.isEmpty()) {
+            JSONObject item = new JSONObject();
+            item.put("role", "user");
+            item.put("parts", new JSONArray().put(new JSONObject().put("text", prompt)));
+            contents.put(item);
+        }
+        if (contents.length() == 0) {
+            sendJsonResponse(out, 400, "{\"error\":\"EMPTY_PROMPT\",\"message\":\"A prompt or messages array is required.\"}");
+            return;
         }
 
-        StringBuilder reply = new StringBuilder();
-        String actionsJson = "[]";
-
-        if (lower.contains("wake") || lower.contains("wol") || lower.contains("събуд")) {
-            if (isBg) {
-                reply.append("Изпращам UDP Magic Packet (Wake-on-LAN) през локалния Wi-Fi интерфейс за събуждане на избрания хост. [ACTION:WOL:").append(targetId).append("]");
-            } else {
-                reply.append("Broadcasting native UDP Magic Packet (Wake-on-LAN) across the active Wi-Fi subnet to wake the target workstation. [ACTION:WOL:").append(targetId).append("]");
-            }
-        } else if (lower.contains("scan") || lower.contains("discover") || lower.contains("сканир")) {
-            if (isBg) {
-                reply.append("Стартирам многонишково сканиране на локалната /24 подмрежа за активни компютри и AI NetController агенти. [ACTION:SCAN]");
-            } else {
-                reply.append("Launching multi-threaded /24 LAN subnet discovery for active workstations and AI NetController Host Agents. [ACTION:SCAN]");
-            }
-        } else if (lower.contains("screen") || lower.contains("desktop") || lower.contains("екран")) {
-            if (isBg) {
-                reply.append("Отварям 120Hz поток на екрана и дистанционния тракпад за ").append(targetId).append(". [ACTION:SCREEN:").append(targetId).append("]");
-            } else {
-                reply.append("Opening live 120Hz remote screen stream and virtual trackpad for ").append(targetId).append(". [ACTION:SCREEN:").append(targetId).append("]");
-            }
-        } else if (lower.contains("taskmgr") || lower.contains("task manager") || lower.contains("диспечер")) {
-            actionsJson = "[{\"type\":\"key_combo\",\"keys\":[\"ctrl\",\"shift\",\"esc\"]}]";
-            if (isBg) {
-                reply.append("Отварям Диспечера на задачите (Task Manager) чрез клавишна комбинация Ctrl+Shift+Esc.");
-            } else {
-                reply.append("Dispatched Ctrl+Shift+Esc shortcut to open Task Manager on the remote workstation.");
-            }
-        } else {
-            String lanIp = detectDeviceLanIp();
-            if (isBg) {
-                reply.append("Автономният Android контролер (v0.35.0, IP: ").append(lanIp).append(") е активен. Можете да сканирате локалната мрежа [ACTION:SCAN], да събудите компютър чрез Wake-on-LAN или да управлявате екрана и терминала в реално време.");
-            } else {
-                reply.append("AI NetController Android Companion (v0.35.0, LAN IP: ").append(lanIp).append(") is online. You can scan your local subnet [ACTION:SCAN], wake sleeping workstations via UDP Magic Packets, or stream live desktop & terminal sessions.");
-            }
+        JSONObject payload = new JSONObject();
+        payload.put("contents", contents);
+        String sysInst = req.optString("systemInstruction", "").trim();
+        if (!sysInst.isEmpty()) {
+            payload.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", sysInst))));
         }
 
-        return "{\"reply\":\"" + escapeJson(reply.toString()) + "\",\"actions\":" + actionsJson + ",\"modelUsed\":\"gemini-3.8-flash-edge\"}";
+        HttpsURLConnection conn = null;
+        try {
+            URL url = new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent");
+            conn = (HttpsURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(8000);
+            conn.setReadTimeout(25000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("x-goog-api-key", apiKey);
+            byte[] outBytes = payload.toString().getBytes(StandardCharsets.UTF_8);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(outBytes);
+            }
+            int code = conn.getResponseCode();
+            if (code >= 200 && code < 300) {
+                String respStr = readAllStream(conn.getInputStream());
+                JSONObject respJson = parseJsonObject(respStr);
+                String replyText = "";
+                JSONArray cands = respJson.optJSONArray("candidates");
+                if (cands != null && cands.length() > 0) {
+                    JSONObject content = cands.optJSONObject(0) != null ? cands.optJSONObject(0).optJSONObject("content") : null;
+                    JSONArray parts = content != null ? content.optJSONArray("parts") : null;
+                    if (parts != null) {
+                        StringBuilder sb = new StringBuilder();
+                        for (int i = 0; i < parts.length(); i++) {
+                            JSONObject p = parts.optJSONObject(i);
+                            if (p != null) sb.append(p.optString("text", ""));
+                        }
+                        replyText = sb.toString();
+                    }
+                }
+                JSONObject ok = new JSONObject();
+                ok.put("reply", replyText);
+                ok.put("actions", new JSONArray());
+                ok.put("modelUsed", model);
+                sendJsonResponse(out, 200, ok.toString());
+            } else {
+                String errBody = readAllStream(conn.getErrorStream());
+                JSONObject errObj = new JSONObject();
+                errObj.put("error", "GEMINI_API_ERROR");
+                errObj.put("status", code);
+                errObj.put("message", errBody.isEmpty() ? ("Gemini API returned HTTP " + code) : errBody);
+                sendJsonResponse(out, code >= 400 && code < 600 ? code : 502, errObj.toString());
+            }
+        } catch (Throwable e) {
+            JSONObject err = new JSONObject();
+            err.put("error", "GEMINI_NETWORK_ERROR");
+            err.put("message", e.getMessage() != null ? e.getMessage() : "Failed to reach Gemini API.");
+            sendJsonResponse(out, 503, err.toString());
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private void handleGeminiModelTest(OutputStream out, String body, String headerApiKey) throws Exception {
+        JSONObject req = parseJsonObject(body);
+        String apiKey = req.optString("apiKey", req.optString("geminiApiKey", "")).trim();
+        if (apiKey.isEmpty() && headerApiKey != null) apiKey = headerApiKey.trim();
+        if (apiKey.isEmpty()) {
+            sendJsonResponse(out, 400, "{\"success\":false,\"error\":\"MISSING_API_KEY\",\"message\":\"Gemini API key is required to run a live model test.\"}");
+            return;
+        }
+        String model = req.optString("model", "gemini-2.5-flash").trim();
+        if (model.isEmpty() || !model.matches("[a-zA-Z0-9._-]+")) {
+            sendJsonResponse(out, 400, "{\"success\":false,\"error\":\"INVALID_MODEL\",\"message\":\"Invalid model identifier.\"}");
+            return;
+        }
+        long started = System.nanoTime();
+        HttpsURLConnection conn = null;
+        try {
+            URL url = new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model);
+            conn = (HttpsURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(10000);
+            conn.setRequestProperty("x-goog-api-key", apiKey);
+            int code = conn.getResponseCode();
+            long latencyMs = Math.max(1L, (System.nanoTime() - started) / 1_000_000L);
+            if (code >= 200 && code < 300) {
+                JSONObject res = new JSONObject();
+                res.put("success", true);
+                res.put("status", "reachable");
+                res.put("model", model);
+                res.put("latencyMs", latencyMs);
+                sendJsonResponse(out, 200, res.toString());
+            } else {
+                String errBody = readAllStream(conn.getErrorStream());
+                JSONObject res = new JSONObject();
+                res.put("success", false);
+                res.put("error", "GEMINI_TEST_FAILED");
+                res.put("status", code);
+                res.put("latencyMs", latencyMs);
+                res.put("message", errBody.isEmpty() ? ("Gemini API returned HTTP " + code) : errBody);
+                sendJsonResponse(out, code >= 400 && code < 600 ? code : 502, res.toString());
+            }
+        } catch (Throwable e) {
+            JSONObject err = new JSONObject();
+            err.put("success", false);
+            err.put("error", "GEMINI_NETWORK_ERROR");
+            err.put("message", e.getMessage() != null ? e.getMessage() : "Unable to contact Gemini API.");
+            sendJsonResponse(out, 503, err.toString());
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
     }
 
     private void startLocalAssetServer() {
@@ -1111,6 +1382,28 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Log.e(TAG, "Failed to start local server: " + e.getMessage());
         }
+    }
+
+    private boolean isAuthorizedLoopbackRequest(String cookieHeader, String bridgeHeader) {
+        byte[] expected = bridgeSessionToken.getBytes(StandardCharsets.UTF_8);
+        if (bridgeHeader != null && !bridgeHeader.isEmpty()) {
+            if (MessageDigest.isEqual(expected, bridgeHeader.trim().getBytes(StandardCharsets.UTF_8))) {
+                return true;
+            }
+        }
+        if (cookieHeader != null && !cookieHeader.isEmpty()) {
+            String[] cookies = cookieHeader.split(";");
+            for (String raw : cookies) {
+                String c = raw.trim();
+                if (c.startsWith("ai_net_bridge=")) {
+                    String val = c.substring("ai_net_bridge=".length()).trim();
+                    if (MessageDigest.isEqual(expected, val.getBytes(StandardCharsets.UTF_8))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private void handleClient(final Socket socket) {
@@ -1149,8 +1442,8 @@ public class MainActivity extends Activity {
                     }
 
                     String headerStr = headerEnd != -1
-                        ? new String(initialBytes, 0, headerEnd, "UTF-8")
-                        : new String(initialBytes, "UTF-8");
+                        ? new String(initialBytes, 0, headerEnd, StandardCharsets.UTF_8)
+                        : new String(initialBytes, StandardCharsets.UTF_8);
 
                     String[] headerLines = headerStr.split("\r?\n");
                     if (headerLines.length == 0) {
@@ -1158,11 +1451,31 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    for (String hl : headerLines) {
-                        if (hl.toLowerCase().startsWith("content-length:")) {
+                    String hostHeader = "";
+                    String originHeader = "";
+                    String cookieHeader = "";
+                    String bridgeHeader = "";
+                    String headerGeminiKey = "";
+                    for (int i = 1; i < headerLines.length; i++) {
+                        String hl = headerLines[i];
+                        int colon = hl.indexOf(':');
+                        if (colon <= 0) continue;
+                        String hName = hl.substring(0, colon).trim().toLowerCase(Locale.US);
+                        String hVal = hl.substring(colon + 1).trim();
+                        if ("content-length".equals(hName)) {
                             try {
-                                contentLength = Math.max(0, Math.min(Integer.parseInt(hl.substring(15).trim()), 1048576));
+                                contentLength = Math.max(0, Math.min(Integer.parseInt(hVal), 1048576));
                             } catch (Throwable ignored) {}
+                        } else if ("host".equals(hName)) {
+                            hostHeader = hVal;
+                        } else if ("origin".equals(hName)) {
+                            originHeader = hVal;
+                        } else if ("cookie".equals(hName)) {
+                            cookieHeader = hVal;
+                        } else if ("x-bridge-token".equals(hName)) {
+                            bridgeHeader = hVal;
+                        } else if ("x-gemini-api-key".equals(hName)) {
+                            headerGeminiKey = hVal;
                         }
                     }
 
@@ -1174,7 +1487,7 @@ public class MainActivity extends Activity {
 
                     byte[] fullBytes = reqBuf.toByteArray();
                     String bodyStr = (headerEnd != -1 && fullBytes.length > headerEnd)
-                        ? new String(fullBytes, headerEnd, fullBytes.length - headerEnd, "UTF-8")
+                        ? new String(fullBytes, headerEnd, fullBytes.length - headerEnd, StandardCharsets.UTF_8)
                         : "";
 
                     String[] parts = headerLines[0].split(" ");
@@ -1183,40 +1496,83 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    String method = parts[0].toUpperCase();
+                    String expectedHost = "127.0.0.1:" + localPort;
+                    String expectedLocalhost = "localhost:" + localPort;
+                    if (!hostHeader.isEmpty() && !expectedHost.equalsIgnoreCase(hostHeader) && !expectedLocalhost.equalsIgnoreCase(hostHeader)) {
+                        sendJsonResponse(out, 403, "{\"error\":\"FORBIDDEN_HOST\"}");
+                        socket.close();
+                        return;
+                    }
+
+                    String expectedOrigin = "http://127.0.0.1:" + localPort;
+                    String expectedOriginLocal = "http://localhost:" + localPort;
+                    if (!originHeader.isEmpty() && !expectedOrigin.equalsIgnoreCase(originHeader) && !expectedOriginLocal.equalsIgnoreCase(originHeader)) {
+                        sendJsonResponse(out, 403, "{\"error\":\"FORBIDDEN_ORIGIN\"}");
+                        socket.close();
+                        return;
+                    }
+
+                    String method = parts[0].toUpperCase(Locale.US);
                     String rawPath = parts[1];
                     int qIdx = rawPath.indexOf('?');
                     if (qIdx != -1) rawPath = rawPath.substring(0, qIdx);
                     Log.i(TAG, "HTTP " + method + " " + rawPath);
 
-                    // CORS preflight handler
                     if (method.equals("OPTIONS")) {
-                        String cors = "HTTP/1.1 204 No Content\r\n" +
-                            "Access-Control-Allow-Origin: *\r\n" +
-                            "Access-Control-Allow-Methods: GET, POST, OPTIONS, PUT, DELETE\r\n" +
-                            "Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With\r\n" +
-                            "Content-Length: 0\r\n\r\n";
-                        out.write(cors.getBytes("UTF-8"));
+                        String resp = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n";
+                        out.write(resp.getBytes(StandardCharsets.UTF_8));
                         out.flush();
+                        socket.close();
+                        return;
+                    }
+
+                    // 3. Health Check (unauthenticated loopback probe)
+                    if (rawPath.equals("/api/health")) {
+                        String lanIp = detectDeviceLanIp();
+                        JSONObject health = new JSONObject();
+                        health.put("status", "ok");
+                        health.put("app", "ai-netcontroller");
+                        health.put("mode", "android-native");
+                        health.put("version", APP_VERSION);
+                        health.put("lanIp", lanIp);
+                        sendJsonResponse(out, 200, health.toString());
+                        socket.close();
+                        return;
+                    }
+
+                    if (rawPath.startsWith("/api/") && !isAuthorizedLoopbackRequest(cookieHeader, bridgeHeader)) {
+                        sendJsonResponse(out, 401, "{\"error\":\"UNAUTHORIZED\",\"message\":\"Valid loopback session cookie required.\"}");
                         socket.close();
                         return;
                     }
 
                     // 1. Native UDP Wake-on-LAN
                     if (rawPath.equals("/api/wol")) {
-                        String mac = extractJsonString(bodyStr, "mac");
-                        String bcast = extractJsonString(bodyStr, "broadcastIp");
-                        String secOn = extractJsonString(bodyStr, "secureOn");
-                        int port = 9;
-                        try {
-                            String p = extractJsonNumber(bodyStr, "port");
-                            if (p != null) port = Integer.parseInt(p);
-                        } catch (Exception ignored) {}
+                        if (!"POST".equals(method)) {
+                            sendJsonResponse(out, 405, "{\"error\":\"METHOD_NOT_ALLOWED\"}");
+                            socket.close();
+                            return;
+                        }
+                        JSONObject wolReq = parseJsonObject(bodyStr);
+                        String mac = wolReq.optString("mac", "");
+                        String bcast = wolReq.optString("broadcastIp", "");
+                        String secOn = wolReq.optString("secureOn", "");
+                        int port = wolReq.optInt("port", 9);
 
                         boolean success = sendNativeWol(mac, bcast, port, secOn);
-                        int bytesCount = (secOn != null && secOn.replaceAll("[^0-9A-Fa-f]", "").length() == 12) ? 108 : 102;
-                        String json = "{\"success\":" + success + ",\"status\":\"dispatched\",\"mac\":\"" + (mac != null ? escapeJson(mac) : "") + "\",\"broadcastIp\":\"" + (bcast != null ? escapeJson(bcast) : "255.255.255.255") + "\",\"port\":" + port + ",\"bytesSent\":" + bytesCount + "}";
-                        sendJsonResponse(out, 200, json);
+                        if (!success) {
+                            sendJsonResponse(out, 400, "{\"success\":false,\"error\":\"INVALID_MAC_OR_SEND_FAILED\",\"message\":\"Valid 12-hex MAC address is required to send a Wake-on-LAN Magic Packet.\"}");
+                        } else {
+                            int bytesCount = secOn.replaceAll("[^0-9A-Fa-f]", "").length() == 12 ? 108 : 102;
+                            JSONObject res = new JSONObject();
+                            res.put("success", true);
+                            res.put("status", "dispatched");
+                            res.put("mac", mac);
+                            res.put("broadcastIp", bcast.isEmpty() ? "255.255.255.255" : bcast);
+                            res.put("port", port);
+                            res.put("bytesSent", bytesCount);
+                            sendJsonResponse(out, 200, res.toString());
+                        }
                         socket.close();
                         return;
                     }
@@ -1229,91 +1585,161 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    // 3. Health Check
-                    if (rawPath.equals("/api/health")) {
-                        String lanIp = detectDeviceLanIp();
-                        String json = "{\"status\":\"ok\",\"app\":\"ai-netcontroller\",\"mode\":\"android-native\",\"version\":\"0.35.0\",\"lanIp\":\"" + lanIp + "\"}";
-                        sendJsonResponse(out, 200, json);
-                        socket.close();
-                        return;
-                    }
-
                     // 4. Quick Setup Info
                     if (rawPath.equals("/api/setup/info")) {
                         String lanIp = detectDeviceLanIp();
-                        String setupObj = "{\"version\":\"0.35.0\",\"localIp\":\"" + lanIp + "\",\"lanIp\":\"" + lanIp + "\",\"hostname\":\"" + escapeJson(Build.MODEL) + "\",\"osName\":\"Android\",\"os\":\"android\",\"mac\":\"\",\"daemonPort\":8765,\"port\":8765,\"wsPort\":8765,\"webPort\":" + localPort + ",\"pairingToken\":\"" + daemonToken + "\",\"exeDownloadUrl\":\"/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe\",\"apkDownloadUrl\":\"/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk\",\"launcherDownloadUrl\":\"/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe\"}";
-                        String json = "{\"success\":true,\"setup\":" + setupObj + "}";
-                        sendJsonResponse(out, 200, json);
+                        String hostModel = ((Build.MANUFACTURER != null ? Build.MANUFACTURER : "Android") + " " + (Build.MODEL != null ? Build.MODEL : "Device")).trim();
+                        JSONObject setupObj = new JSONObject();
+                        setupObj.put("version", APP_VERSION);
+                        setupObj.put("localIp", lanIp);
+                        setupObj.put("lanIp", lanIp);
+                        setupObj.put("hostname", hostModel);
+                        setupObj.put("osName", "Android " + Build.VERSION.RELEASE);
+                        setupObj.put("os", "android");
+                        setupObj.put("mac", "");
+                        setupObj.put("daemonPort", 8765);
+                        setupObj.put("port", 8765);
+                        setupObj.put("wsPort", 8765);
+                        setupObj.put("webPort", localPort);
+                        setupObj.put("pairingToken", daemonToken);
+                        setupObj.put("exeDownloadUrl", "/releases/" + RELEASE_TAG + "/AI_NetController_HostAgent_" + RELEASE_TAG + "_win64.exe");
+                        setupObj.put("apkDownloadUrl", "/releases/" + RELEASE_TAG + "/AI_NetController_" + RELEASE_TAG + "_arm64-v8a.apk");
+                        setupObj.put("launcherDownloadUrl", "/releases/" + RELEASE_TAG + "/AI_NetController_HostAgent_" + RELEASE_TAG + "_win64.exe");
+                        JSONObject wrapper = new JSONObject();
+                        wrapper.put("success", true);
+                        wrapper.put("setup", setupObj);
+                        sendJsonResponse(out, 200, wrapper.toString());
                         socket.close();
                         return;
                     }
 
                     // 5. Releases Manifest
                     if (rawPath.equals("/api/releases")) {
-                        String manifestJson = readAssetText("dist/releases/v0.35.0/RELEASE_MANIFEST.json");
+                        String manifestJson = readAssetText("dist/releases/" + RELEASE_TAG + "/RELEASE_MANIFEST.json");
+                        JSONObject resp = new JSONObject();
+                        resp.put("currentVersion", APP_VERSION);
                         if (manifestJson != null && !manifestJson.trim().isEmpty()) {
-                            String wrapped = "{\"currentVersion\":\"0.35.0\",\"manifest\":" + manifestJson + ",\"releases\":[" + manifestJson + "]}";
-                            sendJsonResponse(out, 200, wrapped);
+                            JSONObject manifestObj = parseJsonObject(manifestJson);
+                            resp.put("manifest", manifestObj);
+                            resp.put("releases", new JSONArray().put(manifestObj));
                         } else {
-                            String fallback = "{\"currentVersion\":\"0.35.0\",\"manifest\":{\"version\":\"v0.35.0\",\"artifacts\":[]},\"releases\":[{\"version\":\"0.35.0\",\"tag\":\"v0.35.0\",\"codename\":\"Deep Optimization & Security Hardening Edition\",\"publishedAt\":\"2026-11-07T16:00:00Z\",\"artifacts\":[]}]}";
-                            sendJsonResponse(out, 200, fallback);
+                            resp.put("manifest", JSONObject.NULL);
+                            resp.put("releases", new JSONArray());
                         }
+                        sendJsonResponse(out, 200, resp.toString());
                         socket.close();
                         return;
                     }
 
                     // 6. System Update Center endpoints
                     if (rawPath.equals("/api/update/status") || rawPath.equals("/api/update/check")) {
-                        String json = "{" +
-                            "\"currentVersion\":\"0.35.0\",\"components\":[],\"checkedComponents\":[]," +
-                            "\"latestVersion\":\"0.35.0\"," +
-                            "\"upToDate\":true," +
-                            "\"isUpdateAvailable\":false," +
-                            "\"status\":\"up-to-date\"," +
-                            "\"channel\":\"beta\"," +
-                            "\"lastChecked\":\"" + new java.util.Date().toString() + "\"," +
-                            "\"releaseUrl\":\"https://github.com/SemO2077/AI-NetController/releases/tag/v0.35.0\"," +
-                            "\"changelog\":[" +
-                                "\"Native Android 120Hz Viewport & Hardware Back Navigation\"," +
-                                "\"Multi-Threaded /24 LAN Subnet Discovery & Directed Broadcast WoL\"," +
-                                "\"Zero-GC Binary WebSocket Protocol with Pure-JS SHA-256 Auth Fallback\"," +
-                                "\"Sleek Solid Dark Surfaces with Zero Scroll Blur Lag\"" +
-                            "]," +
-                            "\"assets\":[" +
-                                "{\"name\":\"AI_NetController_v0.35.0_arm64-v8a.apk\",\"size\":\"5.9 MB\",\"platform\":\"Android 8.0–15 (ARM64)\",\"url\":\"/releases/v0.35.0/AI_NetController_v0.35.0_arm64-v8a.apk\",\"verified\":true}," +
-                                "{\"name\":\"AI_NetController_HostAgent_v0.35.0_win64.exe\",\"size\":\"14.9 MB\",\"platform\":\"Windows 10/11 x64 GUI\",\"url\":\"/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe\",\"verified\":true}," +
-                                "{\"name\":\"AI_NetController_HostAgent_v0.35.0_win64_portable.zip\",\"size\":\"15.0 MB\",\"platform\":\"Windows 10/11 x64 Portable\",\"url\":\"/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64_portable.zip\",\"verified\":true}" +
-                            "]" +
-                        "}";
-                        sendJsonResponse(out, 200, json);
+                        JSONObject res = new JSONObject();
+                        res.put("currentVersion", APP_VERSION);
+                        res.put("components", new JSONArray());
+                        res.put("checkedComponents", new JSONArray());
+                        res.put("channel", "beta");
+                        res.put("releaseUrl", "https://github.com/SemO2077/AI-NetController/releases/tag/" + RELEASE_TAG);
+
+                        JSONArray assetsArr = new JSONArray();
+                        String manifestJson = readAssetText("dist/releases/" + RELEASE_TAG + "/RELEASE_MANIFEST.json");
+                        if (manifestJson != null && !manifestJson.trim().isEmpty()) {
+                            JSONObject mObj = parseJsonObject(manifestJson);
+                            JSONArray arts = mObj.optJSONArray("artifacts");
+                            if (arts != null) {
+                                for (int i = 0; i < arts.length(); i++) {
+                                    JSONObject a = arts.optJSONObject(i);
+                                    if (a == null) continue;
+                                    JSONObject entry = new JSONObject();
+                                    String fname = a.optString("filename", "");
+                                    entry.put("name", fname);
+                                    entry.put("size", a.optString("sizeFormatted", ""));
+                                    entry.put("platform", a.optString("platform", ""));
+                                    entry.put("url", "/releases/" + RELEASE_TAG + "/" + fname);
+                                    entry.put("sha256", a.optString("sha256", ""));
+                                    assetsArr.put(entry);
+                                }
+                            }
+                        }
+                        res.put("assets", assetsArr);
+
+                        if (rawPath.equals("/api/update/check")) {
+                            HttpsURLConnection conn = null;
+                            try {
+                                URL ghUrl = new URL("https://api.github.com/repos/SemO2077/AI-NetController/releases");
+                                conn = (HttpsURLConnection) ghUrl.openConnection();
+                                conn.setRequestMethod("GET");
+                                conn.setConnectTimeout(5000);
+                                conn.setReadTimeout(8000);
+                                conn.setRequestProperty("Accept", "application/vnd.github+json");
+                                conn.setRequestProperty("User-Agent", "AI-NetController-Android/" + APP_VERSION);
+                                int code = conn.getResponseCode();
+                                if (code >= 200 && code < 300) {
+                                    String body = readAllStream(conn.getInputStream());
+                                    JSONArray rels = new JSONArray(body);
+                                    String latestTag = RELEASE_TAG;
+                                    String releaseUrl = "https://github.com/SemO2077/AI-NetController/releases/tag/" + RELEASE_TAG;
+                                    if (rels.length() > 0 && rels.optJSONObject(0) != null) {
+                                        latestTag = rels.optJSONObject(0).optString("tag_name", RELEASE_TAG);
+                                        releaseUrl = rels.optJSONObject(0).optString("html_url", releaseUrl);
+                                    }
+                                    String latestVer = latestTag.startsWith("v") ? latestTag.substring(1) : latestTag;
+                                    boolean upToDate = latestVer.equals(APP_VERSION);
+                                    res.put("latestVersion", latestVer);
+                                    res.put("upToDate", upToDate);
+                                    res.put("isUpdateAvailable", !upToDate);
+                                    res.put("status", upToDate ? "up-to-date" : "update-available");
+                                    res.put("releaseUrl", releaseUrl);
+                                    res.put("remoteChecked", true);
+                                    sendJsonResponse(out, 200, res.toString());
+                                } else {
+                                    res.put("latestVersion", APP_VERSION);
+                                    res.put("upToDate", JSONObject.NULL);
+                                    res.put("isUpdateAvailable", false);
+                                    res.put("status", "remote-check-failed");
+                                    res.put("remoteChecked", false);
+                                    res.put("error", "GitHub API returned HTTP " + code);
+                                    sendJsonResponse(out, 502, res.toString());
+                                }
+                            } catch (Throwable e) {
+                                res.put("latestVersion", APP_VERSION);
+                                res.put("upToDate", JSONObject.NULL);
+                                res.put("isUpdateAvailable", false);
+                                res.put("status", "offline");
+                                res.put("remoteChecked", false);
+                                res.put("error", e.getMessage() != null ? e.getMessage() : "Unable to reach GitHub Releases.");
+                                sendJsonResponse(out, 503, res.toString());
+                            } finally {
+                                if (conn != null) conn.disconnect();
+                            }
+                        } else {
+                            res.put("latestVersion", APP_VERSION);
+                            res.put("upToDate", true);
+                            res.put("isUpdateAvailable", false);
+                            res.put("status", "bundled");
+                            res.put("remoteChecked", false);
+                            sendJsonResponse(out, 200, res.toString());
+                        }
                         socket.close();
                         return;
                     }
 
                     if (rawPath.equals("/api/update/execute")) {
-                        String json = "{" +
-                            "\"success\":true," +
-                            "\"version\":\"0.35.0\"," +
-                            "\"steps\":[" +
-                                "{\"step\":\"Verify GitHub Release v0.35.0 manifest\",\"status\":\"completed\",\"durationMs\":45}," +
-                                "{\"step\":\"Validate SHA-256 binary signatures\",\"status\":\"completed\",\"durationMs\":62}," +
-                                "{\"step\":\"Confirm Android APK & Web Bundle v0.35.0 parity\",\"status\":\"completed\",\"durationMs\":38}" +
-                            "]," +
-                            "\"message\":\"System is running the latest verified v0.35.0 release.\"" +
-                        "}";
-                        sendJsonResponse(out, 200, json);
+                        JSONObject res = new JSONObject();
+                        res.put("success", false);
+                        res.put("error", "SELF_UPDATE_UNSUPPORTED");
+                        res.put("message", "In-place binary self-update is not supported inside the Android APK. Install the updated APK from GitHub Releases.");
+                        res.put("releaseUrl", "https://github.com/SemO2077/AI-NetController/releases/tag/" + RELEASE_TAG);
+                        sendJsonResponse(out, 501, res.toString());
                         socket.close();
                         return;
                     }
 
                     if (rawPath.equals("/api/update/ai-analyze")) {
-                        String json = "{" +
-                            "\"analysis\":\"All installed AI NetController v0.35.0 components (Android Native Engine, Binary WebSocket Worker, and UDP WoL Broadcaster) match the latest cryptographic SHA-256 release signatures.\"," +
-                            "\"recommendation\":\"Keep current v0.35.0 build active. No breaking changes or security vulnerabilities detected.\"," +
-                            "\"riskLevel\":\"low\"," +
-                            "\"compatibilityScore\":100" +
-                        "}";
-                        sendJsonResponse(out, 200, json);
+                        JSONObject req = parseJsonObject(bodyStr);
+                        if (!req.has("prompt") && !req.has("messages")) {
+                            req.put("prompt", "Summarize release status and upgrade considerations for AI NetController " + RELEASE_TAG + ".");
+                        }
+                        handleGeminiChat(out, req.toString(), headerGeminiKey);
                         socket.close();
                         return;
                     }
@@ -1327,19 +1753,29 @@ public class MainActivity extends Activity {
                     }
 
                     if (rawPath.equals("/api/daemon/action")) {
-                        String act = extractJsonString(bodyStr, "action");
+                        JSONObject actReq = parseJsonObject(bodyStr);
+                        String act = actReq.optString("action", "").trim();
                         if ("toggle_service".equals(act) || "toggle_pause".equals(act)) {
                             daemonRunning = !daemonRunning;
                         } else if ("regenerate_pin".equals(act) || "rotate_pin".equals(act)) {
-                            int pinVal = 100000 + new SecureRandom().nextInt(900000);
-                            daemonPin = String.valueOf(pinVal);
+                            daemonPin = generatePin();
                         } else if ("set_hitl_mode".equals(act)) {
-                            String mode = extractJsonString(bodyStr, "value");
-                            if (mode != null && !mode.isEmpty()) daemonHitlMode = mode;
+                            String mode = actReq.optString("value", "").trim().toLowerCase(Locale.US);
+                            if ("strict".equals(mode) || "balanced".equals(mode) || "permissive".equals(mode) || "manual".equals(mode)) {
+                                daemonHitlMode = mode;
+                            } else {
+                                sendJsonResponse(out, 400, "{\"success\":false,\"error\":\"INVALID_HITL_MODE\"}");
+                                socket.close();
+                                return;
+                            }
                         } else if ("toggle_view_only".equals(act)) {
                             daemonViewOnly = !daemonViewOnly;
                         } else if ("toggle_tls".equals(act)) {
                             daemonTlsActive = !daemonTlsActive;
+                        } else {
+                            sendJsonResponse(out, 400, "{\"success\":false,\"error\":\"UNKNOWN_DAEMON_ACTION\"}");
+                            socket.close();
+                            return;
                         }
                         String dState = buildDaemonStateJson();
                         String resp = "{\"success\":true,\"daemon\":" + dState + ",\"state\":" + dState + "}";
@@ -1348,47 +1784,45 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    // 8. AI Model Catalog & Latency Test
+                    // 8. AI Model Catalog & Live Latency Test
                     if (rawPath.equals("/api/ai/models")) {
-                        String json = "{\"models\":[" +
-                            "{\"id\":\"gemini-3.8-flash\",\"name\":\"Gemini 3.8 Flash\",\"provider\":\"Google DeepMind\",\"latencyMs\":38,\"status\":\"ready\"}," +
-                            "{\"id\":\"gemini-3.8-pro\",\"name\":\"Gemini 3.8 Pro\",\"provider\":\"Google DeepMind\",\"latencyMs\":84,\"status\":\"ready\"}," +
-                            "{\"id\":\"local-edge-v3\",\"name\":\"AI NetController Edge Heuristic\",\"provider\":\"On-Device Native\",\"latencyMs\":4,\"status\":\"ready\"}" +
-                        "]}";
-                        sendJsonResponse(out, 200, json);
+                        JSONArray models = new JSONArray();
+                        models.put(new JSONObject().put("id", "gemini-2.5-flash").put("name", "Gemini 2.5 Flash").put("provider", "Google Gemini API").put("status", "requires_api_key"));
+                        models.put(new JSONObject().put("id", "gemini-2.5-pro").put("name", "Gemini 2.5 Pro").put("provider", "Google Gemini API").put("status", "requires_api_key"));
+                        models.put(new JSONObject().put("id", "gemini-2.0-flash").put("name", "Gemini 2.0 Flash").put("provider", "Google Gemini API").put("status", "requires_api_key"));
+                        sendJsonResponse(out, 200, new JSONObject().put("models", models).toString());
                         socket.close();
                         return;
                     }
 
                     if (rawPath.equals("/api/ai/models/test")) {
-                        String modelId = extractJsonString(bodyStr, "model");
-                        if (modelId == null || modelId.isEmpty()) modelId = "gemini-3.8-flash";
-                        String json = "{\"success\":true,\"model\":\"" + escapeJson(modelId) + "\",\"latencyMs\":24,\"status\":\"operational\",\"message\":\"Model endpoint verified from Android controller.\"}";
-                        sendJsonResponse(out, 200, json);
+                        handleGeminiModelTest(out, bodyStr, headerGeminiKey);
                         socket.close();
                         return;
                     }
 
-                    // 9. Remote PC Control Action Endpoint
+                    // 9. Remote PC Control Action Endpoint (requires desktop WebSocket connection)
                     if (rawPath.equals("/api/pc-control/execute")) {
-                        String type = extractJsonString(bodyStr, "type");
-                        String cmd = extractJsonString(bodyStr, "command");
-                        String keys = extractJsonString(bodyStr, "keys");
-                        String summary = "Executed " + (type != null ? type : "input") + (cmd != null ? " (" + cmd + ")" : (keys != null ? " [" + keys + "]" : ""));
-                        String json = "{\"success\":true,\"executed\":true,\"mode\":\"native_touch\",\"summary\":\"" + escapeJson(summary) + "\"}";
-                        sendJsonResponse(out, 200, json);
+                        sendJsonResponse(out, 501, "{\"success\":false,\"executed\":false,\"error\":\"REMOTE_WS_REQUIRED\",\"message\":\"Direct host input and command execution require an authenticated WebSocket session to the target AI NetController Host Agent.\"}");
                         socket.close();
                         return;
                     }
 
-                    // 10. Smart AI Chat Endpoint
+                    // 10. Real Gemini AI Chat Endpoint
                     if (rawPath.equals("/api/chat")) {
-                        sendJsonResponse(out, 200, buildSmartChatJson(bodyStr));
+                        handleGeminiChat(out, bodyStr, headerGeminiKey);
                         socket.close();
                         return;
                     }
 
-                    if (rawPath.equals("/") || rawPath.isEmpty() || rawPath.contains("..")) rawPath = "/index.html";
+                    if (rawPath.contains("..") || rawPath.contains("\\")) {
+                        out.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+                        out.flush();
+                        socket.close();
+                        return;
+                    }
+
+                    if (rawPath.equals("/") || rawPath.isEmpty()) rawPath = "/index.html";
 
                     String assetPath = "dist" + rawPath;
                     AssetManager assets = getAssets();
@@ -1397,11 +1831,19 @@ public class MainActivity extends Activity {
                     try {
                         assetStream = assets.open(assetPath);
                     } catch (Exception ex) {
-                        try {
-                            assetStream = assets.open("dist/index.html");
-                            assetPath = "dist/index.html";
-                        } catch (Exception e2) {
-                            out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".getBytes("UTF-8"));
+                        int lastSlash = rawPath.lastIndexOf('/');
+                        String lastSeg = lastSlash >= 0 ? rawPath.substring(lastSlash + 1) : rawPath;
+                        boolean hasFileExt = lastSeg.contains(".");
+                        if (!hasFileExt) {
+                            try {
+                                assetStream = assets.open("dist/index.html");
+                                assetPath = "dist/index.html";
+                            } catch (Exception e2) {
+                                assetStream = null;
+                            }
+                        }
+                        if (assetStream == null) {
+                            out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".getBytes(StandardCharsets.UTF_8));
                             out.flush();
                             socket.close();
                             return;
@@ -1418,13 +1860,18 @@ public class MainActivity extends Activity {
                     byte[] data = baos.toByteArray();
 
                     String mime = getMimeType(assetPath);
-                    String headers = "HTTP/1.1 200 OK\r\n" +
-                        "Content-Type: " + mime + "\r\n" +
-                        "Content-Length: " + data.length + "\r\n" +
-                        "Access-Control-Allow-Origin: *\r\n" +
-                        "Cache-Control: no-cache\r\n\r\n";
+                    StringBuilder headersSb = new StringBuilder();
+                    headersSb.append("HTTP/1.1 200 OK\r\n");
+                    headersSb.append("Content-Type: ").append(mime).append("\r\n");
+                    headersSb.append("Content-Length: ").append(data.length).append("\r\n");
+                    headersSb.append("X-Content-Type-Options: nosniff\r\n");
+                    headersSb.append("Cache-Control: no-store\r\n");
+                    if ("dist/index.html".equals(assetPath)) {
+                        headersSb.append("Set-Cookie: ai_net_bridge=").append(bridgeSessionToken).append("; HttpOnly; SameSite=Strict; Path=/\r\n");
+                    }
+                    headersSb.append("\r\n");
 
-                    out.write(headers.getBytes("UTF-8"));
+                    out.write(headersSb.toString().getBytes(StandardCharsets.UTF_8));
                     out.write(data);
                     out.flush();
                     socket.close();
@@ -1489,6 +1936,9 @@ public class MainActivity extends Activity {
     }
 }
 """
+    rel_tag = _get_release_tag()
+    app_ver = rel_tag.lstrip("v")
+    java_content = java_content.replace("__APP_VERSION__", app_ver).replace("__RELEASE_TAG__", rel_tag)
     dest = os.path.join(STAGE_DIR, "src", "com", "cst", "autonomouslan", "MainActivity.java")
     with open(dest, "w", encoding="utf-8") as f:
         f.write(java_content)
@@ -1580,7 +2030,8 @@ def zipalign_and_sign():
     bin_dir = os.path.join(STAGE_DIR, "bin")
     unaligned_apk = os.path.join(bin_dir, "unaligned.apk")
     aligned_apk = os.path.join(bin_dir, "aligned.apk")
-    signed_apk = os.path.join(bin_dir, "AI_NetController_v0.35.0_arm64-v8a.apk")
+    rel_tag = _get_release_tag()
+    signed_apk = os.path.join(bin_dir, f"AI_NetController_{rel_tag}_arm64-v8a.apk")
 
     print("[*] Aligning APK with zipalign (4-byte alignment)...")
     if os.path.exists(aligned_apk):
@@ -1591,14 +2042,27 @@ def zipalign_and_sign():
         print("[ERROR] zipalign failed:", res.stderr)
         sys.exit(1)
 
-    ensure_debug_keystore()
-    print("[*] Signing APK with apksigner...")
+    ks_path = os.environ.get("AI_ANDROID_KEYSTORE", "").strip()
+    ks_pass = os.environ.get("AI_ANDROID_KEYSTORE_PASS", "").strip()
+    ks_alias = os.environ.get("AI_ANDROID_KEY_ALIAS", "").strip()
+    key_pass = os.environ.get("AI_ANDROID_KEY_PASS", "").strip() or ks_pass
+
+    if ks_path and os.path.isfile(ks_path) and ks_pass and ks_alias:
+        print(f"[*] Signing APK with release keystore ({ks_alias})...")
+    else:
+        ks_path = KEYSTORE_PATH
+        ks_pass = "android"
+        ks_alias = "androiddebugkey"
+        key_pass = "android"
+        ensure_debug_keystore()
+        print("[*] Signing APK with local debug keystore (set AI_ANDROID_KEYSTORE for release signing)...")
+
     cmd_sign = [
         APKSIGNER, "sign",
-        "--ks", KEYSTORE_PATH,
-        "--ks-pass", "pass:android",
-        "--ks-key-alias", "androiddebugkey",
-        "--key-pass", "pass:android",
+        "--ks", ks_path,
+        "--ks-pass", f"pass:{ks_pass}",
+        "--ks-key-alias", ks_alias,
+        "--key-pass", f"pass:{key_pass}",
         "--out", signed_apk,
         aligned_apk
     ]
@@ -1610,65 +2074,70 @@ def zipalign_and_sign():
     # Verify signature
     cmd_verify = [APKSIGNER, "verify", "--verbose", signed_apk]
     res_v = subprocess.run(cmd_verify, env=ENV, capture_output=True, text=True)
+    if res_v.returncode != 0:
+        print("[ERROR] apksigner verify failed:", res_v.stderr)
+        sys.exit(1)
     print("[OK] APK Signature verified:\n", res_v.stdout.strip())
 
     return signed_apk
 
 def distribute_apk(signed_apk):
-    # Distribute to v0.35.0 and v0.35.0
-    for rel_tag, apk_tag in [("v0.35.0", "v0.35.0")]:
-        rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
-        os.makedirs(rel_dir, exist_ok=True)
-        dest_arm64 = os.path.join(rel_dir, f"AI_NetController_{apk_tag}_arm64-v8a.apk")
-        dest_univ = os.path.join(rel_dir, f"AI_NetController_{apk_tag}.apk")
-        shutil.copy2(signed_apk, dest_arm64)
-        shutil.copy2(signed_apk, dest_univ)
+    rel_tag = _get_release_tag()
+    rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
+    os.makedirs(rel_dir, exist_ok=True)
+    dest_arm64 = os.path.join(rel_dir, f"AI_NetController_{rel_tag}_arm64-v8a.apk")
+    dest_univ = os.path.join(rel_dir, f"AI_NetController_{rel_tag}.apk")
+    shutil.copy2(signed_apk, dest_arm64)
+    shutil.copy2(signed_apk, dest_univ)
 
     mobile_out = os.path.join(ROOT_DIR, "apps", "mobile", "build", "app", "outputs", "flutter-apk")
     os.makedirs(mobile_out, exist_ok=True)
     dest_flutter = os.path.join(mobile_out, "app-arm64-v8a-release.apk")
     shutil.copy2(signed_apk, dest_flutter)
 
-    dest_arm64_main = os.path.join(ROOT_DIR, "public", "releases", "v0.35.0", "AI_NetController_v0.35.0_arm64-v8a.apk")
-    size_mb = os.path.getsize(dest_arm64_main) / (1024 * 1024)
-    sha_hash = sha256_file(dest_arm64_main)
-    print(f"\n[SUCCESS] APK Published to:\n  - {dest_arm64_main}\n  - Size: {size_mb:.2f} MB\n  - SHA256: {sha_hash}")
+    size_mb = os.path.getsize(dest_arm64) / (1024 * 1024)
+    sha_hash = sha256_file(dest_arm64)
+    print(f"\n[SUCCESS] APK Published to:\n  - {dest_arm64}\n  - {dest_univ}\n  - Size: {size_mb:.2f} MB\n  - SHA256: {sha_hash}")
 
-    # Update manifest & checksums
-    for rel_tag, apk_tag in [("v0.35.0", "v0.35.0")]:
-        rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
-        manifest_path = os.path.join(rel_dir, "RELEASE_MANIFEST.json")
-        if os.path.exists(manifest_path):
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-            for art in manifest.get("artifacts", []):
-                if apk_tag in art["filename"]:
-                    art_file = os.path.join(rel_dir, art["filename"])
-                    if os.path.exists(art_file):
-                        art["sizeBytes"] = os.path.getsize(art_file)
-                        art["sizeFormatted"] = f"{art['sizeBytes'] / (1024*1024):.1f} MB"
-                        art["sha256"] = sha256_file(art_file)
-            manifest["publishedAt"] = datetime.now(timezone.utc).isoformat()
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2)
+    manifest_path = os.path.join(rel_dir, "RELEASE_MANIFEST.json")
+    if os.path.exists(manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        for art in manifest.get("artifacts", []):
+            if rel_tag in art["filename"]:
+                art_file = os.path.join(rel_dir, art["filename"])
+                if os.path.exists(art_file):
+                    sz = os.path.getsize(art_file)
+                    art["sizeBytes"] = sz
+                    art["sizeFormatted"] = f"{sz / (1024*1024):.1f} MB" if sz >= 1024 * 1024 else f"{sz / 1024:.0f} KB"
+                    art["sha256"] = sha256_file(art_file)
+        manifest["publishedAt"] = datetime.now(timezone.utc).isoformat()
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
 
-        sums_path = os.path.join(rel_dir, "SHA256SUMS.txt")
-        if os.path.exists(sums_path):
-            with open(sums_path, "r", encoding="utf-8") as f:
-                lines = [l for l in f.read().splitlines() if l.strip()]
-            new_lines = []
-            for l in lines:
-                parts = l.split(None, 1)
-                if len(parts) == 2:
-                    matched_file = os.path.join(rel_dir, parts[1])
-                    if os.path.exists(matched_file):
-                        new_lines.append(f"{sha256_file(matched_file)}  {parts[1]}")
-                        continue
-                new_lines.append(l)
-            with open(sums_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(new_lines) + "\n")
+    sums_path = os.path.join(rel_dir, "SHA256SUMS.txt")
+    if os.path.exists(sums_path):
+        with open(sums_path, "r", encoding="utf-8") as f:
+            lines = [l for l in f.read().splitlines() if l.strip()]
+        new_lines = []
+        seen = set()
+        for l in lines:
+            parts = l.split(None, 1)
+            if len(parts) == 2:
+                matched_file = os.path.join(rel_dir, parts[1])
+                if os.path.exists(matched_file):
+                    new_lines.append(f"{sha256_file(matched_file)}  {parts[1]}")
+                    seen.add(parts[1])
+                    continue
+            new_lines.append(l)
+        for fname in (f"AI_NetController_{rel_tag}_arm64-v8a.apk", f"AI_NetController_{rel_tag}.apk"):
+            fpath = os.path.join(rel_dir, fname)
+            if fname not in seen and os.path.exists(fpath):
+                new_lines.append(f"{sha256_file(fpath)}  {fname}")
+        with open(sums_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(new_lines) + "\n")
 
-    return dest_arm64_main
+    return dest_arm64
 
 if __name__ == "__main__":
     ensure_web_dist()
@@ -1681,4 +2150,4 @@ if __name__ == "__main__":
     compile_and_link_resources()
     apk = zipalign_and_sign()
     distribute_apk(apk)
-    print("\n[ALL DONE] The Android App is now 100% identical to the Google AI Studio console!")
+    print(f"\n[ALL DONE] AI NetController Android APK ({_get_release_tag()} / {_get_version_name()}) built and verified.")

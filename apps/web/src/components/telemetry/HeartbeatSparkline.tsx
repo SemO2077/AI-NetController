@@ -21,13 +21,23 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
   const { t } = useTranslation();
   const { currentLatencyMs, history, jitterMs, minLatencyMs, maxLatencyMs, avgLatencyMs, status } = metrics;
 
-  // Compute SVG sparkline path
+  // Compute SVG sparkline path from real measured samples only
   const svgData = useMemo(() => {
-    // If not enough history, generate a graceful placeholder
-    const data = history.length > 0 ? history : [15, 16, 14, 15, 17, 14, 16];
+    const data =
+      history.length >= 2
+        ? history
+        : history.length === 1
+        ? [history[0], history[0]]
+        : currentLatencyMs !== null
+        ? [currentLatencyMs, currentLatencyMs]
+        : [];
     const width = variant === 'compact' ? 56 : 320;
     const height = variant === 'compact' ? 20 : 64;
     const padding = variant === 'compact' ? 2 : 6;
+
+    if (data.length === 0) {
+      return { path: '', area: '', lastPoint: null, width, height, minVal: 0, maxVal: 0 };
+    }
 
     const minVal = Math.max(0, Math.min(...data) - 4);
     const maxVal = Math.max(minVal + 10, Math.max(...data) + 4);

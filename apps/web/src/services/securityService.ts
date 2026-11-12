@@ -59,7 +59,8 @@ const HIGH_RISK_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
  * before running AST security pattern matching.
  */
 export function deobfuscateShellCommand(raw: string): string {
-  return raw
+  return String(raw || '')
+    .normalize('NFKC')
     .replace(/\^(.)/g, '$1')
     .replace(/`([a-zA-Z0-9])/g, '$1')
     .replace(/["']/g, '')
@@ -266,7 +267,8 @@ export const hostCircuitBreaker = new HostCircuitBreaker();
 /**
  * Host Quarantine & Network Isolation Registry
  */
-const STORAGE_KEY_QUARANTINED = 'cst_quarantined_hosts_v1';
+const STORAGE_KEY_QUARANTINED = 'ai_netcontroller_quarantined_hosts_v1';
+const LEGACY_STORAGE_KEY_QUARANTINED = 'cst_quarantined_hosts_v1';
 const inMemoryQuarantined = new Set<string>();
 
 export function getQuarantinedHosts(): string[] {
@@ -274,7 +276,9 @@ export function getQuarantinedHosts(): string[] {
     return Array.from(inMemoryQuarantined);
   }
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_QUARANTINED);
+    const raw =
+      localStorage.getItem(STORAGE_KEY_QUARANTINED) ||
+      localStorage.getItem(LEGACY_STORAGE_KEY_QUARANTINED);
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
@@ -306,11 +310,16 @@ export function setHostQuarantined(hostId: string, quarantined: boolean): string
 /**
  * Pre-Shared Key (PSK) / Bearer Auth Token Management
  */
-const STORAGE_KEY_AUTH_TOKEN = 'cst_auth_token_v1';
+const STORAGE_KEY_AUTH_TOKEN = 'ai_netcontroller_auth_token_v1';
+const LEGACY_STORAGE_KEY_AUTH_TOKEN = 'cst_auth_token_v1';
 
 export function getStoredAuthToken(): string {
   if (typeof window === 'undefined') return '';
-  return localStorage.getItem(STORAGE_KEY_AUTH_TOKEN) || '';
+  return (
+    localStorage.getItem(STORAGE_KEY_AUTH_TOKEN) ||
+    localStorage.getItem(LEGACY_STORAGE_KEY_AUTH_TOKEN) ||
+    ''
+  );
 }
 
 export function saveAuthToken(token: string) {
@@ -319,6 +328,7 @@ export function saveAuthToken(token: string) {
       localStorage.setItem(STORAGE_KEY_AUTH_TOKEN, token.trim());
     } else {
       localStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
+      localStorage.removeItem(LEGACY_STORAGE_KEY_AUTH_TOKEN);
     }
   }
 }
@@ -344,4 +354,70 @@ export function generatePacketNonce(): { nonce: string; timestamp: number; seque
     timestamp,
     sequence: packetCounter,
   };
+}
+
+/**
+ * Exchanges a 6-digit ephemeral pairing PIN over WebSocket (`action: 'PAIR'`)
+ * for the host agent's persistent cryptographic pairing token.
+ */
+export function pairHostWithPin(
+  wsUri: string,
+  pin: string,
+  deviceLabel: string = 'AI NetController Web Console'
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const cleanPin = (pin || '').trim();
+    if (!wsUri || !cleanPin || typeof WebSocket === 'undefined') {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    let ws: WebSocket | null = null;
+    const finish = (token: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws?.close(1000, 'PAIR complete');
+      } catch {
+        // ignore
+      }
+      resolve(token);
+    };
+    const timer = setTimeout(() => finish(null), 3500);
+    try {
+      ws = new WebSocket(wsUri);
+      ws.onopen = () => {
+        try {
+          ws?.send(
+            JSON.stringify({
+              action: 'PAIR',
+              pin: cleanPin,
+              device: deviceLabel,
+            })
+          );
+        } catch {
+          finish(null);
+        }
+      };
+      ws.onmessage = (evt: MessageEvent) => {
+        if (typeof evt.data !== 'string') return;
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.event === 'AUTHENTICATED' && typeof msg.pairingToken === 'string' && msg.pairingToken) {
+            saveAuthToken(msg.pairingToken);
+            finish(msg.pairingToken);
+          } else if (msg.event === 'ERROR') {
+            finish(null);
+          }
+        } catch {
+          // ignore
+        }
+      };
+      ws.onerror = () => finish(null);
+      ws.onclose = () => finish(null);
+    } catch {
+      finish(null);
+    }
+  });
 }

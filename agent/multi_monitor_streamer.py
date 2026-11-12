@@ -2,15 +2,17 @@
 Multi-Monitor Hardware Screen Grabber & Material You Dynamic Color Extractor
 ---------------------------------------------------------------------
 Features:
-- Opcode 0x0B (DISPLAY_ENUMERATION) Dynamic Monitor Switching ([ 1 ] [ 2 ] [ 3 ])
+- Opcode 0x0D (DISPLAY_ENUMERATION) Dynamic Monitor Switching ([ 1 ] [ 2 ] [ 3 ])
 - Real-time MSS bounding box re-binding without dropping WebSocket connection
 - TurboJPEG SIMD acceleration with preallocated output buffers
 - Fast Desktop Wallpaper Dominant Color Extraction (K-Means / Frequency Clustering)
-- Material You HEX Color Output for Flutter Neon Accent Interpolation
+- Material You HEX Color Output for Neon Accent Interpolation
 """
 
+import ctypes
 import io
 import logging
+import platform
 import threading
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -40,18 +42,41 @@ logger = logging.getLogger("MultiMonitorStreamer")
 DEFAULT_JPEG_QUALITY = 60
 
 
+def _enable_windows_dpi_awareness() -> None:
+    """Ensures capture dimensions match physical screen pixels on HiDPI Windows displays."""
+    if platform.system() != "Windows":
+        return
+    try:
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 class MultiMonitorStreamer:
     """
     Thread-safe multi-monitor screen capture manager.
     Enables instant context-switching across multiple physical displays.
     """
     def __init__(self):
+        _enable_windows_dpi_awareness()
         self._lock = threading.Lock()
         self._tls = threading.local()
-        self._sct = (mss.MSS() if hasattr(mss, "MSS") else mss.mss()) if mss else None
+        self._all_scts: List[Any] = []
+        self._sct = None
+        if mss:
+            try:
+                self._sct = mss.MSS() if hasattr(mss, "MSS") else mss.mss()
+                self._all_scts.append(self._sct)
+            except Exception as exc:
+                logger.warning("MSS screen capture initialization deferred (%s)", exc)
+                self._sct = None
         self._active_monitor_index: int = 1  # 1-indexed (monitor 0 is all monitors combined)
         self._current_bbox: Dict[str, int] = {}
-        self._dominant_hex_color: str = "#00F0FF"  # Default CST Neon Cyan
+        self._dominant_hex_color: str = "#00F0FF"  # Default Neon Cyan
         self._has_extracted_color: bool = False
 
         self._refresh_monitors_list()
@@ -61,9 +86,29 @@ class MultiMonitorStreamer:
             return None
         sct = getattr(self._tls, "sct", None)
         if sct is None:
-            sct = mss.MSS() if hasattr(mss, "MSS") else mss.mss()
-            self._tls.sct = sct
+            try:
+                sct = mss.MSS() if hasattr(mss, "MSS") else mss.mss()
+                self._tls.sct = sct
+                with self._lock:
+                    self._all_scts.append(sct)
+            except Exception as exc:
+                logger.debug("Thread-local MSS creation failed: %s", exc)
+                return None
         return sct
+
+    def close(self) -> None:
+        """Closes all GDI / X11 MSS handles allocated by this streamer."""
+        with self._lock:
+            scts = list(self._all_scts)
+            self._all_scts.clear()
+            self._sct = None
+        for sct in scts:
+            try:
+                sct.close()
+            except Exception:
+                pass
+        if hasattr(self._tls, "sct"):
+            self._tls.sct = None
 
     def _refresh_monitors_list(self) -> List[Dict[str, Any]]:
         """Queries MSS for connected monitors and binds default display."""
@@ -108,7 +153,7 @@ class MultiMonitorStreamer:
         return monitors
 
     def enumerate_monitors(self) -> List[Dict[str, Any]]:
-        """Returns JSON-serializable list of all active monitors for Opcode 0x0B payload."""
+        """Returns JSON-serializable list of all active monitors for Opcode 0x0D payload."""
         return self._refresh_monitors_list()
 
     def switch_monitor(self, monitor_index: int) -> bool:
@@ -134,11 +179,13 @@ class MultiMonitorStreamer:
         Returns: (jpeg_bytes, width, height) or None on failure.
         """
         sct = self._get_thread_sct()
-        if not sct:
+        if not sct or not sct.monitors:
             return None
 
+        clamped_quality = max(1, min(95, int(quality)))
         with self._lock:
-            bbox = self._current_bbox.copy() if self._current_bbox else sct.monitors[1]
+            fallback_mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+            bbox = self._current_bbox.copy() if self._current_bbox else fallback_mon
 
         try:
             # High-speed hardware screen grab
@@ -156,7 +203,7 @@ class MultiMonitorStreamer:
                     bgra_arr = np.frombuffer(raw_sct_img.raw, dtype=np.uint8).reshape((height, width, 4))
                     jpeg_bytes = _TURBO_JPEG_INSTANCE.encode(
                         bgra_arr,
-                        quality=quality,
+                        quality=clamped_quality,
                         pixel_format=3,  # TJPF_BGRX (constant 3 for 4-byte BGRA/BGRX)
                         jpeg_subsample=TJSAMP_420
                     )
@@ -168,7 +215,7 @@ class MultiMonitorStreamer:
             if Image:
                 img = Image.frombytes("RGB", raw_sct_img.size, raw_sct_img.bgra, "raw", "BGRX")
                 buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=quality, optimize=False)
+                img.save(buf, format="JPEG", quality=clamped_quality, optimize=False)
                 return buf.getvalue(), width, height
 
             return None

@@ -94,6 +94,7 @@ interface DaemonStateSnapshot {
   securityProfile?: 'zero_trust' | 'balanced' | 'view_only';
   pairingPin?: string;
   pairingToken: string;
+  hasPairingToken?: boolean;
   cpuPercent: number;
   cpuCores: number;
   ramPercent: number;
@@ -122,15 +123,15 @@ interface PcDaemonGuiModalProps {
 }
 
 const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
-  version: '0.35.0',
-  protocol: 'CST/3.0-SECURE',
+  version: '0.50.0',
+  protocol: 'AI-NET/3.0-SECURE',
   hostname: 'LOCAL-HOST',
   osName: 'Windows / Linux Host',
   localIp: '127.0.0.1',
   port: 8765,
   wsUri: 'ws://127.0.0.1:8765',
   uptime: '00:00:00',
-  isRunning: true,
+  isRunning: false,
   isPaused: false,
   mdnsEnabled: true,
   viewOnlyMode: false,
@@ -141,17 +142,18 @@ const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
   subnetGeofenceOnly: true,
   autoStartOnBoot: true,
   targetFps: 60,
-  setupCompleted: true,
+  setupCompleted: false,
   securityProfile: 'balanced',
   pairingPin: '',
-  pairingToken: 'cst_autonomous_lan_secret_2025',
+  pairingToken: '',
+  hasPairingToken: false,
   cpuPercent: 0,
   cpuCores: 1,
   ramPercent: 0,
   ramUsedGb: 0,
   ramTotalGb: 0,
   diskPercent: 0,
-  captureFps: 60,
+  captureFps: 0,
   connectedClients: [],
   blacklistedDevices: [],
   activeAdapters: [],
@@ -160,8 +162,8 @@ const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
     visibleHwnd: true,
     zeroHiddenShell: true,
     manifestAsInvoker: true,
-    authenticodeReady: true,
-    sandboxJobObject: true,
+    authenticodeReady: false,
+    sandboxJobObject: false,
   },
   logs: [],
 };
@@ -178,6 +180,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<DaemonGuiTab>('overview');
   const [daemon, setDaemon] = useState<DaemonStateSnapshot>(FALLBACK_DAEMON_STATE);
+  const [serverReachable, setServerReachable] = useState<boolean | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [isLoadingAction, setIsLoadingAction] = useState<string | null>(null);
   const [showToken, setShowToken] = useState(false);
   const [copiedUri, setCopiedUri] = useState(false);
@@ -198,16 +202,20 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
   const fetchDaemonState = useCallback(async () => {
     try {
-      const res = await fetch('/api/daemon/state');
+      const res = await fetch('/api/daemon/state', { credentials: 'include' });
       const data = await res.json();
-      if (data.success && data.daemon) {
+      setServerReachable(res.ok);
+      if (res.ok && data.success && data.daemon) {
         setDaemon(data.daemon);
         if (!isEditingPort) {
           setPortInput(String(data.daemon.port));
         }
+      } else {
+        setDaemon((prev) => ({ ...prev, isRunning: false }));
       }
     } catch {
-      // Keep local fallback state if offline
+      setServerReachable(false);
+      setDaemon((prev) => ({ ...prev, isRunning: false }));
     }
   }, [isEditingPort]);
 
@@ -240,8 +248,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       pair_port: String(daemon.port),
       pair_name: daemon.hostname,
       pair_mac: primaryMac,
-      pair_os: 'windows',
-      pair_token: daemon.pairingToken,
+      pair_os: daemon.osName?.toLowerCase().includes('linux') ? 'linux' : 'windows',
+      ...(daemon.pairingPin ? { pair_pin: daemon.pairingPin } : {}),
     });
     const pairUrl = `${baseOrigin}/?${params.toString()}`;
     QRCode.toDataURL(pairUrl, {
@@ -251,67 +259,40 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     })
       .then((url) => setQrDataUrl(url))
       .catch(() => {});
-  }, [isOpen, daemon.localIp, daemon.port, daemon.hostname, daemon.pairingToken, daemon.activeAdapters]);
+  }, [isOpen, daemon.localIp, daemon.port, daemon.hostname, daemon.osName, daemon.pairingPin, daemon.activeAdapters]);
 
   if (!isOpen) return null;
 
   const dispatchAction = async (action: string, extra?: Record<string, any>) => {
     triggerHapticFeedback('medium');
     setIsLoadingAction(action);
+    setActionError(null);
     try {
       const res = await fetch('/api/daemon/action', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, ...extra }),
       });
-      const data = await res.json();
-      if (data.success && data.daemon) {
+      const data = await res.json().catch(() => ({}));
+      setServerReachable(res.ok);
+      if (res.ok && data.success && data.daemon) {
         setDaemon(data.daemon);
+      } else {
+        setActionError(
+          data?.error ||
+            (isBg
+              ? `Сървърът отказа операцията "${action}" (HTTP ${res.status}).`
+              : `Control server rejected "${action}" (HTTP ${res.status}).`)
+        );
       }
     } catch {
-      // Optimistic local state fallback
-      const nowTime = new Date().toLocaleTimeString('en-GB', { hour12: false });
-      setDaemon((prev) => {
-        if (action === 'disconnect_client') {
-          return {
-            ...prev,
-            connectedClients: prev.connectedClients.filter(
-              (c) => c.id !== extra?.clientId && c.ip !== extra?.ip
-            ),
-          };
-        }
-        if (action === 'blacklist_client') {
-          const target = prev.connectedClients.find(
-            (c) => c.id === extra?.clientId || c.ip === extra?.ip
-          );
-          const resolvedIp = target?.ip || extra?.ip || '';
-          if (!resolvedIp) return prev;
-          const banEntry: BlacklistedDevice = {
-            id: `BAN-${Math.floor(100 + Math.random() * 900)}`,
-            ip: resolvedIp,
-            mac: (target?.mac || extra?.mac || '00:00:00:00:00:00').toUpperCase(),
-            device: target?.device || extra?.device || 'Blocked Peer',
-            reason: extra?.reason || 'Manually blacklisted by operator',
-            bannedAt: nowTime,
-          };
-          return {
-            ...prev,
-            connectedClients: prev.connectedClients.filter(
-              (c) => c.id !== extra?.clientId && c.ip !== banEntry.ip
-            ),
-            blacklistedDevices: [banEntry, ...(prev.blacklistedDevices || [])],
-          };
-        }
-        if (action === 'unban_device') {
-          return {
-            ...prev,
-            blacklistedDevices: (prev.blacklistedDevices || []).filter(
-              (b) => b.id !== extra?.banId && b.ip !== extra?.ip
-            ),
-          };
-        }
-        return prev;
-      });
+      setServerReachable(false);
+      setActionError(
+        isBg
+          ? `Няма връзка с Control Server (${action}). Промените не бяха записани.`
+          : `Control server unreachable for "${action}". No state changes were persisted.`
+      );
     } finally {
       setIsLoadingAction(null);
     }
@@ -437,17 +418,23 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                 </h2>
                 <span
                   className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
-                    daemon.isPaused
+                    !daemon.isRunning
+                      ? 'bg-rose-500/15 text-rose-300 border-rose-400/40'
+                      : daemon.isPaused
                       ? 'bg-amber-500/15 text-amber-300 border-amber-400/40'
                       : 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
                   }`}
                 >
                   <span
                     className={`w-1.5 h-1.5 rounded-full ${
-                      daemon.isPaused ? 'bg-amber-400' : 'bg-emerald-400'
+                      !daemon.isRunning ? 'bg-rose-400' : daemon.isPaused ? 'bg-amber-400' : 'bg-emerald-400'
                     }`}
                   />
-                  {daemon.isPaused
+                  {!daemon.isRunning
+                    ? isBg
+                      ? 'ОФЛАЙН • СПРЯН'
+                      : 'OFFLINE • STOPPED'
+                    : daemon.isPaused
                     ? isBg
                       ? 'ПАУЗИРАН'
                       : 'PAUSED'
@@ -468,8 +455,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href="/releases/v0.35.0/AI_NetController_HostAgent_v0.35.0_win64.exe"
-              download="AI_NetController_HostAgent_v0.35.0_win64.exe"
+              href="/releases/v0.50.0/AI_NetController_HostAgent_v0.50.0_win64.exe"
+              download="AI_NetController_HostAgent_v0.50.0_win64.exe"
               onClick={() => triggerHapticFeedback('medium')}
               className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-mono text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(34,211,238,0.3)] transition"
             >
@@ -585,6 +572,39 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
         {/* Main Scrollable Desktop GUI Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+          {actionError && (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-500/15 px-4 py-2.5 text-xs text-rose-200 flex items-center justify-between gap-3">
+              <span>{actionError}</span>
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                className="text-rose-300 hover:text-white underline shrink-0"
+              >
+                {isBg ? 'Затвори' : 'Dismiss'}
+              </button>
+            </div>
+          )}
+
+          {!daemon.isRunning && (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <span className="font-bold text-amber-300 uppercase tracking-wider mr-2">
+                  {isBg ? 'Хост агентът не е активен' : 'Host Agent Offline'}
+                </span>
+                <span className="text-amber-100/90">
+                  {isBg
+                    ? 'Няма връзка с локалния Python Daemon (ws://127.0.0.1:8765). Стартирайте HostAgent или използвайте INSTALLERS за настройка.'
+                    : 'No live connection to the local Python HostAgent (ws://127.0.0.1:8765). Start HostAgent on the target PC or open Setup to pair.'}
+                </span>
+              </div>
+              {serverReachable === false && (
+                <span className="text-[11px] font-mono text-rose-300 shrink-0">
+                  {isBg ? 'Control Server: OFFLINE' : 'Control Server: OFFLINE'}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* =====================================================================
               TAB 1: OVERVIEW & SAFEGUARDS
              ===================================================================== */}
@@ -671,7 +691,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                       <div>
                         <div className="text-[10px] font-mono text-slate-400">mDNS ZeroConf</div>
                         <div className="text-xs font-mono font-bold text-white truncate">
-                          {daemon.mdnsEnabled ? '_cst-agent._tcp' : isBg ? 'Изключен' : 'Muted'}
+                          {daemon.mdnsEnabled ? '_ai-net._tcp' : isBg ? 'Изключен' : 'Muted'}
                         </div>
                       </div>
                       <button
@@ -696,7 +716,16 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                         <span>{isBg ? 'HMAC-SHA256 Ключ за сдвояване' : 'HMAC-SHA256 Pairing Key'}</span>
                       </div>
                       <div className="text-xs font-mono text-slate-200 truncate mt-0.5">
-                        {showToken ? daemon.pairingToken : '••••••••••••••••••••••••••••'}
+                        {showToken
+                          ? daemon.pairingToken ||
+                            (daemon.hasPairingToken
+                              ? isBg
+                                ? 'Скрит (натиснете Ротирай за нов)'
+                                : 'Configured (click Rotate to reveal new key)'
+                              : isBg
+                              ? 'Не е конфигуриран'
+                              : 'Not configured')
+                          : '••••••••••••••••••••••••••••'}
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -711,7 +740,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                       <button
                         type="button"
                         onClick={handleCopyToken}
-                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-mono text-cyan-300 cursor-pointer"
+                        disabled={!daemon.pairingToken}
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-mono text-cyan-300 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {copiedToken ? (isBg ? 'Копирано!' : 'Copied!') : isBg ? 'Копирай' : 'Copy'}
                       </button>
