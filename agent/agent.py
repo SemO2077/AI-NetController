@@ -200,10 +200,26 @@ except ImportError:
         get_icon_image = lambda size=64: None
 
 try:
-    from daemon_config import load_config, save_config, get_config_path, rotate_token, regenerate_pin
+    from daemon_config import (
+        ensure_fresh_pin,
+        get_config_path,
+        get_config_revision,
+        load_config,
+        regenerate_pin,
+        rotate_token,
+        save_config,
+    )
 except ImportError:
     try:
-        from agent.daemon_config import load_config, save_config, get_config_path, rotate_token, regenerate_pin
+        from agent.daemon_config import (
+            ensure_fresh_pin,
+            get_config_path,
+            get_config_revision,
+            load_config,
+            regenerate_pin,
+            rotate_token,
+            save_config,
+        )
     except ImportError:
         def _ephemeral_config():
             return {
@@ -214,8 +230,18 @@ except ImportError:
         load_config = _ephemeral_config
         save_config = lambda cfg: False
         get_config_path = lambda: ""
+        get_config_revision = lambda: 0
         rotate_token = lambda: f"ainet_{secrets.token_hex(24)}"
         regenerate_pin = lambda: f"{secrets.randbelow(900000) + 100000}"
+        ensure_fresh_pin = lambda cfg=None: (regenerate_pin(), int(time.time()), True)
+
+try:
+    from tls_manager import build_server_ssl_context
+except ImportError:
+    try:
+        from agent.tls_manager import build_server_ssl_context
+    except ImportError:
+        build_server_ssl_context = None  # type: ignore[assignment]
 
 # Configure logging with high-performance minimal formatter
 logging.basicConfig(
@@ -527,8 +553,8 @@ class AdaptiveScreenPipeline:
                 self.force_keyframe = False
                 self.consecutive_static = 0
 
-            # Fast Adler-32 and 8x8 Spatial Grid Delta Hash check (C-contiguous buffer)
-            current_hash = zlib.adler32(bytes(raw_mv[::2048]))
+            # Fast Adler-32 sample hash using direct memoryview slice (zero whole-frame copy)
+            current_hash = zlib.adler32(raw_mv[::2048].tobytes())
             is_static = (not force_send) and (current_hash == self.last_frame_hash)
             self.last_frame_hash = current_hash
 
@@ -544,15 +570,16 @@ class AdaptiveScreenPipeline:
                 h_shot,
             )
 
-            # Compute 8x8 block grid CRC32 hashes for spatial delta detection
+            # Compute 8x8 block grid CRC32 hashes directly over memoryview slices
             grid_rows, grid_cols = 8, 8
             block_h, block_w = max(1, h_shot // grid_rows), max(1, w_shot // grid_cols)
             new_grid = []
             for r in range(grid_rows):
+                row_base = r * block_h * w_shot
+                span = block_w * 4
                 for c in range(grid_cols):
-                    sample_offset = (r * block_h * w_shot + c * block_w) * 4
-                    sample_slice = raw_mv[sample_offset:sample_offset + (block_w * 4)]
-                    new_grid.append(zlib.crc32(sample_slice))
+                    sample_offset = (row_base + c * block_w) * 4
+                    new_grid.append(zlib.crc32(raw_mv[sample_offset:sample_offset + span]))
 
             grid_changed_count = sum(1 for o, n in zip(self.grid_hashes, new_grid) if o != n) if self.grid_hashes else 64
             self.grid_hashes = new_grid
@@ -560,7 +587,7 @@ class AdaptiveScreenPipeline:
             if (is_static or grid_changed_count == 0) and self.consecutive_static > 3:
                 return None, True  # Screen hasn't changed; drop frame to save network bandwidth
 
-            # Dynamic aspect-preserving downsampling to match client viewport bounds without distortion
+            # Dynamic aspect-preserving downsampling + TurboJPEG SIMD acceleration
             if Image and (w_shot > self.target_res[0] or h_shot > self.target_res[1] or w_shot != self.target_res[0] or h_shot != self.target_res[1]):
                 scale = min(self.target_res[0] / max(1, w_shot), self.target_res[1] / max(1, h_shot))
                 out_w = max(1, int(round(w_shot * scale)))
@@ -569,6 +596,20 @@ class AdaptiveScreenPipeline:
                     img = Image.frombytes("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX")
                     img = img.resize((out_w, out_h), Image.Resampling.BILINEAR)
                     self.last_stream_size = (out_w, out_h)
+                    if self.turbo:
+                        try:
+                            import numpy as np
+                            rgb_arr = np.asarray(img, dtype=np.uint8)
+                            # pixel_format=0 (TJPF_RGB), jpeg_subsample=2 (TJSAMP_420), flags=1 (TJFLAG_FASTDCT)
+                            return self.turbo.encode(
+                                rgb_arr,
+                                quality=self.jpeg_quality,
+                                pixel_format=0,
+                                jpeg_subsample=2,
+                                flags=1,
+                            ), False
+                        except Exception:
+                            pass
                     buf = getattr(self._local, 'bio_buf', None)
                     if buf is None:
                         buf = io.BytesIO()
@@ -581,7 +622,7 @@ class AdaptiveScreenPipeline:
 
             self.last_stream_size = (w_shot, h_shot)
 
-            # Zero-copy encode for 1:1 desktop resolution
+            # Zero-copy encode for 1:1 desktop resolution via libjpeg-turbo SIMD
             if self.turbo:
                 try:
                     import numpy as np
@@ -589,7 +630,9 @@ class AdaptiveScreenPipeline:
                     encoded = self.turbo.encode(
                         bgra_arr,
                         quality=self.jpeg_quality,
-                        pixel_format=3,  # TJPF_BGRX (constant 3 is BGRX in turbojpeg)
+                        pixel_format=3,  # TJPF_BGRX
+                        jpeg_subsample=2,
+                        flags=1,
                     )
                     return encoded, False
                 except Exception as tj_err:
@@ -715,12 +758,17 @@ class HostAgentDaemon:
         self._owns_loop: bool = False
         self._start_time: float = time.time()
         self._pin_fail_count: int = 0
-        self._pin_lockout_until: float = 0.0
+        self._pin_lockout_until_val: float = 0.0
+        self._pin_failures_by_ip: Dict[str, List[float]] = {}
+        self._pin_lockout_by_ip: Dict[str, float] = {}
         self._initial_env_secret: str = (
             os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET") or ""
         ).strip()
         self._secret_rotated: bool = False
         self._last_cfg_mtime: float = self._safe_cfg_mtime()
+        self._last_cfg_rev: int = int(get_config_revision())
+        self._last_cfg_stat_ts: float = 0.0
+        self.tls_fingerprint: str = ""
 
         # Persistent credentials & policies (CSPRNG only, never hardcoded fallbacks)
         self.pairing_pin: str = str(self.config.get("pairing_pin") or f"{secrets.randbelow(900000) + 100000}")
@@ -732,6 +780,12 @@ class HostAgentDaemon:
         self.auto_lock_on_disconnect: bool = bool(self.config.get("auto_lock_on_disconnect", False))
         self.auto_ban_intrusion: bool = bool(self.config.get("auto_ban_intrusion", True))
         self.subnet_geofence_only: bool = bool(self.config.get("subnet_geofence_only", True))
+        self.require_hmac_auth: bool = bool(self.config.get("require_hmac_auth", False))
+        self.require_aead: bool = bool(self.config.get("require_aead", False))
+        self.require_tls: bool = bool(self.config.get("require_tls", False))
+        self.allowed_origins: Set[str] = {
+            str(o).strip().lower() for o in (self.config.get("allowed_origins") or []) if str(o).strip()
+        }
         self.security_profile: str = str(self.config.get("security_profile", "balanced"))
         self.is_paused: bool = False
         self.blacklisted_ips: Set[str] = self._extract_blacklisted_ips(self.config.get("blacklisted_devices"))
@@ -824,11 +878,22 @@ class HostAgentDaemon:
         self.gui_state.auto_ban_intrusion = self.auto_ban_intrusion
         self.gui_state.subnet_geofence_only = self.subnet_geofence_only
 
-    def _refresh_runtime_policies(self) -> None:
-        """Synchronizes live policy toggles and credentials from gui_state or persisted config."""
-        cfg_mtime = self._safe_cfg_mtime()
-        if cfg_mtime > self._last_cfg_mtime and callable(load_config):
-            self._last_cfg_mtime = cfg_mtime
+    def _refresh_runtime_policies(self, force_disk: bool = False) -> None:
+        """Synchronizes live policy toggles and credentials from gui_state or persisted config (TTL cached)."""
+        now_mono = time.monotonic()
+        curr_rev = int(get_config_revision()) if callable(get_config_revision) else 0
+        need_disk = force_disk or (curr_rev != self._last_cfg_rev)
+        if not need_disk and (now_mono - self._last_cfg_stat_ts) >= 1.0:
+            self._last_cfg_stat_ts = now_mono
+            cfg_mtime = self._safe_cfg_mtime()
+            if cfg_mtime > self._last_cfg_mtime:
+                self._last_cfg_mtime = cfg_mtime
+                need_disk = True
+
+        if need_disk and callable(load_config):
+            self._last_cfg_rev = curr_rev
+            self._last_cfg_stat_ts = now_mono
+            self._last_cfg_mtime = self._safe_cfg_mtime()
             try:
                 cfg = load_config() or {}
                 if isinstance(cfg, dict):
@@ -845,7 +910,12 @@ class HostAgentDaemon:
                     self.clipboard_sync_allowed = bool(cfg.get("clipboard_sync_allowed", self.clipboard_sync_allowed))
                     self.auto_ban_intrusion = bool(cfg.get("auto_ban_intrusion", self.auto_ban_intrusion))
                     self.subnet_geofence_only = bool(cfg.get("subnet_geofence_only", self.subnet_geofence_only))
+                    self.require_hmac_auth = bool(cfg.get("require_hmac_auth", self.require_hmac_auth))
+                    self.require_aead = bool(cfg.get("require_aead", self.require_aead))
+                    self.require_tls = bool(cfg.get("require_tls", self.require_tls))
                     self.security_profile = str(cfg.get("security_profile", self.security_profile))
+                    if isinstance(cfg.get("allowed_origins"), list):
+                        self.allowed_origins = {str(o).strip().lower() for o in cfg["allowed_origins"] if str(o).strip()}
                     if "blacklisted_devices" in cfg:
                         self.blacklisted_ips = self._extract_blacklisted_ips(cfg.get("blacklisted_devices"))
             except Exception:
@@ -864,7 +934,35 @@ class HostAgentDaemon:
             self.clipboard_sync_allowed = bool(getattr(self.gui_state, "clipboard_sync_allowed", self.clipboard_sync_allowed))
             self.auto_ban_intrusion = bool(getattr(self.gui_state, "auto_ban_intrusion", self.auto_ban_intrusion))
             self.subnet_geofence_only = bool(getattr(self.gui_state, "subnet_geofence_only", self.subnet_geofence_only))
+            self.require_hmac_auth = bool(getattr(self.gui_state, "require_hmac_auth", self.require_hmac_auth))
+            self.require_aead = bool(getattr(self.gui_state, "require_aead", self.require_aead))
             self.is_paused = bool(getattr(self.gui_state, "is_paused", False))
+            gui_bl = getattr(self.gui_state, "blacklisted_devices", None)
+            if gui_bl is not None:
+                self.blacklisted_ips.update(self._extract_blacklisted_ips(gui_bl))
+            unbanned = getattr(self.gui_state, "_unbanned_ips", None)
+            if unbanned:
+                with self.gui_state.lock:
+                    to_unban = list(unbanned)
+                    unbanned.clear()
+                for uip in to_unban:
+                    self.blacklisted_ips.discard(uip)
+                    self._failed_auth_attempts.pop(uip, None)
+            if hasattr(self.gui_state, "tls_fingerprint"):
+                self.gui_state.tls_fingerprint = self.tls_fingerprint
+            if hasattr(self.gui_state, "tls_enabled"):
+                self.gui_state.tls_enabled = bool(self.tls_fingerprint)
+
+    @property
+    def _pin_lockout_until(self) -> float:
+        return self._pin_lockout_until_val
+
+    @_pin_lockout_until.setter
+    def _pin_lockout_until(self, value: float) -> None:
+        self._pin_lockout_until_val = float(value)
+        if self._pin_lockout_until_val <= 0.0:
+            self._pin_failures_by_ip.clear()
+            self._pin_lockout_by_ip.clear()
 
     def _is_client_blacklisted(self, client_ip: str) -> bool:
         if client_ip in self.blacklisted_ips:
@@ -989,11 +1087,23 @@ class HostAgentDaemon:
         ssl_ctx = None
         cert_file = os.environ.get("AI_TLS_CERT") or os.environ.get("SSL_CERT_FILE")
         key_file = os.environ.get("AI_TLS_KEY") or os.environ.get("SSL_KEY_FILE")
+        auto_tls = self.require_tls or (os.environ.get("AI_TLS_AUTO") == "1")
         if cert_file and key_file and os.path.isfile(cert_file) and os.path.isfile(key_file):
             import ssl
             ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             ssl_ctx.load_cert_chain(cert_file, key_file)
             logger.info("TLS enabled for WebSocket transport (%s)", cert_file)
+        elif auto_tls and build_server_ssl_context is not None:
+            try:
+                ssl_ctx, fp = build_server_ssl_context()
+                self.tls_fingerprint = fp
+                if self.gui_state is not None:
+                    self.gui_state.tls_fingerprint = fp
+                    self.gui_state.tls_enabled = True
+                logger.info("Auto-generated ECDSA SAN TLS context active (fp=%s...)", fp[:16])
+            except Exception as tls_err:
+                logger.warning("Failed to initialize auto-TLS context, falling back cleanly: %s", tls_err)
 
         if websockets is not None:
             self.server = await websockets.serve(
@@ -1028,12 +1138,20 @@ class HostAgentDaemon:
             from urllib.parse import urlparse
             parsed = urlparse(origin_header)
             scheme = (parsed.scheme or "").lower()
-            if scheme in ("capacitor", "app", "file", "ionic"):
+            if scheme in ("capacitor", "app", "file", "ionic", "tauri"):
                 return True
+            if scheme not in ("http", "https"):
+                return False
             hn = (parsed.hostname or "").lower()
+            env_allow = {x.strip().lower() for x in os.environ.get("AI_ALLOWED_ORIGINS", "").split(",") if x.strip()}
+            if env_allow and (origin_header.strip().lower() in env_allow or hn in env_allow):
+                return True
             if hn in ("localhost", "127.0.0.1", "::1") or hn.endswith(".local"):
                 return True
-            return is_local_or_private_ip(hn)
+            if is_local_or_private_ip(hn):
+                port = parsed.port or (443 if scheme == "https" else 80)
+                return port in (80, 443, 3000, 3001, 4173, 5173, 8080, 8443, 8765)
+            return False
         except Exception:
             return False
 
@@ -1150,7 +1268,10 @@ class HostAgentDaemon:
                             raw_payload = await reader.readexactly(length)
                             if is_masked and length > 0:
                                 repeated_mask = (mask_key * ((length // 4) + 1))[:length]
-                                raw_payload = bytes(a ^ b for a, b in zip(raw_payload, repeated_mask))
+                                raw_payload = (
+                                    int.from_bytes(raw_payload, "little")
+                                    ^ int.from_bytes(repeated_mask, "little")
+                                ).to_bytes(length, "little")
                             if opcode == 0x08:  # CLOSE
                                 raise StopAsyncIteration
                             if opcode == 0x09:  # PING -> PONG
@@ -1190,7 +1311,9 @@ class HostAgentDaemon:
                 'os': platform.system(),
                 'version': '0.51.0',
                 'ai': 'ollama-bridge',
-                'hostname': hostname
+                'hostname': hostname,
+                'tls': '1' if self.tls_fingerprint else '0',
+                'fp': self.tls_fingerprint[:16] if self.tls_fingerprint else '',
             }
             info = ServiceInfo(
                 "_cst-agent._tcp.local.",
@@ -1258,12 +1381,12 @@ class HostAgentDaemon:
         def run_tray():
             img = get_icon_image(64)
             if not img:
-                img = Image.new('RGBA', (64, 64), (7, 12, 24, 255))
+                img = Image.new('RGBA', (64, 64), (4, 8, 18, 255))
                 from PIL import ImageDraw
                 draw = ImageDraw.Draw(img)
-                draw.ellipse([4, 4, 60, 60], outline=(34, 211, 238, 255), width=3)
-                draw.ellipse([16, 16, 48, 48], fill=(5, 150, 105, 255), outline=(52, 211, 153, 255), width=2)
-                draw.ellipse([26, 26, 38, 38], fill=(110, 231, 183, 255))
+                draw.ellipse([4, 4, 60, 60], outline=(0, 240, 255, 255), width=3)
+                draw.ellipse([16, 16, 48, 48], fill=(10, 22, 40, 255), outline=(138, 43, 226, 255), width=2)
+                draw.ellipse([26, 26, 38, 38], fill=(0, 255, 157, 255))
 
             def _show_gui():
                 if self.gui_state and hasattr(self.gui_state, "request_show_window"):
@@ -1458,10 +1581,12 @@ class HostAgentDaemon:
         if req_headers is None and getattr(ws, "request", None) is not None:
             req_headers = getattr(ws.request, "headers", None)
         origin = req_headers.get("Origin") if req_headers else None
-        if origin and not self._is_origin_allowed(origin):
-            logger.warning("Rejected untrusted WebSocket Origin '%s' from %s", origin, client_id)
-            await ws.close(code=1008, reason="WebSocket Origin not permitted")
-            return
+        if origin:
+            origin_low = origin.strip().lower()
+            if origin_low not in self.allowed_origins and not self._is_origin_allowed(origin):
+                logger.warning("Rejected untrusted WebSocket Origin '%s' from %s", origin, client_id)
+                await ws.close(code=1008, reason="WebSocket Origin not permitted")
+                return
 
         if self.is_paused:
             await ws.close(code=1013, reason="Daemon is paused by host operator")
@@ -1530,28 +1655,55 @@ class HostAgentDaemon:
                                 or ""
                             ).strip()
                             candidate_token = candidate_raw.encode("utf-8", errors="replace")
+                            candidate_hmac = str(text_data.get("hmac") or "").strip().lower()
 
                             now_ts = time.time()
                             valid_tokens = self._get_valid_secrets()
-                            matched_token = next(
-                                (vt for vt in valid_tokens if candidate_token and hmac.compare_digest(candidate_token, vt)),
-                                None,
-                            )
+                            matched_token = None
+                            if candidate_hmac:
+                                nonce_info = self.active_nonces.get(ws)
+                                if nonce_info and (now_ts - nonce_info[1]) <= MAX_NONCE_AGE_SECONDS:
+                                    n_bytes = nonce_info[0]
+                                    matched_token = next(
+                                        (
+                                            vt for vt in valid_tokens
+                                            if hmac.compare_digest(
+                                                candidate_hmac,
+                                                hmac.new(vt, n_bytes, hashlib.sha256).hexdigest(),
+                                            )
+                                        ),
+                                        None,
+                                    )
+                                    if matched_token is not None:
+                                        self.active_nonces.pop(ws, None)
+                            elif not (self.require_hmac_auth and action != "PAIR"):
+                                matched_token = next(
+                                    (vt for vt in valid_tokens if candidate_token and hmac.compare_digest(candidate_token, vt)),
+                                    None,
+                                )
                             token_ok = matched_token is not None
-                            # Allow 6-digit PIN strictly for explicit PAIR flow within PIN TTL & lockout guard
+
+                            # Allow 6-digit PIN strictly for explicit PAIR flow within PIN TTL & per-IP/global lockout guard
                             pin_ok = False
                             if action == "PAIR" and not token_ok:
-                                if now_ts < self._pin_lockout_until:
+                                ip_fails = [t for t in self._pin_failures_by_ip.get(client_ip, []) if now_ts - t < 60.0]
+                                self._pin_failures_by_ip[client_ip] = ip_fails
+                                ip_locked = now_ts < self._pin_lockout_by_ip.get(client_ip, 0.0)
+                                if now_ts < self._pin_lockout_until_val or ip_locked or len(ip_fails) >= 5:
                                     pin_ok = False
                                 else:
                                     pin_ok = self._is_valid_pairing_pin(candidate_token)
                                     if pin_ok:
                                         self._pin_fail_count = 0
+                                        self._pin_failures_by_ip.pop(client_ip, None)
+                                        self._pin_lockout_by_ip.pop(client_ip, None)
                                     else:
                                         self._pin_fail_count += 1
-                                        if self._pin_fail_count >= 5:
-                                            self._pin_lockout_until = now_ts + 60.0
-                                            logger.warning("PAIR PIN rate-limit lockout triggered for 60s")
+                                        ip_fails.append(now_ts)
+                                        self._pin_failures_by_ip[client_ip] = ip_fails
+                                        if len(ip_fails) >= 5:
+                                            self._pin_lockout_by_ip[client_ip] = now_ts + 60.0
+                                            logger.warning("PAIR PIN rate-limit lockout triggered for 60s (%s)", client_ip)
 
                             if token_ok or pin_ok:
                                 label = str(text_data.get("device") or f"Remote Client ({client_ip})")
@@ -1586,7 +1738,7 @@ class HostAgentDaemon:
                                 cmd_str = str(text_data.get("prompt") or text_data.get("command") or "").strip()
                                 cmd_id = str(text_data.get("command_id") or f"cmd-{int(time.time() * 1000)}")
                                 if cmd_str:
-                                    asyncio.create_task(self._process_json_shell_command(ws, cmd_str, cmd_id))
+                                    self._track_task(self._process_json_shell_command(ws, cmd_str, cmd_id))
                                 continue
                             elif action == "APPROVAL_RESPONSE":
                                 await self._process_hitl_response(message.encode("utf-8"), ws)
@@ -1666,6 +1818,11 @@ class HostAgentDaemon:
                         await ws.close(code=1008, reason="Authentication failed")
                         break
                     continue
+
+                if opcode not in (OP_PING, OP_AUTH, OP_ERR) and (self.require_aead or self.security_profile == "strict"):
+                    if vault is None or not vault.is_established:
+                        await self._send_error(ws, "ChaCha20-Poly1305 ECDH vault handshake required by host security policy")
+                        continue
 
                 # Replay check on operational binary frames (seq >= 1, no duplicates)
                 if opcode not in (OP_PING, OP_AUTH, OP_FRAME_SYNC):
@@ -1939,7 +2096,7 @@ class HostAgentDaemon:
             return
 
         if CommandASTFirewall is not None:
-            is_allowed, risk, _, fw_reason = CommandASTFirewall.inspect_and_sanitize(cmd_str)
+            is_allowed, risk, normalized_cmd, fw_reason = CommandASTFirewall.inspect_and_sanitize(cmd_str)
             if not is_allowed or risk == "BLOCKED":
                 await self._ws_send(ws, json.dumps({
                     "event": "EXECUTION_RESULT",
@@ -1952,12 +2109,13 @@ class HostAgentDaemon:
                 }))
                 return
         else:
+            normalized_cmd = cmd_str
             risk = "SAFE"
 
-        is_dangerous, reason = AstCommandInspector.inspect(cmd_str)
+        is_dangerous, reason = AstCommandInspector.inspect(normalized_cmd)
         biometric_approved = False
         if is_dangerous or risk == "REQUIRES_BIOMETRIC":
-            approved, _ = await self._request_hitl_approval(ws, cmd_str, reason, is_binary=False, client_cmd_id=command_id)
+            approved, _ = await self._request_hitl_approval(ws, normalized_cmd, reason, is_binary=False, client_cmd_id=command_id)
             if not approved:
                 await self._ws_send(ws, json.dumps({
                     "event": "EXECUTION_RESULT",
@@ -1975,7 +2133,7 @@ class HostAgentDaemon:
             if CommandASTFirewall is None:
                 raise RuntimeError("CommandASTFirewall unavailable")
             exec_res = await CommandASTFirewall.execute_sandboxed(
-                cmd_str,
+                normalized_cmd,
                 timeout_sec=15.0,
                 biometric_approved=biometric_approved,
             )
@@ -2023,7 +2181,7 @@ class HostAgentDaemon:
             return
 
         if CommandASTFirewall is not None:
-            is_allowed, risk, _, fw_reason = CommandASTFirewall.inspect_and_sanitize(cmd_str)
+            is_allowed, risk, normalized_cmd, fw_reason = CommandASTFirewall.inspect_and_sanitize(cmd_str)
             if not is_allowed or risk == "BLOCKED":
                 resp = json.dumps({
                     "event": "EXECUTION_RESULT",
@@ -2038,12 +2196,13 @@ class HostAgentDaemon:
                 await self._send_encrypted_or_plain(ws, OP_SHELL, resp, seq=self._next_outbound_seq(ws))
                 return
         else:
+            normalized_cmd = cmd_str
             risk = "SAFE"
 
-        is_dangerous, reason = AstCommandInspector.inspect(cmd_str)
+        is_dangerous, reason = AstCommandInspector.inspect(normalized_cmd)
         biometric_approved = False
         if is_dangerous or risk == "REQUIRES_BIOMETRIC":
-            approved, approval_id = await self._request_hitl_approval(ws, cmd_str, reason, seq=seq, is_binary=True)
+            approved, approval_id = await self._request_hitl_approval(ws, normalized_cmd, reason, seq=seq, is_binary=True)
             if not approved:
                 resp = json.dumps({
                     "event": "EXECUTION_RESULT",
@@ -2062,7 +2221,7 @@ class HostAgentDaemon:
             if CommandASTFirewall is None:
                 raise RuntimeError("CommandASTFirewall unavailable")
             exec_res = await CommandASTFirewall.execute_sandboxed(
-                cmd_str,
+                normalized_cmd,
                 timeout_sec=15.0,
                 biometric_approved=biometric_approved,
             )
@@ -2300,25 +2459,34 @@ class HostAgentDaemon:
                     dy = int(data.get("dy", 0))
                     pyautogui.scroll(dy, x=x, y=y, _pause=False)
                 elif action in ("type", "type_text", "keyboard_type"):
-                    text = str(data.get("text", ""))
+                    raw_text = str(data.get("text", ""))[:2048]
+                    text = "".join(ch for ch in raw_text if ord(ch) >= 32 or ch in ("\n", "\t"))
                     press_enter = bool(data.get("press_enter", data.get("pressEnter", False)))
                     if text:
                         pyautogui.write(text, _pause=False)
                     if press_enter:
                         pyautogui.press('enter', _pause=False)
                 elif action in ("key", "key_press"):
-                    key = str(data.get("key", "")).lower()
-                    if key and key in getattr(pyautogui, "KEYBOARD_KEYS", {key}):
+                    key = str(data.get("key", "")).lower().strip()
+                    if key and len(key) <= 32 and key in getattr(pyautogui, "KEYBOARD_KEYS", {key}):
                         pyautogui.press(key, _pause=False)
                 elif action in ("hotkey", "key_combo", "keyboard_hotkey"):
                     raw_keys = data.get("keys") if data.get("keys") is not None else data.get("command", [])
                     if isinstance(raw_keys, str):
                         normalized_keys = raw_keys.replace("+", ",")
-                        keys = [k.strip().lower() for k in normalized_keys.split(",") if k.strip()]
+                        keys = [k.strip().lower() for k in normalized_keys.split(",") if k.strip()][:6]
                     elif isinstance(raw_keys, list):
-                        keys = [str(k).strip().lower() for k in raw_keys if str(k).strip()]
+                        keys = [str(k).strip().lower() for k in raw_keys if str(k).strip()][:6]
                     else:
                         keys = []
+                    key_set = set(keys)
+                    blocked_combos = (
+                        {"ctrl", "alt", "del"},
+                        {"ctrl", "alt", "delete"},
+                        {"ctrl", "shift", "esc"},
+                    )
+                    if key_set in blocked_combos:
+                        return
                     valid_keyset = set(getattr(pyautogui, "KEYBOARD_KEYS", []))
                     if keys and (not valid_keyset or all(k in valid_keyset for k in keys)):
                         pyautogui.hotkey(*keys, _pause=False)
@@ -2509,8 +2677,23 @@ class HostAgentDaemon:
     # =================================================================
     # STREAMING & HEARTBEAT BACKGROUND LOOPS
     # =================================================================
+    @staticmethod
+    def _is_workstation_locked() -> bool:
+        """Fast Win32 desktop lock check so idle capture skips locked consoles."""
+        if platform.system() != "Windows":
+            return False
+        try:
+            u32 = ctypes.windll.user32
+            h_desk = u32.OpenInputDesktop(0, False, 0x0001)
+            if not h_desk:
+                return True
+            u32.CloseDesktop(h_desk)
+            return False
+        except Exception:
+            return False
+
     async def _screen_stream_loop(self):
-        """Streams desktop frames at adaptive framerates with live FPS measurement."""
+        """Streams desktop frames at adaptive framerates with transport backpressure & lock-pause."""
         fps_window_start = time.perf_counter()
         fps_frame_count = 0
         while self.is_running:
@@ -2521,6 +2704,13 @@ class HostAgentDaemon:
                 fps_window_start = time.perf_counter()
                 fps_frame_count = 0
                 await asyncio.sleep(0.5)
+                continue
+
+            if self._is_workstation_locked():
+                self.capture_fps = 0.0
+                if self.gui_state is not None:
+                    self.gui_state.capture_fps = 0.0
+                await asyncio.sleep(0.6)
                 continue
 
             frame = await self.screen_pipeline.get_next_frame()
@@ -2539,7 +2729,16 @@ class HostAgentDaemon:
                     with self.gui_state.lock:
                         self.gui_state.frames_broadcast += 1
 
-                clients_snapshot = list(self.authenticated_clients)
+                clients_snapshot = []
+                for ws in list(self.authenticated_clients):
+                    transport = getattr(ws, "transport", None)
+                    if transport is not None and hasattr(transport, "get_write_buffer_size"):
+                        try:
+                            if transport.get_write_buffer_size() > (2 * 1024 * 1024):
+                                continue
+                        except Exception:
+                            pass
+                    clients_snapshot.append(ws)
                 if clients_snapshot:
                     results = await asyncio.gather(
                         *(

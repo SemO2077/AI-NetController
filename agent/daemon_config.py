@@ -25,16 +25,23 @@ import secrets
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("AI-NetController-Config")
 
 DEFAULT_PORT = 8765
 DEFAULT_HOST = "0.0.0.0"
+DEFAULT_PIN_TTL_SECONDS = 900
 _CONFIG_LOCK = threading.RLock()
+_CONFIG_REVISION = 0
 _DPAPI_PREFIX = "dpapi_v1:"
 _DPAPI_ENTROPY = b"AI_NetController_Config_DPAPI_v1"
 _IS_WINDOWS = platform.system() == "Windows"
+
+
+def get_config_revision() -> int:
+    """Monotonic revision bumped whenever config is persisted or secrets rotate."""
+    return _CONFIG_REVISION
 
 
 class _DATA_BLOB(ctypes.Structure):
@@ -103,7 +110,11 @@ def _dpapi_protect(plaintext: str) -> str:
                 if out_blob.pbData:
                     kernel32.LocalFree(ctypes.cast(out_blob.pbData, wintypes.HLOCAL))
     except Exception as exc:
+        if os.environ.get("AI_STRICT_DPAPI") == "1":
+            raise RuntimeError(f"Strict DPAPI protection failed: {exc}") from exc
         logger.debug("DPAPI protect unavailable (%s); storing with OS file permissions", exc)
+    if os.environ.get("AI_STRICT_DPAPI") == "1":
+        raise RuntimeError("Strict DPAPI protection failed to produce dpapi_v1 payload")
     return plaintext
 
 
@@ -146,6 +157,14 @@ def _dpapi_unprotect(stored: str) -> Optional[str]:
 
 def _restrict_file_permissions(path: str, is_dir: bool = False) -> None:
     if _IS_WINDOWS:
+        try:
+            try:
+                from windows_integration import harden_windows_acl
+            except ImportError:
+                from agent.windows_integration import harden_windows_acl
+            harden_windows_acl(path, is_dir=is_dir)
+        except Exception as exc:
+            logger.debug("Windows ACL restriction notice for %s: %s", path, exc)
         return
     try:
         os.chmod(path, 0o700 if is_dir else 0o600)
@@ -198,6 +217,12 @@ def _generate_default_config() -> Dict[str, Any]:
         "auto_lock_on_disconnect": False,
         "auto_ban_intrusion": True,
         "subnet_geofence_only": True,
+        "require_hmac_auth": False,
+        "require_aead": False,
+        "require_tls": False,
+        "local_hitl_prompt": True,
+        "pin_ttl_seconds": DEFAULT_PIN_TTL_SECONDS,
+        "allowed_origins": [],
         "security_profile": "balanced",
         "blacklisted_devices": [],
         "setup_completed": False,
@@ -216,6 +241,10 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
         "auto_lock_on_disconnect",
         "auto_ban_intrusion",
         "subnet_geofence_only",
+        "require_hmac_auth",
+        "require_aead",
+        "require_tls",
+        "local_hitl_prompt",
         "setup_completed",
     ):
         val = raw.get(bool_key)
@@ -235,10 +264,27 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
     if isinstance(raw_port, int) and not isinstance(raw_port, bool) and 1 <= raw_port <= 65535:
         merged["port"] = raw_port
 
-    # PIN issued timestamp
+    # PIN issued timestamp & TTL
     raw_ts = raw.get("pin_issued_at")
     if isinstance(raw_ts, int) and not isinstance(raw_ts, bool) and raw_ts > 0:
         merged["pin_issued_at"] = raw_ts
+
+    raw_ttl = raw.get("pin_ttl_seconds")
+    if isinstance(raw_ttl, int) and not isinstance(raw_ttl, bool) and 60 <= raw_ttl <= 86400:
+        merged["pin_ttl_seconds"] = raw_ttl
+
+    # Explicit CSWSH allowed origins allowlist
+    raw_origins = raw.get("allowed_origins")
+    if isinstance(raw_origins, list):
+        clean_origins: List[str] = []
+        seen_o = set()
+        for o in raw_origins:
+            if isinstance(o, str):
+                os_val = o.strip()
+                if os_val and os_val not in seen_o and len(os_val) <= 256:
+                    seen_o.add(os_val)
+                    clean_origins.append(os_val)
+        merged["allowed_origins"] = clean_origins
 
     # Blacklisted devices/IPs (supports both plain IP strings and structured ban dicts from GUI/web)
     raw_bl = raw.get("blacklisted_devices")
@@ -343,6 +389,8 @@ def save_config(config: Dict[str, Any]) -> bool:
                 try:
                     os.replace(tmp_path, cfg_path)
                     _restrict_file_permissions(cfg_path, is_dir=False)
+                    global _CONFIG_REVISION
+                    _CONFIG_REVISION += 1
                     return True
                 except OSError as exc:
                     last_err = exc
@@ -380,3 +428,38 @@ def regenerate_pin() -> str:
         cfg["pin_issued_at"] = int(time.time())
         save_config(cfg)
         return new_pin
+
+
+def ensure_fresh_pin(cfg: Optional[Dict[str, Any]] = None) -> Tuple[str, int, bool]:
+    """
+    Checks whether the current 6-digit pairing PIN has exceeded its TTL and
+    auto-rotates it if expired. Returns (pin, issued_at, was_rotated).
+    """
+    with _CONFIG_LOCK:
+        current = cfg if cfg is not None else load_config()
+        ttl = int(current.get("pin_ttl_seconds") or DEFAULT_PIN_TTL_SECONDS)
+        issued_at = int(current.get("pin_issued_at") or 0)
+        pin = str(current.get("pairing_pin") or "")
+        now = int(time.time())
+        if not pin or len(pin) != 6 or not pin.isdigit() or (now - issued_at) >= ttl:
+            new_pin = regenerate_pin()
+            refreshed = load_config()
+            return new_pin, int(refreshed.get("pin_issued_at", now)), True
+        return pin, issued_at, False
+
+
+def build_pairing_uri(
+    host_ip: str,
+    port: int,
+    pin: str,
+    tls: bool = False,
+    tls_fingerprint: str = "",
+) -> str:
+    """
+    Builds a safe transient QR pairing URI containing only host endpoint,
+    ephemeral 6-digit PIN, and optional TLS cert fingerprint — never embedding the
+    persistent long-lived master pairing_token.
+    """
+    scheme = "wss" if tls else "ws"
+    fp_part = f"&fp={tls_fingerprint[:16]}" if (tls and tls_fingerprint) else ""
+    return f"ainet://pair?proto={scheme}&host={host_ip}&port={int(port)}&pin={pin}{fp_part}"

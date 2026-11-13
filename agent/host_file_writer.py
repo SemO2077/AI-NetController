@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import stat
 import struct
 import time
@@ -47,11 +48,15 @@ STATUS_ERR_CHECKSUM = 0x12
 STATUS_ERR_IO = 0x13
 
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB hard limit
+MAX_CONCURRENT_TRANSFERS = 8
+MIN_DISK_RESERVE_BYTES = 50 * 1024 * 1024  # Reserve 50 MB free disk buffer
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _DANGEROUS_EXECUTABLES = {
     ".exe", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".vbs", ".vbe",
     ".js", ".jse", ".wsf", ".wsh", ".msi", ".msp", ".scr", ".pif",
     ".com", ".hta", ".cpl", ".dll", ".sys", ".lnk", ".scf", ".url", ".reg",
+    ".py", ".pyw", ".sh", ".chm", ".iso", ".img", ".vhd", ".vhdx", ".inf",
+    ".appx", ".msix",
 }
 
 
@@ -191,6 +196,14 @@ class ActiveTransfer:
                 counter += 1
 
         self.temp_path.replace(self.target_path)
+        try:
+            try:
+                from windows_integration import apply_mark_of_the_web
+            except ImportError:
+                from agent.windows_integration import apply_mark_of_the_web
+            apply_mark_of_the_web(str(self.target_path), zone_id=3)
+        except Exception:
+            pass
         logger.info("File successfully received and verified: %s (%d bytes)", self.target_path, self.bytes_written)
         return True
 
@@ -285,6 +298,17 @@ class HostFileWriter:
 
         if transfer_id in self.active_transfers:
             self.active_transfers[transfer_id].abort()
+
+        self.prune_stale_transfers(max_idle_sec=300.0)
+        if len(self.active_transfers) >= MAX_CONCURRENT_TRANSFERS:
+            return self._build_ack(transfer_id, STATUS_ERR_SIZE_LIMIT, 0, "Maximum concurrent transfers exceeded")
+
+        try:
+            free_bytes = shutil.disk_usage(self.download_dir).free
+            if total_size + MIN_DISK_RESERVE_BYTES > free_bytes:
+                return self._build_ack(transfer_id, STATUS_ERR_SIZE_LIMIT, 0, "Insufficient free disk space on host")
+        except Exception:
+            pass
 
         try:
             transfer = ActiveTransfer(transfer_id, clean_name, total_size, sha256_hex, target_path)

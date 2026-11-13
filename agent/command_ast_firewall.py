@@ -54,6 +54,11 @@ CRITICAL_COMMANDS = {
     "add-mppreference", "invoke-webrequest", "iwr", "invoke-restmethod", "irm",
     "start-process", "saps", "set-content", "out-file", "tee-object",
     "wbadmin", "diskshadow", "wevtutil", "nltest", "dsquery", "procdump",
+    "invoke-command", "icm", "sal", "new-alias", "curl", "wget", "makecab",
+    "esentutl", "forfiles", "pcalua", "cmdkey", "vaultcmd", "msbuild",
+    "installutil", "cmstp", "hh", "odbcconf", "mavinject", "control",
+    "ftp", "tftp", "nc", "ncat", "socat", "ssh", "scp", "rsync",
+    "start-bitstransfer", "add-type", "new-object",
     "sudo", "su", "pkexec", "arp", "route",
 }
 
@@ -81,6 +86,12 @@ _RE_UNICODE_DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
 _RE_PYTHON_CMD = re.compile(r'^(?:"[^"]*?python(?:3)?(?:\.exe)?"|[^\s]*?python(?:3)?(?:\.exe)?|python(?:3)?)(\s+|$)', flags=re.IGNORECASE)
 _RE_ENCODED_POWERSHELL = re.compile(r"(?:powershell|pwsh)(?:\.exe)?\b[^\r\n]*\s[-/](?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\b", flags=re.IGNORECASE)
 _RE_SUBSHELL_INJECTION = re.compile(r"\$\([^)]+\)|`[^`]+`|\b(?:iex|invoke-expression)\b|(?:^|\s)[&.]\s*\(", flags=re.IGNORECASE)
+_RE_DOTNET_CRADLE = re.compile(
+    r"\[(?:reflection\.assembly|system\.diagnostics\.process|scriptblock|system\.net\.webclient)\]"
+    r"|\b(?:frombase64string|downloadstring|downloadfile)\b",
+    flags=re.IGNORECASE,
+)
+_RE_CMD_DELAYED_EXPANSION = re.compile(r"\bcmd(?:\.exe)?\b[^\r\n]*\s/v\s*:\s*on\b", flags=re.IGNORECASE)
 _RE_CHAIN_OPERATORS = re.compile(r"(?:&&|\|\||[;&|\r\n])")
 _RE_SEGMENT_SPLIT = re.compile(r"(?:&&|\|\||[;|&()\r\n]+)")
 _RE_REDIRECTION = re.compile(r"(?:^|\s|\S)(?:\d?>>?|<)(?!=)")
@@ -146,7 +157,7 @@ class CommandASTFirewall:
         res = CommandASTFirewall._inspect_and_sanitize_uncached(raw_cmd)
         if isinstance(raw_cmd, str):
             if len(_INSPECTION_CACHE) >= _MAX_INSPECTION_CACHE:
-                _INSPECTION_CACHE.clear()
+                _INSPECTION_CACHE.pop(next(iter(_INSPECTION_CACHE)), None)
             _INSPECTION_CACHE[raw_cmd] = res
         return res
 
@@ -191,6 +202,12 @@ class CommandASTFirewall:
         # Block obfuscated Base64 PowerShell regardless of backtick/quote splitting
         if _RE_ENCODED_POWERSHELL.search(cleaned) or _RE_ENCODED_POWERSHELL.search(unobfuscated_scan):
             return False, "BLOCKED", single_line_cleaned, "Encoded PowerShell command (-EncodedCommand) is prohibited."
+
+        if _RE_CMD_DELAYED_EXPANSION.search(cleaned) or _RE_CMD_DELAYED_EXPANSION.search(unobfuscated_scan):
+            return False, "BLOCKED", single_line_cleaned, "Delayed cmd expansion (/V:ON) obfuscation is prohibited."
+
+        if _RE_DOTNET_CRADLE.search(cleaned) or _RE_DOTNET_CRADLE.search(unobfuscated_scan):
+            return True, "REQUIRES_BIOMETRIC", single_line_cleaned, ".NET reflection or memory download cradle requires biometric confirmation."
 
         if _RE_DELAYED_OR_PS_ENV.search(nfkc_raw) or _RE_DELAYED_OR_PS_ENV.search(unobfuscated_scan):
             return True, "REQUIRES_BIOMETRIC", single_line_cleaned, "Dynamic environment expansion (!VAR! or $env:) requires operator approval."
@@ -302,15 +319,21 @@ class CommandASTFirewall:
             return
         if IS_WINDOWS:
             try:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=3.0,
-                )
+                import psutil  # type: ignore
+
+                parent = psutil.Process(proc.pid)
+                children = parent.children(recursive=True)
+                kill_mode = sig == getattr(signal, "SIGKILL", signal.SIGTERM)
+                for child in children:
+                    try:
+                        if kill_mode:
+                            child.kill()
+                        else:
+                            child.terminate()
+                    except Exception:
+                        pass
             except Exception as exc:
-                logger.debug("taskkill warning for PID %s: %s", proc.pid, exc)
+                logger.debug("Process tree signal notice for PID %s: %s", proc.pid, exc)
             try:
                 if sig == getattr(signal, "SIGKILL", signal.SIGTERM):
                     proc.kill()
