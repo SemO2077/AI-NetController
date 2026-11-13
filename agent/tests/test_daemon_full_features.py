@@ -166,7 +166,7 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         if self.daemon is not None:
-            self.daemon.stop()
+            await self.daemon.async_stop()
         if self.daemon_task is not None and not self.daemon_task.done():
             self.daemon_task.cancel()
             await asyncio.gather(self.daemon_task, return_exceptions=True)
@@ -181,7 +181,13 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
 
     async def _start_daemon(self, gui_state=None, fake_frame: bytes = None):
         port = _free_tcp_port()
-        daemon = agent_mod.HostAgentDaemon(host="127.0.0.1", port=port, gui_state=gui_state)
+        daemon = agent_mod.HostAgentDaemon(
+            host="127.0.0.1",
+            port=port,
+            gui_state=gui_state,
+            enable_tray=False,
+            enable_mdns=False,
+        )
         daemon.file_writer = HostFileWriter(download_dir=str(self.dl_dir))
         daemon._start_system_tray = lambda: None
 
@@ -691,11 +697,17 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
             await ws.close()
 
         # Stop previous daemon cleanly before testing _run_agent_services
-        daemon.stop()
+        await daemon.async_stop()
+        self.daemon = None
         port2 = _free_tcp_port()
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("AI_AGENT_SECRET", None)
-        ws_daemon2 = agent_mod.HostAgentDaemon(host="127.0.0.1", port=port2)
+        ws_daemon2 = agent_mod.HostAgentDaemon(
+            host="127.0.0.1",
+            port=port2,
+            enable_tray=False,
+            enable_mdns=False,
+        )
         ws_daemon2.file_writer = HostFileWriter(download_dir=str(self.dl_dir))
         ws_daemon2._start_system_tray = lambda: None
 
@@ -719,7 +731,7 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ws_daemon2.is_running)
         ws2 = await _connect_and_auth(f"ws://127.0.0.1:{port2}", ws_daemon2.pairing_token.encode("utf-8"))
         await ws2.close()
-        ws_daemon2.stop()
+        await ws_daemon2.async_stop()
         await asyncio.wait_for(svc_task, timeout=3.0)
 
 

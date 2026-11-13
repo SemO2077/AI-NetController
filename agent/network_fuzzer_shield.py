@@ -212,8 +212,12 @@ class NetworkFuzzerShield:
         logger.info("Cleaning up and zeroizing keys for %s. Reason: %s", client_id, reason)
 
         wd = self.watchdogs.pop(client_id, None)
-        if wd and not wd.done():
+        if wd and not wd.done() and wd is not asyncio.current_task():
             wd.cancel()
+            try:
+                await asyncio.gather(wd, return_exceptions=True)
+            except Exception:
+                pass
 
         key = self.ephemeral_keys.pop(client_id, None)
         if key:

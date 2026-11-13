@@ -22,6 +22,7 @@ Enterprise-grade platform bridge for Windows 10 & 11:
 """
 
 import os
+import ntpath
 import sys
 import time
 import socket
@@ -722,19 +723,30 @@ def validate_install_path(path: str) -> Tuple[bool, str]:
         return False, "Installation path cannot be empty."
     if "\x00" in path:
         return False, "Invalid path: null bytes detected."
+
+    is_windows_path = (
+        IS_WINDOWS
+        or (len(path) >= 2 and path[1] == ":" and path[0].isalpha())
+        or path.startswith("\\\\")
+    )
+    path_mod = ntpath if is_windows_path else os.path
     try:
-        norm = os.path.abspath(os.path.normpath(path))
+        if IS_WINDOWS or not is_windows_path:
+            norm = path_mod.abspath(path_mod.normpath(path))
+        else:
+            # Normalize Windows drive/UNC paths lexically even when validating on POSIX hosts.
+            norm = ntpath.normpath(path)
     except Exception as e:
         return False, f"Invalid path syntax: {e}"
 
-    drive, rest = os.path.splitdrive(norm)
+    _, rest = path_mod.splitdrive(norm)
     if not rest or rest in ("\\", "/"):
         return False, "Cannot install directly into a drive root."
 
     rest_clean = rest.lower().strip("\\/")
     forbidden_prefixes = ["windows", "boot", "recovery", "$recycle.bin", "system volume information"]
     for fb in forbidden_prefixes:
-        if rest_clean == fb or rest_clean.startswith(fb + "\\"):
+        if rest_clean == fb or rest_clean.startswith(fb + "\\") or rest_clean.startswith(fb + "/"):
             return False, f"Cannot install into protected Windows system folder: {norm}"
 
     return True, norm

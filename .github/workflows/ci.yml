@@ -10,6 +10,7 @@ jobs:
   web-tests:
     name: Web Frontend & Server Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,8 +34,15 @@ jobs:
         run: npm run build
 
   agent-tests:
-    name: Python Host Agent Tests
-    runs-on: windows-latest
+    name: Python Host Agent Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONFAULTHANDLER: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -51,4 +59,4 @@ jobs:
           pip install -r agent/requirements.txt
 
       - name: Run Agent Unit & Security Tests
-        run: python -m unittest discover -s agent/tests
+        run: python -m unittest discover -s agent/tests -v
