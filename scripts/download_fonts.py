@@ -2,7 +2,8 @@ import urllib.request
 import re
 import os
 
-FONTS_DIR = os.path.abspath('apps/web/public/fonts')
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FONTS_DIR = os.path.join(ROOT_DIR, 'apps', 'web', 'public', 'fonts')
 os.makedirs(FONTS_DIR, exist_ok=True)
 
 url = 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Onest:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap'
@@ -53,13 +54,16 @@ for subset, body in blocks:
                 out_f.write(fresp.read())
         downloaded += 1
     
-    # Replace remote url with relative path
-    # In fonts.css, path will be /fonts/<filename> or ./fonts/<filename>
-    new_body = re.sub(r'url\(https://[^)]+\.woff2\)', f'url("/fonts/{filename}")', body)
+    # Replace remote url with relative path matching Vite base: './'
+    new_body = re.sub(r'url\(https://[^)]+\.woff2\)', f'url("./fonts/{filename}")', body)
     local_css_rules.append(f"/* {subset} */\n@font-face {{\n{new_body.strip()}\n}}")
 
-fonts_css_path = os.path.abspath('apps/web/src/fonts.css')
-with open(fonts_css_path, 'w', encoding='utf-8') as f:
-    f.write("/* Offline Self-Hosted Typography Engine for AI NetController */\n\n" + "\n\n".join(local_css_rules) + "\n")
+css_content = "/* Offline Self-Hosted Typography Engine for AI NetController */\n\n" + "\n\n".join(local_css_rules) + "\n"
+public_fonts_css_path = os.path.join(ROOT_DIR, 'apps', 'web', 'public', 'fonts.css')
+src_fonts_css_path = os.path.join(ROOT_DIR, 'apps', 'web', 'src', 'fonts.css')
+for css_path in (public_fonts_css_path, src_fonts_css_path):
+    os.makedirs(os.path.dirname(css_path), exist_ok=True)
+    with open(css_path, 'w', encoding='utf-8') as f:
+        f.write(css_content)
 
-print(f"SUCCESS: Downloaded {downloaded} font files into {FONTS_DIR} and created {fonts_css_path}")
+print(f"SUCCESS: Downloaded {downloaded} font files into {FONTS_DIR} and created {public_fonts_css_path} and {src_fonts_css_path}")

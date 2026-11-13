@@ -22,7 +22,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
-agent/app_manifest.xml
 
 # Flutter
 .dart_tool/

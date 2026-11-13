@@ -22,6 +22,7 @@ a = Analysis(
     pathex=[SPEC_DIR, os.path.dirname(SPEC_DIR)],
     binaries=[],
     datas=[
+        (os.path.join(SPEC_DIR, '__init__.py'), '.'),
         (os.path.join(SPEC_DIR, 'crypto_vault.py'), '.'),
         (os.path.join(SPEC_DIR, 'crypto_handshake.py'), '.'),
         (os.path.join(SPEC_DIR, 'daemon_config.py'), '.'),

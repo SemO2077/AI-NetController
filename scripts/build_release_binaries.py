@@ -9,15 +9,12 @@ Generates standalone packaged release artifacts for GitHub Releases and Web OTA 
 """
 
 import hashlib
-import io
 import json
 import os
 import platform
 import shutil
-import struct
 import subprocess
 import sys
-import time
 import zipfile
 from datetime import datetime, timezone
 
@@ -133,7 +130,16 @@ def build_android_apk(output_arm64_path: str, output_univ_path: str) -> None:
         "bin",
         f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk",
     )
+    webview_arm64 = os.path.join(
+        ROOT_DIR,
+        "apps",
+        "mobile",
+        "build",
+        "webview_apk",
+        f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk",
+    )
     prebuilt_candidates = [
+        webview_arm64,
         native_arm64,
         os.path.join(RELEASE_DIR, f"AI_NetController_{RELEASE_VERSION}_arm64-v8a.apk"),
         os.path.join(RELEASE_DIR, f"AI_NetController_{RELEASE_VERSION}.apk"),
