@@ -464,7 +464,8 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(agent_mod, "pyautogui", fake_pyautogui), \
              patch.object(agent_mod, "pyperclip", fake_pyperclip), \
-             patch.object(agent_mod, "ctypes", fake_ctypes):
+             patch.object(agent_mod, "ctypes", fake_ctypes), \
+             patch("subprocess.run") as fake_subprocess_run:
             ws = await _connect_and_auth(url, daemon.pairing_token.encode("utf-8"))
             try:
                 # 1. 6-byte binary trackpad moveRel
@@ -481,7 +482,7 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
                 # 3. Hotkey using 'command' key & media via OP_INPUT
                 await ws.send(agent_mod.pack_packet(agent_mod.OP_INPUT, json.dumps({"action": "hotkey", "command": "ctrl+c"}).encode("utf-8"), seq=2))
                 await ws.send(agent_mod.pack_packet(agent_mod.OP_INPUT, json.dumps({"action": "INPUT_EVENT", "kind": "media", "command": "next_track"}).encode("utf-8"), seq=3))
-                # 4. OP_AUDIO 2-byte volume_up with 20% steps -> round(20/10)=2 volumeup presses
+                # 4. OP_AUDIO 2-byte volume_up with 20% steps -> round(20/10)=2 volumeup steps
                 await ws.send(agent_mod.pack_packet(agent_mod.OP_AUDIO, bytes([1, 20]), seq=4))
                 # 5. OP_CLIP bidirectional sync
                 await ws.send(agent_mod.pack_packet(agent_mod.OP_CLIP, b"FROM_PHONE_CLIP", seq=5))
@@ -504,10 +505,9 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
                     fake_user32.keybd_event.assert_any_call(0xB0, 0, 0, 0)
                     vol_up_calls = [c for c in fake_user32.keybd_event.call_args_list if c.args[:3] == (0xAF, 0, 0)]
                     self.assertGreaterEqual(len(vol_up_calls), 2)
-                else:
-                    fake_pyautogui.press.assert_any_call("nexttrack")
-                    vol_up_calls = [c for c in fake_pyautogui.press.call_args_list if c.args == ("volumeup",)]
-                    self.assertGreaterEqual(len(vol_up_calls), 2)
+                elif platform.system() == "Linux":
+                    fake_subprocess_run.assert_any_call(["playerctl", "next"], check=False, timeout=3.0)
+                    fake_subprocess_run.assert_any_call(["amixer", "-D", "pulse", "sset", "Master", "10%+"], check=False, timeout=3.0)
 
                 # View-only mode blocks further clicks
                 fake_pyautogui.click.reset_mock()
