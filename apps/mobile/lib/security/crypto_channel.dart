@@ -30,6 +30,9 @@ class Curve25519 {
   static final BigInt _a24 = BigInt.from(121665);
 
   static Uint8List clampScalar(Uint8List kBytes) {
+    if (kBytes.length != 32) {
+      throw ArgumentError.value(kBytes.length, 'kBytes', 'Curve25519 scalar must be 32 bytes');
+    }
     final Uint8List a = Uint8List.fromList(kBytes);
     a[0] &= 248;
     a[31] &= 127;
@@ -60,6 +63,9 @@ class Curve25519 {
   }
 
   static Uint8List scalarMult(Uint8List scalar, Uint8List uCoordinate) {
+    if (uCoordinate.length != 32) {
+      throw ArgumentError.value(uCoordinate.length, 'uCoordinate', 'Curve25519 u-coordinate must be 32 bytes');
+    }
     final Uint8List clamped = clampScalar(scalar);
     final BigInt k = _decodeLittleEndian(clamped);
     // RFC 7748 Section 5: clear bit 255 and reduce mod p
@@ -336,47 +342,83 @@ class ChaCha20Poly1305 {
 // HIGH-LEVEL CRYPTO CHANNEL (CLIENT CONTROLLER)
 // =====================================================================
 class CryptoChannel {
+  static const int _hostSenderTag = 0x484F5354; // 'HOST'
+  static const int _mobileSenderTag = 0x4D4F424C; // 'MOBL'
+  static const int _maxHandshakeAgeSec = 120;
+
   final String preSharedKey;
-  Uint8List? _sessionKey;
+  Uint8List? _txKey;
+  Uint8List? _rxKey;
   bool _isEstablished = false;
+  bool _isClosed = false;
 
   int _txNonceCounter = 0;
-  int _rxLastNonceCounter = -1;
+  int _rxLastNonceCounter = 0;
 
   late final Uint8List _clientPrivateKey;
   late final Uint8List _clientPublicKey;
 
-  bool get isEstablished => _isEstablished;
+  bool get isEstablished => _isEstablished && !_isClosed;
 
   CryptoChannel({required this.preSharedKey}) {
+    if (preSharedKey.trim().isEmpty) {
+      throw ArgumentError("preSharedKey cannot be empty");
+    }
     _clientPrivateKey = Curve25519.generatePrivateKey();
     _clientPublicKey = Curve25519.getPublicKey(_clientPrivateKey);
   }
 
   /// Evaluates Opcode 0x06 Host Challenge and produces the Client Response.
   Uint8List processHandshakeChallenge(Uint8List challengePayload) {
+    if (_isClosed || _isEstablished) {
+      throw StateError("CryptoChannel handshake already completed or channel closed");
+    }
     // Challenge structure: [11-byte Magic] + [32-byte Host PubKey] + [16-byte Salt] + [8-byte Timestamp]
-    if (challengePayload.length < 11 + 32 + 16 + 8) {
+    if (challengePayload.length != 11 + 32 + 16 + 8) {
       throw const FormatException("Malformed ECDH challenge payload");
+    }
+
+    for (int i = 0; i < kHandshakeMagic.length; i++) {
+      if (challengePayload[i] != kHandshakeMagic[i]) {
+        throw const FormatException("Invalid ECDH handshake magic");
+      }
     }
 
     final Uint8List hostPubKey = challengePayload.sublist(11, 11 + 32);
     final Uint8List salt = challengePayload.sublist(11 + 32, 11 + 32 + 16);
+    final Uint8List tsBytes = challengePayload.sublist(11 + 32 + 16, 11 + 32 + 16 + 8);
+    final int challengeTs = ByteData.sublistView(tsBytes).getUint64(0, Endian.big);
+    final int nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (challengeTs <= 0 || (nowSec - challengeTs).abs() > _maxHandshakeAgeSec) {
+      throw const FormatException("Expired or invalid ECDH challenge timestamp");
+    }
 
-    // Compute shared secret via Curve25519
+    // Compute shared secret via Curve25519 and reject all-zero small-subgroup outputs
     final Uint8List sharedSecret = Curve25519.scalarMult(_clientPrivateKey, hostPubKey);
+    int nonZero = 0;
+    for (int i = 0; i < sharedSecret.length; i++) {
+      nonZero |= sharedSecret[i];
+    }
+    if (nonZero == 0) {
+      sharedSecret.fillRange(0, sharedSecret.length, 0);
+      throw const FormatException("Invalid low-order ECDH peer public key");
+    }
 
-    // Derive symmetric session key via HKDF-SHA256
-    _sessionKey = HkdfSha256.deriveKey(sharedSecret, salt, kInfoString);
+    // Derive twin directional session keys matching HostCryptoSession (crypto_handshake.py)
+    _txKey = HkdfSha256.deriveKey(sharedSecret, salt, "$kInfoString-client-tx");
+    _rxKey = HkdfSha256.deriveKey(sharedSecret, salt, "$kInfoString-host-tx");
+    sharedSecret.fillRange(0, sharedSecret.length, 0);
+    _clientPrivateKey.fillRange(0, _clientPrivateKey.length, 0);
     _isEstablished = true;
 
-    // Create client proof HMAC over [Magic + HostPub + ClientPub + Salt]
+    // Create client proof HMAC over [Magic + HostPub + ClientPub + Salt + Timestamp]
     final hmac = crypto_pkg.Hmac(crypto_pkg.sha256, utf8.encode(preSharedKey));
     final List<int> hmacInput = [
       ...kHandshakeMagic,
       ...hostPubKey,
       ..._clientPublicKey,
-      ...salt
+      ...salt,
+      ...tsBytes,
     ];
     final List<int> clientAuthTag = hmac.convert(hmacInput).bytes;
 
@@ -391,14 +433,14 @@ class CryptoChannel {
     _txNonceCounter++;
     final ByteData bd = ByteData(12);
     bd.setUint64(0, _txNonceCounter, Endian.big);
-    bd.setUint32(8, 0x4D4F424C, Endian.big); // 'MOBL'
+    bd.setUint32(8, _mobileSenderTag, Endian.big); // 'MOBL'
     return bd.buffer.asUint8List();
   }
 
   /// Encrypts an outgoing protocol packet with ChaCha20-Poly1305.
   /// Frame structure: [12-byte Standard Header (AAD)] + [12-byte Nonce] + [Ciphertext + 16-byte Tag]
   Uint8List encryptPacket(int opcode, Uint8List plaintext, {int flags = 0, int seq = 0}) {
-    if (!_isEstablished || _sessionKey == null) {
+    if (_isClosed || !_isEstablished || _txKey == null) {
       throw StateError("CryptoChannel is not established. Handshake required.");
     }
 
@@ -416,7 +458,7 @@ class CryptoChannel {
     headerBd.setUint32(8, payloadLength, Endian.big);
 
     final Uint8List ciphertextAndTag = ChaCha20Poly1305.encrypt(
-      _sessionKey!,
+      _txKey!,
       nonce,
       plaintext,
       aad: headerBytes,
@@ -429,9 +471,9 @@ class CryptoChannel {
     return framedPacket.toBytes();
   }
 
-  /// Decrypts an incoming framed packet and validates the Poly1305 tag & anti-replay counter.
+  /// Decrypts an incoming framed packet and validates sender tag, Poly1305 MAC & anti-replay counter.
   ProtocolPacket decryptPacket(Uint8List rawBytes) {
-    if (!_isEstablished || _sessionKey == null) {
+    if (_isClosed || !_isEstablished || _rxKey == null) {
       throw StateError("CryptoChannel is not established. Handshake required.");
     }
     if (rawBytes.length < kHeaderSize + kNonceSize + kTagSize) {
@@ -463,9 +505,13 @@ class CryptoChannel {
       kHeaderSize + totalLength,
     );
 
-    // Check monotonic counter WITHOUT mutating state before AEAD verification
+    // Check sender tag and monotonic counter WITHOUT mutating state before AEAD verification
     final ByteData nonceBd = ByteData.sublistView(nonce);
     final int rxCounter = nonceBd.getUint64(0, Endian.big);
+    final int senderTag = nonceBd.getUint32(8, Endian.big);
+    if (senderTag != _hostSenderTag) {
+      throw const FormatException("Invalid sender identifier in nonce (possible packet reflection attack)");
+    }
     if (rxCounter <= 0 || rxCounter <= _rxLastNonceCounter) {
       throw FormatException(
         "Replay attack detected! Counter $rxCounter <= $_rxLastNonceCounter",
@@ -473,7 +519,7 @@ class CryptoChannel {
     }
 
     final Uint8List plaintext = ChaCha20Poly1305.decrypt(
-      _sessionKey!,
+      _rxKey!,
       nonce,
       ciphertextAndTag,
       aad: headerBytes,
@@ -488,5 +534,15 @@ class CryptoChannel {
       seq: seq,
       payload: plaintext,
     );
+  }
+
+  void dispose() {
+    _isClosed = true;
+    _isEstablished = false;
+    _txKey?.fillRange(0, _txKey!.length, 0);
+    _rxKey?.fillRange(0, _rxKey!.length, 0);
+    _txKey = null;
+    _rxKey = null;
+    _clientPrivateKey.fillRange(0, _clientPrivateKey.length, 0);
   }
 }

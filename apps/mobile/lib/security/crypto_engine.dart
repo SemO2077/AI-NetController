@@ -48,7 +48,11 @@ class SlidingWindowReplayGuard {
   BigInt _bitmap = BigInt.zero;
   bool _initialized = false;
 
-  SlidingWindowReplayGuard({this.windowSize = kWindowSize});
+  SlidingWindowReplayGuard({this.windowSize = kWindowSize}) {
+    if (windowSize <= 0) {
+      throw ArgumentError.value(windowSize, 'windowSize', 'must be > 0');
+    }
+  }
 
   /// Non-mutating check to ensure replay state is not polluted before AEAD tag verification.
   bool canAccept(int seq) {
@@ -103,6 +107,9 @@ class X25519 {
   static final BigInt _a24 = BigInt.from(121665);
 
   static Uint8List clampScalar(Uint8List k) {
+    if (k.length != 32) {
+      throw ArgumentError.value(k.length, 'k', 'X25519 scalar must be 32 bytes');
+    }
     final Uint8List res = Uint8List.fromList(k);
     res[0] &= 248;
     res[31] &= 127;
@@ -142,6 +149,9 @@ class X25519 {
   }
 
   static Uint8List scalarMult(Uint8List kBytes, Uint8List uBytes) {
+    if (uBytes.length != 32) {
+      throw ArgumentError.value(uBytes.length, 'uBytes', 'X25519 u-coordinate must be 32 bytes');
+    }
     final Uint8List clamped = clampScalar(kBytes);
     final BigInt k = _bytesToBigInt(clamped);
     // RFC 7748 Section 5: mask bit 255 of u-coordinate and reduce mod p
@@ -277,6 +287,9 @@ class ChaCha20Poly1305 {
   }
 
   static Uint8List encrypt(Uint8List key, Uint8List nonce, Uint8List plaintext, {Uint8List? aad}) {
+    if (key.length != 32 || nonce.length != 12) {
+      throw ArgumentError('ChaCha20-Poly1305 requires a 32-byte key and 12-byte nonce');
+    }
     aad ??= Uint8List(0);
     final Uint8List polyKeyBlock = _chachaBlock(key, 0, nonce);
     final Uint8List polyKey = polyKeyBlock.sublist(0, 32);
@@ -317,7 +330,7 @@ class ChaCha20Poly1305 {
   }
 
   static Uint8List? decrypt(Uint8List key, Uint8List nonce, Uint8List ciphertextAndTag, {Uint8List? aad}) {
-    if (ciphertextAndTag.length < 16) return null;
+    if (key.length != 32 || nonce.length != 12 || ciphertextAndTag.length < 16) return null;
     aad ??= Uint8List(0);
 
     final Uint8List ciphertext = ciphertextAndTag.sublist(0, ciphertextAndTag.length - 16);
@@ -389,6 +402,7 @@ class CryptoEngine {
   Uint8List? _kSend; // Client Tx Key (Host Rx)
   Uint8List? _kRecv; // Client Rx Key (Host Tx)
   bool _isEstablished = false;
+  bool _disposed = false;
   int _txSeq = 0;
   final SlidingWindowReplayGuard _replayGuard = SlidingWindowReplayGuard();
 
@@ -415,7 +429,10 @@ class CryptoEngine {
   /// Returns response payload to send to Host:
   /// [32B CLIENT_PUBKEY] [16B CLIENT_NONCE_N1] [32B HMAC_PROOF]
   Uint8List? processHostChallenge(Uint8List hostChallengePayload) {
-    if (hostChallengePayload.length < 59) return null;
+    if (_disposed || _isEstablished) {
+      return null;
+    }
+    if (hostChallengePayload.length != 59) return null;
 
     final Uint8List magic = hostChallengePayload.sublist(0, 11);
     if (!constantTimeEquals(magic, Uint8List.fromList(kMagicBytes))) {
@@ -425,8 +442,16 @@ class CryptoEngine {
     final Uint8List hostPub = hostChallengePayload.sublist(11, 43);
     final Uint8List hostNonceN2 = hostChallengePayload.sublist(43, 59);
 
-    // Compute Shared Secret via Curve25519
+    // Compute Shared Secret via Curve25519 and reject low-order all-zero shared secrets (RFC 7748)
     final Uint8List sharedSecret = X25519.scalarMult(_clientPrivKey, hostPub);
+    int nonZero = 0;
+    for (int i = 0; i < sharedSecret.length; i++) {
+      nonZero |= sharedSecret[i];
+    }
+    if (nonZero == 0) {
+      zeroize(sharedSecret);
+      return null;
+    }
 
     // Compute HMAC Proof with PSK
     final BytesBuilder proofData = BytesBuilder();
@@ -466,10 +491,17 @@ class CryptoEngine {
   /// Encrypts an outgoing packet payload.
   /// Returns [12B IV (Nonce)] + [Ciphertext] + [16B Tag]
   Uint8List encryptPacket(Uint8List plaintext, {Uint8List? aad, int? forcedSeq}) {
-    if (!_isEstablished || _kSend == null) {
+    if (_disposed || !_isEstablished || _kSend == null) {
       throw StateError("CryptoEngine is not established.");
     }
-    _txSeq = forcedSeq ?? (_txSeq + 1);
+    if (forcedSeq != null) {
+      if (forcedSeq <= 0 || forcedSeq <= _txSeq) {
+        throw ArgumentError("forcedSeq must advance strictly beyond current _txSeq ($_txSeq).");
+      }
+      _txSeq = forcedSeq;
+    } else {
+      _txSeq++;
+    }
 
     final Uint8List nonce = Uint8List(kNonceSize);
     final ByteData nonceBd = ByteData.sublistView(nonce);
@@ -486,7 +518,7 @@ class CryptoEngine {
   /// Decrypts an incoming packet with replay window verification.
   /// Expects payload: [12B Nonce] + [Ciphertext] + [16B Tag]
   Uint8List? decryptPacket(Uint8List framedPayload, {Uint8List? aad}) {
-    if (!_isEstablished || _kRecv == null || framedPayload.length < 28) {
+    if (_disposed || !_isEstablished || _kRecv == null || framedPayload.length < 28) {
       return null;
     }
 
@@ -494,6 +526,10 @@ class CryptoEngine {
     final Uint8List ctAndTag = framedPayload.sublist(kNonceSize);
 
     final ByteData nonceBd = ByteData.sublistView(nonce);
+    final int epoch = nonceBd.getUint32(0, Endian.big);
+    if (epoch != 0) {
+      return null;
+    }
     final int seq = nonceBd.getUint64(4, Endian.big);
 
     // Check replay eligibility BEFORE committing state, then verify Poly1305 MAC first
@@ -512,6 +548,7 @@ class CryptoEngine {
   }
 
   void dispose() {
+    _disposed = true;
     if (_kSend != null) {
       zeroize(_kSend!);
       _kSend = null;

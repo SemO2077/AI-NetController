@@ -264,10 +264,24 @@ def create_vbs_shortcut(
                 pass
 
 
+def _resolve_desktop_dir() -> str:
+    """Resolves actual user Desktop folder, including OneDrive-redirected Desktops on Windows."""
+    if IS_WINDOWS:
+        try:
+            buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+            # CSIDL_DESKTOPDIRECTORY = 0x0010, SHGFP_TYPE_CURRENT = 0
+            hr = ctypes.windll.shell32.SHGetFolderPathW(None, 0x0010, None, 0, buf)
+            if hr == 0 and buf.value and os.path.isdir(buf.value):
+                return buf.value
+        except Exception:
+            pass
+    return os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+
+
 def create_desktop_shortcut(target_exe: Optional[str] = None, icon_path: Optional[str] = None) -> Tuple[bool, str]:
     """Creates desktop shortcut 'AI NetController.lnk' with matching Android app icon."""
     exe_path = target_exe or get_executable_path()
-    desktop_dir = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+    desktop_dir = _resolve_desktop_dir()
     if not os.path.exists(desktop_dir):
         return False, "Desktop folder not found."
 
@@ -298,14 +312,22 @@ def create_start_menu_shortcut(target_exe: Optional[str] = None, icon_path: Opti
 def remove_shortcuts() -> Tuple[int, str]:
     """Removes all Desktop and Start Menu shortcuts."""
     removed = 0
-    desktop_dir = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
-    desktop_lnk = os.path.join(desktop_dir, f"{APP_NAME}.lnk")
-    if os.path.exists(desktop_lnk):
-        try:
-            os.remove(desktop_lnk)
-            removed += 1
-        except Exception:
-            pass
+    candidate_desktops = []
+    resolved_desktop = _resolve_desktop_dir()
+    if resolved_desktop:
+        candidate_desktops.append(resolved_desktop)
+    fallback_desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+    if fallback_desktop and fallback_desktop not in candidate_desktops:
+        candidate_desktops.append(fallback_desktop)
+
+    for desktop_dir in candidate_desktops:
+        desktop_lnk = os.path.join(desktop_dir, f"{APP_NAME}.lnk")
+        if os.path.exists(desktop_lnk):
+            try:
+                os.remove(desktop_lnk)
+                removed += 1
+            except Exception:
+                pass
 
     appdata = os.environ.get("APPDATA", "")
     if appdata:
@@ -419,6 +441,38 @@ def _stop_external_agent_processes() -> bool:
     if not IS_WINDOWS:
         return True
     try:
+        current_pid = os.getpid()
+        target_pids: List[int] = []
+        try:
+            import psutil  # type: ignore
+            for proc in psutil.process_iter(["pid", "name", "exe"]):
+                try:
+                    pid = proc.info.get("pid")
+                    if not pid or pid == current_pid:
+                        continue
+                    name = (proc.info.get("name") or "").lower()
+                    exe = (proc.info.get("exe") or "").lower()
+                    if "ai_netcontroller_hostagent" in name or "ai_netcontroller_hostagent" in exe:
+                        target_pids.append(int(pid))
+                except Exception:
+                    continue
+        except ImportError:
+            target_pids = []
+
+        if target_pids:
+            all_ok = True
+            for pid in target_pids:
+                res = subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    creationflags=0x08000000,
+                )
+                if res.returncode not in (0, 128):
+                    all_ok = False
+            return all_ok
+
         res = subprocess.run(
             [
                 "taskkill",
@@ -426,7 +480,7 @@ def _stop_external_agent_processes() -> bool:
                 "/IM",
                 "AI_NetController_HostAgent.exe",
                 "/FI",
-                f"PID ne {os.getpid()}",
+                f"PID ne {current_pid}",
             ],
             capture_output=True,
             text=True,
@@ -450,7 +504,7 @@ def perform_full_uninstall(
     2. Removes Desktop and Start Menu shortcuts
     3. Removes Windows Run startup entry
     4. Removes Windows Add/Remove Programs registry entry
-    5. Optionally removes local app data / logs
+    5. Optionally removes local app data / logs and install binaries
     """
     stopped = _stop_external_agent_processes()
     results = {
@@ -459,6 +513,7 @@ def perform_full_uninstall(
         "removed_autostart": False,
         "removed_uninstaller": False,
         "removed_config": False,
+        "removed_install_dir": False,
         "success": True,
         "message": ""
     }
@@ -473,14 +528,30 @@ def perform_full_uninstall(
     # 3. Unregister from Windows Add/Remove Programs
     results["removed_uninstaller"] = unregister_windows_uninstaller()
 
-    # 4. Optionally clean persisted configuration directory
+    # 4. Clean user-space installed binaries (%LOCALAPPDATA%\Programs\AI NetController)
+    try:
+        install_dir = get_default_install_dir()
+        if os.path.isdir(install_dir):
+            shutil.rmtree(install_dir, ignore_errors=True)
+            results["removed_install_dir"] = not os.path.exists(install_dir)
+    except Exception:
+        results["removed_install_dir"] = False
+
+    # 5. Optionally clean persisted configuration directory (%LOCALAPPDATA% & legacy %APPDATA%)
     if remove_config:
         try:
-            appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
-            cfg_dir = os.path.join(appdata, "AI NetController")
-            if os.path.isdir(cfg_dir):
-                shutil.rmtree(cfg_dir, ignore_errors=True)
-                results["removed_config"] = not os.path.exists(cfg_dir)
+            local_app = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+            roaming_app = os.environ.get("APPDATA") or ""
+            removed_any = True
+            for base_dir in (local_app, roaming_app):
+                if not base_dir:
+                    continue
+                cfg_dir = os.path.join(base_dir, APP_NAME)
+                if os.path.isdir(cfg_dir):
+                    shutil.rmtree(cfg_dir, ignore_errors=True)
+                    if os.path.exists(cfg_dir):
+                        removed_any = False
+            results["removed_config"] = removed_any
         except Exception:
             results["removed_config"] = False
 

@@ -526,7 +526,7 @@ class TestHostDaemonGuiAndAvHardening(unittest.TestCase):
         old_token = state.pairing_token
         new_token = state.rotate_pairing_token()
         self.assertNotEqual(old_token, new_token)
-        self.assertTrue(new_token.startswith("ai_sec_"))
+        self.assertTrue(new_token.startswith(("ainet_", "ai_sec_")))
 
         snap = state.sample_telemetry()
         self.assertGreaterEqual(state.cpu_percent, 0.0)

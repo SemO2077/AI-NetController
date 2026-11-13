@@ -105,22 +105,19 @@ def apply_window_icon(window) -> None:
     ico_path = get_icon_ico_path()
     if ico_path and os.path.isfile(ico_path):
         try:
-            window.iconbitmap(default=ico_path)
+            window.iconbitmap(ico_path)
             return
         except Exception as e:
             logger.debug(f"iconbitmap notice: {e}")
 
-    # 2. Try PhotoImage via iconphoto
-    png_path = get_icon_png_path(64) or get_icon_png_path(512)
-    if png_path and os.path.isfile(png_path):
-        try:
-            import tkinter as tk
-            from PIL import ImageTk
-            img = get_icon_image(64)
-            if img:
-                photo = ImageTk.PhotoImage(img)
-                window.iconphoto(True, photo)
-                # Keep reference to prevent GC
-                window._icon_photo_ref = photo
-        except Exception as e:
-            logger.debug(f"iconphoto notice: {e}")
+    # 2. Try PhotoImage via iconphoto (with dynamic in-memory fallback icon when PNG asset is absent)
+    try:
+        from PIL import ImageTk
+        img = get_icon_image(64)
+        if img:
+            photo = ImageTk.PhotoImage(img)
+            window.iconphoto(False, photo)
+            # Keep reference to prevent GC
+            window._icon_photo_ref = photo
+    except Exception as e:
+        logger.debug(f"iconphoto notice: {e}")

@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 /// High-Performance Zero-Allocation Binary Wire Protocol Framer & Reassembler
 /// ============================================================================
-/// Protocol Framing Specification:
-/// [0x55, 0xAA]  - 2B Sync Magic Header
+/// Protocol Framing Specification (Canonical AI NetController 12B Header):
+/// [0xC5, 0x71]  - 2B Sync Magic Header
 /// [Opcode]      - 1B Command / Packet Type
 /// [Flags]       - 1B Bitmask (0x01: Compressed, 0x02: Encrypted, 0x04: Fragmented, 0x08: Last Fragment)
 /// [Seq]         - 4B Big-Endian Monotonic Sequence Number
@@ -18,10 +18,11 @@ import 'dart:typed_data';
 /// Total Sub-Hdr = 12 Bytes
 /// ============================================================================
 
-const int kSyncByte0 = 0x55;
-const int kSyncByte1 = 0xAA;
+const int kSyncByte0 = 0xC5;
+const int kSyncByte1 = 0x71;
 const int kHeaderLength = 12;
 const int kFragSubHeaderLength = 12;
+const int kMaxPayloadSize = 10 * 1024 * 1024;
 
 // Protocol Flags
 class WireFlags {
@@ -53,6 +54,7 @@ class _FragmentAssemblySession {
   final int flags;
   final int seq;
   final Uint8List buffer;
+  final Set<int> receivedOffsets = <int>{};
   int bytesReceived = 0;
   DateTime lastActivity;
 
@@ -126,12 +128,10 @@ class NetworkFramer {
 
   void _processAccumulator() {
     while ((_writeIndex - _readIndex) >= kHeaderLength) {
-      // 1. Frame Resynchronization: Verify 0x55, 0xAA or 0xC5, 0x71 Magic Header
+      // 1. Frame Resynchronization: Verify Canonical 0xC5, 0x71 Magic Header
       final int b0 = _accumulator[_readIndex];
       final int b1 = _accumulator[_readIndex + 1];
-      final bool isSyncHeader =
-          (b0 == kSyncByte0 && b1 == kSyncByte1) || (b0 == 0xC5 && b1 == 0x71);
-      if (!isSyncHeader) {
+      if (b0 != kSyncByte0 || b1 != kSyncByte1) {
         // Discard 1 byte and resynchronize
         _readIndex++;
         continue;
@@ -143,8 +143,8 @@ class NetworkFramer {
       final int seq = bd.getUint32(4, Endian.big);
       final int payloadLen = bd.getUint32(8, Endian.big);
 
-      // Sanity check length against safety ceiling (16MB)
-      if (payloadLen > 16 * 1024 * 1024) {
+      // Sanity check length against canonical ceiling (10 MiB)
+      if (payloadLen > kMaxPayloadSize) {
         // Desynchronized corrupted length header: advance 1 byte
         _readIndex++;
         continue;
@@ -192,8 +192,8 @@ class NetworkFramer {
     final int offset = bd.getUint32(4, Endian.big);
     final int totalLength = bd.getUint32(8, Endian.big);
 
-    // Guard against forged/malicious fragment totalLength causing OOM (max 16 MB, max 32 active sessions)
-    if (totalLength <= 0 || totalLength > 16 * 1024 * 1024) return;
+    // Guard against forged/malicious fragment totalLength causing OOM (max 10 MiB, max 32 active sessions)
+    if (totalLength <= 0 || totalLength > kMaxPayloadSize) return;
     if (!_fragmentSessions.containsKey(messageId) && _fragmentSessions.length >= 32) {
       _reapExpiredSessions();
       if (_fragmentSessions.length >= 32) {
@@ -202,7 +202,7 @@ class NetworkFramer {
     }
 
     final int sliceLen = fragmentPayload.length - kFragSubHeaderLength;
-    if (offset < 0 || offset + sliceLen > totalLength) return;
+    if (offset < 0 || sliceLen <= 0 || offset + sliceLen > totalLength) return;
 
     final Uint8List slice =
         Uint8List.sublistView(fragmentPayload, kFragSubHeaderLength);
@@ -218,8 +218,14 @@ class NetworkFramer {
       ),
     );
 
-    if (offset + slice.length <= session.totalLength) {
+    if (session.totalLength != totalLength || session.opcode != opcode) {
+      return;
+    }
+
+    if (!session.receivedOffsets.contains(offset) &&
+        offset + slice.length <= session.totalLength) {
       session.buffer.setRange(offset, offset + slice.length, slice);
+      session.receivedOffsets.add(offset);
       session.bytesReceived += slice.length;
       session.lastActivity = DateTime.now();
     }

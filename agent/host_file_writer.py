@@ -83,6 +83,8 @@ class ActiveTransfer:
         self.bytes_written = 0
         self.max_offset_written = 0
         self.file_handle = None
+        self.last_activity = time.monotonic()
+        self._written_intervals: list = []
 
     def open(self, truncate: bool = False):
         # Ensure parent directory exists and neither target nor temp path is a symlink/junction
@@ -99,6 +101,21 @@ class ActiveTransfer:
             os.close(fd)
             raise
 
+    def _record_written_range(self, start: int, end: int) -> None:
+        if end <= start:
+            return
+        intervals = self._written_intervals + [(start, end)]
+        intervals.sort()
+        merged = [intervals[0]]
+        for cur_s, cur_e in intervals[1:]:
+            prev_s, prev_e = merged[-1]
+            if cur_s <= prev_e:
+                merged[-1] = (prev_s, max(prev_e, cur_e))
+            else:
+                merged.append((cur_s, cur_e))
+        self._written_intervals = merged
+        self.bytes_written = sum(e - s for s, e in merged)
+
     def write_chunk(self, offset: int, data: bytes):
         if offset < 0 or offset + len(data) > self.total_size or offset + len(data) > MAX_FILE_SIZE:
             raise ValueError(
@@ -108,7 +125,8 @@ class ActiveTransfer:
             self.open()
         self.file_handle.seek(offset)
         self.file_handle.write(data)
-        self.bytes_written += len(data)
+        self.last_activity = time.monotonic()
+        self._record_written_range(offset, offset + len(data))
         if offset + len(data) > self.max_offset_written:
             self.max_offset_written = offset + len(data)
 
@@ -200,17 +218,25 @@ class HostFileWriter:
         logger.info("HostFileWriter initialized. Target chroot directory: %s", self.download_dir)
 
     _WINDOWS_RESERVED_NAMES = {
-        "CON", "PRN", "AUX", "NUL",
+        "CON", "CONIN$", "CONOUT$", "PRN", "AUX", "NUL",
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
 
     def _sanitize_filename(self, filename: str) -> str:
-        """Strip directory paths and dangerous characters to block path traversal."""
+        """Strip directory paths, enforce 255-byte limit, and block path traversal."""
         normalized = filename.replace("\\", "/")
         clean_name = os.path.basename(normalized)
         clean_name = re.sub(r'[\x00-\x1f\x7f]', '', clean_name)
         clean_name = re.sub(r'[<>:"/\\|?*]', '_', clean_name).strip(" .")
+        # Cap sanitized filename to 255 UTF-8 bytes while preserving extension
+        raw_utf8 = clean_name.encode("utf-8")
+        if len(raw_utf8) > 255:
+            stem, ext = os.path.splitext(clean_name)
+            ext_bytes = ext.encode("utf-8")[:64]
+            budget = max(1, 255 - len(ext_bytes))
+            stem_trunc = stem.encode("utf-8")[:budget].decode("utf-8", errors="ignore").rstrip(" .")
+            clean_name = f"{stem_trunc}{ext_bytes.decode('utf-8', errors='ignore')}"
         stem_upper = clean_name.split(".")[0].upper() if clean_name else ""
         if not clean_name or clean_name in {".", ".."} or stem_upper in self._WINDOWS_RESERVED_NAMES:
             clean_name = f"cst_received_{time.time_ns()}.bin"
@@ -338,7 +364,30 @@ class HostFileWriter:
             return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, transfer.bytes_written, "SHA-256 mismatch")
         return self.handle_packet(payload)
 
-    def _build_ack(self, transfer_id: int, status: int, bytes_written: int, message: str) -> bytes:
+    def abort_all(self) -> int:
+        """Aborts and deletes temp files for all active transfers (e.g., on disconnect)."""
+        count = 0
+        for tid in list(self.active_transfers.keys()):
+            transfer = self.active_transfers.pop(tid, None)
+            if transfer:
+                transfer.abort()
+                count += 1
+        return count
+
+    def prune_stale_transfers(self, max_idle_sec: float = 3600.0) -> int:
+        """Aborts transfers that have been idle longer than max_idle_sec."""
+        now = time.monotonic()
+        stale_ids = [
+            tid for tid, t in self.active_transfers.items()
+            if (now - t.last_activity) > max_idle_sec
+        ]
+        for tid in stale_ids:
+            transfer = self.active_transfers.pop(tid, None)
+            if transfer:
+                transfer.abort()
+        return len(stale_ids)
+
+    def _build_ack(self, transfer_id: int, status: int, bytes_written: int, message: str, seq: int = 0) -> bytes:
         """
         Constructs an Opcode 0x0C ACK packet.
         Format: [2 magic][1 opcode][1 flags][4 seq][4 len] + [4 id][1 status][8 bytes_written][msg_utf8]
@@ -347,5 +396,5 @@ class HostFileWriter:
         ack_payload = struct.pack('!IBQ', transfer_id, status, bytes_written) + msg_bytes
         length = len(ack_payload)
 
-        header = struct.pack('!2sBBII', MAGIC, OP_FILE_TRANSFER, 0, 0, length)
+        header = struct.pack('!2sBBII', MAGIC, OP_FILE_TRANSFER, 0, seq, length)
         return header + ack_payload

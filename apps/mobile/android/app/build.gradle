@@ -26,9 +26,31 @@ android {
         multiDexEnabled true
     }
 
+    signingConfigs {
+        release {
+            def ksPath = System.getenv("AI_ANDROID_KEYSTORE")
+            def ksPass = System.getenv("AI_ANDROID_KEYSTORE_PASS")
+            def ksAlias = System.getenv("AI_ANDROID_KEY_ALIAS")
+            def ksKeyPass = System.getenv("AI_ANDROID_KEY_PASS") ?: ksPass
+            if (ksPath && ksPass && ksAlias) {
+                storeFile file(ksPath)
+                storePassword ksPass
+                keyAlias ksAlias
+                keyPassword ksKeyPass
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            def strictRelease = System.getenv("AI_RELEASE_BUILD") == "1"
+            def hasReleaseKeystore = (System.getenv("AI_ANDROID_KEYSTORE") ?: "").trim().length() > 0 &&
+                (System.getenv("AI_ANDROID_KEYSTORE_PASS") ?: "").trim().length() > 0 &&
+                (System.getenv("AI_ANDROID_KEY_ALIAS") ?: "").trim().length() > 0
+            if (strictRelease && !hasReleaseKeystore) {
+                throw new GradleException("AI_RELEASE_BUILD=1 requires AI_ANDROID_KEYSTORE, AI_ANDROID_KEYSTORE_PASS, and AI_ANDROID_KEY_ALIAS")
+            }
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             shrinkResources false
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"

@@ -12,10 +12,11 @@ Implements:
 import asyncio
 from collections import deque
 import enum
+import inspect
 import logging
 import random
 import struct
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger("NetworkFuzzerShield")
 
@@ -23,6 +24,7 @@ logger = logging.getLogger("NetworkFuzzerShield")
 MAGIC = b"\xC5\x71"
 HEADER_STRUCT = struct.Struct("!2sBBII")
 HEADER_SIZE = HEADER_STRUCT.size
+MAX_PAYLOAD_SIZE = 10 * 1024 * 1024  # 10 MiB canonical frame ceiling
 
 # Canonical Protocol Opcodes
 OP_PING = 0x01
@@ -230,7 +232,7 @@ class NetworkFuzzerShield:
         if close_callback:
             try:
                 res = close_callback()
-                if asyncio.iscoroutine(res):
+                if inspect.isawaitable(res):
                     await res
             except Exception as e:
                 logger.error("Error invoking close callback for %s: %s", client_id, e)
@@ -251,7 +253,7 @@ class NetworkFuzzerShield:
             return None
 
         magic, opcode, flags, seq, length = HEADER_STRUCT.unpack_from(raw_packet, 0)
-        if magic != MAGIC:
+        if magic != MAGIC or length > MAX_PAYLOAD_SIZE or len(raw_packet) != HEADER_SIZE + length:
             return None
 
         # Strictly enforce state machine before processing or passing packets through
@@ -277,7 +279,7 @@ class NetworkFuzzerShield:
             if on_keyframe_request:
                 try:
                     res = on_keyframe_request(client_id)
-                    if asyncio.iscoroutine(res):
+                    if inspect.isawaitable(res):
                         await res
                 except Exception as e:
                     logger.error("Error handling keyframe sync: %s", e)
@@ -317,6 +319,15 @@ class NetworkFuzzerShield:
             return delayed
 
         return raw_packet
+
+    def flush_reorder_buffer(self, client_id: str) -> List[bytes]:
+        """Drains and clears any queued reordered packets for the specified client."""
+        buf = self._reorder_buffer.pop(client_id, None)
+        if not buf:
+            return []
+        drained = list(buf)
+        buf.clear()
+        return drained
 
     def get_audit_metrics(self) -> dict:
         """Returns runtime shield metrics."""
