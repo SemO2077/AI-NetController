@@ -1707,7 +1707,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           title: 'AI NetController Mobile',
           subtitle:
               'Impeller 120Hz Hardware Engine • AI-NET/3.0-SECURE Protocol',
-          trailing: const Text('Beta 0.50.00',
+          trailing: const Text('Beta 0.51.00',
               style: TextStyle(
                   color: CyberColors.success,
                   fontFamily: 'monospace',

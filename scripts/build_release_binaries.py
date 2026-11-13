@@ -24,9 +24,17 @@ def get_package_version() -> str:
     pkg_json = os.path.join(ROOT_DIR, "package.json")
     if os.path.exists(pkg_json):
         with open(pkg_json, "r", encoding="utf-8") as f:
-            v = json.load(f).get("version", "0.50.0")
+            v = json.load(f).get("version", "0.51.0")
             return f"v{v}" if not v.startswith("v") else v
-    return "v0.50.0"
+    return "v0.51.0"
+
+
+def _format_beta_label(tag: str) -> str:
+    ver = tag.lstrip("v")
+    parts = [p for p in ver.split(".")[:3] if p.isdigit()]
+    if len(parts) == 3 and parts[0] == "0":
+        return f"Beta 0.{int(parts[1]):02d}.{int(parts[2]):02d}"
+    return f"v{ver}"
 
 RELEASE_VERSION = get_package_version()
 RELEASE_DIR = os.path.join(ROOT_DIR, "public", "releases", RELEASE_VERSION)
@@ -222,7 +230,7 @@ def main() -> None:
     manifest_data = {
         "version": RELEASE_VERSION,
         "tag": RELEASE_VERSION,
-        "releaseName": f"AI NetController {RELEASE_VERSION} (Beta 0.50.00)",
+        "releaseName": f"AI NetController {RELEASE_VERSION} ({_format_beta_label(RELEASE_VERSION)})",
         "publishedAt": datetime.now(timezone.utc).isoformat(),
         "artifacts": artifacts,
     }

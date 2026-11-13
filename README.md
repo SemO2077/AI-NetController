@@ -14,21 +14,21 @@ The system consists of three main components:
 
 ---
 
-## Release Downloads (Beta 0.50.00 / v0.50.0)
+## Release Downloads (Beta 0.51.00 / v0.51.0)
 
-Pre-built binaries and deployment archives are available on the [GitHub Releases page](https://github.com/SemO2077/AI-NetController/releases/tag/v0.50.0):
+Pre-built binaries and deployment archives are available on the [GitHub Releases page](https://github.com/SemO2077/AI-NetController/releases/tag/v0.51.0):
 
 | Artifact | Target Platform | Description |
 | :--- | :--- | :--- |
-| `AI_NetController_HostAgent_v0.50.0_win64.exe` | Windows 10/11 x64 | Standalone signed Host Agent executable with system tray & GUI |
-| `AI_NetController_HostAgent_v0.50.0_win64_portable.zip` | Windows x64 | Portable bundle containing agent binaries, source, and launchers |
-| `AI_NetController_v0.50.0_arm64-v8a.apk` | Android 10–15 (arm64-v8a) | Signed native Android application package (`0.50.00-beta`) |
-| `AI_NetController_v0.50.0.apk` | Android Universal | Signed universal APK package (`0.50.00-beta`) |
+| `AI_NetController_HostAgent_v0.51.0_win64.exe` | Windows 10/11 x64 | Standalone signed Host Agent executable with system tray & GUI |
+| `AI_NetController_HostAgent_v0.51.0_win64_portable.zip` | Windows x64 | Portable bundle containing agent binaries, source, and launchers |
+| `AI_NetController_v0.51.0_arm64-v8a.apk` | Android 10–15 (arm64-v8a) | Signed native Android application package (`0.51.00-beta`) |
+| `AI_NetController_v0.51.0.apk` | Android Universal | Signed universal APK package (`0.51.00-beta`) |
 | `SHA256SUMS.txt` | All | Cryptographic checksums for binary integrity verification |
 
 To verify artifact integrity on Windows:
 ```powershell
-Get-FileHash public\releases\v0.50.0\* -Algorithm SHA256
+Get-FileHash public\releases\v0.51.0\* -Algorithm SHA256
 ```
 
 ---
@@ -196,7 +196,7 @@ Open `http://localhost:3000` in your web browser.
 ### 3. Launch the Windows Host Agent
 
 #### Option A: Run Prebuilt Executable
-Download and run `AI_NetController_HostAgent_v0.50.0_win64.exe` from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.50.0).
+Download and run `AI_NetController_HostAgent_v0.51.0_win64.exe` from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.51.0).
 
 #### Option B: Run from Source
 ```bash

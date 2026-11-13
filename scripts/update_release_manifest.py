@@ -11,9 +11,17 @@ def get_release_tag() -> str:
     pkg_json = os.path.join(ROOT_DIR, "package.json")
     if os.path.exists(pkg_json):
         with open(pkg_json, "r", encoding="utf-8") as f:
-            v = json.load(f).get("version", "0.50.0")
+            v = json.load(f).get("version", "0.51.0")
             return f"v{v}" if not v.startswith("v") else v
-    return "v0.50.0"
+    return "v0.51.0"
+
+
+def _format_beta_label(tag: str) -> str:
+    ver = tag.lstrip("v")
+    parts = [p for p in ver.split(".")[:3] if p.isdigit()]
+    if len(parts) == 3 and parts[0] == "0":
+        return f"Beta 0.{int(parts[1]):02d}.{int(parts[2]):02d}"
+    return f"v{ver}"
 
 
 REL_TAG = get_release_tag()
@@ -65,7 +73,7 @@ with open(sums_path, "w", encoding="utf-8") as f:
 manifest_data = {
     "version": REL_TAG,
     "tag": REL_TAG,
-    "releaseName": f"AI NetController {REL_TAG} (Beta 0.50.00)",
+    "releaseName": f"AI NetController {REL_TAG} ({_format_beta_label(REL_TAG)})",
     "publishedAt": datetime.now(timezone.utc).isoformat(),
     "artifacts": artifacts
 }

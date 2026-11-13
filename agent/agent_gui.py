@@ -1,5 +1,5 @@
 """
-AI NetController — Native Desktop GUI for PC Host Daemon (Beta 0.50.00 / v0.50.0)
+AI NetController — Native Desktop GUI for PC Host Daemon (Beta 0.51.00 / v0.51.0)
 ================================================================================
 Provides a clean, transparent, user-facing desktop control panel built on Python's
 standard library (tkinter / ttk) with zero third-party native GUI DLLs.
@@ -70,7 +70,7 @@ except ImportError:
     is_running_from_install_dir = lambda: False
     is_app_installed = lambda: False
     APP_NAME = "AI NetController"
-    APP_VERSION = "0.50.0"
+    APP_VERSION = "0.51.0"
 
 try:
     from icon_assets import apply_window_icon, get_icon_image, get_icon_ico_path
@@ -158,7 +158,7 @@ class HostDaemonState:
     """
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.lock = threading.Lock()
-        self.version = "0.50.0"
+        self.version = "0.51.0"
         self.protocol = "AI-NET/3.0-SECURE"
         self.hostname = socket.gethostname()
         self.os_name = f"{platform.system()} {platform.release()}"

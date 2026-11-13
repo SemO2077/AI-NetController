@@ -171,18 +171,18 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "filename": "PATCH_NOTES.md",
     "language": "markdown",
     "category": "docs",
-    "description": "Beta v0.50.00 Release Patch Notes — Full Security Audit, Authenticated Session Control & Native APK/EXE Releases",
-    "code": `# Patch Notes — AI NetController v0.50.0 (Beta 0.50.00)
+    "description": "Beta v0.51.00 Release Patch Notes — Full Daemon E2E Verification, Binary OP_AUTH Fix & Flutter Telemetry",
+    "code": `# Patch Notes — AI NetController v0.51.0 (Beta 0.51.00)
 
-**Version:** Beta 0.50.00 (v0.50.0)
+**Version:** Beta 0.51.00 (v0.51.0)
 **Protocol Version:** AI-NET/3.0-SECURE
 
 ## 1. Host Daemon & Security Hardening (agent/)
-- Eliminated fallback secrets, enforced Windows DPAPI sealing & 15m TTL PIN pairing.
+- Fixed OP_AUTH 16-byte ACK collision, added async_stop() teardown and _client_secrets cleanup, and expanded Linux/Windows headless E2E daemon coverage.
 - Canonical framing (0x0D/0xED/0xEE), Origin validation, HITL approval challenge nonces, and Authenticode-signed Windows EXE packaging.
 
 ## 2. Control Plane & Native Client Hardening
-- Fail-closed localhost auth session cookies, real TCP RTT LAN scanner, persistent WoL schedules, and live Android WebView/Flutter protocol alignment.
+- Live Flutter dashboard telemetry, responsive overflow fixes, aligned OP_AUTH handshake, and end-to-end Flutter <-> Python daemon test coverage.
 `
   }
 ];

@@ -72,7 +72,7 @@ img.save(buf, format='JPEG', quality=80)
 jpeg_bytes = buf.getvalue()
 
 async def main():
-    daemon = mod.HostAgentDaemon(host='127.0.0.1', port=port)
+    daemon = mod.HostAgentDaemon(host='127.0.0.1', port=port, enable_tray=False, enable_mdns=False)
     daemon.is_running = True
     daemon.pairing_pin = ${jsonEncode(pin)}
     daemon.pin_issued_at = time.time() + 3600.0

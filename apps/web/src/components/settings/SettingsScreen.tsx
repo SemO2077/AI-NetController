@@ -496,7 +496,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                 {language === 'bg' ? 'Системен & AI Център' : 'System & AI Center'}
               </div>
               <div className="text-[11px] text-cyan-300 font-mono truncate mt-0.5">
-                Beta v0.50.0 • AI-NET/3.0
+                Beta v0.51.0 • AI-NET/3.0
               </div>
             </div>
           </button>

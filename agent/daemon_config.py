@@ -185,7 +185,7 @@ def _generate_default_config() -> Dict[str, Any]:
     pairing_pin = f"{secrets.randbelow(900000) + 100000}"
 
     return {
-        "version": "0.50.0",
+        "version": "0.51.0",
         "protocol": "AI-NET/3.0-SECURE",
         "bind_host": DEFAULT_HOST,
         "port": DEFAULT_PORT,
@@ -282,7 +282,7 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
     if unprot_pin and len(unprot_pin.strip()) == 6 and unprot_pin.strip().isdigit():
         merged["pairing_pin"] = unprot_pin.strip()
 
-    merged["version"] = "0.50.0"
+    merged["version"] = "0.51.0"
     return merged
 
 

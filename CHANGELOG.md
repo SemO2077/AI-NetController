@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [v0.51.0] (Beta 0.51.00) - 2026-11-13
+
+### Fixed & Verified
+- **PC Daemon Binary Protocol & Session Cleanup (`agent/agent.py`)**: Resolved `OP_AUTH` 16-byte acknowledgment frame collision during binary handshakes and ensured `_close_vaults_and_approvals` clears `_client_secrets` and `_client_outbound_seq` on shutdown (`async_stop()`).
+- **Flutter Mobile Client (`apps/mobile/`)**: Aligned Flutter binary `OP_AUTH` / telemetry handling with the Python Host Daemon, resolved dashboard layout overflow issues, and added live Flutter-to-Python daemon end-to-end verification (`apps/mobile/test/daemon_mobile_e2e_test.dart`).
+- **End-to-End Daemon Test Coverage (`agent/tests/test_daemon_full_features.py`)**: Added comprehensive live WebSocket, telemetry, AST firewall, HITL approval, remote input, file/clipboard, and shutdown test coverage alongside Linux/Windows headless CI compatibility (`enable_tray=False`, `enable_mdns=False`).
+
+### Changed
+- **Release Tooling & Version Bump (`0.51.0` / `v0.51.0`)**: Updated Python, Node/React, Flutter/Android (`versionCode 510`, `0.51.00-beta`), and release builder/publisher scripts to dynamically format beta release metadata for `v0.51.0`.
+
+---
+
 ## [v0.50.0] (Beta 0.50.00) - 2026-11-12
 
 ### Security

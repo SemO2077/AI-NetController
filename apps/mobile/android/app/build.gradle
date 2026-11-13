@@ -21,8 +21,8 @@ android {
         applicationId "com.cst.autonomouslan"
         minSdk 24
         targetSdk 36
-        versionCode 500
-        versionName "0.50.00-beta"
+        versionCode 510
+        versionName "0.51.00-beta"
         multiDexEnabled true
     }
 
