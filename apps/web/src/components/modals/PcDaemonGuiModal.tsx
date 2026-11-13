@@ -123,7 +123,7 @@ interface PcDaemonGuiModalProps {
 }
 
 const INITIAL_DAEMON_STATE: DaemonStateSnapshot = {
-  version: '0.51.0',
+  version: '0.60.0',
   protocol: 'AI-NET/3.0',
   hostname: 'LOCAL-HOST',
   osName: 'Windows / Linux Host',
@@ -479,8 +479,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href="/releases/v0.51.0/AI_NetController_HostAgent_v0.51.0_win64.exe"
-              download="AI_NetController_HostAgent_v0.51.0_win64.exe"
+              href="/releases/v0.60.0/AI_NetController_HostAgent_v0.60.0_win64.exe"
+              download="AI_NetController_HostAgent_v0.60.0_win64.exe"
               onClick={() => triggerHapticFeedback('medium')}
               className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-mono text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(34,211,238,0.3)] transition"
             >

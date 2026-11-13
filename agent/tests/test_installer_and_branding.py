@@ -70,7 +70,7 @@ class TestInstallerAndBranding(unittest.TestCase):
         self.assertEqual(APP_NAME, "AI NetController")
         self.assertIn("AI NetController", APP_DESCRIPTION)
         self.assertEqual(APP_PUBLISHER, "AI NetController")
-        self.assertEqual(APP_VERSION, "0.51.0")
+        self.assertEqual(APP_VERSION, "0.60.0")
 
     def test_03_installer_path_security_checks(self):
         """Verify installer rejects illegal paths, traversal, null bytes, and critical Windows dirs."""

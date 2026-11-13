@@ -5,7 +5,7 @@ Creates/updates a GitHub Release and uploads standalone binaries via `gh` CLI
 or Python stdlib `urllib.request` using `GITHUB_TOKEN` / `GH_TOKEN` / git credential helper.
 
 Usage:
-    python scripts/publish_github_release.py [--tag v0.51.0] [--repo SemO2077/AI-NetController] [--prerelease]
+    python scripts/publish_github_release.py [--tag v0.60.0] [--repo SemO2077/AI-NetController] [--prerelease]
 """
 
 import argparse
@@ -27,9 +27,9 @@ def get_current_version() -> str:
     if os.path.exists(pkg_json_path):
         with open(pkg_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            ver = data.get("version", "0.51.0")
+            ver = data.get("version", "0.60.0")
             return f"v{ver}" if not ver.startswith("v") else ver
-    return "v0.51.0"
+    return "v0.60.0"
 
 
 def _format_beta_label(tag: str) -> str:
@@ -94,7 +94,7 @@ def _github_request(
 def main():
     parser = argparse.ArgumentParser(description="Publish AI NetController to GitHub Releases")
     parser.add_argument("--repo", default="SemO2077/AI-NetController", help="GitHub repo (owner/name)")
-    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.51.0)")
+    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.60.0)")
     parser.add_argument("--title", default=None, help="Release title override")
     parser.add_argument("--prerelease", action="store_true", help="Mark GitHub release as prerelease (beta)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate release publication")

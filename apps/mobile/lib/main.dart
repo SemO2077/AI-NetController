@@ -3423,7 +3423,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           subtitle:
               'Impeller Hardware Engine • AI-NET/3.0-SECURE Protocol',
           trailing: const Text(
-            'v0.51.0',
+            'v0.60.0',
             style: TextStyle(
               color: CyberColors.success,
               fontFamily: 'monospace',

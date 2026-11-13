@@ -171,18 +171,18 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "filename": "PATCH_NOTES.md",
     "language": "markdown",
     "category": "docs",
-    "description": "Beta v0.51.00 Release Patch Notes — Full Daemon E2E Verification, Binary OP_AUTH Fix & Flutter Telemetry",
-    "code": `# Patch Notes — AI NetController v0.51.0 (Beta 0.51.00)
+    "description": "Beta v0.60.00 Release Patch Notes — Unified Security Hardening, Persistent Preferences, Cyber Glass UI & Native Performance",
+    "code": `# Patch Notes — AI NetController v0.60.0 (Beta 0.60.00)
 
-**Version:** Beta 0.51.00 (v0.51.0)
+**Version:** Beta 0.60.00 (v0.60.0)
 **Protocol Version:** AI-NET/3.0-SECURE
 
-## 1. Host Daemon & Security Hardening (agent/)
-- Fixed OP_AUTH 16-byte ACK collision, added async_stop() teardown and _client_secrets cleanup, and expanded Linux/Windows headless E2E daemon coverage.
-- Canonical framing (0x0D/0xED/0xEE), Origin validation, HITL approval challenge nonces, and Authenticode-signed Windows EXE packaging.
+## 1. Mobile Security, Performance & Persistence (apps/mobile/)
+- Android Keystore AES-GCM secret storage (SecureSecretStore + MainActivity.kt), optional wss:// TLS fingerprint pinning, mutual 91B X25519+HMAC (INIT_ECDH_VAULT_M), and CST_ECDH_V2 AEAD frames.
+- Fixed OK_AUTHENTICATED 16B ACK collision, added sync NetworkFramer broadcast, lazy 64KB->4MB video ring buffer, 6B binary OP_INPUT coalescing, and persistent CyberPalette preferences (AppPreferencesNotifier).
 
-## 2. Control Plane & Native Client Hardening
-- Live Flutter dashboard telemetry, responsive overflow fixes, aligned OP_AUTH handshake, and end-to-end Flutter <-> Python daemon test coverage.
+## 2. Host Daemon, Cyber Glass UI & Packaging (agent/, apps/web/)
+- SAN ECDSA TLS (tls_manager.py), NFKC/LOLBin AST firewall, DPAPI secret sealing, Cyber Glass desktop GUI (cyber_ui_theme.py + QR pairing), signed --onedir/MSIX packaging, and native WebView storage bridge (nativeStorage.ts).
 `
   }
 ];

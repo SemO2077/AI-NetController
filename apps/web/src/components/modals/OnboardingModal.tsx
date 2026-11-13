@@ -179,7 +179,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   AI NetController
                 </span>
                 <span className="px-2 py-0.5 rounded text-[10.5px] font-mono font-semibold bg-cyan-500/15 border border-cyan-400/30 text-cyan-300 shrink-0 shadow-[0_0_8px_rgba(0,240,255,0.2)]">
-                  Beta v0.51.0
+                  Beta v0.60.0
                 </span>
               </div>
               <h2 className="text-sm font-semibold text-white/90 truncate">

@@ -449,7 +449,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                             ? 'Вариант Б: Самостоятелен Windows .EXE файл'
                             : 'Option B: Standalone Windows Executable (.EXE)'}
                         </span>
-                        <span className="text-[10px] font-mono text-slate-400">v0.51.0 (Beta)</span>
+                        <span className="text-[10px] font-mono text-slate-400">v0.60.0 (Beta)</span>
                       </div>
                       <p className="text-[11px] text-slate-400 leading-snug">
                         {isBg
@@ -458,13 +458,13 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </p>
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <a
-                          href={setupInfo?.exeDownloadUrl || '/releases/v0.51.0/AI_NetController_HostAgent_v0.51.0_win64.exe'}
-                          download="AI_NetController_HostAgent_v0.51.0_win64.exe"
+                          href={setupInfo?.exeDownloadUrl || '/releases/v0.60.0/AI_NetController_HostAgent_v0.60.0_win64.exe'}
+                          download="AI_NetController_HostAgent_v0.60.0_win64.exe"
                           onClick={() => triggerHapticFeedback('medium')}
                           className="min-h-[42px] px-4 py-2 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center gap-2 transition cursor-pointer"
                         >
                           <Download className="w-4 h-4 text-emerald-400" />
-                          <span>{isBg ? 'Изтегли AI_NetController_HostAgent_v0.51.0_win64.exe' : 'Download AI_NetController_HostAgent_v0.51.0_win64.exe'}</span>
+                          <span>{isBg ? 'Изтегли AI_NetController_HostAgent_v0.60.0_win64.exe' : 'Download AI_NetController_HostAgent_v0.60.0_win64.exe'}</span>
                         </a>
                       </div>
                     </div>
@@ -597,8 +597,8 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </button>
 
                       <a
-                        href={setupInfo?.apkDownloadUrl || '/releases/v0.51.0/AI_NetController_v0.51.0_arm64-v8a.apk'}
-                        download="AI_NetController_v0.51.0_arm64-v8a.apk"
+                        href={setupInfo?.apkDownloadUrl || '/releases/v0.60.0/AI_NetController_v0.60.0_arm64-v8a.apk'}
+                        download="AI_NetController_v0.60.0_arm64-v8a.apk"
                         onClick={() => triggerHapticFeedback('medium')}
                         className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                       >

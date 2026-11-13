@@ -1,8 +1,8 @@
 {
   "name": "ai-netcontroller",
   "private": true,
-  "version": "0.51.0",
-  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.51.00)",
+  "version": "0.60.0",
+  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.60.00)",
   "type": "module",
   "scripts": {
     "dev": "tsx apps/web/server.ts",

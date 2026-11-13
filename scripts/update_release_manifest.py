@@ -11,9 +11,9 @@ def get_release_tag() -> str:
     pkg_json = os.path.join(ROOT_DIR, "package.json")
     if os.path.exists(pkg_json):
         with open(pkg_json, "r", encoding="utf-8") as f:
-            v = json.load(f).get("version", "0.51.0")
+            v = json.load(f).get("version", "0.60.0")
             return f"v{v}" if not v.startswith("v") else v
-    return "v0.51.0"
+    return "v0.60.0"
 
 
 def _format_beta_label(tag: str) -> str:

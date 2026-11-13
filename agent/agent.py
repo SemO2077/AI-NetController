@@ -1178,7 +1178,7 @@ class HostAgentDaemon:
         self.loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
         self._stream_wake_event = asyncio.Event()
-        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.51.0)...")
+        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.60.0)...")
         await self._start_mdns()
         self._start_system_tray()
 
@@ -1407,7 +1407,7 @@ class HostAgentDaemon:
 
             desc = {
                 'os': platform.system(),
-                'version': '0.51.0',
+                'version': '0.60.0',
                 'ai': 'ollama-bridge',
                 'hostname': hostname,
                 'tls': '1' if self.tls_fingerprint else '0',
@@ -1542,7 +1542,7 @@ class HostAgentDaemon:
                 pystray.MenuItem("Open Control Center", _show_gui, default=True),
                 pystray.MenuItem("Install AI NetController to PC...", _install),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("AI NetController Beta 0.51.00", lambda: None, enabled=False),
+                pystray.MenuItem("AI NetController Beta 0.60.00", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Port: {self.port} (WebSocket)", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
@@ -3178,7 +3178,7 @@ class HostAgentDaemon:
                     "disk_percent": disk_pct,
                     "capture_fps": self.capture_fps,
                     "os": self._os_name,
-                    "version": "0.51.0",
+                    "version": "0.60.0",
                     "protocol": "CST/3.0",
                     "local_ip": self._get_local_ip(),
                     "mac": self._get_primary_mac(),

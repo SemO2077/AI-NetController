@@ -6,9 +6,9 @@ Security updates and patches are actively maintained for the current release ser
 
 | Version Branch | Supported | Notes |
 | :--- | :--- | :--- |
-| `0.51.x` (Beta `0.51.00`) | Yes | Active maintenance and security patches |
-| `0.50.x` | Limited | Security patches migrated to `v0.51.0` |
-| `< 0.50.0` | No | End of life; upgrade to `v0.51.0` (Beta `0.51.00`) or newer |
+| `0.60.x` (Beta `0.60.00`) | Yes | Active maintenance and security patches |
+| `0.51.x` | Limited | Security patches migrated to `v0.60.0` |
+| `< 0.51.0` | No | End of life; upgrade to `v0.60.0` (Beta `0.60.00`) or newer |
 
 ---
 
@@ -59,4 +59,4 @@ We appreciate the responsible disclosure of security issues. If you identify a v
 ### Response Timeline
 - **Initial Acknowledgment**: Within 48 hours.
 - **Status Assessment**: Within 5 business days.
-- **Remediation**: Security patches are prioritized and released in the next patch update (`v0.51.x`).
+- **Remediation**: Security patches are prioritized and released in the next patch update (`v0.60.x`).

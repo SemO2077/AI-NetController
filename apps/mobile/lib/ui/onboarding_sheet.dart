@@ -73,7 +73,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
         'subtitle': 'Local-First Workstation Orchestration',
         'icon': Icons.bolt_rounded,
         'color': palette.primary,
-        'badge': 'v0.51.0 Local-First',
+        'badge': 'v0.60.0 Local-First',
         'description':
             'Direct LAN fleet control, hardware-accelerated screen streaming, Wake-on-LAN, and diagnostics without external cloud dependencies.',
       },

@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
 echo =========================================================
-echo AI NetController Host Agent - Windows Builder (v0.51.0 Beta)
+echo AI NetController Host Agent - Windows Builder (v0.60.0 Beta)
 echo (Smart-App-Control-Aligned --onedir - Zero UPX - Signed)
 echo =========================================================
 echo.

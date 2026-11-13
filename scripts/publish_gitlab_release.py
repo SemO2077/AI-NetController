@@ -5,7 +5,7 @@ Uploads standalone release binaries to GitLab Generic Packages and creates or up
 a GitLab Release with permanent direct asset download links.
 
 Usage:
-    python scripts/publish_gitlab_release.py [--project-id <id|group/project>] [--tag v0.51.0] [--dry-run]
+    python scripts/publish_gitlab_release.py [--project-id <id|group/project>] [--tag v0.60.0] [--dry-run]
 """
 
 import argparse
@@ -25,9 +25,9 @@ def get_current_version() -> str:
     if os.path.exists(pkg_json_path):
         with open(pkg_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            ver = data.get("version", "0.51.0")
+            ver = data.get("version", "0.60.0")
             return f"v{ver}" if not ver.startswith("v") else ver
-    return "v0.51.0"
+    return "v0.60.0"
 
 
 def get_gitlab_token() -> Optional[str]:
@@ -50,7 +50,7 @@ def main():
         default=os.environ.get("CI_SERVER_URL", "https://gitlab.com"),
         help="GitLab host base URL",
     )
-    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.51.0)")
+    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.60.0)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate release publication")
     args = parser.parse_args()
 

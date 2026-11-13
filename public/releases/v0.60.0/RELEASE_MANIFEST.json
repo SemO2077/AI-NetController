@@ -1,0 +1,44 @@
+{
+  "version": "v0.60.0",
+  "tag": "v0.60.0",
+  "releaseName": "AI NetController v0.60.0 (Beta 0.60.00)",
+  "publishedAt": "2026-11-13T13:57:14.232160+00:00",
+  "artifacts": [
+    {
+      "filename": "AI_NetController_HostAgent_v0.60.0_win64.exe",
+      "kind": "exe",
+      "platform": "Windows 10/11 x64 (Standalone Host Agent .EXE)",
+      "sizeBytes": 37532184,
+      "sizeFormatted": "35.79 MB",
+      "sha256": "d68877661676ea0629761b96535b8c222d91764083b4fe6b58011aba48fcc929",
+      "downloadUrl": "/releases/v0.60.0/AI_NetController_HostAgent_v0.60.0_win64.exe"
+    },
+    {
+      "filename": "AI_NetController_HostAgent_v0.60.0_win64_portable.zip",
+      "kind": "zip",
+      "platform": "Windows Signed --onedir Bundle + Source & MSIX Manifest (.ZIP)",
+      "sizeBytes": 37802130,
+      "sizeFormatted": "36.05 MB",
+      "sha256": "f3c7470b0dbb4deb5300c5a8a8839387c24635b11d34abd1e679ff214ba41df4",
+      "downloadUrl": "/releases/v0.60.0/AI_NetController_HostAgent_v0.60.0_win64_portable.zip"
+    },
+    {
+      "filename": "AI_NetController_v0.60.0_arm64-v8a.apk",
+      "kind": "apk",
+      "platform": "Android 10\u201315 arm64-v8a (Mobile Companion .APK)",
+      "sizeBytes": 1402905,
+      "sizeFormatted": "1.34 MB",
+      "sha256": "2c54e406d1cef3acfa960db5449a5975774b9377c226b6adcc6784d7e4f8d095",
+      "downloadUrl": "/releases/v0.60.0/AI_NetController_v0.60.0_arm64-v8a.apk"
+    },
+    {
+      "filename": "AI_NetController_v0.60.0.apk",
+      "kind": "apk",
+      "platform": "Android Universal (Mobile Companion .APK)",
+      "sizeBytes": 1402905,
+      "sizeFormatted": "1.34 MB",
+      "sha256": "2c54e406d1cef3acfa960db5449a5975774b9377c226b6adcc6784d7e4f8d095",
+      "downloadUrl": "/releases/v0.60.0/AI_NetController_v0.60.0.apk"
+    }
+  ]
+}

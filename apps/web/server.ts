@@ -17,8 +17,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const RELEASES_PUBLIC_DIR = path.resolve(ROOT_DIR, 'public/releases');
-const APP_VERSION = '0.51.0';
-const APP_VERSION_LABEL = '0.51.00-beta';
+const APP_VERSION = '0.60.0';
+const APP_VERSION_LABEL = '0.60.00-beta';
 const PROTOCOL_VERSION = 'AI-NET/3.0-SECURE';
 
 const app = express();
@@ -1108,7 +1108,7 @@ let cachedReleasesPayload: { data: any; timestamp: number } | null = null;
 const RELEASES_CACHE_TTL_MS = 30_000;
 
 function readFirstAvailableManifest(): any {
-  const candidates = ['v0.51.0', 'v0.50.0', 'v0.35.0', 'v0.32.0', 'v0.31.3', 'v0.30.0'];
+  const candidates = ['v0.60.0', 'v0.51.0', 'v0.50.0', 'v0.35.0', 'v0.32.0', 'v0.31.3', 'v0.30.0'];
   for (const ver of candidates) {
     const p = path.join(RELEASES_PUBLIC_DIR, ver, 'RELEASE_MANIFEST.json');
     if (fs.existsSync(p)) {

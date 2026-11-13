@@ -121,7 +121,7 @@ logger = logging.getLogger("AI-NetController-WindowsIntegration")
 
 APP_NAME = "AI NetController"
 APP_DESCRIPTION = "AI NetController — PC Host Agent & Desktop Control Center"
-APP_VERSION = "0.51.0"
+APP_VERSION = "0.60.0"
 APP_PUBLISHER = "AI NetController"
 MUTEX_NAME = "Global\\AI_NetController_HostAgent_Mutex"
 REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"

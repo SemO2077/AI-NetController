@@ -4,7 +4,7 @@
 
 param(
     [string]$DistDir = ".\dist\AI_NetController_HostAgent",
-    [string]$OutputMsix = ".\dist\AI_NetController_HostAgent_0.51.0_x64.msix",
+    [string]$OutputMsix = ".\dist\AI_NetController_HostAgent_0.60.0_x64.msix",
     [string]$Publisher = "",
     [string]$Thumbprint = $env:AI_CODESIGN_THUMBPRINT,
     [string]$TimestampUrl = "http://timestamp.digicert.com",

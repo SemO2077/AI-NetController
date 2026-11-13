@@ -103,7 +103,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
                     <span>{language === 'bg' ? 'Бързи Клавиши' : 'Keyboard Shortcuts'}</span>
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-400/30">
-                      v0.51.0
+                      v0.60.0
                     </span>
                   </h3>
                   <p className="text-xs text-white/50">

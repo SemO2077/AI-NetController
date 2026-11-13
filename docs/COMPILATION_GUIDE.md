@@ -1,6 +1,6 @@
 # Compilation Guide
 
-This document describes how to compile all **AI NetController** (`v0.51.0` / Beta `0.51.00`) deliverables from source code:
+This document describes how to compile all **AI NetController** (`v0.60.0` / Beta `0.60.00`) deliverables from source code:
 1. The web production bundle (`apps/web/dist/`)
 2. The standalone Windows Host Agent executable (`.exe`) and portable distribution archive (`.zip`)
 3. The signed native Android application package (`.apk`)
@@ -61,9 +61,9 @@ The script executes the following steps:
    - Configures `upx=False` across both single-file and directory outputs to prevent antivirus heuristics false positives.
    - Embeds the Per-Monitor V2 DPI manifest (`PerMonitorV2`).
    - Packages Windows icons (`agent/icon.ico`) and version metadata (`agent/version_info.txt`).
-3. Outputs artifacts to `public/releases/v0.51.0/`:
-   - `AI_NetController_HostAgent_v0.51.0_win64.exe` (Standalone PE32+ executable)
-   - `AI_NetController_HostAgent_v0.51.0_win64_portable.zip` (Portable directory bundle with Python launcher)
+3. Outputs artifacts to `public/releases/v0.60.0/`:
+   - `AI_NetController_HostAgent_v0.60.0_win64.exe` (Standalone PE32+ executable)
+   - `AI_NetController_HostAgent_v0.60.0_win64_portable.zip` (Portable directory bundle with Python launcher)
 4. Re-computes SHA-256 digests and updates `SHA256SUMS.txt` and `RELEASE_MANIFEST.json`.
 
 ---
@@ -91,8 +91,8 @@ python scripts/build_android_app.py
 5. **Alignment**: Aligns uncompressed assets on 4-byte boundaries with `zipalign`.
 6. **Cryptographic Signing**: Signs the final APK using `apksigner` with APK Signature Scheme V1, V2, and V3.
 7. **Output**:
-   - `public/releases/v0.51.0/AI_NetController_v0.51.0_arm64-v8a.apk`
-   - `public/releases/v0.51.0/AI_NetController_v0.51.0.apk`
+   - `public/releases/v0.60.0/AI_NetController_v0.60.0_arm64-v8a.apk`
+   - `public/releases/v0.60.0/AI_NetController_v0.60.0.apk`
 
 ---
 
@@ -101,7 +101,7 @@ python scripts/build_android_app.py
 To calculate and verify the cryptographic checksums of all release binaries:
 
 ```powershell
-Get-FileHash public\releases\v0.51.0\* -Algorithm SHA256
+Get-FileHash public\releases\v0.60.0\* -Algorithm SHA256
 ```
 
-Compare the outputs against `public/releases/v0.51.0/SHA256SUMS.txt`.
+Compare the outputs against `public/releases/v0.60.0/SHA256SUMS.txt`.

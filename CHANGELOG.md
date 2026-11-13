@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [v0.60.0] (Beta 0.60.00) - 2026-11-13
+
+### Security & Hardening
+- **Mobile Hardware Keystore & Zero-Trust Transport (`apps/mobile/`)**: Added Android Keystore AES-GCM secret storage (`SecureSecretStore` + `MainActivity.kt` MethodChannel) with legacy Hive secret migration; upgraded `HostConnectionClient` and `CryptoEngine` with optional `wss://` TLS + SHA-256 fingerprint pinning, mutual 91-byte X25519+HMAC (`INIT_ECDH_VAULT_M`), `CST_ECDH_V2` AEAD frames (`encryptWirePacket`/`decryptWirePacket`), post-vault anti-downgrade, and encrypted `PAIR_INIT`/`PAIR_FINISH` (`PairingResult`).
+- **Host Daemon TLS, Firewall & Vault (`agent/`)**: Added `tls_manager.py` (SAN ECDSA TLS + SHA-256 pinning), mutual `INIT_ECDH_VAULT_M` and workstation-lock auto-pause in `agent.py`, hardened IPC supervision in `agent_daemon.py`, Unicode NFKC/caret normalization + LOLBin/`ri`/`rp`/`spps` blocking + bounded `OrderedDict` inspection cache in `command_ast_firewall.py`, DPAPI sealing + weak PIN rejection in `daemon_config.py`, and disk reservation + Win32 MotW ADS tagging in `host_file_writer.py`.
+- **Smart-App-Control-Aligned Packaging**: Replaced legacy dropper patterns (`taskkill`/`vbs`/`icacls`) with Win32 COM shortcut helpers (`windows_integration.py`) and added `--onedir` + MSIX packaging (`AppxManifest.xml`, `package_msix.ps1`, `build_agent.spec`, `sign_binary.ps1`).
+
+### Performance & Reliability
+- **Mobile Engine & Wire Pipeline**: Fixed the critical 16-byte `OK_AUTHENTICATED` challenge-nonce collision in `HostConnectionClient`, switched `NetworkFramer` to synchronous broadcast (`sync: true`) with bounded `PacketReassembler`, optimized 26-bit limb `ChaCha20Poly1305` (`encryptInto`), added 6-byte binary `OP_INPUT` coalescing (`16ms`), switched `_DoubleFrameRingBuffer` to lazy-exponential growth (64KB → 4MB) with 1500ms keyframe cooldown, fixed disconnect UI state in `viewport_stream_widget.dart`, removed unused `shader_warmup.dart`, and refined R8/ProGuard rules.
+- **Host Screen Capture**: Added static-frame short-circuiting, NumPy resize caching, and 4:2:0 chroma subsampling in `AdaptiveScreenPipeline`.
+
+### Added & Visual Improvements
+- **Persistent Mobile & Web Memory**: Added Hive-backed `AppPreferencesNotifier` (`app_preferences.dart`) persisting `CyberAccentPreset`, `GlassIntensity`, dark/AMOLED toggle, target FPS, TLS preference, custom scan port, haptic feedback toggle, onboarding completion, and 25-entry command history alongside dynamic `CyberPalette` (`fluid_theme.dart`), `FleetNotifier` persistence, `BiometricSecurityGate` persistence, and `NetworkValidators`; added `apps/web/src/utils/nativeStorage.ts` integrated with `MainActivity.java`, `uiStore.ts`, `useFleetState.ts`, and `wolService.ts`.
+- **Cyber Glass Desktop Control Center**: Rebuilt `agent_gui.py` and `cyber_ui_theme.py` (`icon_assets.py`) with Abyssal Void (`#040812`), Cyan (`#00F0FF`)/Violet (`#8A2BE2`) ambient glows, orbital `CyberNodeBadge`, pure-Python ISO/IEC 18004 QR pairing card, PIN TTL rotation, Neon Coral HITL modal, and idle-aware rendering.
+- **Responsive Layout & Localization**: Refined responsive Flutter widgets (`responsive_device_card.dart`, `adaptive_layout_builder.dart`, `pip_stream_viewer.dart`, `onboarding_sheet.dart`) and standardized English localization across `file_transfer_engine.dart` and `os_integrations_manager.dart`.
+
+### Changed
+- **Unified `v0.60.0` (`Beta 0.60.00`) Release**: Bumped all Node/Web (`0.60.0`), Python Host Agent (`0.60.0` / PE & MSIX `0.60.0.0`), Flutter/Android (`0.60.0+600` / `versionCode 600` / `0.60.00-beta`), documentation, and release scripts.
+
+---
+
 ## [v0.51.0] (Beta 0.51.00) - 2026-11-13
 
 ### Fixed & Verified

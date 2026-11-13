@@ -173,7 +173,7 @@ def setup_staging():
     rel_tag = _get_release_tag()
     rel_src = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
     if not os.path.exists(rel_src):
-        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.51.0")
+        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.60.0")
     rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", rel_tag)
     os.makedirs(rel_dst, exist_ok=True)
     for meta_file in ("RELEASE_MANIFEST.json", "SHA256SUMS.txt", "PATCH_NOTES.md"):
@@ -188,11 +188,11 @@ def _get_release_tag():
     if os.path.exists(pkg_json):
         try:
             with open(pkg_json, "r", encoding="utf-8") as f:
-                v = str(json.load(f).get("version", "0.51.0")).strip()
+                v = str(json.load(f).get("version", "0.60.0")).strip()
                 return f"v{v}" if not v.startswith("v") else v
         except Exception:
             pass
-    return "v0.51.0"
+    return "v0.60.0"
 
 
 def _get_version_name():
@@ -206,7 +206,7 @@ def _get_version_name():
 def create_android_manifest():
     ver_name = _get_version_name()
     parts = [int(p) for p in _get_release_tag().lstrip("v").split(".")[:3] if p.isdigit()]
-    ver_code = str(parts[0] * 1000 + parts[1] * 10 + parts[2]) if len(parts) == 3 else "510"
+    ver_code = str(parts[0] * 1000 + parts[1] * 10 + parts[2]) if len(parts) == 3 else "600"
     manifest_content = f"""<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cst.autonomouslan"
