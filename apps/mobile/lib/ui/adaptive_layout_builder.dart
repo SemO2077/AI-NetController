@@ -565,8 +565,8 @@ class AdaptiveScaffold extends StatelessWidget {
   Widget _buildAppBar(BuildContext context,
       {required bool showNavIcon, String? subtitle}) {
     return Container(
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      constraints: const BoxConstraints(minHeight: 52),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: Colors.white10, width: 1)),
       ),
@@ -574,6 +574,7 @@ class AdaptiveScaffold extends StatelessWidget {
         children: [
           Expanded(
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -597,6 +598,8 @@ class AdaptiveScaffold extends StatelessWidget {
                       color: CyberColors.textSecondary,
                       letterSpacing: 1.2,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
               ],
             ),

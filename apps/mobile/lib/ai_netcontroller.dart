@@ -3,11 +3,12 @@
 library ai_netcontroller;
 
 export 'protocol/binary_protocol.dart';
-export 'protocol/fragmentation_engine.dart';
-export 'protocol/network_framer.dart';
+export 'protocol/fragmentation_engine.dart' hide kFlagEncrypted;
+export 'protocol/network_framer.dart' hide kMaxPayloadSize;
 
 export 'security/crypto_channel.dart';
-export 'security/crypto_engine.dart';
+export 'security/crypto_engine.dart'
+    hide kKeySize, kNonceSize, kTagSize, ChaCha20Poly1305;
 export 'security/biometric_security_gate.dart';
 
 export 'services/file_transfer_engine.dart';

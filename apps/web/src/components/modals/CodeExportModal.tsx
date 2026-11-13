@@ -111,7 +111,7 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
       })
       .catch((err) => {
         if (err?.name === 'AbortError') return;
-        fetch('/releases/v0.50.0/RELEASE_MANIFEST.json', { signal: controller.signal })
+        fetch('/releases/v0.51.0/RELEASE_MANIFEST.json', { signal: controller.signal })
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
           .then((m) => setManifest(m))
           .catch(() => {});
@@ -254,10 +254,10 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
     }
   };
 
-  const ghReleaseCommands = `# 1. Tag and push Beta 0.50.00 (v0.50.0)
+  const ghReleaseCommands = `# 1. Tag and push Beta 0.51.00 (v0.51.0)
 git add .
-git commit -m "release: AI NetController Beta 0.50.00 (v0.50.0)"
-git tag -a v0.50.0 -m "AI NetController v0.50.0 (Beta 0.50.00)"
+git commit -m "release: AI NetController Beta 0.51.00 (v0.51.0)"
+git tag -a v0.51.0 -m "AI NetController v0.51.0 (Beta 0.51.00)"
 git push origin main --tags
 
 # 2. Publish pre-built binaries to GitHub Releases:
@@ -296,7 +296,7 @@ python scripts/publish_github_release.py`;
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'ai_netcontroller_v0.50.0_source_and_builders.zip';
+      a.download = 'ai_netcontroller_v0.51.0_source_and_builders.zip';
       a.click();
       scheduleTimer(() => URL.revokeObjectURL(url), 1500);
     } catch (err) {
@@ -308,31 +308,31 @@ python scripts/publish_github_release.py`;
 
   const artifacts: ReleaseArtifact[] = manifest?.artifacts || [
     {
-      filename: 'AI_NetController_HostAgent_v0.50.0_win64.exe',
+      filename: 'AI_NetController_HostAgent_v0.51.0_win64.exe',
       kind: 'exe',
       platform: 'Windows 10/11 x64 (Standalone Host Agent .EXE)',
       sizeBytes: 0,
       sizeFormatted: 'Build Required',
       sha256: 'not_built_yet',
-      downloadUrl: '/releases/v0.50.0/AI_NetController_HostAgent_v0.50.0_win64.exe',
+      downloadUrl: '/releases/v0.51.0/AI_NetController_HostAgent_v0.51.0_win64.exe',
     },
     {
-      filename: 'AI_NetController_v0.50.0_arm64-v8a.apk',
+      filename: 'AI_NetController_v0.51.0_arm64-v8a.apk',
       kind: 'apk',
       platform: 'Android 10-15 arm64-v8a (Mobile Controller .APK)',
       sizeBytes: 0,
       sizeFormatted: 'Build Required',
       sha256: 'not_built_yet',
-      downloadUrl: '/releases/v0.50.0/AI_NetController_v0.50.0_arm64-v8a.apk',
+      downloadUrl: '/releases/v0.51.0/AI_NetController_v0.51.0_arm64-v8a.apk',
     },
     {
-      filename: 'AI_NetController_HostAgent_v0.50.0_win64_portable.zip',
+      filename: 'AI_NetController_HostAgent_v0.51.0_win64_portable.zip',
       kind: 'zip',
       platform: 'Windows Portable Agent Bundle + Internal Runtime (.ZIP)',
       sizeBytes: 0,
       sizeFormatted: 'Build Required',
       sha256: 'not_built_yet',
-      downloadUrl: '/releases/v0.50.0/AI_NetController_HostAgent_v0.50.0_win64_portable.zip',
+      downloadUrl: '/releases/v0.51.0/AI_NetController_HostAgent_v0.51.0_win64_portable.zip',
     },
   ];
 
@@ -351,7 +351,7 @@ python scripts/publish_github_release.py`;
                   {isBg ? 'БИНАРНИ РЕЛИЙЗИ (.APK / .EXE) И КОД' : 'RELEASE BINARIES (.APK / .EXE) & SOURCE'}
                 </h2>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-[10px] font-mono font-semibold shrink-0">
-                  Beta v0.50.0
+                  Beta v0.51.0
                 </span>
                 {rebuildMessage && (
                   <span className="text-[11px] font-mono text-cyan-300">{rebuildMessage}</span>
@@ -408,7 +408,7 @@ python scripts/publish_github_release.py`;
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>{isBg ? 'Beta v0.50.0 .APK & .EXE Релийз' : 'Beta v0.50.0 .APK & .EXE Releases'}</span>
+            <span>{isBg ? 'Beta v0.51.0 .APK & .EXE Релийз' : 'Beta v0.51.0 .APK & .EXE Releases'}</span>
           </button>
 
           <button
@@ -523,8 +523,8 @@ python scripts/publish_github_release.py`;
                   <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>
                     {isBg
-                      ? 'Официални компилирани бинарни пакети (Beta v0.50.0)'
-                      : 'Official Packaged Release Binaries (Beta v0.50.0)'}
+                      ? 'Официални компилирани бинарни пакети (Beta v0.51.0)'
+                      : 'Official Packaged Release Binaries (Beta v0.51.0)'}
                   </span>
                 </h3>
                 <p className="text-xs text-slate-400 font-mono break-words">
@@ -546,7 +546,7 @@ python scripts/publish_github_release.py`;
                   <span>{isBg ? 'Отвори PC Демон GUI' : 'Open PC Daemon GUI'}</span>
                 </button>
                 <a
-                  href="/releases/v0.50.0/SHA256SUMS.txt"
+                  href="/releases/v0.51.0/SHA256SUMS.txt"
                   download="SHA256SUMS.txt"
                   className="px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-xs font-mono text-cyan-300 flex items-center gap-1.5 transition"
                 >
@@ -652,7 +652,7 @@ python scripts/publish_github_release.py`;
               <div className="rounded-2xl bg-[#0b1324]/70 border border-white/10 p-4 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-mono font-bold text-emerald-300 uppercase">
-                    PATCH_NOTES.md (Beta v0.50.0)
+                    PATCH_NOTES.md (Beta v0.51.0)
                   </span>
                 </div>
                 <pre className="p-3.5 rounded-xl bg-black/60 border border-white/10 font-mono text-[11px] text-slate-300 max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed">
@@ -729,8 +729,8 @@ python scripts/publish_github_release.py`;
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
             <span>
               {isBg
-                ? 'Beta v0.50.0 Бинарни пакети (.APK & .EXE) • UTF-8'
-                : 'Beta v0.50.0 Release Pipeline (.APK & .EXE) • UTF-8'}
+                ? 'Beta v0.51.0 Бинарни пакети (.APK & .EXE) • UTF-8'
+                : 'Beta v0.51.0 Release Pipeline (.APK & .EXE) • UTF-8'}
             </span>
           </div>
           <span>AI-NET/3.0-SECURE</span>

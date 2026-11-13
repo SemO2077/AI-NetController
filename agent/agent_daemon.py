@@ -828,6 +828,37 @@ class DaemonServer:
         self.thread_pool.shutdown(wait=False)
         logger.info("Host daemon shutdown complete.")
 
+async def _run_agent_services(ws_daemon: Any, daemon: "DaemonServer") -> None:
+    """Runs the WebSocket host daemon and IPC DaemonServer resiliently on the active loop."""
+    if ws_daemon:
+        try:
+            await ws_daemon.start()
+        except Exception as exc:
+            logger.error(f"WebSocket host daemon failed to start: {exc}")
+
+    async def _run_ipc_daemon() -> None:
+        try:
+            await daemon.run()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(f"IPC daemon reactor exited: {exc}")
+        finally:
+            daemon.running = False
+
+    ipc_task = asyncio.create_task(_run_ipc_daemon())
+    try:
+        while (ws_daemon and getattr(ws_daemon, "is_running", False)) or not ipc_task.done():
+            await asyncio.sleep(0.5)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if not ipc_task.done():
+            daemon.stop()
+            ipc_task.cancel()
+            await asyncio.gather(ipc_task, return_exceptions=True)
+
+
 def main():
     import multiprocessing
     multiprocessing.freeze_support()
@@ -910,14 +941,7 @@ def main():
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
                         try:
-                            async def _run_services():
-                                tasks = []
-                                if ws_daemon:
-                                    tasks.append(asyncio.create_task(ws_daemon.start()))
-                                tasks.append(asyncio.create_task(daemon.run()))
-                                await asyncio.gather(*tasks, return_exceptions=True)
-
-                            loop.run_until_complete(_run_services())
+                            loop.run_until_complete(_run_agent_services(ws_daemon, daemon))
                         except Exception as exc:
                             logger.error(f"Daemon thread error: {exc}")
                         finally:
@@ -932,18 +956,13 @@ def main():
                         on_stop_daemon=_stop_all,
                     )
                     gui.run()
+                    _stop_all()
                     return
             except Exception as e:
                 logger.info(f"GUI mode fallback to console reactor: {e}")
 
         try:
-            async def _run_both():
-                tasks = []
-                if ws_daemon:
-                    tasks.append(asyncio.create_task(ws_daemon.start()))
-                tasks.append(asyncio.create_task(daemon.run()))
-                await asyncio.gather(*tasks, return_exceptions=True)
-            asyncio.run(_run_both())
+            asyncio.run(_run_agent_services(ws_daemon, daemon))
         except KeyboardInterrupt:
             _stop_all()
     finally:

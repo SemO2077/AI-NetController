@@ -31,7 +31,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
       'subtitle': 'Автономно Управление на Локална Компютърна Инфраструктура',
       'icon': Icons.bolt_rounded,
       'color': CyberColors.primary,
-      'badge': 'Beta v0.50.0 Local-First',
+      'badge': 'Beta v0.51.0 Local-First',
       'description':
           'Платформа от ново поколение за пълен отдалечен достъп, нисколатентен 120Hz видео стрийминг и управление с изкуствен интелект без външни облачни сървъри.',
     },

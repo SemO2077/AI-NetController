@@ -77,8 +77,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     progress: 0,
     driftSeverity: 'moderate',
     driftDescription: '1 minor version behind (v1.4 -> v1.5.2)',
-    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.50.0 for CoT chunk streaming',
-    minRequiredDaemonVersion: 'v0.50.0',
+    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.51.0 for CoT chunk streaming',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes:
       'Optimized Q4_K_M quant with 32k context and streaming reasoning tokens via Opcode 0x0B.',
@@ -97,7 +97,7 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'minor',
     driftDescription: '1 minor version behind (v2.1.0 -> v2.2.4)',
     compatibilityRequirement: 'Supports AI-NET/3.0-SECURE and Job Object sandbox',
-    minRequiredDaemonVersion: 'v0.50.0',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Added enhanced AST de-obfuscation prompts and cmd.exe caret normalization.',
   },
@@ -114,8 +114,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     progress: 0,
     driftSeverity: 'minor',
     driftDescription: '1 minor version behind (v3.2.0 -> v3.3.1)',
-    compatibilityRequirement: 'Compatible with Host Daemon v0.50.0 multi-monitor routing',
-    minRequiredDaemonVersion: 'v0.50.0',
+    compatibilityRequirement: 'Compatible with Host Daemon v0.51.0 multi-monitor routing',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Multi-GPU tensor parallelism enhancements and Wake-on-LAN routing templates.',
   },
@@ -133,7 +133,7 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
     compatibilityRequirement: 'Compatible with Mobile Client & Host Daemon',
-    minRequiredDaemonVersion: 'v0.50.0',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Current verified release for lightweight edge reasoning.',
   },
@@ -142,20 +142,20 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     name: 'AI NetController Host Agent (EXE + GUI)',
     category: 'core_system',
     engineType: 'host_daemon',
-    currentVersion: 'v0.50.0',
-    latestVersion: 'v0.50.0',
+    currentVersion: 'v0.51.0',
+    latestVersion: 'v0.51.0',
     description:
       'Native Desktop GUI Control Center, Binary WebSocket Server (0xC5,0x71), Signed Build',
     size: '18.2 MB',
     status: 'up_to_date',
     progress: 100,
     driftSeverity: 'none',
-    driftDescription: 'Synchronized with Beta v0.50.0',
+    driftDescription: 'Synchronized with Beta v0.51.0',
     compatibilityRequirement: 'Core supervisor required by local & cloud AI execution bridge.',
-    minRequiredDaemonVersion: 'v0.50.0',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes:
-      'Beta 0.50.00: EPHEMERAL/DPAPI secrets, directional AEAD keys, PIN-only QR pairing, and real WoL scheduling.',
+      'Beta 0.51.00: Fixed OP_AUTH 16-byte ACK collision, async_stop() cleanup, Linux headless CI support, and live Flutter telemetry.',
   },
   {
     id: 'ast-security-rules',
@@ -171,8 +171,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     progress: 100,
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Requires Host Daemon v0.50.0 for NFKC & caret normalization',
-    minRequiredDaemonVersion: 'v0.50.0',
+    compatibilityRequirement: 'Requires Host Daemon v0.51.0 for NFKC & caret normalization',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes:
       'Updated heuristics for obfuscated PowerShell/LOLBin execution and symlink traversal.',
@@ -191,7 +191,7 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
     compatibilityRequirement: 'Dual-stack IPv4/IPv6 compliant',
-    minRequiredDaemonVersion: 'v0.50.0',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Latest RFC 6762 beacon engine.',
   },
@@ -208,8 +208,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     progress: 100,
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.50.0',
-    minRequiredDaemonVersion: 'v0.50.0',
+    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.51.0',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'AVX2/NEON SIMD color space transformation and multi-monitor enumeration.',
   },
@@ -227,7 +227,7 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
     compatibilityRequirement: 'Supports IPv4 Directed Broadcast and persistent schedules',
-    minRequiredDaemonVersion: 'v0.50.0',
+    minRequiredDaemonVersion: 'v0.51.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Backed by persistent disk schedule storage and NIC WakeOnMagicPacket audit.',
   },
@@ -240,7 +240,7 @@ const COMPONENT_BG_MAP: Record<
   'deepseek-r1': {
     description: 'Локален модел за разсъждение (верига от мисли и синтез на системни команди)',
     driftDescription: '1 минорна версия назад (v1.4 -> v1.5.2)',
-    compatibilityRequirement: 'Изисква хост демон >= v0.50.0 за поточно предаване',
+    compatibilityRequirement: 'Изисква хост демон >= v0.51.0 за поточно предаване',
   },
   'qwen25-coder': {
     description: 'Автономен генератор на код и скриптове с проверка на синтаксиса',
@@ -250,7 +250,7 @@ const COMPONENT_BG_MAP: Record<
   'llama33-70b': {
     description: 'Водещ оркестратор за многохостов флот и автономно планиране на задачи',
     driftDescription: '1 минорна версия назад (v3.2.0 -> v3.3.1)',
-    compatibilityRequirement: 'Съвместим с хост демон v0.50.0 за няколко монитора',
+    compatibilityRequirement: 'Съвместим с хост демон v0.51.0 за няколко монитора',
   },
   'llama32-3b': {
     description: 'Лек 3B локален резервен модел (<1.8GB VRAM)',
@@ -260,14 +260,14 @@ const COMPONENT_BG_MAP: Record<
   'cst-host-agent': {
     description:
       'Графичен контролен център за настолен компютър, двоичен сървър и сертифициран компилатор',
-    driftDescription: 'Синхронизиран с Beta v0.50.0',
+    driftDescription: 'Синхронизиран с Beta v0.51.0',
     compatibilityRequirement: 'Основен супервайзър за AI и отдалечено управление.',
   },
   'ast-security-rules': {
     description:
       'Правила за карантина на високорискови команди (изтриване, форматиране, акаунти)',
     driftDescription: 'Актуална политика за сигурност',
-    compatibilityRequirement: 'Изисква хост демон v0.50.0 за NFKC нормализиране',
+    compatibilityRequirement: 'Изисква хост демон v0.51.0 за NFKC нормализиране',
   },
   'zeroconf-mdns': {
     description: 'Откриване на мрежови интерфейси по RFC 6762 и активен кеш на адреси',
@@ -277,7 +277,7 @@ const COMPONENT_BG_MAP: Record<
   'turbojpeg-pipeline': {
     description: 'Бързо хеширане на делта кадри под 5ms и споделена памет за видео поток',
     driftDescription: 'Актуална версия (v1.8.0)',
-    compatibilityRequirement: 'Изисква хост демон >= v0.50.0',
+    compatibilityRequirement: 'Изисква хост демон >= v0.51.0',
   },
   'directed-wol-engine': {
     description: 'Мрежов двигател за насочени пакети за събуждане през маршрутизатори',
@@ -317,7 +317,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
   } | null>(null);
 
   const [updateLogs, setUpdateLogs] = useState<string[]>([
-    '[INIT] System & AI Model Registry initialized (Beta v0.50.0).',
+    '[INIT] System & AI Model Registry initialized (Beta v0.51.0).',
     '[INFO] Gemini 2.5 Flash & Local Ollama Runtime checks ready.',
     '[READY] Update Center ready to query /api/update/status and /api/update/check.',
   ]);
@@ -397,7 +397,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
   const systemCompatibility = useMemo(() => {
     const daemonComp = components.find((c) => c.id === 'cst-host-agent');
-    const daemonVersion = daemonComp ? daemonComp.currentVersion : 'v0.50.0';
+    const daemonVersion = daemonComp ? daemonComp.currentVersion : 'v0.51.0';
     const isDaemonLatest =
       daemonComp?.status === 'up_to_date' || daemonComp?.status === 'completed';
 
@@ -789,7 +789,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                       : 'System & AI Model Update Center'}
                   </h2>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 shrink-0">
-                    Beta v0.50.0 OTA
+                    Beta v0.51.0 OTA
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5 break-words leading-snug">
@@ -1028,11 +1028,11 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                 <p className="text-[11px] text-slate-300 leading-snug break-words">
                   {systemCompatibility.availableDaemonUpdates > 0
                     ? isBg
-                      ? 'Налична е актуализация за Beta v0.50.0 хост агента.'
-                      : 'Host Agent update available for Beta v0.50.0.'
+                      ? 'Налична е актуализация за Beta v0.51.0 хост агента.'
+                      : 'Host Agent update available for Beta v0.51.0.'
                     : isBg
-                    ? 'Хост демонът е актуален с протокол Beta v0.50.0 (AI-NET/3.0).'
-                    : 'Host Daemon is up to date with Beta v0.50.0 (AI-NET/3.0).'}
+                    ? 'Хост демонът е актуален с протокол Beta v0.51.0 (AI-NET/3.0).'
+                    : 'Host Daemon is up to date with Beta v0.51.0 (AI-NET/3.0).'}
                 </p>
               </div>
               <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 flex-wrap">

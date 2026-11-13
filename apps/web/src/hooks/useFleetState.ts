@@ -77,25 +77,66 @@ export function useFleetState() {
     const now = Date.now();
     const cutoff = now - 30000;
     const nowLabel = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const reportedIp = typeof data.ip === 'string' ? data.ip : undefined;
+    const localIp = typeof data.local_ip === 'string' ? data.local_ip : undefined;
+    const reportedOs = typeof data.os === 'string' ? data.os.toLowerCase() : '';
+    const normalizedOs = reportedOs.includes('windows')
+      ? 'windows'
+      : reportedOs.includes('linux')
+        ? 'linux'
+        : undefined;
+    const reportedMac = typeof data.mac === 'string' ? data.mac.toUpperCase() : '';
+    const hasRealMac = Boolean(reportedMac && reportedMac !== '00:00:00:00:00:00');
+    const reportedDisk =
+      typeof data.disk_percent === 'number' && Number.isFinite(data.disk_percent)
+        ? `${Math.round(data.disk_percent)}%`
+        : typeof data.diskUsage === 'string'
+          ? data.diskUsage
+          : undefined;
+
     setHosts((prev) =>
       prev.map((h) => {
-        const matchesId = (data.targetId && h.id === data.targetId) || (data.hostname && h.id === data.hostname);
-        const matchesIp = Boolean(data.ip && h.ip === data.ip);
         const matchesPort = !data.port || !h.port || Number(h.port) === Number(data.port);
-        if (matchesId || (matchesIp && matchesPort)) {
+        const matchesWsIp = Boolean(reportedIp && h.ip === reportedIp && matchesPort);
+        const matchesLocalIp = Boolean(localIp && h.ip === localIp && matchesPort);
+        const matchesHostname = Boolean(data.hostname && h.id === data.hostname && matchesPort);
+        const matchesTarget = Boolean(
+          data.targetId &&
+            h.id === data.targetId &&
+            (!reportedIp || h.ip === reportedIp || !localIp || h.ip === localIp)
+        );
+        if (matchesTarget || matchesWsIp || matchesLocalIp || matchesHostname) {
           const newPing = typeof data.ping === 'number' && Number.isFinite(data.ping) ? data.ping : h.ping;
           const prevHistory = (h.latencyHistory || []).filter((p) => p.timestamp >= cutoff);
           const updatedHistory: LatencyDataPoint[] =
             typeof newPing === 'number'
               ? [...prevHistory.slice(-19), { timestamp: now, latency: newPing }]
               : prevHistory;
+          const hasPlaceholderName =
+            !h.name ||
+            h.name === h.id ||
+            h.name.startsWith('PC-') ||
+            h.name.startsWith('Host PC') ||
+            h.name.startsWith('AI-AGENT-');
+          const resolvedName =
+            hasPlaceholderName && typeof data.hostname === 'string' && data.hostname.trim()
+              ? data.hostname.trim()
+              : h.name;
+          const resolvedMac =
+            hasRealMac && (!h.mac || h.mac === '00:00:00:00:00:00' || h.mac === '00:00:00:00:00')
+              ? reportedMac
+              : h.mac;
 
           return {
             ...h,
+            name: resolvedName,
+            mac: resolvedMac,
+            os: normalizedOs ?? h.os,
             isOnline: true,
             lastSeen: nowLabel,
             cpuUsage: data.cpu_percent ?? h.cpuUsage,
             ramUsage: data.ram_percent ?? h.ramUsage,
+            diskUsage: reportedDisk ?? h.diskUsage,
             ping: newPing,
             latencyHistory: updatedHistory,
             specStatus: data.cpu_percent !== undefined ? 'READY' : h.specStatus,

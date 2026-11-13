@@ -1,5 +1,5 @@
 """
-AI NetController — Native Desktop GUI for PC Host Daemon (Beta 0.50.00 / v0.50.0)
+AI NetController — Native Desktop GUI for PC Host Daemon (Beta 0.51.00 / v0.51.0)
 ================================================================================
 Provides a clean, transparent, user-facing desktop control panel built on Python's
 standard library (tkinter / ttk) with zero third-party native GUI DLLs.
@@ -70,7 +70,7 @@ except ImportError:
     is_running_from_install_dir = lambda: False
     is_app_installed = lambda: False
     APP_NAME = "AI NetController"
-    APP_VERSION = "0.50.0"
+    APP_VERSION = "0.51.0"
 
 try:
     from icon_assets import apply_window_icon, get_icon_image, get_icon_ico_path
@@ -109,11 +109,22 @@ def _detect_av_integrity() -> Dict[str, Any]:
     is_windows = platform.system() == "Windows"
     has_job_obj = False
     try:
-        try:
-            from command_ast_firewall import JOB_SUPERVISOR
-        except ImportError:
-            from agent.command_ast_firewall import JOB_SUPERVISOR
-        has_job_obj = is_windows and JOB_SUPERVISOR is not None and getattr(JOB_SUPERVISOR, "_job_handle", None) is not None
+        supervisor = None
+        for mod_name in ("agent", "agent.agent"):
+            mod = sys.modules.get(mod_name)
+            if mod is not None and hasattr(mod, "JOB_SUPERVISOR"):
+                supervisor = getattr(mod, "JOB_SUPERVISOR")
+                break
+        if supervisor is None:
+            try:
+                from agent import JOB_SUPERVISOR as supervisor
+            except ImportError:
+                from agent.agent import JOB_SUPERVISOR as supervisor
+        has_job_obj = (
+            is_windows
+            and supervisor is not None
+            and (getattr(supervisor, "job_handle", None) is not None or getattr(supervisor, "_job_handle", None) is not None)
+        )
     except Exception:
         has_job_obj = False
 
@@ -147,7 +158,7 @@ class HostDaemonState:
     """
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.lock = threading.Lock()
-        self.version = "0.50.0"
+        self.version = "0.51.0"
         self.protocol = "AI-NET/3.0-SECURE"
         self.hostname = socket.gethostname()
         self.os_name = f"{platform.system()} {platform.release()}"

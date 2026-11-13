@@ -21,7 +21,7 @@ import stat
 import struct
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 logger = logging.getLogger("HostFileWriter")
 
@@ -205,9 +205,9 @@ class ActiveTransfer:
 
 class HostFileWriter:
     """Zero-Trust Host File Transfer Receiver."""
-    def __init__(self, download_dir: Optional[Path] = None, allow_executables: bool = False):
+    def __init__(self, download_dir: Optional[Union[Path, str]] = None, allow_executables: bool = False):
         if download_dir:
-            self.download_dir = download_dir.resolve()
+            self.download_dir = Path(download_dir).resolve()
         else:
             user_home = Path.home()
             self.download_dir = (user_home / "Downloads").resolve()

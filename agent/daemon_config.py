@@ -185,7 +185,7 @@ def _generate_default_config() -> Dict[str, Any]:
     pairing_pin = f"{secrets.randbelow(900000) + 100000}"
 
     return {
-        "version": "0.50.0",
+        "version": "0.51.0",
         "protocol": "AI-NET/3.0-SECURE",
         "bind_host": DEFAULT_HOST,
         "port": DEFAULT_PORT,
@@ -240,10 +240,32 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
     if isinstance(raw_ts, int) and not isinstance(raw_ts, bool) and raw_ts > 0:
         merged["pin_issued_at"] = raw_ts
 
-    # Blacklisted devices/IPs
+    # Blacklisted devices/IPs (supports both plain IP strings and structured ban dicts from GUI/web)
     raw_bl = raw.get("blacklisted_devices")
     if isinstance(raw_bl, list):
-        merged["blacklisted_devices"] = [str(item).strip() for item in raw_bl if isinstance(item, str) and item.strip()]
+        sanitized_bl = []
+        seen_ips = set()
+        for item in raw_bl:
+            if isinstance(item, str):
+                ip_str = item.strip()
+                if ip_str and ip_str not in seen_ips:
+                    seen_ips.add(ip_str)
+                    sanitized_bl.append(ip_str)
+            elif isinstance(item, dict):
+                ip_str = str(item.get("ip", "")).strip()
+                ban_id = str(item.get("id", "")).strip()
+                if not ip_str and not ban_id:
+                    continue
+                if ip_str and ip_str in seen_ips:
+                    continue
+                if ip_str:
+                    seen_ips.add(ip_str)
+                entry = {}
+                for k, v in item.items():
+                    if isinstance(k, str) and isinstance(v, (str, int, float, bool)):
+                        entry[k] = v.strip() if isinstance(v, str) else v
+                sanitized_bl.append(entry)
+        merged["blacklisted_devices"] = sanitized_bl
 
     # Decrypt or migrate secrets
     env_secret = os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET")
@@ -260,7 +282,7 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
     if unprot_pin and len(unprot_pin.strip()) == 6 and unprot_pin.strip().isdigit():
         merged["pairing_pin"] = unprot_pin.strip()
 
-    merged["version"] = "0.50.0"
+    merged["version"] = "0.51.0"
     return merged
 
 

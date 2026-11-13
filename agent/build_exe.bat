@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
 echo =========================================================
-echo AI NetController Host Agent - Windows EXE Builder (v0.50.00 Beta)
+echo AI NetController Host Agent - Windows EXE Builder (v0.51.00 Beta)
 echo (AV-Safe Desktop GUI Edition - Zero UPX - Authenticode)
 echo =========================================================
 echo.

@@ -5,7 +5,7 @@ Creates/updates a GitHub Release and uploads standalone binaries via `gh` CLI
 or Python stdlib `urllib.request` using `GITHUB_TOKEN` / `GH_TOKEN` / git credential helper.
 
 Usage:
-    python scripts/publish_github_release.py [--tag v0.50.0] [--repo SemO2077/AI-NetController] [--prerelease]
+    python scripts/publish_github_release.py [--tag v0.51.0] [--repo SemO2077/AI-NetController] [--prerelease]
 """
 
 import argparse
@@ -27,9 +27,17 @@ def get_current_version() -> str:
     if os.path.exists(pkg_json_path):
         with open(pkg_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            ver = data.get("version", "0.50.0")
+            ver = data.get("version", "0.51.0")
             return f"v{ver}" if not ver.startswith("v") else ver
-    return "v0.50.0"
+    return "v0.51.0"
+
+
+def _format_beta_label(tag: str) -> str:
+    ver = tag.lstrip("v")
+    parts = [p for p in ver.split(".")[:3] if p.isdigit()]
+    if len(parts) == 3 and parts[0] == "0":
+        return f"Beta 0.{int(parts[1]):02d}.{int(parts[2]):02d}"
+    return f"v{ver}"
 
 
 def get_github_token() -> Optional[str]:
@@ -66,7 +74,7 @@ def _github_request(
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
-        "User-Agent": "AINetController-Release-Publisher/0.50.0",
+        "User-Agent": f"AINetController-Release-Publisher/{get_current_version().lstrip('v')}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     data = None
@@ -86,14 +94,14 @@ def _github_request(
 def main():
     parser = argparse.ArgumentParser(description="Publish AI NetController to GitHub Releases")
     parser.add_argument("--repo", default="SemO2077/AI-NetController", help="GitHub repo (owner/name)")
-    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.50.0)")
+    parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.51.0)")
     parser.add_argument("--title", default=None, help="Release title override")
     parser.add_argument("--prerelease", action="store_true", help="Mark GitHub release as prerelease (beta)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate release publication")
     args = parser.parse_args()
 
     target_tag = args.tag or get_current_version()
-    release_title = args.title or f"AI NetController {target_tag} (Beta 0.50.00)"
+    release_title = args.title or f"AI NetController {target_tag} ({_format_beta_label(target_tag)})"
     is_prerelease = bool(args.prerelease or "beta" in release_title.lower() or target_tag.startswith("v0."))
 
     release_dir = os.path.join(REPO_DIR, "public", "releases", target_tag)
