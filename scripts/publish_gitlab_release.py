@@ -15,7 +15,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict, List, Optional
+from typing import Optional
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -75,15 +75,8 @@ def main():
     # Locate release assets
     assets_dir = os.path.join(REPO_DIR, "public", "releases", target_tag)
     if not os.path.exists(assets_dir):
-        # Fallback check
-        alt_assets_dir = os.path.join(
-            r"C:\Users\Lenovo\Documents\antigravity\Ai NetConroller", "public", "releases", target_tag
-        )
-        if os.path.exists(alt_assets_dir):
-            assets_dir = alt_assets_dir
-        else:
-            print(f"[!] Local assets directory {assets_dir} not found.")
-            sys.exit(1)
+        print(f"[!] Local assets directory {assets_dir} not found.")
+        sys.exit(1)
 
     if args.dry_run:
         print(f"    [DRY-RUN] Target tag: {target_tag}")
