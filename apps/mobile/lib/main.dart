@@ -1,16 +1,15 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'security/secure_secret_store.dart';
+import 'services/host_connection_client.dart';
 import 'theme/fluid_theme.dart';
 import 'ui/adaptive_layout_builder.dart';
 import 'ui/responsive_device_card.dart';
@@ -21,29 +20,65 @@ import 'ui/onboarding_sheet.dart';
 // STATE MODELS & RIVERPOD STATE MANAGERS
 // =====================================================================
 String loadGlobalPairingSecret() {
+  final cached = appSecretStore.getToken(SecureSecretStore.globalHostKey);
+  if (cached != null && cached.isNotEmpty) return cached;
   if (!Hive.isBoxOpen('ghost_devices')) return '';
   final val = Hive.box('ghost_devices').get('__global_pairing_secret__');
-  return val is String ? val.trim() : '';
+  if (val is String) {
+    final trimmed = val.trim();
+    if (trimmed.isNotEmpty && trimmed != SecureSecretStore.legacySentinel) {
+      return trimmed;
+    }
+  }
+  return '';
 }
 
 String loadHostPairingSecret(String ip) {
-  if (!Hive.isBoxOpen('ghost_devices')) return '';
-  final hostSecret = Hive.box('ghost_devices').get('__secret_$ip');
-  if (hostSecret is String && hostSecret.trim().isNotEmpty) {
-    return hostSecret.trim();
+  final cached = appSecretStore.getToken(ip);
+  if (cached != null && cached.isNotEmpty) return cached;
+  if (Hive.isBoxOpen('ghost_devices')) {
+    final hostSecret = Hive.box('ghost_devices').get('__secret_$ip');
+    if (hostSecret is String) {
+      final trimmed = hostSecret.trim();
+      if (trimmed.isNotEmpty && trimmed != SecureSecretStore.legacySentinel) {
+        return trimmed;
+      }
+    }
   }
   return loadGlobalPairingSecret();
 }
 
-void saveHostPairingSecret(String ip, String secret) {
-  if (!Hive.isBoxOpen('ghost_devices')) return;
+String loadHostCertFingerprint(String ip) {
+  return appSecretStore.getCertFingerprint(ip) ?? '';
+}
+
+void saveHostPairingSecret(
+  String ip,
+  String secret, {
+  String? certFingerprint,
+}) {
   final trimmed = secret.trim();
-  final box = Hive.box('ghost_devices');
   if (ip.isNotEmpty) {
-    box.put('__secret_$ip', trimmed);
+    unawaited(appSecretStore.saveToken(ip, trimmed));
+    if (certFingerprint != null && certFingerprint.trim().isNotEmpty) {
+      unawaited(appSecretStore.saveCertFingerprint(ip, certFingerprint.trim()));
+    }
   }
   if (trimmed.isNotEmpty) {
-    box.put('__global_pairing_secret__', trimmed);
+    unawaited(
+        appSecretStore.saveToken(SecureSecretStore.globalHostKey, trimmed));
+  }
+  if (Hive.isBoxOpen('ghost_devices')) {
+    final box = Hive.box('ghost_devices');
+    if (ip.isNotEmpty) {
+      box.put(
+        '__secret_$ip',
+        trimmed.isNotEmpty ? SecureSecretStore.legacySentinel : '',
+      );
+    }
+    if (trimmed.isNotEmpty) {
+      box.put('__global_pairing_secret__', SecureSecretStore.legacySentinel);
+    }
   }
 }
 
@@ -67,6 +102,8 @@ class HostState {
   final bool viewOnlyMode;
   final String osName;
   final String sharedSecret;
+  final bool useTls;
+  final String certFingerprint;
 
   HostState({
     required this.id,
@@ -85,6 +122,8 @@ class HostState {
     this.viewOnlyMode = false,
     this.osName = '',
     this.sharedSecret = '',
+    this.useTls = false,
+    this.certFingerprint = '',
   });
 
   HostState copyWith({
@@ -102,6 +141,8 @@ class HostState {
     bool? viewOnlyMode,
     String? osName,
     String? sharedSecret,
+    bool? useTls,
+    String? certFingerprint,
   }) {
     return HostState(
       id: id,
@@ -120,6 +161,8 @@ class HostState {
       viewOnlyMode: viewOnlyMode ?? this.viewOnlyMode,
       osName: osName ?? this.osName,
       sharedSecret: sharedSecret ?? this.sharedSecret,
+      useTls: useTls ?? this.useTls,
+      certFingerprint: certFingerprint ?? this.certFingerprint,
     );
   }
 }
@@ -136,9 +179,19 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
     final effectiveSecret = host.sharedSecret.trim().isNotEmpty
         ? host.sharedSecret.trim()
         : loadHostPairingSecret(host.ip);
-    final hydrated = host.copyWith(sharedSecret: effectiveSecret);
-    if (effectiveSecret.isNotEmpty) {
-      saveHostPairingSecret(host.ip, effectiveSecret);
+    final effectiveFp = host.certFingerprint.trim().isNotEmpty
+        ? host.certFingerprint.trim()
+        : loadHostCertFingerprint(host.ip);
+    final hydrated = host.copyWith(
+      sharedSecret: effectiveSecret,
+      certFingerprint: effectiveFp,
+    );
+    if (effectiveSecret.isNotEmpty || effectiveFp.isNotEmpty) {
+      saveHostPairingSecret(
+        host.ip,
+        effectiveSecret,
+        certFingerprint: effectiveFp,
+      );
     }
     state = [
       ...state.where((h) => h.id != hydrated.id && h.ip != hydrated.ip),
@@ -156,11 +209,18 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
     ];
   }
 
-  void setHostSecret(String ip, String secret) {
-    saveHostPairingSecret(ip, secret);
+  void setHostSecret(String ip, String secret, {String? certFingerprint}) {
+    saveHostPairingSecret(ip, secret, certFingerprint: certFingerprint);
+    HostConnectionPool.instance.invalidate(ip);
     state = [
       for (final h in state)
-        if (h.ip == ip) h.copyWith(sharedSecret: secret.trim()) else h
+        if (h.ip == ip)
+          h.copyWith(
+            sharedSecret: secret.trim(),
+            certFingerprint: certFingerprint ?? h.certFingerprint,
+          )
+        else
+          h
     ];
   }
 
@@ -256,7 +316,9 @@ class CommandLogItem {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
-  await Hive.openBox('ghost_devices');
+  final ghostBox = await Hive.openBox('ghost_devices');
+  await appSecretStore.init();
+  await appSecretStore.migrateLegacyPairingKeys(ghostBox);
 
   PlatformDispatcher.instance.onError = (error, stack) {
     debugPrint('CENTRALIZED ERROR CAUGHT: $error');
@@ -324,6 +386,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
   @override
   void dispose() {
+    HostConnectionPool.instance.disposeAll();
     _commandController.dispose();
     super.dispose();
   }
@@ -427,21 +490,36 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         debugPrint('Interface list notice: $e');
       }
 
-      // Probing TCP Port 8765 in parallel chunks: ONLY real PCs that accept socket connections on port 8765 qualify!
+      // Probing WebSocket + canonical 0xC5 0x71 OP_AUTH banner in parallel chunks:
+      // verifies actual AI NetController daemons instead of generic TCP port 8765 listeners.
       final ipList = candidateIps.toList();
       const chunkSize = 40;
       for (int i = 0; i < ipList.length; i += chunkSize) {
         final chunk = ipList.sublist(i, (i + chunkSize > ipList.length) ? ipList.length : i + chunkSize);
         await Future.wait(
           chunk.map((ip) async {
+            bool found = false;
+            bool detectedTls = false;
             try {
-              final socket = await Socket.connect(
+              if (await HostConnectionClient.probeHostAgent(
                 ip,
-                8765,
-                timeout: const Duration(milliseconds: 300),
-              );
-              socket.destroy();
-
+                port: 8765,
+                timeout: const Duration(milliseconds: 500),
+              )) {
+                found = true;
+              } else if (await HostConnectionClient.probeHostAgent(
+                ip,
+                port: 8765,
+                useTls: true,
+                timeout: const Duration(milliseconds: 550),
+              )) {
+                found = true;
+                detectedTls = true;
+              }
+            } catch (_) {
+              // Unreachable or not an active AI NetController host PC
+            }
+            if (found) {
               final String hostName = (ip == '127.0.0.1' || ip == '10.0.2.2')
                   ? 'Host PC (Local)'
                   : 'Host PC ($ip)';
@@ -454,10 +532,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   ip: ip,
                   mac: '00:00:00:00:00:00',
                   isOnline: true,
+                  useTls: detectedTls,
+                  certFingerprint: loadHostCertFingerprint(ip),
                 ),
               );
-            } catch (_) {
-              // Port closed or unreachable: not an active AI NetController host PC
             }
           }),
         );
@@ -530,59 +608,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     );
   }
 
-  Future<String?> _pairWithHostPin(String ip, String pin,
-      {int port = 8765}) async {
-    WebSocketChannel? channel;
-    StreamSubscription? sub;
-    final completer = Completer<String?>();
-    try {
-      channel = WebSocketChannel.connect(
-        Uri(scheme: 'ws', host: ip, port: port),
-      );
-      sub = channel.stream.listen(
-        (message) {
-          if (completer.isCompleted) return;
-          if (message is String) {
-            try {
-              final decoded = jsonDecode(message);
-              if (decoded is Map<String, dynamic>) {
-                if (decoded['event'] == 'AUTHENTICATED' &&
-                    decoded['pairingToken'] is String) {
-                  completer.complete(decoded['pairingToken'] as String);
-                  return;
-                }
-                if (decoded['event'] == 'ERROR') {
-                  completer.complete(null);
-                  return;
-                }
-              }
-            } catch (_) {}
-          }
-        },
-        onError: (_) {
-          if (!completer.isCompleted) completer.complete(null);
-        },
-        onDone: () {
-          if (!completer.isCompleted) completer.complete(null);
-        },
-      );
-      channel.sink.add(jsonEncode({
-        'action': 'PAIR',
-        'pin': pin.trim(),
-        'device': 'AI NetController Mobile',
-      }));
-      return await completer.future.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => null,
-      );
-    } catch (_) {
-      return null;
-    } finally {
-      await sub?.cancel();
-      try {
-        await channel?.sink.close();
-      } catch (_) {}
-    }
+  Future<PairingResult?> _pairWithHostPin(
+    String ip,
+    String pin, {
+    int port = 8765,
+    bool useTls = false,
+    String? certFingerprint,
+  }) async {
+    return HostConnectionClient.pairWithHostPin(
+      ip: ip,
+      pin: pin,
+      port: port,
+      useTls: useTls,
+      expectedCertFingerprint: certFingerprint,
+    );
   }
 
   Future<void> _showAddHostDialog() async {
@@ -592,134 +631,178 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final secretCtrl = TextEditingController(
       text: ref.read(globalPairingSecretProvider),
     );
+    bool useTls = false;
 
     await showDialog<void>(
       context: context,
       builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: CyberColors.surfaceElevated,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-          ),
-          title: const Text(
-            'Add Workstation',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-                decoration: const InputDecoration(
-                  labelText: 'Hostname',
-                  hintText: 'e.g. WORKSTATION-01',
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: CyberColors.surfaceElevated,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+              ),
+              title: const Text(
+                'Add Workstation',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: ipCtrl,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 13, fontFamily: 'monospace'),
-                decoration: const InputDecoration(
-                  labelText: 'IPv4 Address',
-                  hintText: 'e.g. 192.168.1.50',
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: macCtrl,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 13, fontFamily: 'monospace'),
-                decoration: const InputDecoration(
-                  labelText: 'MAC Address (for Wake-on-LAN)',
-                  hintText: 'e.g. AA:BB:CC:DD:EE:FF',
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: secretCtrl,
-                obscureText: true,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 13, fontFamily: 'monospace'),
-                decoration: const InputDecoration(
-                  labelText: '6-Digit PIN or Pairing Token',
-                  hintText: 'e.g. 482910 or ainet_...',
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel',
-                  style: TextStyle(color: CyberColors.textSecondary)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: CyberColors.primary,
-                foregroundColor: Colors.black,
-              ),
-              onPressed: () async {
-                final ip = ipCtrl.text.trim();
-                if (ip.isEmpty) return;
-                final name = nameCtrl.text.trim().isNotEmpty
-                    ? nameCtrl.text.trim()
-                    : 'PC-$ip';
-                final mac = macCtrl.text.trim().isNotEmpty
-                    ? macCtrl.text.trim().toUpperCase()
-                    : '00:00:00:00:00:00';
-                String secret = secretCtrl.text.trim();
-                bool pinFailed = false;
-                if (RegExp(r'^\d{6}$').hasMatch(secret)) {
-                  final exchanged = await _pairWithHostPin(ip, secret);
-                  if (exchanged != null && exchanged.isNotEmpty) {
-                    secret = exchanged;
-                  } else {
-                    secret = '';
-                    pinFailed = true;
-                  }
-                }
-                if (secret.isNotEmpty) {
-                  saveHostPairingSecret(ip, secret);
-                  ref.read(globalPairingSecretProvider.notifier).state = secret;
-                }
-                final id = name.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9_-]'), '-');
-                final host = HostState(
-                  id: id,
-                  name: name,
-                  ip: ip,
-                  mac: mac,
-                  isOnline: true,
-                  sharedSecret: secret,
-                );
-                ref.read(fleetProvider.notifier).addHost(host);
-                ref.read(selectedHostIdProvider.notifier).state = host.id;
-                if (ctx.mounted) {
-                  Navigator.of(ctx).pop();
-                }
-                if (pinFailed && mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      backgroundColor: CyberColors.surfaceElevated,
-                      content: Text(
-                        'PIN pairing failed — workstation added without secret. Open Settings to pair.',
-                        style: TextStyle(
-                            color: CyberColors.warning, fontFamily: 'monospace'),
-                      ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: const InputDecoration(
+                      labelText: 'Hostname',
+                      hintText: 'e.g. WORKSTATION-01',
                     ),
-                  );
-                }
-              },
-              child: const Text('Save PC',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: ipCtrl,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontFamily: 'monospace'),
+                    decoration: const InputDecoration(
+                      labelText: 'IPv4 Address',
+                      hintText: 'e.g. 192.168.1.50',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: macCtrl,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontFamily: 'monospace'),
+                    decoration: const InputDecoration(
+                      labelText: 'MAC Address (for Wake-on-LAN)',
+                      hintText: 'e.g. AA:BB:CC:DD:EE:FF',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: secretCtrl,
+                    obscureText: true,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontFamily: 'monospace'),
+                    decoration: const InputDecoration(
+                      labelText: '6-Digit PIN or Pairing Token',
+                      hintText: 'e.g. 482910 or ainet_...',
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    activeColor: CyberColors.primary,
+                    title: const Text(
+                      'Require WSS TLS',
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    value: useTls,
+                    onChanged: (v) => setDialogState(() => useTls = v),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancel',
+                      style: TextStyle(color: CyberColors.textSecondary)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: CyberColors.primary,
+                    foregroundColor: Colors.black,
+                  ),
+                  onPressed: () async {
+                    final ip = ipCtrl.text.trim();
+                    if (ip.isEmpty) return;
+                    final name = nameCtrl.text.trim().isNotEmpty
+                        ? nameCtrl.text.trim()
+                        : 'PC-$ip';
+                    final mac = macCtrl.text.trim().isNotEmpty
+                        ? macCtrl.text.trim().toUpperCase()
+                        : '00:00:00:00:00:00';
+                    String secret = secretCtrl.text.trim();
+                    String certFp = loadHostCertFingerprint(ip);
+                    bool pinFailed = false;
+                    if (RegExp(r'^\d{6}$').hasMatch(secret)) {
+                      final exchanged = await _pairWithHostPin(
+                        ip,
+                        secret,
+                        useTls: useTls,
+                        certFingerprint: certFp,
+                      );
+                      if (exchanged != null &&
+                          exchanged.pairingToken.isNotEmpty) {
+                        secret = exchanged.pairingToken;
+                        if (exchanged.certFingerprint != null &&
+                            exchanged.certFingerprint!.isNotEmpty) {
+                          certFp = exchanged.certFingerprint!;
+                        }
+                      } else {
+                        secret = '';
+                        pinFailed = true;
+                      }
+                    }
+                    if (secret.isNotEmpty) {
+                      saveHostPairingSecret(
+                        ip,
+                        secret,
+                        certFingerprint: certFp,
+                      );
+                      ref.read(globalPairingSecretProvider.notifier).state =
+                          secret;
+                    }
+                    final id = name
+                        .toUpperCase()
+                        .replaceAll(RegExp(r'[^A-Z0-9_-]'), '-');
+                    final host = HostState(
+                      id: id,
+                      name: name,
+                      ip: ip,
+                      mac: mac,
+                      isOnline: true,
+                      sharedSecret: secret,
+                      useTls: useTls,
+                      certFingerprint: certFp,
+                    );
+                    ref.read(fleetProvider.notifier).addHost(host);
+                    ref.read(selectedHostIdProvider.notifier).state = host.id;
+                    if (ctx.mounted) {
+                      Navigator.of(ctx).pop();
+                    }
+                    if (pinFailed && mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          backgroundColor: CyberColors.surfaceElevated,
+                          content: Text(
+                            'PIN pairing failed — workstation added without secret. Open Settings to pair.',
+                            style: TextStyle(
+                                color: CyberColors.warning,
+                                fontFamily: 'monospace'),
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text('Save PC',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
         );
       },
     ).whenComplete(() {
@@ -790,91 +873,27 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       return;
     }
 
-    WebSocketChannel? channel;
-    StreamSubscription? sub;
-    final completer = Completer<String>();
-    var cmdSent = false;
-    var seq = 1;
-
     try {
-      channel = WebSocketChannel.connect(
-        Uri(scheme: 'ws', host: targetHost.ip, port: targetHost.wsPort),
+      final resolvedFp = targetHost.certFingerprint.trim().isNotEmpty
+          ? targetHost.certFingerprint.trim()
+          : loadHostCertFingerprint(targetHost.ip);
+      final client = HostConnectionPool.instance.acquire(
+        hostIp: targetHost.ip,
+        port: targetHost.wsPort,
+        sharedSecret: effectiveSecret,
+        useTls: targetHost.useTls,
+        certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
       );
-      sub = channel.stream.listen(
-        (message) {
-          if (completer.isCompleted) return;
-          if (message is Uint8List) {
-            final packet = StreamBinaryPacket.parse(message);
-            if (packet == null) return;
-            if (packet.opcode == StreamOpcode.auth) {
-              final statusStr =
-                  utf8.decode(packet.payload, allowMalformed: true).trim();
-              if (statusStr == 'AUTH_OK' || statusStr == 'OK_AUTHENTICATED') {
-                if (!cmdSent) {
-                  cmdSent = true;
-                  channel?.sink.add(StreamBinaryPacket.pack(
-                    StreamOpcode.shell,
-                    seq++,
-                    Uint8List.fromList(utf8.encode(trimmed)),
-                  ));
-                }
-              } else if (packet.payload.length == 16) {
-                final digest = Hmac(sha256, utf8.encode(effectiveSecret))
-                    .convert(packet.payload);
-                channel?.sink.add(StreamBinaryPacket.pack(
-                  StreamOpcode.auth,
-                  packet.seqId,
-                  Uint8List.fromList(digest.bytes),
-                ));
-              } else if (statusStr.isNotEmpty) {
-                completer.complete('Authentication rejected: $statusStr');
-              }
-            } else if (packet.opcode == StreamOpcode.shell) {
-              final raw = utf8.decode(packet.payload, allowMalformed: true);
-              try {
-                final parsed = jsonDecode(raw);
-                if (parsed is Map<String, dynamic>) {
-                  final out = (parsed['output'] ?? parsed['stdout'] ?? parsed['stderr'] ?? raw).toString().trim();
-                  final st = (parsed['status'] ?? 'done').toString();
-                  final code = parsed['exit_code'];
-                  completer.complete('[$st${code != null ? ' · exit $code' : ''}] ${out.isNotEmpty ? out : "(no output)"}');
-                  return;
-                }
-              } catch (_) {}
-              completer.complete(raw.isNotEmpty ? raw : 'Completed.');
-            } else if (packet.opcode == StreamOpcode.hitl) {
-              completer.complete(
-                  'HITL Biometric/Operator approval requested on host PC — approve or deny on host.');
-            } else if (packet.opcode == StreamOpcode.error) {
-              final err = utf8.decode(packet.payload, allowMalformed: true).trim();
-              completer.complete('Error: ${err.isNotEmpty ? err : "Command rejected"}');
-            }
-          }
-        },
-        onError: (err) {
-          if (!completer.isCompleted) {
-            completer.complete('Connection failed: $err');
-          }
-        },
-        onDone: () {
-          if (!completer.isCompleted) {
-            completer.complete('Disconnected before receiving command output.');
-          }
-        },
+      final res = await client.executeCommand(
+        trimmed,
+        timeout: const Duration(seconds: 25),
       );
-
-      final result = await completer.future.timeout(
-        const Duration(seconds: 15),
-        onTimeout: () => 'Command timed out awaiting response from ${targetHost.ip}:8765.',
+      final out = res.output.trim();
+      updateLatestStatus(
+        '[${res.status} · exit ${res.exitCode}] ${out.isNotEmpty ? out : "(no output)"}',
       );
-      updateLatestStatus(result);
     } catch (e) {
       updateLatestStatus('Dispatch error: $e');
-    } finally {
-      await sub?.cancel();
-      try {
-        await channel?.sink.close();
-      } catch (_) {}
     }
   }
 
@@ -1245,6 +1264,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           : (loadHostPairingSecret(host.ip).isNotEmpty
                               ? loadHostPairingSecret(host.ip)
                               : ref.watch(globalPairingSecretProvider)),
+                      useTls: host.useTls,
+                      certFingerprint: host.certFingerprint.trim().isNotEmpty
+                          ? host.certFingerprint.trim()
+                          : loadHostCertFingerprint(host.ip),
                       onTelemetry: (data) => ref
                           .read(fleetProvider.notifier)
                           .updateTelemetryByIp(host.ip, data),
@@ -1538,6 +1561,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               ),
               onPressed: () async {
                 String nextSecret = secretCtrl.text.trim();
+                String? nextCertFp = targetHost?.certFingerprint;
                 final pin = pinCtrl.text.trim();
                 bool? pinPaired;
                 if (targetHost != null && RegExp(r'^\d{6}$').hasMatch(pin)) {
@@ -1545,9 +1569,15 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     targetHost.ip,
                     pin,
                     port: targetHost.wsPort,
+                    useTls: targetHost.useTls,
+                    certFingerprint: targetHost.certFingerprint,
                   );
-                  if (exchanged != null && exchanged.isNotEmpty) {
-                    nextSecret = exchanged;
+                  if (exchanged != null && exchanged.pairingToken.isNotEmpty) {
+                    nextSecret = exchanged.pairingToken;
+                    if (exchanged.certFingerprint != null &&
+                        exchanged.certFingerprint!.isNotEmpty) {
+                      nextCertFp = exchanged.certFingerprint;
+                    }
                     pinPaired = true;
                   } else {
                     pinPaired = false;
@@ -1557,11 +1587,18 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   ref.read(globalPairingSecretProvider.notifier).state =
                       nextSecret;
                   saveHostPairingSecret(
-                      targetHost?.ip ?? '', nextSecret);
+                    targetHost?.ip ?? '',
+                    nextSecret,
+                    certFingerprint: nextCertFp,
+                  );
                   if (targetHost != null) {
                     ref
                         .read(fleetProvider.notifier)
-                        .setHostSecret(targetHost.ip, nextSecret);
+                        .setHostSecret(
+                          targetHost.ip,
+                          nextSecret,
+                          certFingerprint: nextCertFp,
+                        );
                   }
                 }
                 if (ctx.mounted) {
@@ -1852,6 +1889,10 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
                 wsPort: widget.host.wsPort,
                 isInline: false,
                 sharedSecret: effectiveSecret,
+                useTls: widget.host.useTls,
+                certFingerprint: widget.host.certFingerprint.trim().isNotEmpty
+                    ? widget.host.certFingerprint.trim()
+                    : loadHostCertFingerprint(widget.host.ip),
                 onTelemetry: widget.onTelemetry,
               ),
             ),

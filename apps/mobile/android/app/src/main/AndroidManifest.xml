@@ -18,7 +18,7 @@
         android:hardwareAccelerated="true"
         android:largeHeap="false"
         android:allowBackup="false"
-        android:usesCleartextTraffic="true"> <!-- Required for low-latency local ws:// LAN connections -->
+        android:networkSecurityConfig="@xml/network_security_config"> <!-- Loopback/.local only; TLS preferred -->
         
         <activity
             android:name=".MainActivity"

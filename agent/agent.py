@@ -20,6 +20,7 @@ import hmac
 import io
 import json
 import logging
+import math
 import os
 import platform
 import secrets
@@ -34,6 +35,11 @@ import base64
 import ipaddress
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Set, Tuple, Any, Callable
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 def is_local_or_private_ip(ip_str: str) -> bool:
     """Returns True if IP is localhost, link-local, or private RFC1918 LAN address."""
@@ -145,13 +151,31 @@ except ImportError:
         MultiMonitorStreamer = None
 
 try:
-    from crypto_vault import HostCryptoVault, SlidingWindowReplayProtector
+    from crypto_vault import (
+        HostCryptoVault,
+        SlidingWindowReplayProtector,
+        FallbackCurve25519,
+        FallbackChaCha20Poly1305,
+        hkdf_extract_and_expand,
+        scrub_memory,
+    )
 except ImportError:
     try:
-        from agent.crypto_vault import HostCryptoVault, SlidingWindowReplayProtector
+        from agent.crypto_vault import (
+            HostCryptoVault,
+            SlidingWindowReplayProtector,
+            FallbackCurve25519,
+            FallbackChaCha20Poly1305,
+            hkdf_extract_and_expand,
+            scrub_memory,
+        )
     except ImportError:
         HostCryptoVault = None
         SlidingWindowReplayProtector = None
+        FallbackCurve25519 = None
+        FallbackChaCha20Poly1305 = None
+        hkdf_extract_and_expand = None
+        scrub_memory = None
 
 try:
     import pyperclip
@@ -232,8 +256,11 @@ MAGIC = b'\xC5\x71'  # 2-byte magic identifier
 _HEADER_STRUCT = struct.Struct('!2sBBII')  # Total: 12 bytes
 HEADER_SIZE = _HEADER_STRUCT.size
 MAX_PAYLOAD_SIZE = 10 * 1024 * 1024  # 10 MB maximum allowed payload
+MAX_WIRE_FRAME_SIZE = MAX_PAYLOAD_SIZE + HEADER_SIZE + 64
 MAX_NONCE_AGE_SECONDS = 10.0  # Nonce expiry time for auth handshake
 PIN_TTL_SECONDS = 900.0  # Pairing PIN expires after 15 minutes unless regenerated
+MAX_CONCURRENT_CLIENTS = 32
+MAX_CONNECTIONS_PER_IP = 8
 
 # Canonical Binary Opcodes
 OP_PING = 0x01            # 1: Ping / Heartbeat
@@ -480,6 +507,7 @@ class AdaptiveScreenPipeline:
         self._local = threading.local()
         self._worker_scts = []
         self._sct_lock = threading.Lock()
+        self._resize_cache: Optional[Tuple[Tuple[int, int, int, int], Any]] = None
 
     def _get_mss(self):
         """Returns thread-local mss instance."""
@@ -533,7 +561,7 @@ class AdaptiveScreenPipeline:
             self.last_frame_hash = current_hash
 
             # Short-circuit idle static frames without recomputing 64-block CRC32 grid
-            if is_static and self.consecutive_static > 3:
+            if is_static and self.consecutive_static >= 2:
                 return None, True
 
             w_shot, h_shot = int(raw_shot.width), int(raw_shot.height)
@@ -557,46 +585,86 @@ class AdaptiveScreenPipeline:
             grid_changed_count = sum(1 for o, n in zip(self.grid_hashes, new_grid) if o != n) if self.grid_hashes else 64
             self.grid_hashes = new_grid
 
-            if (is_static or grid_changed_count == 0) and self.consecutive_static > 3:
+            frame_unchanged = (not force_send) and (is_static or grid_changed_count == 0)
+            if frame_unchanged and self.consecutive_static >= 2:
                 return None, True  # Screen hasn't changed; drop frame to save network bandwidth
 
             # Dynamic aspect-preserving downsampling to match client viewport bounds without distortion
-            if Image and (w_shot > self.target_res[0] or h_shot > self.target_res[1] or w_shot != self.target_res[0] or h_shot != self.target_res[1]):
+            if (w_shot > self.target_res[0] or h_shot > self.target_res[1] or w_shot != self.target_res[0] or h_shot != self.target_res[1]):
                 scale = min(self.target_res[0] / max(1, w_shot), self.target_res[1] / max(1, h_shot))
                 out_w = max(1, int(round(w_shot * scale)))
                 out_h = max(1, int(round(h_shot * scale)))
                 if out_w != w_shot or out_h != h_shot:
-                    img = Image.frombytes("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX")
-                    img = img.resize((out_w, out_h), Image.Resampling.BILINEAR)
-                    self.last_stream_size = (out_w, out_h)
-                    buf = getattr(self._local, 'bio_buf', None)
-                    if buf is None:
-                        buf = io.BytesIO()
-                        self._local.bio_buf = buf
-                    else:
-                        buf.seek(0)
-                        buf.truncate(0)
-                    img.save(buf, format="JPEG", quality=self.jpeg_quality, optimize=False)
-                    return buf.getvalue(), False
+                    if np is not None and (self.turbo is not None or Image is not None):
+                        cache_key = (w_shot, h_shot, out_w, out_h)
+                        cached = self._resize_cache
+                        if cached is not None and cached[0] == cache_key:
+                            idx_grid = cached[1]
+                        else:
+                            yi = (np.arange(out_h, dtype=np.intp) * h_shot) // out_h
+                            xi = (np.arange(out_w, dtype=np.intp) * w_shot) // out_w
+                            idx_grid = yi[:, None] * w_shot + xi[None, :]
+                            self._resize_cache = (cache_key, idx_grid)
+                        flat_bgra = np.frombuffer(raw_shot.bgra, dtype=np.uint8).reshape(-1, 4)
+                        self.last_stream_size = (out_w, out_h)
+                        if self.turbo:
+                            try:
+                                scaled_bgra = np.ascontiguousarray(np.take(flat_bgra, idx_grid, axis=0))
+                                encoded = self.turbo.encode(
+                                    scaled_bgra,
+                                    quality=self.jpeg_quality,
+                                    pixel_format=3,  # TJPF_BGRX
+                                )
+                                return encoded, frame_unchanged
+                            except Exception as tj_err:
+                                logger.debug(f"TurboJPEG resized encode fallback to Pillow: {tj_err}")
+                        if Image is not None:
+                            scaled_rgb = np.ascontiguousarray(np.take(flat_bgra, idx_grid, axis=0)[..., 2::-1])
+                            img = Image.fromarray(scaled_rgb, mode="RGB")
+                            buf = getattr(self._local, 'bio_buf', None)
+                            if buf is None:
+                                buf = io.BytesIO()
+                                self._local.bio_buf = buf
+                            else:
+                                buf.seek(0)
+                                buf.truncate(0)
+                            img.save(buf, format="JPEG", quality=self.jpeg_quality, optimize=False, subsampling=2)
+                            return buf.getvalue(), frame_unchanged
+                    if Image:
+                        img = Image.frombuffer("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX", 0, 1)
+                        img = img.resize((out_w, out_h), Image.Resampling.BILINEAR)
+                        self.last_stream_size = (out_w, out_h)
+                        buf = getattr(self._local, 'bio_buf', None)
+                        if buf is None:
+                            buf = io.BytesIO()
+                            self._local.bio_buf = buf
+                        else:
+                            buf.seek(0)
+                            buf.truncate(0)
+                        img.save(buf, format="JPEG", quality=self.jpeg_quality, optimize=False, subsampling=2)
+                        return buf.getvalue(), frame_unchanged
 
             self.last_stream_size = (w_shot, h_shot)
 
             # Zero-copy encode for 1:1 desktop resolution
             if self.turbo:
                 try:
-                    import numpy as np
-                    bgra_arr = np.frombuffer(raw_shot.raw, dtype=np.uint8).reshape((raw_shot.height, raw_shot.width, 4))
-                    encoded = self.turbo.encode(
-                        bgra_arr,
-                        quality=self.jpeg_quality,
-                        pixel_format=3,  # TJPF_BGRX (constant 3 is BGRX in turbojpeg)
+                    bgra_arr = (
+                        np.frombuffer(raw_shot.raw, dtype=np.uint8).reshape((raw_shot.height, raw_shot.width, 4))
+                        if np is not None else None
                     )
-                    return encoded, False
+                    if bgra_arr is not None:
+                        encoded = self.turbo.encode(
+                            bgra_arr,
+                            quality=self.jpeg_quality,
+                            pixel_format=3,  # TJPF_BGRX (constant 3 is BGRX in turbojpeg)
+                        )
+                        return encoded, frame_unchanged
                 except Exception as tj_err:
                     logger.debug(f"TurboJPEG encode fallback to Pillow: {tj_err}")
             if Image:
                 # Optimized Pillow fallback with reusable thread-local BytesIO
-                img = Image.frombytes("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX")
+                img = Image.frombuffer("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX", 0, 1)
                 buf = getattr(self._local, 'bio_buf', None)
                 if buf is None:
                     buf = io.BytesIO()
@@ -604,8 +672,8 @@ class AdaptiveScreenPipeline:
                 else:
                     buf.seek(0)
                     buf.truncate(0)
-                img.save(buf, format="JPEG", quality=self.jpeg_quality, optimize=False)
-                return buf.getvalue(), False
+                img.save(buf, format="JPEG", quality=self.jpeg_quality, optimize=False, subsampling=2)
+                return buf.getvalue(), frame_unchanged
             return None, False
         except Exception as e:
             logger.debug(f"Frame capture error: {e}")
@@ -710,12 +778,15 @@ class HostAgentDaemon:
         self._client_replay: Dict[WebSocketServerProtocol, Any] = {}
         self._client_outbound_seq: Dict[WebSocketServerProtocol, int] = {}
         self._ws_write_locks: Dict[WebSocketServerProtocol, asyncio.Lock] = {}
+        self._pending_pairings: Dict[WebSocketServerProtocol, Tuple[bytearray, bytes, bytes, bytes, float]] = {}
+        self._stream_wake_event: Optional[asyncio.Event] = None
         self._background_tasks: List[asyncio.Task] = []
         self._background_task_set: Set[asyncio.Task] = set()
         self._owns_loop: bool = False
         self._start_time: float = time.time()
-        self._pin_fail_count: int = 0
-        self._pin_lockout_until: float = 0.0
+        self._pin_fail_by_ip: Dict[str, Tuple[int, float]] = {}
+        self._pin_fail_count_storage: int = 0
+        self._pin_lockout_until_storage: float = 0.0
         self._initial_env_secret: str = (
             os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET") or ""
         ).strip()
@@ -782,6 +853,60 @@ class HostAgentDaemon:
                 if ip_val:
                     ips.add(ip_val)
         return ips
+
+    def _wake_stream(self) -> None:
+        """Signals the screen stream loop immediately after input or viewport activity."""
+        self.screen_pipeline.consecutive_static = 0
+        ev = self._stream_wake_event
+        if ev is not None and self.loop is not None and self.loop.is_running():
+            if threading.get_ident() == self._loop_thread_id:
+                ev.set()
+            else:
+                self.loop.call_soon_threadsafe(ev.set)
+
+    @property
+    def _pin_fail_count(self) -> int:
+        return self._pin_fail_count_storage
+
+    @_pin_fail_count.setter
+    def _pin_fail_count(self, val: int) -> None:
+        self._pin_fail_count_storage = int(val)
+        if val <= 0:
+            self._pin_fail_by_ip.clear()
+
+    @property
+    def _pin_lockout_until(self) -> float:
+        return self._pin_lockout_until_storage
+
+    @_pin_lockout_until.setter
+    def _pin_lockout_until(self, val: float) -> None:
+        self._pin_lockout_until_storage = float(val)
+        if val <= 0.0:
+            self._pin_fail_by_ip.clear()
+
+    def _is_pin_locked_out(self, client_ip: str, now_ts: float) -> bool:
+        _, lockout_until = self._pin_fail_by_ip.get(client_ip, (0, 0.0))
+        return now_ts < lockout_until
+
+    def _record_pin_failure(self, client_ip: str, now_ts: float) -> Tuple[int, float]:
+        cnt, until = self._pin_fail_by_ip.get(client_ip, (0, 0.0))
+        if now_ts >= until and cnt >= 5:
+            cnt = 0
+        cnt += 1
+        if cnt >= 5:
+            until = now_ts + 60.0
+            logger.warning("PAIR PIN rate-limit lockout triggered for %s (60s)", client_ip)
+        self._pin_fail_by_ip[client_ip] = (cnt, until)
+        if len(self._pin_fail_by_ip) > 1024:
+            self._pin_fail_by_ip.pop(next(iter(self._pin_fail_by_ip)), None)
+        self._pin_fail_count_storage = cnt
+        self._pin_lockout_until_storage = until
+        return cnt, until
+
+    def _reset_pin_failures(self, client_ip: str) -> None:
+        self._pin_fail_by_ip.pop(client_ip, None)
+        self._pin_fail_count_storage = 0
+        self._pin_lockout_until_storage = 0.0
 
     def _next_outbound_seq(self, ws: WebSocketServerProtocol) -> int:
         """Allocates a strictly monotonic 32-bit sequence number (>= 1) per client connection."""
@@ -982,6 +1107,7 @@ class HostAgentDaemon:
         """Bootstraps mDNS advertisement, system tray icon, and WebSocket server."""
         self.loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
+        self._stream_wake_event = asyncio.Event()
         logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.51.0)...")
         await self._start_mdns()
         self._start_system_tray()
@@ -1001,7 +1127,7 @@ class HostAgentDaemon:
                 self.host,
                 self.port,
                 ssl=ssl_ctx,
-                max_size=MAX_PAYLOAD_SIZE,
+                max_size=MAX_WIRE_FRAME_SIZE,
                 ping_interval=20,
                 ping_timeout=15
             )
@@ -1144,13 +1270,20 @@ class HostAgentDaemon:
                                 length = struct.unpack("!H", await reader.readexactly(2))[0]
                             elif length == 127:
                                 length = struct.unpack("!Q", await reader.readexactly(8))[0]
-                            if length > MAX_PAYLOAD_SIZE:
-                                raise ValueError(f"Frame payload length {length} exceeds MAX_PAYLOAD_SIZE")
+                            if length > MAX_WIRE_FRAME_SIZE:
+                                raise ValueError(f"Frame payload length {length} exceeds MAX_WIRE_FRAME_SIZE")
                             mask_key = await reader.readexactly(4) if is_masked else b""
                             raw_payload = await reader.readexactly(length)
                             if is_masked and length > 0:
-                                repeated_mask = (mask_key * ((length // 4) + 1))[:length]
-                                raw_payload = bytes(a ^ b for a, b in zip(raw_payload, repeated_mask))
+                                if np is not None and length > 256:
+                                    mask_arr = np.frombuffer(mask_key, dtype=np.uint8)
+                                    pad = (-length) & 3
+                                    src = np.frombuffer(raw_payload, dtype=np.uint8)
+                                    repeated = np.tile(mask_arr, (length + 3) // 4)[:length]
+                                    raw_payload = np.bitwise_xor(src, repeated).tobytes()
+                                else:
+                                    repeated_mask = (mask_key * ((length // 4) + 1))[:length]
+                                    raw_payload = bytes(a ^ b for a, b in zip(raw_payload, repeated_mask))
                             if opcode == 0x08:  # CLOSE
                                 raise StopAsyncIteration
                             if opcode == 0x09:  # PING -> PONG
@@ -1381,7 +1514,7 @@ class HostAgentDaemon:
 
             for ws in list(self.clients):
                 try:
-                    asyncio.create_task(ws.close(code=1008, reason="Emergency panic disconnect"))
+                    self._track_task(ws.close(code=1008, reason="Emergency panic disconnect"))
                 except Exception:
                     pass
             self.authenticated_clients.clear()
@@ -1391,6 +1524,10 @@ class HostAgentDaemon:
                 except Exception:
                     pass
             self._client_vaults.clear()
+            for pending in self._pending_pairings.values():
+                if scrub_memory is not None and isinstance(pending[0], bytearray):
+                    scrub_memory(pending[0])
+            self._pending_pairings.clear()
             if self.gui_state is not None:
                 with self.gui_state.lock:
                     self.gui_state.connected_clients.clear()
@@ -1416,9 +1553,14 @@ class HostAgentDaemon:
             cid = f"{p_ip}:{p_port}"
             with self.gui_state.lock:
                 client_entry = next(
-                    (c for c in self.gui_state.connected_clients if c.get("id") == cid or c.get("ip") == p_ip),
+                    (c for c in self.gui_state.connected_clients if c.get("id") == cid),
                     None,
                 )
+                if client_entry is None and not p_port:
+                    client_entry = next(
+                        (c for c in self.gui_state.connected_clients if c.get("ip") == p_ip),
+                        None,
+                    )
                 if client_entry and not client_entry.get("inputAllowed", True):
                     return False
         return True
@@ -1474,13 +1616,25 @@ class HostAgentDaemon:
             logger.warning("Rejected non-local IP %s by Subnet Geofencing.", client_ip)
             await ws.close(code=1008, reason="Subnet geofence policy violation")
             return
+        if len(self.clients) >= MAX_CONCURRENT_CLIENTS:
+            logger.warning("Rejected connection from %s: max concurrent clients (%d) reached.", client_id, MAX_CONCURRENT_CLIENTS)
+            await ws.close(code=1013, reason="Server busy: max concurrent clients reached")
+            return
+        per_ip_count = sum(
+            1 for existing_ws in self.clients
+            if (getattr(existing_ws, "remote_address", None) or (None,))[0] == client_ip
+        )
+        if per_ip_count >= MAX_CONNECTIONS_PER_IP:
+            logger.warning("Rejected connection from %s: per-IP limit (%d) reached.", client_id, MAX_CONNECTIONS_PER_IP)
+            await ws.close(code=1013, reason="Too many connections from this IP")
+            return
 
         self.clients.add(ws)
         self._ws_write_locks[ws] = asyncio.Lock()
         logger.info("Client connected from %s", client_id)
 
         if self.chaos_shield:
-            self.chaos_shield.register_client(client_id, lambda: asyncio.create_task(ws.close(code=1008)))
+            self.chaos_shield.register_client(client_id, lambda: self._track_task(ws.close(code=1008)))
             self.chaos_shield.transition_state(client_id, ConnectionState.AUTH_PENDING)
 
         nonce = secrets.token_bytes(16)
@@ -1500,6 +1654,10 @@ class HostAgentDaemon:
                     break
 
                 if not isinstance(message, bytes):
+                    active_vault = self._client_vaults.get(ws)
+                    if active_vault is not None and active_vault.is_established:
+                        await self._send_error(ws, "Encrypted AEAD transport (flag 0x02) required after vault handshake")
+                        continue
                     try:
                         text_data = json.loads(message)
                         action = str(text_data.get("action") or text_data.get("event") or "").upper()
@@ -1510,6 +1668,181 @@ class HostAgentDaemon:
                                 "timestamp": time.time(),
                                 "seq": text_data.get("seq", 0)
                             }))
+                            continue
+                        elif action == "PAIR_INIT":
+                            if FallbackCurve25519 is None or FallbackChaCha20Poly1305 is None or hkdf_extract_and_expand is None:
+                                await self._ws_send(ws, json.dumps({
+                                    "event": "ERROR",
+                                    "error": "Ephemeral encrypted pairing crypto unavailable",
+                                    "code": 500,
+                                }))
+                                continue
+                            now_ts = time.time()
+                            if self._is_pin_locked_out(client_ip, now_ts):
+                                await self._ws_send(ws, json.dumps({
+                                    "event": "ERROR",
+                                    "error": "Pairing PIN temporarily locked out due to failed attempts",
+                                    "code": 429,
+                                }))
+                                await ws.close(code=1008, reason="Pairing locked out")
+                                break
+                            try:
+                                cli_pub = base64.b64decode(str(text_data.get("client_pub") or ""), validate=True)
+                                cli_n1 = base64.b64decode(str(text_data.get("client_nonce") or ""), validate=True)
+                            except Exception:
+                                cli_pub, cli_n1 = b"", b""
+                            if len(cli_pub) != 32 or len(cli_n1) != 16:
+                                await self._ws_send(ws, json.dumps({
+                                    "event": "ERROR",
+                                    "error": "Invalid PAIR_INIT key or nonce",
+                                    "code": 400,
+                                }))
+                                continue
+                            old_pending = self._pending_pairings.pop(ws, None)
+                            if old_pending is not None and scrub_memory is not None and isinstance(old_pending[0], bytearray):
+                                scrub_memory(old_pending[0])
+                            srv_priv_raw, srv_pub = FallbackCurve25519.generate_keypair()
+                            srv_priv = bytearray(srv_priv_raw)
+                            try:
+                                srv_n2 = secrets.token_bytes(16)
+                                shared = bytearray(
+                                    FallbackCurve25519.compute_shared_secret(bytes(srv_priv), cli_pub)
+                                )
+                                try:
+                                    if bytes(shared) == (b"\x00" * 32):
+                                        await self._ws_send(ws, json.dumps({
+                                            "event": "ERROR",
+                                            "error": "Invalid Curve25519 peer public key",
+                                            "code": 400,
+                                        }))
+                                        continue
+                                    pair_key = bytearray(
+                                        hkdf_extract_and_expand(
+                                            salt=cli_n1 + srv_n2,
+                                            ikm=bytes(shared),
+                                            info=b"CST_PAIR_WRAP_V1",
+                                            length=32,
+                                        )
+                                    )
+                                finally:
+                                    if scrub_memory is not None:
+                                        scrub_memory(shared)
+                            finally:
+                                if scrub_memory is not None:
+                                    scrub_memory(srv_priv)
+                            aad = b"CST_PAIR_V1" + cli_pub + srv_pub + cli_n1 + srv_n2
+                            self._pending_pairings[ws] = (pair_key, aad, cli_n1, srv_n2, now_ts)
+                            await self._ws_send(ws, json.dumps({
+                                "event": "PAIR_CHALLENGE",
+                                "host_pub": base64.b64encode(srv_pub).decode("ascii"),
+                                "host_nonce": base64.b64encode(srv_n2).decode("ascii"),
+                                "protocol": "CST-PAIR-X25519-V1",
+                            }))
+                            continue
+                        elif action == "PAIR_FINISH":
+                            pending = self._pending_pairings.pop(ws, None)
+                            if pending is None or FallbackChaCha20Poly1305 is None:
+                                await self._ws_send(ws, json.dumps({
+                                    "event": "ERROR",
+                                    "error": "No active PAIR_INIT challenge",
+                                    "code": 400,
+                                }))
+                                continue
+                            pair_key, aad, _cli_n1, _srv_n2, issued_ts = pending
+                            try:
+                                now_ts = time.time()
+                                if now_ts - issued_ts > MAX_NONCE_AGE_SECONDS:
+                                    await self._ws_send(ws, json.dumps({
+                                        "event": "ERROR",
+                                        "error": "Pairing challenge expired",
+                                        "code": 401,
+                                    }))
+                                    await ws.close(code=1008, reason="Pairing expired")
+                                    break
+                                if self._is_pin_locked_out(client_ip, now_ts):
+                                    self._record_auth_failure(client_ip, client_id)
+                                    await self._ws_send(ws, json.dumps({
+                                        "event": "ERROR",
+                                        "error": "Invalid authentication token or expired PIN",
+                                        "code": 401,
+                                    }))
+                                    await ws.close(code=1008, reason="Pairing locked out")
+                                    break
+                                try:
+                                    raw_ct = base64.b64decode(str(text_data.get("ciphertext") or ""), validate=True)
+                                except Exception:
+                                    raw_ct = b""
+                                if len(raw_ct) < 28 or raw_ct[:12] != (b"\x00" * 12):
+                                    self._record_auth_failure(client_ip, client_id)
+                                    await self._ws_send(ws, json.dumps({
+                                        "event": "ERROR",
+                                        "error": "Encrypted pairing verification failed",
+                                        "code": 401,
+                                    }))
+                                    await ws.close(code=1008, reason="Authentication failed")
+                                    break
+                                try:
+                                    pt = FallbackChaCha20Poly1305.decrypt(
+                                        bytes(pair_key), raw_ct[:12], raw_ct[12:], aad=aad
+                                    )
+                                    if pt is None:
+                                        raise ValueError("AEAD tag verification failed")
+                                    inner = json.loads(pt.decode("utf-8"))
+                                except Exception:
+                                    self._record_pin_failure(client_ip, now_ts)
+                                    self._record_auth_failure(client_ip, client_id)
+                                    await self._ws_send(ws, json.dumps({
+                                        "event": "ERROR",
+                                        "error": "Encrypted pairing verification failed",
+                                        "code": 401,
+                                    }))
+                                    await ws.close(code=1008, reason="Authentication failed")
+                                    break
+                                candidate_pin = str(
+                                    inner.get("pin") or inner.get("pair_pin") or ""
+                                ).strip().encode("utf-8", errors="replace")
+                                if self._is_valid_pairing_pin(candidate_pin):
+                                    self._reset_pin_failures(client_ip)
+                                    label = str(inner.get("device") or text_data.get("device") or f"Mobile Peer ({client_ip})")[:128]
+                                    tok_bytes = str(self.pairing_token).strip().encode("utf-8")
+                                    self._client_secrets[ws] = tok_bytes
+                                    self._register_authenticated_client(ws, client_ip, client_id, label)
+                                    if self.gui_state is not None:
+                                        self.gui_state.add_log("SECURITY", f"Client {client_id} paired via encrypted X25519 PAIR_FINISH.")
+                                    result_obj = {
+                                        "event": "AUTHENTICATED",
+                                        "status": "OK",
+                                        "protocol": "AI-NET/3.0-SECURE",
+                                        "pairingToken": self.pairing_token,
+                                        "timestamp": time.time(),
+                                    }
+                                    resp_nonce = struct.pack(">IQ", 0, 1)
+                                    enc_res = resp_nonce + FallbackChaCha20Poly1305.encrypt(
+                                        bytes(pair_key),
+                                        resp_nonce,
+                                        json.dumps(result_obj).encode("utf-8"),
+                                        aad=aad,
+                                    )
+                                    await self._ws_send(ws, json.dumps({
+                                        "event": "PAIR_RESULT",
+                                        "status": "OK",
+                                        "protocol": "CST-PAIR-X25519-V1",
+                                        "ciphertext": base64.b64encode(enc_res).decode("ascii"),
+                                    }))
+                                    logger.info("Client %s authenticated via encrypted PAIR_FINISH.", client_id)
+                                else:
+                                    self._record_pin_failure(client_ip, now_ts)
+                                    self._record_auth_failure(client_ip, client_id)
+                                    await self._ws_send(ws, json.dumps({
+                                        "event": "ERROR",
+                                        "error": "Invalid authentication token or expired PIN",
+                                        "code": 401,
+                                    }))
+                                    await ws.close(code=1008, reason="Authentication failed")
+                                    break
+                            finally:
+                                if scrub_memory is not None and isinstance(pair_key, bytearray):
+                                    scrub_memory(pair_key)
                             continue
                         elif action in ("AUTHENTICATE", "PAIR", "AUTH"):
                             if ws in self.authenticated_clients:
@@ -1537,24 +1870,35 @@ class HostAgentDaemon:
                                 (vt for vt in valid_tokens if candidate_token and hmac.compare_digest(candidate_token, vt)),
                                 None,
                             )
+                            provided_hmac = str(text_data.get("hmac") or "").strip().lower()
+                            if matched_token is None and provided_hmac:
+                                nonce_info = self.active_nonces.get(ws)
+                                if nonce_info and (now_ts - nonce_info[1]) <= MAX_NONCE_AGE_SECONDS:
+                                    matched_token = next(
+                                        (
+                                            vt for vt in valid_tokens
+                                            if hmac.compare_digest(
+                                                provided_hmac,
+                                                hmac.new(vt, nonce_info[0], hashlib.sha256).hexdigest().lower(),
+                                            )
+                                        ),
+                                        None,
+                                    )
                             token_ok = matched_token is not None
-                            # Allow 6-digit PIN strictly for explicit PAIR flow within PIN TTL & lockout guard
+                            # Allow 6-digit PIN strictly for explicit PAIR flow within PIN TTL & per-IP lockout guard
                             pin_ok = False
                             if action == "PAIR" and not token_ok:
-                                if now_ts < self._pin_lockout_until:
+                                if self._is_pin_locked_out(client_ip, now_ts):
                                     pin_ok = False
                                 else:
                                     pin_ok = self._is_valid_pairing_pin(candidate_token)
                                     if pin_ok:
-                                        self._pin_fail_count = 0
+                                        self._reset_pin_failures(client_ip)
                                     else:
-                                        self._pin_fail_count += 1
-                                        if self._pin_fail_count >= 5:
-                                            self._pin_lockout_until = now_ts + 60.0
-                                            logger.warning("PAIR PIN rate-limit lockout triggered for 60s")
+                                        self._record_pin_failure(client_ip, now_ts)
 
                             if token_ok or pin_ok:
-                                label = str(text_data.get("device") or f"Remote Client ({client_ip})")
+                                label = str(text_data.get("device") or f"Remote Client ({client_ip})")[:128]
                                 self._client_secrets[ws] = matched_token if matched_token is not None else str(self.pairing_token).strip().encode("utf-8")
                                 self._register_authenticated_client(ws, client_ip, client_id, label)
                                 if self.gui_state is not None:
@@ -1586,7 +1930,7 @@ class HostAgentDaemon:
                                 cmd_str = str(text_data.get("prompt") or text_data.get("command") or "").strip()
                                 cmd_id = str(text_data.get("command_id") or f"cmd-{int(time.time() * 1000)}")
                                 if cmd_str:
-                                    asyncio.create_task(self._process_json_shell_command(ws, cmd_str, cmd_id))
+                                    self._track_task(self._process_json_shell_command(ws, cmd_str, cmd_id))
                                 continue
                             elif action == "APPROVAL_RESPONSE":
                                 await self._process_hitl_response(message.encode("utf-8"), ws)
@@ -1648,7 +1992,7 @@ class HostAgentDaemon:
                             await self._send_error(ws, "AEAD decryption or replay check failed")
                             continue
                         payload, _ = dec
-                    elif opcode not in (OP_AUTH, OP_PING):
+                    else:
                         await self._send_error(ws, "Encrypted AEAD transport (flag 0x02) required after vault handshake")
                         continue
 
@@ -1679,27 +2023,40 @@ class HostAgentDaemon:
                 # AUTHENTICATED OPCODES
                 # =====================================================
                 if opcode == OP_PING:
-                    await self._ws_send(ws, pack_packet(OP_PING, b'PONG', seq=seq))
+                    await self._send_encrypted_or_plain(ws, OP_PING, b'PONG', seq=seq)
 
                 elif opcode == OP_AUTH:
                     vault = self._client_vaults.get(ws)
-                    if vault is None and HostCryptoVault is not None and payload == b"INIT_ECDH_VAULT":
+                    if vault is None and HostCryptoVault is not None and (
+                        payload == b"INIT_ECDH_VAULT"
+                        or (payload.startswith(b"INIT_ECDH_VAULT_M:") and len(payload) == 34)
+                    ):
                         secrets_list = self._get_valid_secrets()
                         vault_psk = self._client_secrets.get(ws) or (secrets_list[0] if secrets_list else None)
                         if vault_psk:
                             vault = HostCryptoVault(vault_psk)
                             self._client_vaults[ws] = vault
-                            await self._ws_send(ws, pack_packet(OP_AUTH, vault.create_handshake_challenge(), seq=seq, flags=0x01))
+                            chal = vault.create_handshake_challenge()
+                            if len(payload) == 34:
+                                client_chal = payload[18:]
+                                host_mac = hmac.new(
+                                    vault_psk,
+                                    b"CST_HOST_CHAL_M:" + client_chal + chal,
+                                    hashlib.sha256,
+                                ).digest()
+                                chal = chal + host_mac
+                            await self._ws_send(ws, pack_packet(OP_AUTH, chal, seq=seq, flags=0x01))
                             continue
-                    if vault is not None and not vault.is_established and len(payload) >= 80:
-                        if vault.complete_handshake(payload):
+                    if vault is not None and not vault.is_established:
+                        if len(payload) >= 80 and vault.complete_handshake(payload):
                             await self._ws_send(ws, pack_packet(OP_AUTH, b'OK_ECDH_VAULT', seq=seq, flags=0x01))
                         else:
+                            self._record_auth_failure(client_ip, client_id)
                             vault.close()
                             self._client_vaults.pop(ws, None)
                             await self._send_error(ws, "ECDH vault handshake verification failed")
                         continue
-                    await self._ws_send(ws, pack_packet(OP_AUTH, b'OK_AUTHENTICATED', seq=seq))
+                    await self._send_encrypted_or_plain(ws, OP_AUTH, b'OK_AUTHENTICATED', seq=seq)
 
                 elif opcode == OP_SHELL:
                     self._track_task(self._process_shell_command(ws, payload, seq))
@@ -1757,6 +2114,9 @@ class HostAgentDaemon:
                     self.gui_state.connected_clients = [
                         c for c in self.gui_state.connected_clients if c.get("id") != client_id
                     ]
+            pending_pair = self._pending_pairings.pop(ws, None)
+            if pending_pair is not None and scrub_memory is not None and isinstance(pending_pair[0], bytearray):
+                scrub_memory(pending_pair[0])
             vault = self._client_vaults.pop(ws, None)
             if vault is not None:
                 try:
@@ -2185,6 +2545,8 @@ class HostAgentDaemon:
                 await self._send_encrypted_or_plain(
                     ws, OP_CLIP, host_clip.encode('utf-8'), seq=self._next_outbound_seq(ws)
                 )
+            if payload:
+                self._wake_stream()
         except Exception as e:
             logger.debug("Clipboard sync error: %s", e)
 
@@ -2205,17 +2567,35 @@ class HostAgentDaemon:
 
             loop = asyncio.get_running_loop()
 
+            def _finite_float(val: Any, lo: float = -5000.0, hi: float = 5000.0, default: float = 0.0) -> float:
+                v = float(val)
+                if not math.isfinite(v):
+                    return default
+                return max(lo, min(hi, v))
+
+            def _clamp_int(val: Any, lo: int = -5000, hi: int = 5000, default: int = 0) -> int:
+                v = float(val)
+                if not math.isfinite(v):
+                    return default
+                return max(lo, min(hi, int(round(v))))
+
             if len(payload) == 6 and not payload.startswith(b'{'):
                 event_type, dx, dy, btn_code = struct.unpack("!BhhB", payload)
-                btn = "right" if btn_code == 2 else "left"
+                dx = max(-5000, min(5000, int(dx)))
+                dy = max(-5000, min(5000, int(dy)))
+                btn = "right" if btn_code == 2 else ("middle" if btn_code == 3 else "left")
                 def _exec_bin_input():
                     if event_type == 1:
                         pyautogui.moveRel(dx, dy, _pause=False)
                     elif event_type == 2:
-                        pyautogui.click(button=btn, _pause=False)
+                        if btn_code == 4:
+                            pyautogui.doubleClick(_pause=False)
+                        else:
+                            pyautogui.click(button=btn, _pause=False)
                     elif event_type == 3:
                         pyautogui.scroll(dy, _pause=False)
                 await loop.run_in_executor(None, _exec_bin_input)
+                self._wake_stream()
                 return
 
             data = json.loads(payload.decode('utf-8'))
@@ -2226,7 +2606,8 @@ class HostAgentDaemon:
                 action = raw_action
 
             def _map_xy(raw_x: Any, raw_y: Any) -> Tuple[int, int]:
-                rx, ry = float(raw_x), float(raw_y)
+                rx = _finite_float(raw_x, -65535.0, 65535.0)
+                ry = _finite_float(raw_y, -65535.0, 65535.0)
                 s_size = getattr(self.screen_pipeline, "last_stream_size", None)
                 c_rect = getattr(self.screen_pipeline, "last_capture_rect", None)
                 if s_size and c_rect and s_size[0] > 0 and s_size[1] > 0:
@@ -2247,14 +2628,15 @@ class HostAgentDaemon:
                         self._execute_media_command(media_cmd, steps=1)
                     return
                 if action == "move":
-                    dx = float(data.get("dx", 0))
-                    dy = float(data.get("dy", 0))
+                    dx = _finite_float(data.get("dx", 0))
+                    dy = _finite_float(data.get("dy", 0))
                     pyautogui.moveRel(dx, dy, _pause=False)
                 elif action in ("move_to", "mouse_move"):
                     x, y = _map_xy(data.get("x", 0), data.get("y", 0))
                     pyautogui.moveTo(x, y, _pause=False)
                 elif action in ("click", "mouse_click"):
-                    btn = str(data.get("button", "left")).lower()
+                    raw_btn = str(data.get("button", "left")).lower()
+                    btn = raw_btn if raw_btn in ("left", "right", "middle", "double") else "left"
                     x = data.get("x")
                     y = data.get("y")
                     if btn == "double":
@@ -2270,7 +2652,8 @@ class HostAgentDaemon:
                         pyautogui.click(button=btn, _pause=False)
                 elif action == "click_at":
                     x, y = _map_xy(data.get("x", 0), data.get("y", 0))
-                    btn = str(data.get("button", "left")).lower()
+                    raw_btn = str(data.get("button", "left")).lower()
+                    btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
                     pyautogui.click(x=x, y=y, button=btn, _pause=False)
                 elif action in ("double_click", "mouse_double_click"):
                     x = data.get("x")
@@ -2287,7 +2670,7 @@ class HostAgentDaemon:
                     x, y = _map_xy(data.get("x", 0), data.get("y", 0))
                     pyautogui.rightClick(x=x, y=y, _pause=False)
                 elif action in ("scroll", "mouse_scroll"):
-                    dy = int(data.get("dy", 0))
+                    dy = _clamp_int(data.get("dy", 0))
                     x = data.get("x")
                     y = data.get("y")
                     if x is not None and y is not None:
@@ -2297,26 +2680,26 @@ class HostAgentDaemon:
                         pyautogui.scroll(dy, _pause=False)
                 elif action == "scroll_at":
                     x, y = _map_xy(data.get("x", 0), data.get("y", 0))
-                    dy = int(data.get("dy", 0))
+                    dy = _clamp_int(data.get("dy", 0))
                     pyautogui.scroll(dy, x=x, y=y, _pause=False)
                 elif action in ("type", "type_text", "keyboard_type"):
-                    text = str(data.get("text", ""))
+                    text = str(data.get("text", ""))[:4096]
                     press_enter = bool(data.get("press_enter", data.get("pressEnter", False)))
                     if text:
                         pyautogui.write(text, _pause=False)
                     if press_enter:
                         pyautogui.press('enter', _pause=False)
                 elif action in ("key", "key_press"):
-                    key = str(data.get("key", "")).lower()
+                    key = str(data.get("key", ""))[:32].lower()
                     if key and key in getattr(pyautogui, "KEYBOARD_KEYS", {key}):
                         pyautogui.press(key, _pause=False)
                 elif action in ("hotkey", "key_combo", "keyboard_hotkey"):
                     raw_keys = data.get("keys") if data.get("keys") is not None else data.get("command", [])
                     if isinstance(raw_keys, str):
                         normalized_keys = raw_keys.replace("+", ",")
-                        keys = [k.strip().lower() for k in normalized_keys.split(",") if k.strip()]
+                        keys = [k.strip().lower() for k in normalized_keys.split(",") if k.strip()][:6]
                     elif isinstance(raw_keys, list):
-                        keys = [str(k).strip().lower() for k in raw_keys if str(k).strip()]
+                        keys = [str(k).strip().lower() for k in raw_keys if str(k).strip()][:6]
                     else:
                         keys = []
                     valid_keyset = set(getattr(pyautogui, "KEYBOARD_KEYS", []))
@@ -2324,6 +2707,7 @@ class HostAgentDaemon:
                         pyautogui.hotkey(*keys, _pause=False)
 
             await loop.run_in_executor(None, _exec_json_input)
+            self._wake_stream()
         except Exception as e:
             logger.debug("Virtual input injection error: %s", e)
 
@@ -2416,6 +2800,7 @@ class HostAgentDaemon:
         self.screen_pipeline.last_stream_size = None
         if self.multi_monitor:
             self.multi_monitor.switch_monitor(clamped)
+        self._wake_stream()
 
     async def _process_viewport_resize(self, payload: bytes):
         """
@@ -2431,9 +2816,11 @@ class HostAgentDaemon:
                     self.screen_pipeline.set_quality(int(data["quality"]))
                 if "monitor" in data:
                     self._switch_active_monitor(int(data["monitor"]))
+                self._wake_stream()
             elif len(payload) == 8:
                 width, height = struct.unpack('!II', payload)
                 self.screen_pipeline.set_target_resolution(width, height)
+                self._wake_stream()
         except Exception as e:
             logger.debug("Viewport resize decode error: %s", e)
 
@@ -2455,6 +2842,8 @@ class HostAgentDaemon:
             await self._send_encrypted_or_plain(
                 ws, OP_DISPLAY_ENUM, resp, seq=self._next_outbound_seq(ws)
             )
+            if payload:
+                self._wake_stream()
         except Exception as exc:
             await self._send_error(ws, f"Display enumeration error: {exc}")
 
@@ -2510,15 +2899,16 @@ class HostAgentDaemon:
     # STREAMING & HEARTBEAT BACKGROUND LOOPS
     # =================================================================
     async def _screen_stream_loop(self):
-        """Streams desktop frames at adaptive framerates with live FPS measurement."""
+        """Streams desktop frames at deadline-paced adaptive framerates with interruptible idle wake and backpressure."""
         fps_window_start = time.perf_counter()
         fps_frame_count = 0
         while self.is_running:
+            frame_start = time.perf_counter()
             if not self.authenticated_clients:
                 self.capture_fps = 0.0
                 if self.gui_state is not None:
                     self.gui_state.capture_fps = 0.0
-                fps_window_start = time.perf_counter()
+                fps_window_start = frame_start
                 fps_frame_count = 0
                 await asyncio.sleep(0.5)
                 continue
@@ -2541,23 +2931,44 @@ class HostAgentDaemon:
 
                 clients_snapshot = list(self.authenticated_clients)
                 if clients_snapshot:
-                    results = await asyncio.gather(
-                        *(
-                            self._send_encrypted_or_plain(
-                                ws, OP_FRAME, frame, seq=self._next_outbound_seq(ws)
-                            )
-                            for ws in clients_snapshot
-                        ),
-                        return_exceptions=True
-                    )
-                    for ws, res in zip(clients_snapshot, results):
-                        if isinstance(res, Exception):
-                            self.authenticated_clients.discard(ws)
+                    ready_clients = []
+                    for ws in clients_snapshot:
+                        tr = getattr(ws, "transport", None)
+                        if tr is not None and hasattr(tr, "get_write_buffer_size"):
+                            try:
+                                if tr.get_write_buffer_size() > 1_048_576:
+                                    continue
+                            except Exception:
+                                pass
+                        ready_clients.append(ws)
+                    if ready_clients:
+                        results = await asyncio.gather(
+                            *(
+                                self._send_encrypted_or_plain(
+                                    ws, OP_FRAME, frame, seq=self._next_outbound_seq(ws)
+                                )
+                                for ws in ready_clients
+                            ),
+                            return_exceptions=True
+                        )
+                        for ws, res in zip(ready_clients, results):
+                            if isinstance(res, Exception):
+                                self.authenticated_clients.discard(ws)
 
-            if self.screen_pipeline.consecutive_static > 2:
-                await asyncio.sleep(0.5)
+            if self.screen_pipeline.consecutive_static >= 2:
+                ev = self._stream_wake_event
+                if ev is not None:
+                    ev.clear()
+                    try:
+                        await asyncio.wait_for(ev.wait(), timeout=0.45)
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    await asyncio.sleep(0.45)
             else:
-                await asyncio.sleep(0.016)  # ~60 FPS cap under active motion
+                work_dt = time.perf_counter() - frame_start
+                sleep_dt = max(0.001, (1.0 / 60.0) - work_dt)
+                await asyncio.sleep(sleep_dt)
 
     def _get_primary_mac(self) -> str:
         cached = getattr(self, "_cached_mac", None)
@@ -2707,6 +3118,10 @@ class HostAgentDaemon:
             except Exception:
                 pass
         self._client_vaults.clear()
+        for pending in self._pending_pairings.values():
+            if scrub_memory is not None and isinstance(pending[0], bytearray):
+                scrub_memory(pending[0])
+        self._pending_pairings.clear()
         self._client_secrets.clear()
         self._client_replay.clear()
         self._client_outbound_seq.clear()

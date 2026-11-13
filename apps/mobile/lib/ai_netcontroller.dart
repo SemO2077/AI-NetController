@@ -10,8 +10,10 @@ export 'security/crypto_channel.dart';
 export 'security/crypto_engine.dart'
     hide kKeySize, kNonceSize, kTagSize, ChaCha20Poly1305;
 export 'security/biometric_security_gate.dart';
+export 'security/secure_secret_store.dart';
 
 export 'services/file_transfer_engine.dart';
+export 'services/host_connection_client.dart';
 export 'services/os_integrations_manager.dart';
 export 'services/thermal_governor.dart';
 export 'services/zero_gc_video_pipeline.dart';

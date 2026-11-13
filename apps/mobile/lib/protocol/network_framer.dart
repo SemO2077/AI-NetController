@@ -54,7 +54,8 @@ class _FragmentAssemblySession {
   final int flags;
   final int seq;
   final Uint8List buffer;
-  final Set<int> receivedOffsets = <int>{};
+  // Sorted disjoint covered intervals [start, end) to block overlapping-chunk byte inflation
+  final List<List<int>> _coveredIntervals = <List<int>>[];
   int bytesReceived = 0;
   DateTime lastActivity;
 
@@ -66,6 +67,44 @@ class _FragmentAssemblySession {
     required this.seq,
   })  : buffer = Uint8List(totalLength),
         lastActivity = DateTime.now();
+
+  /// Merges interval `[start, end)` and returns net newly covered unique bytes.
+  int recordCoveredRange(int start, int end) {
+    if (start >= end) return 0;
+    final int prev = bytesReceived;
+
+    int insertIdx = 0;
+    while (insertIdx < _coveredIntervals.length &&
+        _coveredIntervals[insertIdx][0] < start) {
+      insertIdx++;
+    }
+    _coveredIntervals.insert(insertIdx, <int>[start, end]);
+
+    final List<List<int>> merged = <List<int>>[];
+    for (final interval in _coveredIntervals) {
+      if (merged.isEmpty || interval[0] > merged.last[1]) {
+        merged.add(<int>[interval[0], interval[1]]);
+      } else if (interval[1] > merged.last[1]) {
+        merged.last[1] = interval[1];
+      }
+    }
+    _coveredIntervals
+      ..clear()
+      ..addAll(merged);
+
+    int total = 0;
+    for (final iv in _coveredIntervals) {
+      total += iv[1] - iv[0];
+    }
+    bytesReceived = total;
+    return total - prev;
+  }
+
+  bool get isComplete =>
+      bytesReceived == totalLength &&
+      _coveredIntervals.length == 1 &&
+      _coveredIntervals[0][0] == 0 &&
+      _coveredIntervals[0][1] == totalLength;
 }
 
 class NetworkFramer {
@@ -222,16 +261,16 @@ class NetworkFramer {
       return;
     }
 
-    if (!session.receivedOffsets.contains(offset) &&
-        offset + slice.length <= session.totalLength) {
+    if (offset + slice.length <= session.totalLength) {
       session.buffer.setRange(offset, offset + slice.length, slice);
-      session.receivedOffsets.add(offset);
-      session.bytesReceived += slice.length;
-      session.lastActivity = DateTime.now();
+      final int netNew = session.recordCoveredRange(offset, offset + slice.length);
+      if (netNew > 0) {
+        session.lastActivity = DateTime.now();
+      }
     }
 
-    // Check completion condition
-    if (session.bytesReceived >= session.totalLength) {
+    // Check completion condition across contiguous interval [0, totalLength)
+    if (session.isComplete) {
       _fragmentSessions.remove(messageId);
       _packetStreamController.add(WirePacket(
         opcode: session.opcode,

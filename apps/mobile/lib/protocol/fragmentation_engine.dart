@@ -55,7 +55,8 @@ class _AssemblySession {
   final int baseFlags;
   final int baseSeq;
   final Uint8List buffer;
-  final Set<int> receivedOffsets;
+  // Sorted disjoint covered intervals [start, end) to block overlapping-chunk byte inflation
+  final List<List<int>> _coveredIntervals = <List<int>>[];
   int bytesAccumulated;
   DateTime lastActivity;
 
@@ -66,11 +67,47 @@ class _AssemblySession {
     required this.baseFlags,
     required this.baseSeq,
   })  : buffer = Uint8List(totalLength),
-        receivedOffsets = <int>{},
         bytesAccumulated = 0,
         lastActivity = DateTime.now();
 
-  bool get isComplete => bytesAccumulated >= totalLength;
+  /// Merges interval `[start, end)` and returns net newly covered bytes.
+  int recordCoveredRange(int start, int end) {
+    if (start >= end) return 0;
+    int prevCovered = bytesAccumulated;
+
+    // Insert sorted by start
+    int insertIdx = 0;
+    while (insertIdx < _coveredIntervals.length &&
+        _coveredIntervals[insertIdx][0] < start) {
+      insertIdx++;
+    }
+    _coveredIntervals.insert(insertIdx, <int>[start, end]);
+
+    // Merge overlapping/adjacent intervals
+    final List<List<int>> merged = <List<int>>[];
+    int total = 0;
+    for (final interval in _coveredIntervals) {
+      if (merged.isEmpty || interval[0] > merged.last[1]) {
+        merged.add(<int>[interval[0], interval[1]]);
+      } else if (interval[1] > merged.last[1]) {
+        merged.last[1] = interval[1];
+      }
+    }
+    _coveredIntervals
+      ..clear()
+      ..addAll(merged);
+    for (final iv in _coveredIntervals) {
+      total += iv[1] - iv[0];
+    }
+    bytesAccumulated = total;
+    return total - prevCovered;
+  }
+
+  bool get isComplete =>
+      bytesAccumulated == totalLength &&
+      _coveredIntervals.length == 1 &&
+      _coveredIntervals[0][0] == 0 &&
+      _coveredIntervals[0][1] == totalLength;
 }
 
 /// Slices oversized binary frames (e.g. 2MB JPEG frames) into sub-64KB chunks
@@ -86,6 +123,9 @@ class PacketFragmenter {
     int flags = 0,
     int seq = 0,
   }) {
+    if (maxChunkSize <= 0) {
+      throw ArgumentError.value(maxChunkSize, 'maxChunkSize', 'Must be positive');
+    }
     // If payload is already under threshold, send as single unfragmented packet
     if (payload.length <= maxChunkSize) {
       return [packPacket(opcode, payload, flags: flags, seq: seq)];
@@ -254,14 +294,12 @@ class PacketReassembler {
       return null;
     }
 
-    session.lastActivity = DateTime.now();
-
-    // Prevent duplicate slice writes
-    if (!session.receivedOffsets.contains(offset)) {
-      if (offset + chunkBytesLength <= session.totalLength) {
-        session.buffer.setRange(offset, offset + chunkBytesLength, chunkData);
-        session.receivedOffsets.add(offset);
-        session.bytesAccumulated += chunkBytesLength;
+    if (offset + chunkBytesLength <= session.totalLength) {
+      session.buffer.setRange(offset, offset + chunkBytesLength, chunkData);
+      final int netNew =
+          session.recordCoveredRange(offset, offset + chunkBytesLength);
+      if (netNew > 0) {
+        session.lastActivity = DateTime.now();
       }
     }
 

@@ -71,6 +71,8 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
   bool _isDecoding = false;
   Uint8List? _latchedPendingFrame;
   int? _cachedTargetWidth;
+  DateTime? _lastKeyframeResyncAt;
+  static const Duration _resyncCooldown = Duration(milliseconds: 1500);
 
   @override
   void initState() {
@@ -128,29 +130,36 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
         ui.Codec? codec;
         ui.Image? pendingImage;
         try {
-          // 1. Copy into alternating slot (Zero-Heap Allocation)
-          final Uint8List frameSlice = _ringBuffer.copy(currentBytes);
-
-          // Verify JPEG SOI / EOI markers (0xFFD8 ... 0xFFD9)
-          if (frameSlice.length < 4 ||
-              frameSlice[0] != 0xFF ||
-              frameSlice[1] != 0xD8 ||
-              frameSlice[frameSlice.length - 2] != 0xFF ||
-              frameSlice[frameSlice.length - 1] != 0xD9) {
-            debugPrint('[ZeroGC-Pipeline] Corrupted JPEG frame markers! Discarding chunk.');
+          if (currentBytes.length < 4 || currentBytes.length > _maxFrameBytes) {
+            debugPrint(
+                '[ZeroGC-Pipeline] Malformed frame size (${currentBytes.length}B). Dropping.');
             _requestKeyframeResync();
           } else {
-            codec = await ui.instantiateImageCodec(
-              frameSlice,
-              targetWidth: widget.fit == BoxFit.contain ? null : _cachedTargetWidth,
-            );
-            pendingImage = (await codec.getNextFrame()).image;
+            // 1. Copy into alternating slot (Zero-Heap Allocation)
+            final Uint8List frameSlice = _ringBuffer.copy(currentBytes);
 
-            if (mounted) {
-              final ui.Image? oldImage = _activeImageNotifier.value;
-              _activeImageNotifier.value = pendingImage;
-              pendingImage = null; // Ownership transferred to notifier
-              oldImage?.dispose();
+            // Verify JPEG SOI / EOI markers (0xFFD8 ... 0xFFD9)
+            if (frameSlice[0] != 0xFF ||
+                frameSlice[1] != 0xD8 ||
+                frameSlice[frameSlice.length - 2] != 0xFF ||
+                frameSlice[frameSlice.length - 1] != 0xD9) {
+              debugPrint(
+                  '[ZeroGC-Pipeline] Corrupted JPEG frame markers! Discarding chunk.');
+              _requestKeyframeResync();
+            } else {
+              codec = await ui.instantiateImageCodec(
+                frameSlice,
+                targetWidth:
+                    widget.fit == BoxFit.contain ? null : _cachedTargetWidth,
+              );
+              pendingImage = (await codec.getNextFrame()).image;
+
+              if (mounted) {
+                final ui.Image? oldImage = _activeImageNotifier.value;
+                _activeImageNotifier.value = pendingImage;
+                pendingImage = null; // Ownership transferred to notifier
+                oldImage?.dispose();
+              }
             }
           }
         } catch (e) {
@@ -171,8 +180,14 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
     }
   }
 
-  /// Dispatches Opcode 0xED (OP_FRAME_SYNC) to request an immediate keyframe from host
+  /// Dispatches Opcode 0xED (OP_FRAME_SYNC) with a 1500ms cooldown throttle
   void _requestKeyframeResync() {
+    final DateTime now = DateTime.now();
+    if (_lastKeyframeResyncAt != null &&
+        now.difference(_lastKeyframeResyncAt!) < _resyncCooldown) {
+      return;
+    }
+    _lastKeyframeResyncAt = now;
     debugPrint('[ZeroGC-Pipeline] Requesting Keyframe Sync (Opcode 0xED)...');
     widget.onRequestKeyframe?.call(0xED);
   }

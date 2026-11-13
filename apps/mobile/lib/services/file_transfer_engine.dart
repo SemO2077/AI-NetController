@@ -69,108 +69,222 @@ class TransferProgress {
 /// High-Performance Chunked Encrypted File Transfer Engine
 class FileTransferEngine {
   static int _idCounter = 100;
+  int _txSeq = 0;
   bool _isCancelled = false;
 
-  /// Initiates, chunks, and streams a file to the host over binary sink
+  /// Initiates, chunks, and streams a file to the host over binary sink.
+  /// Provide [packetBuilder] (e.g. `client.encryptFrame`) to encrypt chunks
+  /// inside an active ChaCha20-Poly1305 AEAD vault session.
   Stream<TransferProgress> sendFile({
     required File file,
     required void Function(Uint8List packet) sendPacket,
     required Stream<ProtocolPacket> ackStream,
+    Uint8List Function(int opcode, Uint8List payload)? packetBuilder,
   }) async* {
     _isCancelled = false;
     final int transferId = ++_idCounter;
-    final String filename = file.uri.pathSegments.isNotEmpty
-        ? file.uri.pathSegments.last
-        : 'upload_${DateTime.now().millisecondsSinceEpoch}.bin';
+    Uint8List buildFrame(Uint8List payload) => packetBuilder != null
+        ? packetBuilder(BinaryOpcode.fileTransfer, payload)
+        : packPacket(BinaryOpcode.fileTransfer, payload, seq: ++_txSeq);
 
-    final int totalBytes = await file.length();
-    yield TransferProgress(
-      transferId: transferId,
-      filename: filename,
-      totalBytes: totalBytes,
-      bytesSent: 0,
-      speedBytesPerSec: 0,
-      eta: Duration.zero,
-      state: TransferState.hashing,
-    );
+    bool observedHostAck = false;
+    bool completedAck = false;
+    String? hostError;
+    Completer<void>? finishAckWaiter;
 
-    // 1. Calculate SHA-256 Checksum without loading entire file into memory
-    final digest = await crypto_pkg.sha256.bind(file.openRead()).first;
-    final String shaHex = digest.toString();
-
-    // 2. Transmit INIT Packet (Sub-cmd 0x01)
-    // Format: [1 cmd][4 id][8 total_size][64 sha256_hex][filename_utf8]
-    final Uint8List filenameBytes = utf8.encode(filename);
-    final Uint8List initPayload = Uint8List(1 + 4 + 8 + 64 + filenameBytes.length);
-    final ByteData bdInit = ByteData.sublistView(initPayload);
-
-    bdInit.setUint8(0, kFileCmdInit);
-    bdInit.setUint32(1, transferId, Endian.big);
-    bdInit.setUint64(5, totalBytes, Endian.big);
-    initPayload.setRange(13, 77, ascii.encode(shaHex));
-    initPayload.setRange(77, 77 + filenameBytes.length, filenameBytes);
-
-    sendPacket(packPacket(BinaryOpcode.fileTransfer, initPayload)); // 0x0C opcode
-
-    yield TransferProgress(
-      transferId: transferId,
-      filename: filename,
-      totalBytes: totalBytes,
-      bytesSent: 0,
-      speedBytesPerSec: 0,
-      eta: Duration.zero,
-      state: TransferState.transferring,
-    );
-
-    // 3. Stream 64KB Chunks with Sliding Speed Calculation
-    final RandomAccessFile raf = await file.open(mode: FileMode.read);
-    int bytesSent = 0;
-    final Stopwatch stopwatch = Stopwatch()..start();
+    final StreamSubscription<ProtocolPacket> ackSub = ackStream.listen((pkt) {
+      if (pkt.opcode != BinaryOpcode.fileTransfer || pkt.payload.length < 13) {
+        return;
+      }
+      final bd = ByteData.sublistView(pkt.payload);
+      final int ackId = bd.getUint32(0, Endian.big);
+      if (ackId != transferId) return;
+      observedHostAck = true;
+      final int status = bd.getUint8(4);
+      final String msg = pkt.payload.length > 13
+          ? utf8.decode(pkt.payload.sublist(13), allowMalformed: true).trim()
+          : '';
+      if (status == kFileStatusCompleted) {
+        completedAck = true;
+        if (finishAckWaiter != null && !finishAckWaiter!.isCompleted) {
+          finishAckWaiter!.complete();
+        }
+      } else if (status >= kFileStatusErrTraversal) {
+        hostError = msg.isNotEmpty
+            ? msg
+            : 'Host rejected transfer (status 0x${status.toRadixString(16)})';
+        if (finishAckWaiter != null && !finishAckWaiter!.isCompleted) {
+          finishAckWaiter!.complete();
+        }
+      }
+    });
 
     try {
-      while (bytesSent < totalBytes && !_isCancelled) {
-        final int remaining = totalBytes - bytesSent;
-        final int chunkSize = min(remaining, kFileTransferChunkSize);
-        final Uint8List chunkBytes = await raf.read(chunkSize);
+      final String filename = file.uri.pathSegments.isNotEmpty
+          ? file.uri.pathSegments.last
+          : 'upload_${DateTime.now().millisecondsSinceEpoch}.bin';
 
-        // Chunk Payload: [1 cmd][4 id][8 offset][chunk_bytes...]
-        final Uint8List chunkPayload = Uint8List(1 + 4 + 8 + chunkBytes.length);
-        final ByteData bdChunk = ByteData.sublistView(chunkPayload);
-        bdChunk.setUint8(0, kFileCmdChunk);
-        bdChunk.setUint32(1, transferId, Endian.big);
-        bdChunk.setUint64(5, bytesSent, Endian.big);
-        chunkPayload.setRange(13, 13 + chunkBytes.length, chunkBytes);
+      final int totalBytes = await file.length();
+      yield TransferProgress(
+        transferId: transferId,
+        filename: filename,
+        totalBytes: totalBytes,
+        bytesSent: 0,
+        speedBytesPerSec: 0,
+        eta: Duration.zero,
+        state: TransferState.hashing,
+      );
 
-        sendPacket(packPacket(BinaryOpcode.fileTransfer, chunkPayload));
-        bytesSent += chunkBytes.length;
+      // 1. Calculate SHA-256 Checksum without loading entire file into memory
+      final digest = await crypto_pkg.sha256.bind(file.openRead()).first;
+      final String shaHex = digest.toString();
 
-        final double elapsedSec = stopwatch.elapsedMilliseconds / 1000.0;
-        final double speed = elapsedSec > 0 ? (bytesSent / elapsedSec) : 0.0;
-        final int remainingBytes = totalBytes - bytesSent;
-        final double remainingSec = speed > 0 ? (remainingBytes / speed) : 0.0;
+      // 2. Transmit INIT Packet (Sub-cmd 0x01)
+      // Format: [1 cmd][4 id][8 total_size][64 sha256_hex][filename_utf8]
+      final Uint8List filenameBytes = utf8.encode(filename);
+      final Uint8List initPayload =
+          Uint8List(1 + 4 + 8 + 64 + filenameBytes.length);
+      final ByteData bdInit = ByteData.sublistView(initPayload);
 
+      bdInit.setUint8(0, kFileCmdInit);
+      bdInit.setUint32(1, transferId, Endian.big);
+      bdInit.setUint64(5, totalBytes, Endian.big);
+      initPayload.setRange(13, 77, ascii.encode(shaHex));
+      initPayload.setRange(77, 77 + filenameBytes.length, filenameBytes);
+
+      sendPacket(buildFrame(initPayload)); // 0x0C opcode
+
+      yield TransferProgress(
+        transferId: transferId,
+        filename: filename,
+        totalBytes: totalBytes,
+        bytesSent: 0,
+        speedBytesPerSec: 0,
+        eta: Duration.zero,
+        state: TransferState.transferring,
+      );
+
+      // 3. Stream 64KB Chunks with Sliding Speed Calculation
+      final RandomAccessFile raf = await file.open(mode: FileMode.read);
+      int bytesSent = 0;
+      final Stopwatch stopwatch = Stopwatch()..start();
+
+      try {
+        while (bytesSent < totalBytes && !_isCancelled && hostError == null) {
+          final int remaining = totalBytes - bytesSent;
+          final int chunkSize = min(remaining, kFileTransferChunkSize);
+          final Uint8List chunkBytes = await raf.read(chunkSize);
+
+          // Chunk Payload: [1 cmd][4 id][8 offset][chunk_bytes...]
+          final Uint8List chunkPayload = Uint8List(1 + 4 + 8 + chunkBytes.length);
+          final ByteData bdChunk = ByteData.sublistView(chunkPayload);
+          bdChunk.setUint8(0, kFileCmdChunk);
+          bdChunk.setUint32(1, transferId, Endian.big);
+          bdChunk.setUint64(5, bytesSent, Endian.big);
+          chunkPayload.setRange(13, 13 + chunkBytes.length, chunkBytes);
+
+          sendPacket(buildFrame(chunkPayload));
+          bytesSent += chunkBytes.length;
+
+          final double elapsedSec = stopwatch.elapsedMilliseconds / 1000.0;
+          final double speed = elapsedSec > 0 ? (bytesSent / elapsedSec) : 0.0;
+          final int remainingBytes = totalBytes - bytesSent;
+          final double remainingSec = speed > 0 ? (remainingBytes / speed) : 0.0;
+
+          yield TransferProgress(
+            transferId: transferId,
+            filename: filename,
+            totalBytes: totalBytes,
+            bytesSent: bytesSent,
+            speedBytesPerSec: speed,
+            eta: Duration(seconds: remainingSec.toInt()),
+            state: TransferState.transferring,
+          );
+
+          // Yield slightly to prevent blocking the event loop
+          await Future.delayed(const Duration(milliseconds: 1));
+        }
+
+        if (hostError != null) {
+          yield TransferProgress(
+            transferId: transferId,
+            filename: filename,
+            totalBytes: totalBytes,
+            bytesSent: bytesSent,
+            speedBytesPerSec: 0,
+            eta: Duration.zero,
+            state: TransferState.failed,
+            errorMessage: hostError,
+          );
+          return;
+        }
+
+        if (_isCancelled) {
+          // Send ABORT
+          final Uint8List abortPayload = Uint8List(5);
+          ByteData.sublistView(abortPayload)
+            ..setUint8(0, kFileCmdAbort)
+            ..setUint32(1, transferId, Endian.big);
+          sendPacket(buildFrame(abortPayload));
+
+          yield TransferProgress(
+            transferId: transferId,
+            filename: filename,
+            totalBytes: totalBytes,
+            bytesSent: bytesSent,
+            speedBytesPerSec: 0,
+            eta: Duration.zero,
+            state: TransferState.cancelled,
+          );
+          return;
+        }
+
+        // 4. Transmit FINISH Packet (Sub-cmd 0x03)
+        if (observedHostAck && !completedAck) {
+          finishAckWaiter = Completer<void>();
+        }
+        final Uint8List finishPayload = Uint8List(5);
+        ByteData.sublistView(finishPayload)
+          ..setUint8(0, kFileCmdFinish)
+          ..setUint32(1, transferId, Endian.big);
+        sendPacket(buildFrame(finishPayload));
+
+        if (finishAckWaiter != null) {
+          await finishAckWaiter!.future.timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              hostError ??= 'Timed out awaiting host SHA-256 verification ACK.';
+            },
+          );
+        }
+
+        if (hostError != null) {
+          yield TransferProgress(
+            transferId: transferId,
+            filename: filename,
+            totalBytes: totalBytes,
+            bytesSent: bytesSent,
+            speedBytesPerSec: 0,
+            eta: Duration.zero,
+            state: TransferState.failed,
+            errorMessage: hostError,
+          );
+          return;
+        }
+
+        final double totalElapsedSec =
+            max(stopwatch.elapsedMilliseconds / 1000.0, 0.001);
         yield TransferProgress(
           transferId: transferId,
           filename: filename,
           totalBytes: totalBytes,
-          bytesSent: bytesSent,
-          speedBytesPerSec: speed,
-          eta: Duration(seconds: remainingSec.toInt()),
-          state: TransferState.transferring,
+          bytesSent: totalBytes,
+          speedBytesPerSec:
+              totalBytes > 0 ? (totalBytes / totalElapsedSec) : 0.0,
+          eta: Duration.zero,
+          state: TransferState.completed,
         );
-
-        // Yield slightly to prevent blocking the event loop
-        await Future.delayed(const Duration(milliseconds: 1));
-      }
-
-      if (_isCancelled) {
-        // Send ABORT
-        final Uint8List abortPayload = Uint8List(5);
-        ByteData.sublistView(abortPayload)
-          ..setUint8(0, kFileCmdAbort)
-          ..setUint32(1, transferId, Endian.big);
-        sendPacket(packPacket(BinaryOpcode.fileTransfer, abortPayload));
-
+      } catch (e) {
         yield TransferProgress(
           transferId: transferId,
           filename: filename,
@@ -178,42 +292,15 @@ class FileTransferEngine {
           bytesSent: bytesSent,
           speedBytesPerSec: 0,
           eta: Duration.zero,
-          state: TransferState.cancelled,
+          state: TransferState.failed,
+          errorMessage: e.toString(),
         );
-        return;
+      } finally {
+        await raf.close();
+        stopwatch.stop();
       }
-
-      // 4. Transmit FINISH Packet (Sub-cmd 0x03)
-      final Uint8List finishPayload = Uint8List(5);
-      ByteData.sublistView(finishPayload)
-        ..setUint8(0, kFileCmdFinish)
-        ..setUint32(1, transferId, Endian.big);
-      sendPacket(packPacket(BinaryOpcode.fileTransfer, finishPayload));
-
-      final double totalElapsedSec = max(stopwatch.elapsedMilliseconds / 1000.0, 0.001);
-      yield TransferProgress(
-        transferId: transferId,
-        filename: filename,
-        totalBytes: totalBytes,
-        bytesSent: totalBytes,
-        speedBytesPerSec: totalBytes > 0 ? (totalBytes / totalElapsedSec) : 0.0,
-        eta: Duration.zero,
-        state: TransferState.completed,
-      );
-    } catch (e) {
-      yield TransferProgress(
-        transferId: transferId,
-        filename: filename,
-        totalBytes: totalBytes,
-        bytesSent: bytesSent,
-        speedBytesPerSec: 0,
-        eta: Duration.zero,
-        state: TransferState.failed,
-        errorMessage: e.toString(),
-      );
     } finally {
-      await raf.close();
-      stopwatch.stop();
+      await ackSub.cancel();
     }
   }
 

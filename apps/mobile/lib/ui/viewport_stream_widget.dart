@@ -2,12 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
-import '../theme/fluid_theme.dart';
+import '../protocol/binary_protocol.dart';
+import '../services/host_connection_client.dart';
+import '../services/thermal_governor.dart';
 import '../services/zero_gc_video_pipeline.dart';
+import '../theme/fluid_theme.dart';
 
 // =====================================================================
 // BINARY PROTOCOL DEFINITION & OPCODES
@@ -112,6 +113,8 @@ class ViewportStreamWidget extends StatefulWidget {
   final bool isInline;
   final VoidCallback? onToggleFullscreen;
   final String sharedSecret;
+  final bool useTls;
+  final String? certFingerprint;
   final void Function(Map<String, dynamic> telemetry)? onTelemetry;
 
   const ViewportStreamWidget({
@@ -122,6 +125,8 @@ class ViewportStreamWidget extends StatefulWidget {
     this.isInline = true,
     this.onToggleFullscreen,
     this.sharedSecret = '',
+    this.useTls = false,
+    this.certFingerprint,
     this.onTelemetry,
   });
 
@@ -132,9 +137,13 @@ class ViewportStreamWidget extends StatefulWidget {
 class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   static int _wakelockRefCount = 0;
 
-  WebSocketChannel? _channel;
-  StreamSubscription? _subscription;
-  Timer? _pingTimer;
+  HostConnectionClient? _client;
+  HostConnectionClient? _retainedClient;
+  StreamSubscription<Uint8List>? _frameSub;
+  StreamSubscription<Map<String, dynamic>>? _telemetrySub;
+  StreamSubscription<HostConnectionSnapshot>? _stateSub;
+  StreamSubscription<Map<String, dynamic>>? _hitlSub;
+
   final StreamController<Uint8List> _frameController =
       StreamController<Uint8List>.broadcast(sync: true);
 
@@ -144,22 +153,26 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   bool _hasReceivedFrame = false;
   String? _errorMessage;
 
-  // Viewport Resolution Tracking
+  // Viewport Resolution & Thermal Quality Tracking
   int _lastPhysicalWidth = 0;
   int _lastPhysicalHeight = 0;
   int _lastSentPhysicalWidth = 0;
   int _lastSentPhysicalHeight = 0;
+  int _lastSentQuality = 75;
   bool _resizeScheduled = false;
 
-  // Touch & Remote PC Control
+  // Touch & 16ms Delta Coalescing (6-byte binary OP_INPUT !BhhB)
   Offset? _lastTouchPosition;
+  double _accumDx = 0.0;
+  double _accumDy = 0.0;
+  double _accumScrollDy = 0.0;
+  Timer? _inputFlushTimer;
 
   // Metrics
   int _fpsCount = 0;
   int _fpsDisplay = 0;
   int? _latencyMs;
-  int _pingSequence = 0;
-  final Map<int, Stopwatch> _pendingPings = {};
+  DateTime _lastUiFrameAt = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _fpsTimer;
 
   @override
@@ -167,6 +180,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     super.initState();
     _wakelockRefCount++;
     unawaited(WakelockPlus.enable().catchError((_) {}));
+    ThermalGovernor.instance.addListener(_onThermalConfigChanged);
     _connect();
 
     _fpsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -184,11 +198,27 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.hostIp != widget.hostIp ||
         oldWidget.wsPort != widget.wsPort ||
-        oldWidget.sharedSecret.trim() != widget.sharedSecret.trim()) {
+        oldWidget.sharedSecret.trim() != widget.sharedSecret.trim() ||
+        oldWidget.useTls != widget.useTls ||
+        oldWidget.certFingerprint != widget.certFingerprint) {
       _hasReceivedFrame = false;
       _lastSentPhysicalWidth = 0;
       _lastSentPhysicalHeight = 0;
       _connect();
+    }
+  }
+
+  int _qualityForThermal(ThermalConfig cfg) {
+    if (cfg.isSnapshotOnlyMode || cfg.targetFps <= 10) return 42;
+    if (cfg.targetFps <= 20) return 60;
+    return 78;
+  }
+
+  void _onThermalConfigChanged() {
+    if (!mounted || !_isAuthenticated || _lastPhysicalWidth <= 0) return;
+    final int targetQuality = _qualityForThermal(ThermalGovernor.instance.currentConfig);
+    if (targetQuality != _lastSentQuality) {
+      _sendViewportNegotiation(_lastPhysicalWidth, _lastPhysicalHeight, targetQuality);
     }
   }
 
@@ -204,147 +234,96 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       });
       return;
     }
+
     setState(() {
       _isConnecting = true;
       _isAuthenticated = false;
       _errorMessage = null;
-      _pingSequence = 0;
     });
 
-    try {
-      final uri = Uri(
-        scheme: 'ws',
-        host: widget.hostIp,
-        port: widget.wsPort,
-      );
-      _channel = WebSocketChannel.connect(uri);
+    final client = HostConnectionPool.instance.acquire(
+      hostIp: widget.hostIp,
+      port: widget.wsPort,
+      sharedSecret: secret,
+      useTls: widget.useTls,
+      certFingerprint: widget.certFingerprint,
+    );
+    client.retain();
+    _client = client;
+    _retainedClient = client;
 
-      _subscription = _channel!.stream.listen(
-        (message) {
-          if (!mounted) return;
-          if (message is Uint8List) {
-            final packet = StreamBinaryPacket.parse(message);
-            if (packet != null) {
-              if (packet.opcode == StreamOpcode.auth) {
-                final statusStr =
-                    utf8.decode(packet.payload, allowMalformed: true).trim();
-                if (statusStr == 'AUTH_OK' ||
-                    statusStr == 'OK_AUTHENTICATED') {
-                  if (mounted) {
-                    setState(() {
-                      _isAuthenticated = true;
-                      _isConnected = true;
-                      _isConnecting = false;
-                    });
-                  }
-                } else if (packet.payload.length == 16) {
-                  // Respond to 16-byte HMAC-SHA256 challenge from agent.py
-                  final hmacSha256 = Hmac(sha256, utf8.encode(secret));
-                  final digest = hmacSha256.convert(packet.payload);
-                  final authReply = StreamBinaryPacket.pack(
-                    StreamOpcode.auth,
-                    packet.seqId,
-                    Uint8List.fromList(digest.bytes),
-                  );
-                  _channel?.sink.add(authReply);
-                } else if (mounted) {
-                  setState(() {
-                    _isAuthenticated = false;
-                    _isConnected = false;
-                    _isConnecting = false;
-                    _errorMessage = 'Stream authentication rejected: $statusStr';
-                  });
-                  _cleanupSocket();
-                }
-              } else if (packet.opcode == StreamOpcode.error) {
-                final errMsg = utf8.decode(packet.payload, allowMalformed: true).trim();
-                if (mounted) {
-                  setState(() {
-                    _errorMessage = errMsg.isNotEmpty ? errMsg : 'Host stream error';
-                    if (!_isAuthenticated) {
-                      _isConnected = false;
-                      _isConnecting = false;
-                    }
-                  });
-                }
-              } else if (packet.opcode == StreamOpcode.telemetry) {
-                try {
-                  final decoded = jsonDecode(
-                    utf8.decode(packet.payload, allowMalformed: true),
-                  );
-                  if (decoded is Map<String, dynamic>) {
-                    widget.onTelemetry?.call(decoded);
-                  }
-                } catch (_) {}
-              } else if (packet.opcode == StreamOpcode.frame) {
-                if (!_isAuthenticated) {
-                  return; // Drop unauthenticated pre-auth video frames
-                }
-                _fpsCount++;
-                if (!_frameController.isClosed) {
-                  _frameController.add(packet.payload);
-                }
-                if (!_isConnected || _isConnecting || !_hasReceivedFrame) {
-                  setState(() {
-                    _hasReceivedFrame = true;
-                    _isConnected = true;
-                    _isConnecting = false;
-                  });
-                }
-              } else if (packet.opcode == StreamOpcode.ping) {
-                final stopwatch = _pendingPings.remove(packet.seqId);
-                if (stopwatch != null) {
-                  stopwatch.stop();
-                  final nextMs = stopwatch.elapsedMilliseconds;
-                  if (mounted && _latencyMs != nextMs) {
-                    setState(() => _latencyMs = nextMs);
-                  }
-                }
-              }
-            }
-          }
-        },
-        onError: (err) {
-          if (!mounted) return;
-          _stopPingTimer();
-          setState(() {
-            _isConnecting = false;
-            _isConnected = false;
-            _isAuthenticated = false;
-            _errorMessage = 'Socket Connection Error: $err';
-          });
-        },
-        onDone: () {
-          if (!mounted) return;
-          _stopPingTimer();
-          setState(() {
-            _isConnected = false;
-            _isAuthenticated = false;
-            _isConnecting = false;
-          });
-        },
-      );
-
-      // Keep-alive ping loop every 2 seconds
-      _pingTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
-        if (!mounted || _channel == null || !_isConnected) return;
-        final int seq = ++_pingSequence;
-        if (_pendingPings.length >= 4) {
-          _pendingPings.remove(_pendingPings.keys.first)?.stop();
+    _stateSub = client.stateStream.listen((snap) {
+      if (!mounted) return;
+      final wasAuthed = _isAuthenticated;
+      setState(() {
+        _isConnecting = snap.isConnecting;
+        _isConnected = snap.isConnected;
+        _isAuthenticated = snap.isVaultEstablished;
+        _latencyMs = snap.latencyMs;
+        if (snap.errorMessage != null && !snap.isVaultEstablished) {
+          _errorMessage = snap.errorMessage;
+        } else if (snap.isVaultEstablished) {
+          _errorMessage = null;
         }
-        _pendingPings[seq] = Stopwatch()..start();
-        try {
-          _channel?.sink.add(
-              StreamBinaryPacket.pack(StreamOpcode.ping, seq, Uint8List(0)));
-        } catch (_) {}
       });
-    } catch (e) {
-      if (mounted) {
+      if (!wasAuthed &&
+          snap.isVaultEstablished &&
+          _lastPhysicalWidth > 0 &&
+          _lastPhysicalHeight > 0) {
+        _sendViewportNegotiation(
+          _lastPhysicalWidth,
+          _lastPhysicalHeight,
+          _qualityForThermal(ThermalGovernor.instance.currentConfig),
+        );
+      }
+    });
+
+    _telemetrySub = client.telemetryStream.listen((decoded) {
+      if (mounted) widget.onTelemetry?.call(decoded);
+    });
+
+    _hitlSub = client.hitlChallengeStream.listen((chal) {
+      unawaited(client.respondToHitlChallenge(chal));
+    });
+
+    _frameSub = client.frameStream.listen((frameBytes) {
+      if (!mounted || !_isAuthenticated) return;
+      final cfg = ThermalGovernor.instance.currentConfig;
+      final int minIntervalMs = cfg.targetFps > 0 ? (1000 ~/ cfg.targetFps) : 33;
+      final now = DateTime.now();
+      if (cfg.targetFps < 30 &&
+          now.difference(_lastUiFrameAt).inMilliseconds < minIntervalMs) {
+        return; // Shed thermal frame load without stalling decrypt sequence state
+      }
+      _lastUiFrameAt = now;
+      _fpsCount++;
+      if (!_frameController.isClosed) {
+        _frameController.add(frameBytes);
+      }
+      if (!_isConnected || _isConnecting || !_hasReceivedFrame) {
         setState(() {
+          _hasReceivedFrame = true;
+          _isConnected = true;
           _isConnecting = false;
-          _errorMessage = 'Failed to connect: $e';
         });
       }
+    });
+
+    unawaited(client.ensureConnected().catchError((_) {}));
+  }
+
+  void _sendViewportNegotiation(int width, int height, int quality) {
+    final client = _client;
+    if (client == null || !client.isVaultEstablished) return;
+    final payload = Uint8List.fromList(utf8.encode(jsonEncode({
+      'width': width,
+      'height': height,
+      'quality': quality,
+    })));
+    if (client.sendEncrypted(BinaryOpcode.viewportResize, payload)) {
+      _lastSentPhysicalWidth = width;
+      _lastSentPhysicalHeight = height;
+      _lastSentQuality = quality;
     }
   }
 
@@ -364,48 +343,72 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     _lastPhysicalWidth = physicalWidth;
     _lastPhysicalHeight = physicalHeight;
 
+    final int targetQuality =
+        _qualityForThermal(ThermalGovernor.instance.currentConfig);
     final dimensionsChanged =
         (physicalWidth - _lastSentPhysicalWidth).abs() > 16 ||
-            (physicalHeight - _lastSentPhysicalHeight).abs() > 16;
+            (physicalHeight - _lastSentPhysicalHeight).abs() > 16 ||
+            targetQuality != _lastSentQuality;
     if (dimensionsChanged &&
-        _channel != null &&
+        _client != null &&
         _isConnected &&
         _isAuthenticated &&
         !_resizeScheduled) {
       _resizeScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _resizeScheduled = false;
-        if (!mounted || _channel == null || !_isConnected) return;
-        try {
-          final resizePacket = StreamBinaryPacket.packViewportResize(
-            _lastPhysicalWidth,
-            _lastPhysicalHeight,
-            seqId: ++_pingSequence,
-          );
-          _channel?.sink.add(resizePacket);
-          _lastSentPhysicalWidth = _lastPhysicalWidth;
-          _lastSentPhysicalHeight = _lastPhysicalHeight;
-        } catch (e) {
-          debugPrint('Failed to send Viewport Resize: $e');
-        }
+        if (!mounted || _client == null || !_isAuthenticated) return;
+        _sendViewportNegotiation(
+            _lastPhysicalWidth, _lastPhysicalHeight, targetQuality);
       });
     }
   }
 
   // ===================================================================
-  // VIRTUAL INPUT & REMOTE PC CONTROL (OPCODE 0x08)
+  // VIRTUAL INPUT & REMOTE PC CONTROL (OPCODE 0x08 OVER AEAD VAULT)
   // ===================================================================
+  void _sendBinaryInputPacket(int eventType, int dx, int dy, int btnCode) {
+    final client = _client;
+    if (client == null || !client.isVaultEstablished) return;
+    final Uint8List buf = Uint8List(6);
+    final ByteData bd = ByteData.sublistView(buf);
+    bd.setUint8(0, eventType);
+    bd.setInt16(1, dx.clamp(-5000, 5000), Endian.big);
+    bd.setInt16(3, dy.clamp(-5000, 5000), Endian.big);
+    bd.setUint8(5, btnCode);
+    client.sendEncrypted(BinaryOpcode.input, buf);
+  }
+
+  void _flushCoalescedInput() {
+    if (_accumDx.abs() >= 1.0 || _accumDy.abs() >= 1.0) {
+      final int dx = _accumDx.round().clamp(-5000, 5000);
+      final int dy = _accumDy.round().clamp(-5000, 5000);
+      _accumDx = 0.0;
+      _accumDy = 0.0;
+      if (dx != 0 || dy != 0) {
+        _sendBinaryInputPacket(1, dx, dy, 0);
+      }
+    }
+    if (_accumScrollDy.abs() >= 1.0) {
+      final int sdy = _accumScrollDy.round().clamp(-5000, 5000);
+      _accumScrollDy = 0.0;
+      if (sdy != 0) {
+        _sendBinaryInputPacket(3, 0, sdy, 0);
+      }
+    }
+  }
+
+  void _scheduleInputFlush() {
+    if (_inputFlushTimer?.isActive ?? false) return;
+    _inputFlushTimer = Timer(const Duration(milliseconds: 16), _flushCoalescedInput);
+  }
+
   void _sendVirtualInput(Map<String, dynamic> actionMap) {
-    if (_channel == null || !_isConnected) return;
+    final client = _client;
+    if (client == null || !client.isVaultEstablished) return;
     try {
-      final jsonStr = jsonEncode(actionMap);
-      final payload = utf8.encode(jsonStr);
-      final packet = StreamBinaryPacket.pack(
-        StreamOpcode.input,
-        ++_pingSequence,
-        Uint8List.fromList(payload),
-      );
-      _channel?.sink.add(packet);
+      final payload = Uint8List.fromList(utf8.encode(jsonEncode(actionMap)));
+      client.sendEncrypted(BinaryOpcode.input, payload);
     } catch (e) {
       debugPrint('Virtual input send error: $e');
     }
@@ -413,17 +416,25 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
   void _sendMouseRel(double dx, double dy) {
     if (dx.abs() < 0.1 && dy.abs() < 0.1) return;
-    final scaledDx = (dx * 1.6).clamp(-140.0, 140.0);
-    final scaledDy = (dy * 1.6).clamp(-140.0, 140.0);
-    _sendVirtualInput({'action': 'move', 'dx': scaledDx, 'dy': scaledDy});
+    _accumDx += (dx * 1.6).clamp(-140.0, 140.0);
+    _accumDy += (dy * 1.6).clamp(-140.0, 140.0);
+    _scheduleInputFlush();
   }
 
   void _sendMouseClick(String button) {
-    _sendVirtualInput({'action': 'click', 'button': button});
+    _flushCoalescedInput();
+    final int code = switch (button) {
+      'right' => 2,
+      'middle' => 3,
+      'double' => 4,
+      _ => 1,
+    };
+    _sendBinaryInputPacket(2, 0, 0, code);
   }
 
   void _sendMouseScroll(double dy) {
-    _sendVirtualInput({'action': 'scroll', 'dy': (dy * 2.0).round()});
+    _accumScrollDy += dy * 2.0;
+    _scheduleInputFlush();
   }
 
   void _sendKeyboardText(String text, {bool pressEnter = true}) {
@@ -549,28 +560,26 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     );
   }
 
-  void _stopPingTimer() {
-    _pingTimer?.cancel();
-    _pingTimer = null;
-    for (final stopwatch in _pendingPings.values) {
-      stopwatch.stop();
-    }
-    _pendingPings.clear();
-  }
-
   void _cleanupSocket() {
-    _stopPingTimer();
+    _inputFlushTimer?.cancel();
+    _inputFlushTimer = null;
     _isAuthenticated = false;
-    _subscription?.cancel();
-    _subscription = null;
-    try {
-      _channel?.sink.close();
-    } catch (_) {}
-    _channel = null;
+    unawaited(_frameSub?.cancel());
+    unawaited(_telemetrySub?.cancel());
+    unawaited(_stateSub?.cancel());
+    unawaited(_hitlSub?.cancel());
+    _frameSub = null;
+    _telemetrySub = null;
+    _stateSub = null;
+    _hitlSub = null;
+    _retainedClient?.release();
+    _retainedClient = null;
+    _client = null;
   }
 
   @override
   void dispose() {
+    ThermalGovernor.instance.removeListener(_onThermalConfigChanged);
     _fpsTimer?.cancel();
     _fpsTimer = null;
     _cleanupSocket();
@@ -633,16 +642,12 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                         frameStream: _frameController.stream,
                         fit: BoxFit.contain,
                         onRequestKeyframe: (opcode) {
-                          if (_channel != null && _isAuthenticated) {
-                            try {
-                              _channel?.sink.add(
-                                StreamBinaryPacket.pack(
-                                  StreamOpcode.frameSync,
-                                  ++_pingSequence,
-                                  Uint8List(0),
-                                ),
-                              );
-                            } catch (_) {}
+                          final client = _client;
+                          if (client != null && client.isVaultEstablished) {
+                            client.sendEncrypted(
+                              BinaryOpcode.frameSync,
+                              Uint8List(0),
+                            );
                           }
                         },
                       ),

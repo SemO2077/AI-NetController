@@ -137,18 +137,21 @@ class OsIntegrationsManager {
     required String targetIp,
     required String routerIp,
   }) {
-    final List<int> macBytes = _parseMacAddress(targetMac);
-    final List<int> ipBytes = _parseIpAddress(targetIp);
-    final List<int> routerIpBytes = _parseIpAddress(routerIp);
+    final List<int>? macBytes = _parseMacAddress(targetMac);
+    final List<int>? ipBytes = _parseIpAddress(targetIp);
+    final List<int>? routerIpBytes = _parseIpAddress(routerIp);
+    if (macBytes == null || ipBytes == null || routerIpBytes == null) {
+      throw ArgumentError('Invalid MAC or IPv4 address for ARP construction.');
+    }
 
     final Uint8List packet = Uint8List(28);
     final ByteData bd = ByteData.sublistView(packet);
 
-    bd.setUint16(0, 0x0001, Endian.big);  // Hardware type: Ethernet (1)
-    bd.setUint16(2, 0x0800, Endian.big);  // Protocol type: IPv4 (0x0800)
-    bd.setUint8(4, 6);                   // Hardware address length (6)
-    bd.setUint8(5, 4);                   // Protocol address length (4)
-    bd.setUint16(6, 0x0002, Endian.big);  // Opcode: ARP Reply (2)
+    bd.setUint16(0, 0x0001, Endian.big); // Hardware type: Ethernet (1)
+    bd.setUint16(2, 0x0800, Endian.big); // Protocol type: IPv4 (0x0800)
+    bd.setUint8(4, 6); // Hardware address length (6)
+    bd.setUint8(5, 4); // Protocol address length (4)
+    bd.setUint16(6, 0x0002, Endian.big); // Opcode: ARP Reply (2)
 
     // Sender Hardware Address (Target PC MAC)
     for (int i = 0; i < 6; i++) {
@@ -170,36 +173,26 @@ class OsIntegrationsManager {
     return packet;
   }
 
-  /// Sends Gratuitous ARP to the router followed by the 102-byte WoL Magic Packet
+  /// Broadcasts a standard 102-byte Wake-on-LAN Magic Packet (`6x 0xFF + 16x MAC`)
+  /// across global broadcast and the local /24 subnet (UDP ports 7 and [port]).
   Future<bool> sendGratuitousArpAndWake({
     required String targetMac,
     required String targetIp,
     required String routerIp,
     int port = 9,
   }) async {
+    final List<int>? macBytes = _parseMacAddress(targetMac);
+    if (macBytes == null) {
+      debugPrint('WoL rejected invalid target MAC address.');
+      return false;
+    }
+
+    RawDatagramSocket? socket;
     try {
-      final RawDatagramSocket socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
       socket.broadcastEnabled = true;
 
-      // 1. Inject Gratuitous ARP payload to refresh Wi-Fi Access Point / Router ARP table
-      try {
-        final Uint8List arpPacket = buildGratuitousArpPacket(
-          targetMac: targetMac,
-          targetIp: targetIp,
-          routerIp: routerIp,
-        );
-        // Transmit gratuitous ARP packet to router gateway
-        socket.send(arpPacket, InternetAddress(routerIp), 67); // UDP helper / broadcast
-        socket.send(arpPacket, InternetAddress('255.255.255.255'), 9);
-      } catch (arpErr) {
-        debugPrint('Gratuitous ARP transmission notice: $arpErr');
-      }
-
-      // Small 50ms delay for wireless NIC AP table propagation
-      await Future.delayed(const Duration(milliseconds: 50));
-
-      // 2. Generate standard 102-byte Magic Packet: 6x 0xFF + 16x MAC
-      final List<int> macBytes = _parseMacAddress(targetMac);
+      // Generate standard 102-byte Magic Packet: 6x 0xFF + 16x MAC
       final Uint8List magicPacket = Uint8List(102);
       for (int i = 0; i < 6; i++) {
         magicPacket[i] = 0xFF;
@@ -210,32 +203,33 @@ class OsIntegrationsManager {
         }
       }
 
-      // Broadcast to both global broadcast and subnet broadcast on UDP 7 & 9
       final InternetAddress broadcastAddr = InternetAddress('255.255.255.255');
       socket.send(magicPacket, broadcastAddr, port);
       socket.send(magicPacket, broadcastAddr, 7);
 
-      // Also send directed subnet broadcast if subnet is /24
-      final List<String> ipParts = routerIp.split('.');
-      if (ipParts.length == 4) {
-        final String subnetBroadcast = '${ipParts[0]}.${ipParts[1]}.${ipParts[2]}.255';
+      // Also send directed subnet broadcast if routerIp is a valid IPv4 address
+      final List<int>? routerParts = _parseIpAddress(routerIp);
+      if (routerParts != null) {
+        final String subnetBroadcast =
+            '${routerParts[0]}.${routerParts[1]}.${routerParts[2]}.255';
         try {
           socket.send(magicPacket, InternetAddress(subnetBroadcast), port);
         } catch (_) {}
       }
 
-      socket.close();
       return true;
     } catch (e) {
       debugPrint('WoWLAN packet broadcast error: $e');
       return false;
+    } finally {
+      socket?.close();
     }
   }
 
-  List<int> _parseMacAddress(String mac) {
+  List<int>? _parseMacAddress(String mac) {
     final String clean = mac.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '');
-    if (clean.length != 12) {
-      return [0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7];
+    if (clean.length != 12 || clean == '000000000000') {
+      return null;
     }
     final List<int> bytes = [];
     for (int i = 0; i < 12; i += 2) {
@@ -244,11 +238,17 @@ class OsIntegrationsManager {
     return bytes;
   }
 
-  List<int> _parseIpAddress(String ip) {
-    final List<String> parts = ip.split('.');
+  List<int>? _parseIpAddress(String ip) {
+    final List<String> parts = ip.trim().split('.');
     if (parts.length != 4) {
-      return [192, 168, 1, 1];
+      return null;
     }
-    return parts.map((p) => int.tryParse(p) ?? 0).toList();
+    final List<int> octets = [];
+    for (final p in parts) {
+      final int? v = int.tryParse(p);
+      if (v == null || v < 0 || v > 255) return null;
+      octets.add(v);
+    }
+    return octets;
   }
 }
