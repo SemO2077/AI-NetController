@@ -603,12 +603,14 @@ class TestProcessSupervision(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_kill_escalation(self):
         assert HAS_FIREWALL_MODULE
-        hang_cmd = "python3 -c 'import time; time.sleep(10)'" if platform.system() != "Windows" else "ping 127.0.0.1 -n 10"
+        hang_cmd = "sleep 10" if platform.system() != "Windows" else "ping 127.0.0.1 -n 10"
         start_time = time.perf_counter()
         result = await CommandASTFirewall.execute_sandboxed(hang_cmd, timeout_sec=1.0)
         elapsed = time.perf_counter() - start_time
-        assert result["success"] is False
-        assert "terminated" in result["stderr"].lower() or "runtime" in result["stderr"].lower()
+        assert result["success"] is False, f"Expected timeout failure, got: {result!r}"
+        assert (
+            "terminated" in result["stderr"].lower() or "runtime" in result["stderr"].lower()
+        ), f"Expected timeout stderr, got: {result!r}"
         assert elapsed < 4.0, f"Termination sequence hung too long: {elapsed:.2f}s"
 
 
