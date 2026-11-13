@@ -1,71 +1,121 @@
 """
-AI NetController — Windows System Integration, Checks & Balances, Tray, Shortcuts & Uninstaller
-================================================================================================
-Enterprise-grade platform bridge for Windows 10 & 11:
-1. Checks & Balances:
-   - Single-Instance Named Mutex (Global\\AI_NetController_HostAgent_Mutex) preventing port collision
-   - Pre-flight Port Availability Verification (8765 / 8766)
-   - Foreground Window Activation if duplicate instance is launched
-2. System Tray Integration:
-   - Live taskbar background tray icon (Pystray) with dynamic status tooltips
-   - Window Minimize-to-Tray on close (WM_DELETE_WINDOW)
-   - Full context menu: Open, Pause/Resume, View-Only Lock, Add Shortcut, Uninstall, Exit
-3. Desktop & Start Menu Shortcuts:
-   - Native Windows Shell .LNK creation on user Desktop & Start Menu
-   - Automatic registration on first launch
-   - App Paths Run-Dialog registration (Win+R -> AI_NetController_HostAgent)
-4. Full Accessible Uninstaller:
-   - Registered in Windows Settings / Control Panel (Add or Remove Programs)
-   - Accessible via GUI button, System Tray menu, or CLI flag (--uninstall)
-   - Cleans up shortcuts, registry keys, autostart, temp files, and terminates background daemon
-================================================================================================
+AI NetController — Windows Integration, Security ACLs & Cyber Setup Wizards
+================================================================================
+AV / Smart App Control (SAC) Hardened Native Implementation:
+  1. SingleInstanceGuard via Kernel Named Mutex
+  2. Native Win32 COM Shortcuts (IShellLinkW + IPersistFile via ctypes ole32)
+     -> ZERO temporary .vbs droppers, ZERO cscript.exe spawns
+  3. Native Win32 Process Management (psutil + OpenProcess/TerminateProcess)
+     -> ZERO taskkill.exe or cmd.exe child spawns
+  4. Native Win32 NTFS User-SID DACL Protection (SetNamedSecurityInfoW)
+     -> ZERO icacls.exe spawns; Owner + SYSTEM only
+  5. Windows Mark-of-the-Web (Zone.Identifier ZoneId=3) ADS writer
+  6. Cyber Glassmorphic Setup & Uninstall Wizards matching Mobile Design Language
+================================================================================
 """
 
-import os
-import ntpath
-import sys
-import time
-import socket
-import tempfile
-import subprocess
+from __future__ import annotations
+
 import logging
+import ntpath
+import os
 import platform
 import shutil
-from typing import Optional, Callable, Dict, Any, Tuple
+import socket
+import subprocess
+import sys
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 IS_WINDOWS = platform.system() == "Windows"
 
 if IS_WINDOWS:
-    import winreg
     import ctypes
+    import winreg
     from ctypes import wintypes
+
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    user32 = ctypes.windll.user32
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    ole32 = ctypes.WinDLL("ole32", use_last_error=True)
 else:
+    ctypes = None  # type: ignore[assignment]
+    wintypes = None  # type: ignore[assignment]
     winreg = None
     kernel32 = None
     user32 = None
+    advapi32 = None
+    ole32 = None
 
 try:
     from icon_assets import (
-        get_icon_ico_path,
-        get_icon_png_path,
-        get_icon_image,
         apply_window_icon,
+        get_icon_ico_path,
+        get_icon_image,
+        get_icon_png_path,
     )
 except ImportError:
     try:
         from agent.icon_assets import (
-            get_icon_ico_path,
-            get_icon_png_path,
-            get_icon_image,
             apply_window_icon,
+            get_icon_ico_path,
+            get_icon_image,
+            get_icon_png_path,
         )
     except ImportError:
-        get_icon_ico_path = lambda: None
-        get_icon_png_path = lambda size=512: None
-        get_icon_image = lambda size=64: None
-        apply_window_icon = lambda win: None
+        get_icon_ico_path = lambda: None  # type: ignore[assignment]
+        get_icon_png_path = lambda size=512: None  # type: ignore[assignment]
+        get_icon_image = lambda size=64: None  # type: ignore[assignment]
+        apply_window_icon = lambda win: None  # type: ignore[assignment]
+
+try:
+    from cyber_ui_theme import (
+        CyberColors,
+        apply_dark_titlebar,
+        enable_hidpi_awareness,
+        render_ambient_backdrop,
+        render_glass_card_image,
+        render_node_orb_image,
+        resolve_font_families,
+    )
+except ImportError:
+    try:
+        from agent.cyber_ui_theme import (
+            CyberColors,
+            apply_dark_titlebar,
+            enable_hidpi_awareness,
+            render_ambient_backdrop,
+            render_glass_card_image,
+            render_node_orb_image,
+            resolve_font_families,
+        )
+    except ImportError:
+        class CyberColors:  # type: ignore[no-redef]
+            BACKGROUND = "#040812"
+            SURFACE = "#0A1628"
+            SURFACE_ELEVATED = "#102038"
+            PRIMARY = "#00F0FF"
+            SECONDARY = "#8A2BE2"
+            ACCENT = "#FF0055"
+            SUCCESS = "#00FF9D"
+            WARNING = "#FFB800"
+            TEXT_PRIMARY = "#E2F1FF"
+            TEXT_SECONDARY = "#7A93B2"
+            TEXT_TERTIARY = "#4A607A"
+            GLASS_BORDER = "#13526A"
+            GLASS_BORDER_IDLE = "#1D2C42"
+            GLASS_BORDER_CRITICAL = "#8F1843"
+            PRIMARY_SOFT = "#0A2A3B"
+            ACCENT_SOFT = "#3B0D24"
+            SUCCESS_SOFT = "#083327"
+            TERMINAL_BG = "#060B16"
+
+        apply_dark_titlebar = lambda *_a, **_kw: None  # type: ignore[assignment]
+        enable_hidpi_awareness = lambda: None  # type: ignore[assignment]
+        render_ambient_backdrop = lambda *_a, **_kw: None  # type: ignore[assignment]
+        render_glass_card_image = lambda *_a, **_kw: None  # type: ignore[assignment]
+        render_node_orb_image = lambda *_a, **_kw: None  # type: ignore[assignment]
+        resolve_font_families = lambda *_a, **_kw: ("Segoe UI", "Consolas")  # type: ignore[assignment]
 
 logger = logging.getLogger("AI-NetController-WindowsIntegration")
 
@@ -79,15 +129,15 @@ REG_UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AI_Net
 REG_APP_PATHS_KEY = r"Software\Microsoft\Windows\CurrentVersion\App Paths\AI_NetController_HostAgent.exe"
 
 
-# =====================================================================
+# ==============================================================================
 # 1. CHECKS & BALANCES: SINGLE-INSTANCE MUTEX & PORT HEALTH
-# =====================================================================
+# ==============================================================================
 class SingleInstanceGuard:
     """
-    Guarantees only one instance of the AI NetController daemon runs at any time.
-    If another instance is launched, it brings the existing window to front
-    and exits cleanly to avoid port collisions and socket corruption.
+    Guarantees only one instance of AI NetController daemon runs at a time
+    using a Windows Kernel Named Mutex.
     """
+
     def __init__(self, mutex_name: str = MUTEX_NAME):
         self.mutex_name = mutex_name
         self.mutex_handle = None
@@ -102,7 +152,6 @@ class SingleInstanceGuard:
         kernel32.CloseHandle.restype = wintypes.BOOL
         kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
-        # Clear thread-local last error before CreateMutexW call
         ctypes.set_last_error(0)
         self.mutex_handle = kernel32.CreateMutexW(None, False, self.mutex_name)
         last_error = ctypes.get_last_error()
@@ -120,247 +169,450 @@ class SingleInstanceGuard:
             except Exception:
                 pass
             self.mutex_handle = None
-            self._activate_existing_window()
             return False
 
         self.is_already_running = False
         return True
 
-    def _activate_existing_window(self):
-        """Attempts to find and restore the existing Control Center window."""
-        if not IS_WINDOWS or not user32:
-            return
-        try:
-            found_hwnds = []
-            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-            def enum_proc(hwnd, lparam):
-                length = user32.GetWindowTextLengthW(hwnd)
-                if length > 0:
-                    buff = ctypes.create_unicode_buffer(length + 1)
-                    user32.GetWindowTextW(hwnd, buff, length + 1)
-                    title = buff.value.lower()
-                    if "ai netcontroller" in title:
-                        found_hwnds.append(hwnd)
-                return True
-
-            cb = WNDENUMPROC(enum_proc)
-            user32.EnumWindows(cb, 0)
-            for hwnd in found_hwnds:
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-                user32.SetForegroundWindow(hwnd)
-                return
-        except Exception as e:
-            logger.debug(f"Could not activate existing window: {e}")
-
-    def release(self):
+    def release(self) -> None:
         if IS_WINDOWS and kernel32 and self.mutex_handle:
             try:
-                kernel32.CloseHandle.restype = wintypes.BOOL
-                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
                 kernel32.CloseHandle(self.mutex_handle)
             except Exception:
                 pass
             self.mutex_handle = None
 
+    def __enter__(self) -> "SingleInstanceGuard":
+        self.acquire()
+        return self
 
-def check_port_available(port: int = 8765, host: str = "0.0.0.0") -> Tuple[bool, str]:
-    """
-    Checks if the designated TCP port is available for binding.
-    Returns (is_available, error_message).
-    """
-    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        self.release()
+
+
+def check_port_available(port: int, host: str = "0.0.0.0") -> Tuple[bool, str]:
+    """Probes whether the target WebSocket port is available on the host."""
     try:
-        test_sock.settimeout(0.5)
-        test_sock.bind((host, port))
-        test_sock.close()
-        return True, f"Port {port} is open and available."
-    except OSError as e:
-        return False, f"Port {port} is currently in use by another process or blocked ({e})."
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.6)
+            probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+            if s.connect_ex((probe_host, port)) == 0:
+                return False, f"Port {port} is currently occupied by another process."
+        return True, f"Port {port} is available."
+    except Exception as e:
+        return True, f"Port check advisory: {e}"
+
+
+def get_executable_path() -> str:
+    """Returns canonical executable or launcher entry path."""
+    if getattr(sys, "frozen", False):
+        return os.path.abspath(sys.executable)
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "agent_daemon.py"))
+
+
+def _resolve_python_gui_launcher() -> Tuple[str, str]:
+    """
+    Returns (target_exe, arguments_prefix) pointing cleanly to PSF-signed pythonw.exe
+    when running from Python source, avoiding unsigned batch/VBS stubs under Smart App Control.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.abspath(sys.executable), ""
+    py_exe = os.path.abspath(sys.executable)
+    py_dir = os.path.dirname(py_exe)
+    pythonw = os.path.join(py_dir, "pythonw.exe")
+    if IS_WINDOWS and os.path.isfile(pythonw):
+        return pythonw, f'"{get_executable_path()}"'
+    return py_exe, f'"{get_executable_path()}"'
+
+
+# ==============================================================================
+# 2. NATIVE WIN32 SECURITY ACLs & MARK-OF-THE-WEB (ZERO SUBPROCESSES)
+# ==============================================================================
+def harden_windows_acl(path: str, is_dir: Optional[bool] = None) -> bool:
+    """
+    Restricts NTFS permissions on sensitive configuration files/folders strictly to
+    the current Windows user SID + Local SYSTEM using protected DACLs via Win32 Advapi32.
+    Eliminates icacls.exe child spawns.
+    """
+    if not IS_WINDOWS or not advapi32 or not kernel32 or not path:
+        return False
+    abs_path = os.path.abspath(path)
+    if not os.path.exists(abs_path):
+        return False
+    if is_dir is None:
+        is_dir = os.path.isdir(abs_path)
+
+    TOKEN_QUERY = 0x0008
+    TokenUser = 1
+    SE_FILE_OBJECT = 1
+    DACL_SECURITY_INFORMATION = 0x00000004
+    PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
+    SDDL_REVISION_1 = 1
+
+    h_token = wintypes.HANDLE()
+    p_sd = ctypes.c_void_p()
+    p_str_sid = wintypes.LPWSTR()
+    try:
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        advapi32.OpenProcessToken.restype = wintypes.BOOL
+
+        if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(h_token)):
+            return False
+
+        advapi32.GetTokenInformation.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)
+        ]
+        advapi32.GetTokenInformation.restype = wintypes.BOOL
+
+        req_len = wintypes.DWORD(0)
+        advapi32.GetTokenInformation(h_token, TokenUser, None, 0, ctypes.byref(req_len))
+        if req_len.value == 0:
+            return False
+
+        buf = (ctypes.c_ubyte * req_len.value)()
+        if not advapi32.GetTokenInformation(h_token, TokenUser, buf, req_len.value, ctypes.byref(req_len)):
+            return False
+
+        # TOKEN_USER first pointer-sized member is PSID
+        psid = ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0]
+        advapi32.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+        advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+        if not advapi32.ConvertSidToStringSidW(psid, ctypes.byref(p_str_sid)):
+            return False
+
+        user_sid = ctypes.wstring_at(p_str_sid)
+        inherit = "OICI" if is_dir else ""
+        sddl = f"D:P(A;{inherit};FA;;;{user_sid})(A;{inherit};FA;;;SY)"
+
+        advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.ULONG)
+        ]
+        advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+        if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl, SDDL_REVISION_1, ctypes.byref(p_sd), None
+        ):
+            return False
+
+        dacl_present = wintypes.BOOL(False)
+        dacl_defaulted = wintypes.BOOL(False)
+        p_dacl = ctypes.c_void_p()
+        advapi32.GetSecurityDescriptorDacl.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL), ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.BOOL)
+        ]
+        advapi32.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+        if not advapi32.GetSecurityDescriptorDacl(
+            p_sd, ctypes.byref(dacl_present), ctypes.byref(p_dacl), ctypes.byref(dacl_defaulted)
+        ) or not dacl_present.value:
+            return False
+
+        advapi32.SetNamedSecurityInfoW.argtypes = [
+            wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD,
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+        ]
+        advapi32.SetNamedSecurityInfoW.restype = wintypes.DWORD
+        err = advapi32.SetNamedSecurityInfoW(
+            abs_path,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            p_dacl,
+            None,
+        )
+        return err == 0
+    except Exception as e:
+        logger.debug(f"NTFS DACL hardening notice for {path}: {e}")
+        return False
     finally:
         try:
-            test_sock.close()
+            if p_str_sid and p_str_sid.value:
+                kernel32.LocalFree(p_str_sid)
+        except Exception:
+            pass
+        try:
+            if p_sd and p_sd.value:
+                kernel32.LocalFree(p_sd)
+        except Exception:
+            pass
+        try:
+            if h_token and h_token.value:
+                kernel32.CloseHandle(h_token)
         except Exception:
             pass
 
 
-# =====================================================================
-# 2. SHORTCUT MANAGEMENT (DESKTOP & START MENU)
-# =====================================================================
-def get_executable_path() -> str:
-    """Returns the absolute path to the running executable or script."""
-    if getattr(sys, "frozen", False):
-        return os.path.abspath(sys.executable)
-    return os.path.abspath(sys.argv[0])
+def apply_mark_of_the_web(file_path: str, zone_id: int = 3) -> bool:
+    """
+    Tags remote-transferred files on NTFS with Windows Mark-of-the-Web
+    (`Zone.Identifier` ADS, ZoneId=3 Internet) so OS smart screens classify them transparently.
+    """
+    if not IS_WINDOWS or not file_path or not os.path.isfile(file_path):
+        return False
+    try:
+        ads_path = f"{os.path.abspath(file_path)}:Zone.Identifier"
+        with open(ads_path, "w", encoding="ascii", newline="\r\n") as ads:
+            ads.write(f"[ZoneTransfer]\nZoneId={int(zone_id)}\n")
+        return True
+    except Exception as e:
+        logger.debug(f"Mark-of-the-Web notice for {file_path}: {e}")
+        return False
 
 
-def _sanitize_vbs_literal(value: str) -> str:
-    """Strips control characters/newlines and doubles quotes for safe VBScript literals."""
-    cleaned = "".join(ch for ch in str(value or "") if ch not in ("\r", "\n", "\x00"))
-    return cleaned.replace('"', '""')
+# ==============================================================================
+# 3. NATIVE WIN32 COM SHORTCUT ENGINE (ZERO .VBS DROPPERS / ZERO CSCRIPT)
+# ==============================================================================
+if IS_WINDOWS and ctypes is not None:
+    class _GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", ctypes.c_uint32),
+            ("Data2", ctypes.c_uint16),
+            ("Data3", ctypes.c_uint16),
+            ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+    _CLSID_ShellLink = _GUID(0x00021401, 0x0000, 0x0000, (ctypes.c_ubyte * 8)(0xC0, 0, 0, 0, 0, 0, 0, 0x46))
+    _IID_IShellLinkW = _GUID(0x000214F9, 0x0000, 0x0000, (ctypes.c_ubyte * 8)(0xC0, 0, 0, 0, 0, 0, 0, 0x46))
+    _IID_IPersistFile = _GUID(0x0000010B, 0x0000, 0x0000, (ctypes.c_ubyte * 8)(0xC0, 0, 0, 0, 0, 0, 0, 0x46))
 
 
-def create_vbs_shortcut(
+def create_native_shortcut(
     target_exe: str,
-    lnk_path: str,
+    shortcut_path: str,
+    arguments: str = "",
     description: str = APP_DESCRIPTION,
     icon_path: Optional[str] = None,
+    work_dir: Optional[str] = None,
 ) -> bool:
     """
-    Creates a native Windows .lnk shortcut using standard WScript.Shell.
-    Works universally on Windows XP through 11 without any external Python packages.
-    Preserves exact matching icon from icon.ico or the target executable.
+    Creates a native Windows `.lnk` shell shortcut strictly in-memory via Win32 COM
+    (`IShellLinkW` + `IPersistFile`). Zero temporary `.vbs` files, zero `cscript.exe`.
     """
-    if not IS_WINDOWS:
+    if not IS_WINDOWS or not ole32:
         return False
 
-    work_dir = os.path.dirname(target_exe)
-    if not icon_path:
-        ico = get_icon_ico_path()
-        icon_path = ico if (ico and os.path.exists(ico)) else f"{target_exe},0"
-
-    clean_target = _sanitize_vbs_literal(target_exe)
-    clean_lnk = _sanitize_vbs_literal(lnk_path)
-    clean_work = _sanitize_vbs_literal(work_dir)
-    clean_desc = _sanitize_vbs_literal(description)
-    clean_icon = _sanitize_vbs_literal(icon_path)
-
-    vbs_content = (
-        'Set w = WScript.CreateObject("WScript.Shell")\n'
-        f'Set l = w.CreateShortcut("{clean_lnk}")\n'
-        f'l.TargetPath = "{clean_target}"\n'
-        f'l.WorkingDirectory = "{clean_work}"\n'
-        f'l.Description = "{clean_desc}"\n'
-        f'l.IconLocation = "{clean_icon}"\n'
-        'l.Save\n'
-    )
-
-    vbs_path = ""
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".vbs",
-            prefix="ainet_mklnk_",
-            encoding="utf-8",
-            delete=False,
-        ) as f:
-            vbs_path = f.name
-            f.write(vbs_content)
+        os.makedirs(os.path.dirname(os.path.abspath(shortcut_path)), exist_ok=True)
+        resolved_target = os.path.abspath(target_exe)
+        effective_args = arguments
 
-        res = subprocess.run(
-            ["cscript", "//Nologo", vbs_path],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            creationflags=0x08000000 if IS_WINDOWS else 0
-        )
-        return res.returncode == 0 and os.path.exists(lnk_path)
+        # If target is a Python script (.py / .pyw), bind directly via pythonw.exe
+        if resolved_target.lower().endswith((".py", ".pyw")) and not getattr(sys, "frozen", False):
+            pyw = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "pythonw.exe")
+            launcher = pyw if os.path.isfile(pyw) else os.path.abspath(sys.executable)
+            effective_args = f'"{resolved_target}"' + (f" {arguments}" if arguments else "")
+            work_dir = work_dir or os.path.dirname(resolved_target)
+            resolved_target = launcher
+        else:
+            work_dir = work_dir or os.path.dirname(resolved_target)
+
+        ico = icon_path or get_icon_ico_path()
+        if not ico or not os.path.exists(ico):
+            ico = resolved_target
+
+        COINIT_APARTMENTTHREADED = 0x2
+        CLSCTX_INPROC_SERVER = 0x1
+        SW_SHOWNORMAL = 1
+        RPC_E_CHANGED_MODE = -2147417850  # 0x80010106 signed HRESULT
+
+        ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        ole32.CoInitializeEx.restype = ctypes.c_long
+        hr_init = ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+        need_uninit = hr_init in (0, 1)
+        if hr_init < 0 and hr_init != RPC_E_CHANGED_MODE:
+            logger.debug(f"CoInitializeEx returned 0x{hr_init & 0xFFFFFFFF:08X}")
+            return False
+
+        p_shell_link = ctypes.c_void_p()
+        p_persist_file = ctypes.c_void_p()
+        try:
+            ole32.CoCreateInstance.argtypes = [
+                ctypes.POINTER(_GUID), ctypes.c_void_p, wintypes.DWORD,
+                ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p)
+            ]
+            ole32.CoCreateInstance.restype = ctypes.c_long
+            hr = ole32.CoCreateInstance(
+                ctypes.byref(_CLSID_ShellLink),
+                None,
+                CLSCTX_INPROC_SERVER,
+                ctypes.byref(_IID_IShellLinkW),
+                ctypes.byref(p_shell_link),
+            )
+            if hr < 0 or not p_shell_link.value:
+                logger.debug(f"CoCreateInstance(ShellLink) failed: 0x{hr & 0xFFFFFFFF:08X}")
+                return False
+
+            vtbl_sl = ctypes.cast(
+                ctypes.cast(p_shell_link, ctypes.POINTER(ctypes.c_void_p))[0],
+                ctypes.POINTER(ctypes.c_void_p),
+            )
+
+            def _call_sl(slot: int, *arg_specs_and_vals):
+                argtypes = [t for t, _ in arg_specs_and_vals]
+                args = [v for _, v in arg_specs_and_vals]
+                fn = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *argtypes)(vtbl_sl[slot])
+                return fn(p_shell_link, *args)
+
+            # IShellLinkW vtable indices: 20=SetPath, 11=SetArguments, 9=SetWorkingDirectory,
+            # 7=SetDescription, 17=SetIconLocation, 15=SetShowCmd, 0=QueryInterface
+            hr = _call_sl(20, (wintypes.LPCWSTR, resolved_target))
+            if hr < 0:
+                return False
+            if effective_args:
+                _call_sl(11, (wintypes.LPCWSTR, effective_args))
+            if work_dir:
+                _call_sl(9, (wintypes.LPCWSTR, work_dir))
+            if description:
+                _call_sl(7, (wintypes.LPCWSTR, description[:256]))
+            if ico:
+                _call_sl(17, (wintypes.LPCWSTR, os.path.abspath(ico)), (ctypes.c_int, 0))
+            _call_sl(15, (ctypes.c_int, SW_SHOWNORMAL))
+
+            hr = _call_sl(0, (ctypes.POINTER(_GUID), ctypes.byref(_IID_IPersistFile)), (ctypes.POINTER(ctypes.c_void_p), ctypes.byref(p_persist_file)))
+            if hr < 0 or not p_persist_file.value:
+                return False
+
+            vtbl_pf = ctypes.cast(
+                ctypes.cast(p_persist_file, ctypes.POINTER(ctypes.c_void_p))[0],
+                ctypes.POINTER(ctypes.c_void_p),
+            )
+            # IPersistFile slot 6 = Save(pszFileName, fRemember)
+            fn_save = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.LPCWSTR, wintypes.BOOL)(vtbl_pf[6])
+            hr = fn_save(p_persist_file, os.path.abspath(shortcut_path), True)
+            return hr >= 0 and os.path.isfile(shortcut_path)
+        finally:
+            if p_persist_file and p_persist_file.value:
+                vtbl_pf = ctypes.cast(
+                    ctypes.cast(p_persist_file, ctypes.POINTER(ctypes.c_void_p))[0],
+                    ctypes.POINTER(ctypes.c_void_p),
+                )
+                ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl_pf[2])(p_persist_file)
+            if p_shell_link and p_shell_link.value:
+                vtbl_sl = ctypes.cast(
+                    ctypes.cast(p_shell_link, ctypes.POINTER(ctypes.c_void_p))[0],
+                    ctypes.POINTER(ctypes.c_void_p),
+                )
+                ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl_sl[2])(p_shell_link)
+            if need_uninit:
+                ole32.CoUninitialize()
     except Exception as e:
-        logger.error(f"Failed to create shortcut at {lnk_path}: {e}")
+        logger.debug(f"COM shortcut creation notice: {e}")
         return False
-    finally:
-        if vbs_path and os.path.exists(vbs_path):
-            try:
-                os.remove(vbs_path)
-            except Exception:
-                pass
+
+
+# Backward-compatible symbol name retained purely as an alias to the COM implementation
+create_vbs_shortcut = create_native_shortcut
 
 
 def _resolve_desktop_dir() -> str:
-    """Resolves actual user Desktop folder, including OneDrive-redirected Desktops on Windows."""
-    if IS_WINDOWS:
+    """Resolves Windows Desktop folder safely including OneDrive KnownFolder redirects."""
+    if IS_WINDOWS and winreg:
         try:
-            buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
-            # CSIDL_DESKTOPDIRECTORY = 0x0010, SHGFP_TYPE_CURRENT = 0
-            hr = ctypes.windll.shell32.SHGetFolderPathW(None, 0x0010, None, 0, buf)
-            if hr == 0 and buf.value and os.path.isdir(buf.value):
-                return buf.value
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+            ) as key:
+                desktop_val, _ = winreg.QueryValueEx(key, "Desktop")
+                expanded = os.path.expandvars(desktop_val)
+                if expanded and os.path.isdir(expanded):
+                    return expanded
         except Exception:
             pass
-    return os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+    userprofile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+    return os.path.join(userprofile, "Desktop")
 
 
-def create_desktop_shortcut(target_exe: Optional[str] = None, icon_path: Optional[str] = None) -> Tuple[bool, str]:
-    """Creates desktop shortcut 'AI NetController.lnk' with matching Android app icon."""
-    exe_path = target_exe or get_executable_path()
-    desktop_dir = _resolve_desktop_dir()
-    if not os.path.exists(desktop_dir):
-        return False, "Desktop folder not found."
+def create_desktop_shortcut(
+    target_exe: Optional[str] = None,
+    icon_path: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Creates a clean AI NetController shortcut on the user's Windows Desktop."""
+    if not IS_WINDOWS:
+        return False, "Desktop shortcut creation skipped on non-Windows host."
+    desktop = _resolve_desktop_dir()
+    lnk_path = os.path.join(desktop, f"{APP_NAME}.lnk")
+    exe = target_exe or get_executable_path()
+    # Respect mocks if tests patch create_vbs_shortcut specifically
+    fn = create_vbs_shortcut if create_vbs_shortcut is not create_native_shortcut else create_native_shortcut
+    if fn(exe, lnk_path, description=APP_DESCRIPTION, icon_path=icon_path):
+        return True, f"Desktop shortcut created: {lnk_path}"
+    return False, "Could not create Desktop shortcut."
 
-    lnk_path = os.path.join(desktop_dir, f"{APP_NAME}.lnk")
-    success = create_vbs_shortcut(exe_path, lnk_path, icon_path=icon_path)
-    if success:
-        return True, f"Desktop shortcut created at {lnk_path}"
-    return False, "Failed to create Desktop shortcut."
 
+def create_start_menu_shortcut(
+    target_exe: Optional[str] = None,
+    icon_path: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Creates Start Menu launch + uninstall shortcuts using native Win32 COM."""
+    if not IS_WINDOWS:
+        return False, "Start Menu shortcut creation skipped on non-Windows host."
+    appdata = os.environ.get("APPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Roaming"))
+    programs_dir = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", APP_NAME)
+    exe = target_exe or get_executable_path()
+    fn = create_vbs_shortcut if create_vbs_shortcut is not create_native_shortcut else create_native_shortcut
 
-def create_start_menu_shortcut(target_exe: Optional[str] = None, icon_path: Optional[str] = None) -> Tuple[bool, str]:
-    """Creates Start Menu shortcut 'AI NetController.lnk' with matching Android app icon."""
-    exe_path = target_exe or get_executable_path()
-    appdata = os.environ.get("APPDATA", "")
-    if not appdata:
-        return False, "APPDATA folder not found."
+    lnk_main = os.path.join(programs_dir, f"{APP_NAME}.lnk")
+    ok_main = fn(exe, lnk_main, description=APP_DESCRIPTION, icon_path=icon_path)
 
-    start_menu_dir = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", APP_NAME)
-    os.makedirs(start_menu_dir, exist_ok=True)
+    lnk_uninst = os.path.join(programs_dir, f"Uninstall {APP_NAME}.lnk")
+    fn(exe, lnk_uninst, arguments="--uninstall", description=f"Uninstall {APP_NAME}", icon_path=icon_path)
 
-    lnk_path = os.path.join(start_menu_dir, f"{APP_NAME}.lnk")
-    success = create_vbs_shortcut(exe_path, lnk_path, icon_path=icon_path)
-    if success:
-        return True, f"Start Menu shortcut created at {lnk_path}"
-    return False, "Failed to create Start Menu shortcut."
+    if ok_main:
+        return True, f"Start Menu shortcut created: {lnk_main}"
+    return False, "Could not create Start Menu shortcut."
 
 
 def remove_shortcuts() -> Tuple[int, str]:
-    """Removes all Desktop and Start Menu shortcuts."""
+    """Removes Desktop and Start Menu shortcuts for AI NetController."""
     removed = 0
-    candidate_desktops = []
-    resolved_desktop = _resolve_desktop_dir()
-    if resolved_desktop:
-        candidate_desktops.append(resolved_desktop)
-    fallback_desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
-    if fallback_desktop and fallback_desktop not in candidate_desktops:
-        candidate_desktops.append(fallback_desktop)
+    targets = [
+        os.path.join(_resolve_desktop_dir(), f"{APP_NAME}.lnk"),
+        os.path.join(_resolve_desktop_dir(), "AI_NetController_HostAgent.lnk"),
+    ]
+    appdata = os.environ.get("APPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Roaming"))
+    sm_folder = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", APP_NAME)
+    if os.path.isdir(sm_folder):
+        try:
+            shutil.rmtree(sm_folder)
+            removed += 1
+        except Exception as e:
+            logger.debug(f"Could not delete Start Menu folder: {e}")
 
-    for desktop_dir in candidate_desktops:
-        desktop_lnk = os.path.join(desktop_dir, f"{APP_NAME}.lnk")
-        if os.path.exists(desktop_lnk):
+    for t in targets:
+        if os.path.isfile(t):
             try:
-                os.remove(desktop_lnk)
+                os.remove(t)
                 removed += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not delete shortcut {t}: {e}")
 
-    appdata = os.environ.get("APPDATA", "")
-    if appdata:
-        start_dir = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", APP_NAME)
-        start_lnk = os.path.join(start_dir, f"{APP_NAME}.lnk")
-        if os.path.exists(start_lnk):
-            try:
-                os.remove(start_lnk)
-                removed += 1
-            except Exception:
-                pass
-        if os.path.exists(start_dir):
-            try:
-                os.rmdir(start_dir)
-            except Exception:
-                pass
-
-    return removed, f"Removed {removed} shortcut(s)."
+    return removed, f"Removed {removed} shortcut artifact(s)."
 
 
-# =====================================================================
-# 3. WINDOWS REGISTRY: AUTOSTART & ADD/REMOVE PROGRAMS (UNINSTALLER)
-# =====================================================================
+# ==============================================================================
+# 4. WINDOWS REGISTRY: AUTOSTART & INSTALLED APPS REGISTRATION
+# ==============================================================================
+def _format_launch_command(exe_path: str, extra_args: str = "") -> str:
+    """Formats a registry command cleanly for frozen EXEs vs PSF-signed pythonw.exe launchers."""
+    abs_target = os.path.abspath(exe_path)
+    if abs_target.lower().endswith((".py", ".pyw")) and not getattr(sys, "frozen", False):
+        pyw = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "pythonw.exe")
+        runner = pyw if (IS_WINDOWS and os.path.isfile(pyw)) else os.path.abspath(sys.executable)
+        suffix = f" {extra_args}" if extra_args else ""
+        return f'"{runner}" "{abs_target}"{suffix}'
+    suffix = f" {extra_args}" if extra_args else ""
+    return f'"{abs_target}"{suffix}'
+
+
 def set_windows_autostart(enabled: bool = True, target_exe: Optional[str] = None) -> bool:
-    """Configures daemon to start on Windows login via HKCU Run key."""
+    """Configures AI NetController launch on user sign-in via HKCU Run key."""
     if not IS_WINDOWS or not winreg:
         return False
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
             if enabled:
                 exe_path = target_exe or get_executable_path()
-                cmd = f'"{exe_path}"'
+                cmd = _format_launch_command(exe_path)
                 winreg.SetValueEx(key, "AINetController", 0, winreg.REG_SZ, cmd)
             else:
                 try:
@@ -374,18 +626,16 @@ def set_windows_autostart(enabled: bool = True, target_exe: Optional[str] = None
 
 
 def register_windows_uninstaller(target_exe: Optional[str] = None, icon_path: Optional[str] = None) -> bool:
-    """
-    Registers AI NetController in Windows Settings / Control Panel
-    (Installed Apps / Add or Remove Programs) so the user can easily uninstall it.
-    """
+    """Registers AI NetController cleanly under HKCU Installed Apps."""
     if not IS_WINDOWS or not winreg:
         return False
 
     exe_path = target_exe or get_executable_path()
-    install_dir = os.path.dirname(exe_path)
+    install_dir = os.path.dirname(os.path.abspath(exe_path))
 
     ico = icon_path or get_icon_ico_path()
     display_icon = f'"{ico}"' if (ico and os.path.exists(ico)) else f'"{exe_path}",0'
+    uninstall_cmd = _format_launch_command(exe_path, "--uninstall")
 
     try:
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_UNINSTALL_KEY) as key:
@@ -393,20 +643,18 @@ def register_windows_uninstaller(target_exe: Optional[str] = None, icon_path: Op
             winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, APP_VERSION)
             winreg.SetValueEx(key, "Publisher", 0, winreg.REG_SZ, APP_PUBLISHER)
             winreg.SetValueEx(key, "DisplayIcon", 0, winreg.REG_SZ, display_icon)
-            winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, f'"{exe_path}" --uninstall')
+            winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, uninstall_cmd)
             winreg.SetValueEx(key, "InstallLocation", 0, winreg.REG_SZ, install_dir)
             winreg.SetValueEx(key, "NoModify", 0, winreg.REG_DWORD, 1)
             winreg.SetValueEx(key, "NoRepair", 0, winreg.REG_DWORD, 1)
-            winreg.SetValueEx(key, "EstimatedSize", 0, winreg.REG_DWORD, 36000)
+            winreg.SetValueEx(key, "EstimatedSize", 0, winreg.REG_DWORD, 32000)
 
-        # Also register in App Paths so users can launch via Run (Win+R -> AI_NetController_HostAgent)
         try:
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_APP_PATHS_KEY) as apk:
                 winreg.SetValueEx(apk, "", 0, winreg.REG_SZ, exe_path)
                 winreg.SetValueEx(apk, "Path", 0, winreg.REG_SZ, install_dir)
         except Exception:
             pass
-
         return True
     except Exception as e:
         logger.debug(f"Uninstaller registry registration error: {e}")
@@ -417,98 +665,136 @@ def unregister_windows_uninstaller() -> bool:
     """Removes AI NetController from Windows Installed Apps registry."""
     if not IS_WINDOWS or not winreg:
         return False
-    try:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, REG_UNINSTALL_KEY)
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        logger.debug(f"Failed to delete uninstall key: {e}")
-
-    try:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, REG_APP_PATHS_KEY)
-    except FileNotFoundError:
-        pass
-    except Exception:
-        pass
-
+    for reg_key in (REG_UNINSTALL_KEY, REG_APP_PATHS_KEY):
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, reg_key)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.debug(f"Registry key removal notice ({reg_key}): {e}")
     return True
 
 
-# =====================================================================
-# 4. FULL UNINSTALLATION WORKFLOW
-# =====================================================================
+# ==============================================================================
+# 5. CLEAN PROCESS TERMINATION (ZERO TASKKILL.EXE SPAWNS) & UNINSTALL
+# ==============================================================================
+def _terminate_pid_native(pid: int, timeout_ms: int = 2000) -> bool:
+    """Terminates a matching agent PID cleanly via Win32 OpenProcess + TerminateProcess."""
+    if not IS_WINDOWS or not kernel32:
+        return True
+    PROCESS_TERMINATE = 0x0001
+    SYNCHRONIZE = 0x00100000
+    h = kernel32.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, int(pid))
+    if not h:
+        return False
+    try:
+        kernel32.TerminateProcess(h, 0)
+        kernel32.WaitForSingleObject(h, int(timeout_ms))
+        return True
+    finally:
+        kernel32.CloseHandle(h)
+
+
 def _stop_external_agent_processes() -> bool:
-    """Terminates other running AI_NetController_HostAgent.exe instances without self-killing."""
+    """
+    Stops other running AI NetController HostAgent instances cleanly using native
+    process APIs without invoking `taskkill.exe` or `cmd.exe`.
+    """
     if not IS_WINDOWS:
         return True
+    current_pid = os.getpid()
+    all_ok = True
     try:
-        current_pid = os.getpid()
-        target_pids: List[int] = []
-        try:
-            import psutil  # type: ignore
-            for proc in psutil.process_iter(["pid", "name", "exe"]):
-                try:
-                    pid = proc.info.get("pid")
-                    if not pid or pid == current_pid:
-                        continue
-                    name = (proc.info.get("name") or "").lower()
-                    exe = (proc.info.get("exe") or "").lower()
-                    if "ai_netcontroller_hostagent" in name or "ai_netcontroller_hostagent" in exe:
-                        target_pids.append(int(pid))
-                except Exception:
+        import psutil  # type: ignore
+
+        matched: List[psutil.Process] = []
+        for proc in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
+            try:
+                pid = proc.info.get("pid")
+                if not pid or pid == current_pid:
                     continue
-        except ImportError:
-            target_pids = []
+                name = (proc.info.get("name") or "").lower()
+                exe = (proc.info.get("exe") or "").lower()
+                cmdline = " ".join(proc.info.get("cmdline") or []).lower()
+                if (
+                    "ai_netcontroller_hostagent" in name
+                    or "ai_netcontroller_hostagent" in exe
+                    or ("agent_daemon.py" in cmdline and "python" in name)
+                ):
+                    matched.append(proc)
+            except Exception:
+                continue
 
-        if target_pids:
-            all_ok = True
-            for pid in target_pids:
-                res = subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(pid)],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    creationflags=0x08000000,
-                )
-                if res.returncode not in (0, 128):
+        for proc in matched:
+            try:
+                proc.terminate()
+            except Exception:
+                all_ok = False
+        if matched:
+            _, alive = psutil.wait_procs(matched, timeout=2.5)
+            for proc in alive:
+                try:
+                    proc.kill()
+                except Exception:
                     all_ok = False
-            return all_ok
+        return all_ok
+    except ImportError:
+        # Pure Win32 Toolhelp32 fallback if psutil is unavailable
+        try:
+            TH32CS_SNAPPROCESS = 0x00000002
 
-        res = subprocess.run(
-            [
-                "taskkill",
-                "/F",
-                "/IM",
-                "AI_NetController_HostAgent.exe",
-                "/FI",
-                f"PID ne {current_pid}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            creationflags=0x08000000,
-        )
-        return res.returncode in (0, 128)
-    except Exception as e:
-        logger.debug(f"External process termination notice: {e}")
-        return False
+            class _PROCESSENTRY32W(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", wintypes.WCHAR * 260),
+                ]
+
+            snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            if snap == wintypes.HANDLE(-1).value:
+                return False
+            try:
+                entry = _PROCESSENTRY32W()
+                entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+                if kernel32.Process32FirstW(snap, ctypes.byref(entry)):
+                    while True:
+                        pid = int(entry.th32ProcessID)
+                        exe_name = (entry.szExeFile or "").lower()
+                        if pid != current_pid and "ai_netcontroller_hostagent" in exe_name:
+                            if not _terminate_pid_native(pid):
+                                all_ok = False
+                        if not kernel32.Process32NextW(snap, ctypes.byref(entry)):
+                            break
+            finally:
+                kernel32.CloseHandle(snap)
+            return all_ok
+        except Exception as e:
+            logger.debug(f"Win32 Toolhelp32 termination notice: {e}")
+            return False
 
 
 def perform_full_uninstall(
     interactive: bool = True,
     remove_config: bool = False,
-    on_complete: Optional[Callable[[], None]] = None
+    on_complete: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
     """
-    Executes complete uninstallation of AI NetController from the host PC:
-    1. Stops running external daemon and background services
+    Executes clean uninstallation of AI NetController from the host PC:
+    1. Stops running external daemon instances
     2. Removes Desktop and Start Menu shortcuts
-    3. Removes Windows Run startup entry
-    4. Removes Windows Add/Remove Programs registry entry
-    5. Optionally removes local app data / logs and install binaries
+    3. Removes Windows Run autostart entry
+    4. Removes Windows Installed Apps registry entries
+    5. Removes user-space install folder and optionally local config/keys
     """
     stopped = _stop_external_agent_processes()
-    results = {
+    results: Dict[str, Any] = {
         "stopped_daemon": stopped,
         "removed_shortcuts": 0,
         "removed_autostart": False,
@@ -516,20 +802,14 @@ def perform_full_uninstall(
         "removed_config": False,
         "removed_install_dir": False,
         "success": True,
-        "message": ""
+        "message": "",
     }
 
-    # 1. Remove Shortcuts
     count, _ = remove_shortcuts()
     results["removed_shortcuts"] = count
-
-    # 2. Remove Autostart
     results["removed_autostart"] = set_windows_autostart(enabled=False)
-
-    # 3. Unregister from Windows Add/Remove Programs
     results["removed_uninstaller"] = unregister_windows_uninstaller()
 
-    # 4. Clean user-space installed binaries (%LOCALAPPDATA%\Programs\AI NetController)
     try:
         install_dir = get_default_install_dir()
         if os.path.isdir(install_dir):
@@ -538,30 +818,21 @@ def perform_full_uninstall(
     except Exception:
         results["removed_install_dir"] = False
 
-    # 5. Optionally clean persisted configuration directory (%LOCALAPPDATA% & legacy %APPDATA%)
     if remove_config:
         try:
-            local_app = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-            roaming_app = os.environ.get("APPDATA") or ""
-            removed_any = True
-            for base_dir in (local_app, roaming_app):
-                if not base_dir:
-                    continue
-                cfg_dir = os.path.join(base_dir, APP_NAME)
-                if os.path.isdir(cfg_dir):
-                    shutil.rmtree(cfg_dir, ignore_errors=True)
-                    if os.path.exists(cfg_dir):
-                        removed_any = False
-            results["removed_config"] = removed_any
-        except Exception:
-            results["removed_config"] = False
+            local_app = os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local"))
+            app_data_dir = os.path.join(local_app, "AI NetController")
+            if os.path.isdir(app_data_dir):
+                shutil.rmtree(app_data_dir, ignore_errors=True)
+                results["removed_config"] = True
+        except Exception as e:
+            logger.debug(f"Config cleanup notice: {e}")
 
     results["message"] = (
-        f"AI NetController has been successfully uninstalled from your PC.\n\n"
-        f"• Removed {count} Desktop & Start Menu shortcut(s)\n"
-        f"• Removed Windows startup registry entries\n"
-        f"• Removed from Installed Apps / Control Panel\n"
-        f"• Stopped external background daemon processes"
+        f"AI NetController has been cleanly uninstalled.\n"
+        f"- Shortcuts removed: {count}\n"
+        f"- Startup entry cleared: {results['removed_autostart']}\n"
+        f"- Apps registry removed: {results['removed_uninstaller']}"
     )
 
     if on_complete and callable(on_complete):
@@ -569,145 +840,12 @@ def perform_full_uninstall(
             on_complete()
         except Exception:
             pass
-
     return results
 
 
-def show_uninstall_dialog(parent_root=None, on_exit: Optional[Callable[[], None]] = None) -> None:
-    """
-    Presents a clean, transparent, cyber-styled confirmation dialog
-    allowing the user to confirm or cancel the full uninstallation.
-    """
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
-    except ImportError:
-        print("[INFO] Running non-GUI uninstallation...")
-        res = perform_full_uninstall(interactive=False, on_complete=on_exit)
-        print(res["message"])
-        sys.exit(0)
-
-    win = tk.Toplevel(parent_root) if parent_root else tk.Tk()
-    win.title("Uninstall AI NetController")
-    win.geometry("540x360")
-    win.resizable(False, False)
-    win.configure(bg="#070c18")
-    apply_window_icon(win)
-
-    # Center window
-    win.update_idletasks()
-    w = win.winfo_width()
-    h = win.winfo_height()
-    x = (win.winfo_screenwidth() // 2) - (w // 2)
-    y = (win.winfo_screenheight() // 2) - (h // 2)
-    win.geometry(f"{w}x{h}+{x}+{y}")
-
-    # Top Header
-    header = tk.Frame(win, bg="#0b1324", padx=16, pady=12, highlightthickness=1, highlightbackground="#1e293b")
-    header.pack(fill=tk.X, padx=14, pady=(14, 10))
-
-    tk.Label(
-        header,
-        text="🗑️ UNINSTALL AI NETCONTROLLER",
-        bg="#0b1324",
-        fg="#ef4444",
-        font=("Segoe UI", 12, "bold")
-    ).pack(anchor="w")
-
-    tk.Label(
-        header,
-        text=f"Version {APP_VERSION} • Host PC Cleanup Wizard",
-        bg="#0b1324",
-        fg="#94a3b8",
-        font=("Segoe UI", 9)
-    ).pack(anchor="w", pady=(2, 0))
-
-    # Content Body
-    body = tk.Frame(win, bg="#070c18", padx=14)
-    body.pack(fill=tk.BOTH, expand=True)
-
-    tk.Label(
-        body,
-        text="Are you sure you want to completely uninstall AI NetController?",
-        bg="#070c18",
-        fg="#f8fafc",
-        font=("Segoe UI", 10, "bold")
-    ).pack(anchor="w", pady=(6, 8))
-
-    items_text = (
-        "This process will perform the following actions:\n"
-        "  ✓ Remove the Desktop shortcut ('AI NetController.lnk')\n"
-        "  ✓ Remove Start Menu shortcuts & Programs folder\n"
-        "  ✓ Remove Windows autostart on boot (Registry Run key)\n"
-        "  ✓ Remove from Windows 'Installed Apps' / Add or Remove Programs\n"
-        "  ✓ Terminate the background daemon and tray icon cleanly"
-    )
-
-    tk.Label(
-        body,
-        text=items_text,
-        bg="#070c18",
-        fg="#cbd5e1",
-        justify=tk.LEFT,
-        font=("Consolas", 9)
-    ).pack(anchor="w", padx=6)
-
-    # Action Buttons
-    btn_frame = tk.Frame(win, bg="#070c18", padx=14, pady=14)
-    btn_frame.pack(fill=tk.X)
-
-    def _do_uninstall():
-        res = perform_full_uninstall(interactive=False, on_complete=None)
-        try:
-            messagebox.showinfo(
-                "Uninstallation Complete",
-                res["message"],
-                parent=win
-            )
-            if win.winfo_exists():
-                win.destroy()
-        except Exception:
-            pass
-        if on_exit and callable(on_exit):
-            on_exit()
-        elif not parent_root:
-            sys.exit(0)
-
-    tk.Button(
-        btn_frame,
-        text="❌ Cancel",
-        command=win.destroy,
-        bg="#1e293b",
-        fg="#e2e8f0",
-        activebackground="#334155",
-        relief=tk.FLAT,
-        font=("Segoe UI", 9, "bold"),
-        padx=14,
-        pady=6,
-        cursor="hand2"
-    ).pack(side=tk.RIGHT, padx=(8, 0))
-
-    tk.Button(
-        btn_frame,
-        text="🗑️ Confirm Uninstall",
-        command=_do_uninstall,
-        bg="#dc2626",
-        fg="#ffffff",
-        activebackground="#b91c1c",
-        relief=tk.FLAT,
-        font=("Segoe UI", 9, "bold"),
-        padx=14,
-        pady=6,
-        cursor="hand2"
-    ).pack(side=tk.RIGHT)
-
-    if not parent_root:
-        win.mainloop()
-
-
-# =====================================================================
-# 5. DEDICATED HOST INSTALLATION WIZARD & ENGINE
-# =====================================================================
+# ==============================================================================
+# 6. INSTALLATION PATH CHECKS & FULL INSTALLATION ENGINE
+# ==============================================================================
 def get_default_install_dir() -> str:
     """Returns standard user-space install directory: %LOCALAPPDATA%\\Programs\\AI NetController."""
     local_appdata = os.environ.get("LOCALAPPDATA") or os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local")
@@ -715,7 +853,7 @@ def get_default_install_dir() -> str:
 
 
 def validate_install_path(path: str) -> Tuple[bool, str]:
-    """Validates the target installation directory against traversal and security risks."""
+    """Validates target installation directory against traversal, drive root, and Windows system paths."""
     if not path or not isinstance(path, str):
         return False, "Installation path cannot be empty."
     path = path.strip().strip('"').strip("'")
@@ -734,7 +872,6 @@ def validate_install_path(path: str) -> Tuple[bool, str]:
         if IS_WINDOWS or not is_windows_path:
             norm = path_mod.abspath(path_mod.normpath(path))
         else:
-            # Normalize Windows drive/UNC paths lexically even when validating on POSIX hosts.
             norm = ntpath.normpath(path)
     except Exception as e:
         return False, f"Invalid path syntax: {e}"
@@ -753,16 +890,18 @@ def validate_install_path(path: str) -> Tuple[bool, str]:
 
 
 def is_running_from_install_dir(target_dir: Optional[str] = None) -> bool:
-    """Checks whether the currently running process is already inside the installed directory."""
+    """Checks whether the currently running binary resides inside the installed directory."""
     install_dir = os.path.abspath(target_dir or get_default_install_dir()).lower()
     curr_exe_dir = os.path.abspath(os.path.dirname(get_executable_path())).lower()
     return curr_exe_dir == install_dir
 
 
 def is_app_installed() -> bool:
-    """Checks whether AI NetController is registered in Windows Installed Apps and executable exists."""
-    dest_exe = os.path.join(get_default_install_dir(), "AI_NetController_HostAgent.exe")
-    if os.path.isfile(dest_exe):
+    """Checks whether AI NetController is registered or installed in user-space."""
+    install_dir = get_default_install_dir()
+    if os.path.isfile(os.path.join(install_dir, "AI_NetController_HostAgent.exe")) or os.path.isfile(
+        os.path.join(install_dir, "launch_agent.pyw")
+    ):
         return True
     if not IS_WINDOWS or not winreg:
         return False
@@ -771,8 +910,6 @@ def is_app_installed() -> bool:
             val, _ = winreg.QueryValueEx(key, "InstallLocation")
             if val and os.path.exists(val):
                 return True
-    except FileNotFoundError:
-        pass
     except Exception:
         pass
     return False
@@ -787,16 +924,12 @@ def perform_full_install(
     progress_cb: Optional[Callable[[int, str], None]] = None,
 ) -> Dict[str, Any]:
     """
-    Executes complete, secure, error-resilient installation of AI NetController:
-    1. Validates destination folder
-    2. Terminates existing conflicting daemon processes cleanly
-    3. Copies standalone executable or bundle into destination folder
-    4. Copies Android-matching icons (icon.ico and icon.png)
-    5. Creates Desktop and Start Menu shortcuts
-    6. Registers Autostart and Windows Add/Remove Programs (Uninstaller)
-    7. Optionally launches the newly installed host daemon
+    Executes secure installation into user-space `%LOCALAPPDATA%\\Programs\\AI NetController`:
+      - Frozen builds copy `AI_NetController_HostAgent.exe` + `_internal` directory (`--onedir`).
+      - Source runs deploy Python modules + `launch_agent.pyw` invoked via signed `pythonw.exe`
+        (zero `.bat` / `.vbs` dropper artifacts).
     """
-    result = {
+    result: Dict[str, Any] = {
         "success": False,
         "installed_dir": "",
         "installed_exe": "",
@@ -804,7 +937,7 @@ def perform_full_install(
         "error": None,
     }
 
-    def _update(pct: int, msg: str):
+    def _update(pct: int, msg: str) -> None:
         logger.info(f"[Install {pct}%] {msg}")
         if progress_cb and callable(progress_cb):
             try:
@@ -822,6 +955,7 @@ def perform_full_install(
 
     try:
         os.makedirs(valid_dir, exist_ok=True)
+        harden_windows_acl(valid_dir, is_dir=True)
     except Exception as e:
         result["message"] = f"Failed to create target directory '{valid_dir}': {e}"
         result["error"] = "PERMISSION_DENIED"
@@ -831,21 +965,19 @@ def perform_full_install(
     dest_exe = os.path.join(valid_dir, "AI_NetController_HostAgent.exe")
     result["installed_exe"] = dest_exe
 
-    # 1. Stop existing external daemon instances if locking destination binary
-    _update(15, "Checking for running instances...")
+    _update(15, "Checking for active daemon processes...")
     current_exe = get_executable_path()
     if os.path.exists(dest_exe) and os.path.abspath(dest_exe).lower() != os.path.abspath(current_exe).lower():
-        for attempt in range(3):
+        for _ in range(3):
             try:
                 with open(dest_exe, "a+b"):
                     break
             except PermissionError:
-                _update(20, "Stopping existing background daemon...")
+                _update(22, "Stopping background daemon...")
                 _stop_external_agent_processes()
                 time.sleep(0.5)
 
-    # 2. Copy binary assets
-    _update(35, "Copying application binaries and resources...")
+    _update(35, "Deploying runtime application files...")
     is_frozen = getattr(sys, "frozen", False)
     if is_frozen:
         src_exe = sys.executable
@@ -868,24 +1000,32 @@ def perform_full_install(
             except Exception as e:
                 logger.debug(f"Optional _internal bundle copy notice: {e}")
     else:
-        # Development / script mode: copy agent files
         src_agent_dir = os.path.dirname(os.path.abspath(__file__))
         dest_agent_dir = os.path.join(valid_dir, "agent")
         os.makedirs(dest_agent_dir, exist_ok=True)
         for fname in os.listdir(src_agent_dir):
-            if fname.endswith((".py", ".txt", ".spec", ".bat", ".ps1", ".ico", ".png")):
+            if fname.endswith((".py", ".txt", ".spec", ".xml", ".ico", ".png")):
                 sf = os.path.join(src_agent_dir, fname)
                 if os.path.isfile(sf):
                     shutil.copy2(sf, os.path.join(dest_agent_dir, fname))
 
-        launcher_bat = os.path.join(valid_dir, "AI_NetController_HostAgent.bat")
-        with open(launcher_bat, "w", encoding="utf-8") as f:
-            f.write(f'@echo off\r\nstart "" "{sys.executable}" "%~dp0agent\\agent_daemon.py" %*\r\n')
-        dest_exe = launcher_bat
+        # Native Python windowless entrypoint (.pyw) launched via PSF-signed pythonw.exe (no .bat dropper)
+        launcher_pyw = os.path.join(valid_dir, "launch_agent.pyw")
+        with open(launcher_pyw, "w", encoding="utf-8") as f:
+            f.write(
+                "import os, sys\n"
+                "_HERE = os.path.dirname(os.path.abspath(__file__))\n"
+                "_AGENT = os.path.join(_HERE, 'agent')\n"
+                "if _AGENT not in sys.path:\n"
+                "    sys.path.insert(0, _AGENT)\n"
+                "from agent_daemon import main\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n"
+            )
+        dest_exe = launcher_pyw
         result["installed_exe"] = dest_exe
 
-    # 3. Copy matching Android app icons
-    _update(55, "Deploying matching branding icons...")
+    _update(55, "Deploying Cyber branding icons...")
     dest_ico = os.path.join(valid_dir, "icon.ico")
     dest_png = os.path.join(valid_dir, "icon.png")
     dest_assets = os.path.join(valid_dir, "assets")
@@ -907,353 +1047,407 @@ def perform_full_install(
         except Exception:
             pass
 
-    # 4. Shortcuts
-    _update(70, "Creating Desktop & Start Menu shortcuts...")
+    _update(72, "Creating Win32 COM Desktop & Start Menu shortcuts...")
     if create_desktop:
         create_desktop_shortcut(dest_exe, icon_path=dest_ico if os.path.exists(dest_ico) else None)
     if create_start_menu:
         create_start_menu_shortcut(dest_exe, icon_path=dest_ico if os.path.exists(dest_ico) else None)
 
-    # 5. Windows Autostart & Add/Remove Programs (Uninstaller)
-    _update(85, "Configuring Windows autostart & Settings registration...")
+    _update(86, "Configuring Windows autostart & Installed Apps...")
     if autostart:
         set_windows_autostart(True, dest_exe)
     register_windows_uninstaller(dest_exe, icon_path=dest_ico if os.path.exists(dest_ico) else None)
 
-    _update(95, "Verifying port 8765 and security shields...")
+    _update(95, "Verifying port 8765 readiness...")
     check_port_available(8765)
 
-    # 6. Launch installed application if requested
     if launch_after:
-        _update(98, "Launching AI NetController...")
+        _update(98, "Launching AI NetController Host Agent...")
         try:
+            if dest_exe.lower().endswith(".pyw") and not is_frozen:
+                pyw = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "pythonw.exe")
+                runner = pyw if (IS_WINDOWS and os.path.isfile(pyw)) else sys.executable
+                cmd_args = [runner, dest_exe]
+            else:
+                cmd_args = [dest_exe]
             subprocess.Popen(
-                [dest_exe],
+                cmd_args,
                 cwd=valid_dir,
-                creationflags=0x08000000 | 0x00000200 if IS_WINDOWS else 0
+                creationflags=0x00000008 if IS_WINDOWS else 0,
             )
         except Exception as e:
-            logger.warning(f"Post-install launch notice: {e}")
+            logger.debug(f"Auto-launch advisory: {e}")
 
-    _update(100, "Installation completed successfully!")
+    _update(100, "Installation completed cleanly.")
     result["success"] = True
-    result["message"] = (
-        f"AI NetController v{APP_VERSION} installed successfully!\n\n"
-        f"• Location: {valid_dir}\n"
-        f"• Desktop & Start Menu shortcuts created with matching Android icon\n"
-        f"• Registered in Windows Settings (Add or Remove Programs)\n"
-        f"• Ready for high-speed mobile companion pairing on port 8765"
-    )
+    result["message"] = f"AI NetController {APP_VERSION} installed to:\n{valid_dir}"
     return result
 
 
-def show_install_dialog(
-    parent_root=None,
-    on_complete: Optional[Callable[[], None]] = None,
-    on_portable_launch: Optional[Callable[[], None]] = None,
-) -> None:
-    """
-    Dedicated GUI installation window for AI NetController:
-    Provides simple 1-click installation with matching Android icons,
-    options for shortcuts, boot autostart, and clean Windows Settings registration.
-    """
+# ==============================================================================
+# 7. CYBER GLASSMORPHIC INSTALL & UNINSTALL WIZARDS (MATCHING MOBILE DESIGN)
+# ==============================================================================
+def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
+    """Displays the Cyber Glassmorphic Setup Wizard matching the Mobile App UI."""
     try:
         import tkinter as tk
-        from tkinter import ttk, messagebox, filedialog
-        from PIL import ImageTk
-    except ImportError:
-        print("[INFO] Running non-GUI automated installation...")
-        res = perform_full_install()
-        print(res.get("message", "Installation completed."))
-        if on_complete and callable(on_complete):
-            on_complete()
-        return
+        from tkinter import filedialog
+    except Exception:
+        return None
 
+    enable_hidpi_awareness()
     win = tk.Toplevel(parent_root) if parent_root else tk.Tk()
-    win.title("AI NetController Setup")
-    win.geometry("620x540")
+    win.title(f"{APP_NAME} v{APP_VERSION} — Setup Wizard")
+    win.geometry("580x500")
+    win.configure(bg=CyberColors.BACKGROUND)
     win.resizable(False, False)
-    win.configure(bg="#070c18")
     apply_window_icon(win)
+    apply_dark_titlebar(win, CyberColors.BACKGROUND)
 
-    # Center window
-    win.update_idletasks()
-    w = win.winfo_width()
-    h = win.winfo_height()
-    x = (win.winfo_screenwidth() // 2) - (w // 2)
-    y = (win.winfo_screenheight() // 2) - (h // 2)
-    win.geometry(f"{w}x{h}+{x}+{y}")
-
-    # Top Header Banner
-    header = tk.Frame(win, bg="#0b1324", padx=16, pady=14, highlightthickness=1, highlightbackground="#1e293b")
-    header.pack(fill=tk.X, padx=14, pady=(14, 10))
+    ui_font, mono_font = resolve_font_families(win if not parent_root else parent_root)
+    outcome: Dict[str, Any] = {"installed": False, "result": None}
+    bg_refs: List[Any] = []
 
     try:
-        ico_img = get_icon_image(48)
-        if ico_img:
-            photo = ImageTk.PhotoImage(ico_img)
-            icon_lbl = tk.Label(header, image=photo, bg="#0b1324")
-            icon_lbl.image = photo
-            icon_lbl.pack(side=tk.LEFT, padx=(0, 14))
+        from PIL import ImageTk
+        bg_im = render_ambient_backdrop(580, 500)
+        if bg_im:
+            bg_photo = ImageTk.PhotoImage(bg_im)
+            bg_refs.append(bg_photo)
+            bg_lbl = tk.Label(win, image=bg_photo, borderwidth=0)
+            bg_lbl.place(x=0, y=0, relwidth=1.0, relheight=1.0)
     except Exception:
         pass
 
-    hdr_text = tk.Frame(header, bg="#0b1324")
-    hdr_text.pack(side=tk.LEFT, fill=tk.Y)
+    header = tk.Frame(win, bg=CyberColors.SURFACE, highlightbackground=CyberColors.GLASS_BORDER, highlightthickness=1)
+    header.pack(fill=tk.X, padx=22, pady=(20, 12))
+
+    # Top glowing cyan accent rule inside card
+    tk.Frame(header, bg=CyberColors.PRIMARY, height=2).pack(fill=tk.X)
+    head_inner = tk.Frame(header, bg=CyberColors.SURFACE, padx=18, pady=14)
+    head_inner.pack(fill=tk.X)
+
+    try:
+        from PIL import ImageTk
+        orb = render_node_orb_image(44, CyberColors.PRIMARY, CyberColors.SECONDARY, 0.1, True)
+        if orb:
+            orb_ph = ImageTk.PhotoImage(orb)
+            bg_refs.append(orb_ph)
+            tk.Label(head_inner, image=orb_ph, bg=CyberColors.SURFACE).pack(side=tk.LEFT, padx=(0, 14))
+    except Exception:
+        pass
+
+    title_col = tk.Frame(head_inner, bg=CyberColors.SURFACE)
+    title_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    tk.Label(
+        title_col,
+        text="NODE SETUP WIZARD",
+        font=(mono_font, 9, "bold"),
+        fg=CyberColors.PRIMARY,
+        bg=CyberColors.SURFACE,
+    ).pack(anchor=tk.W)
+    tk.Label(
+        title_col,
+        text=f"{APP_NAME} v{APP_VERSION}",
+        font=(ui_font, 15, "bold"),
+        fg=CyberColors.TEXT_PRIMARY,
+        bg=CyberColors.SURFACE,
+    ).pack(anchor=tk.W)
+    tk.Label(
+        title_col,
+        text="Per-user Zero-Trust Host Agent • Native Win32 COM • Zero Admin UAC",
+        font=(ui_font, 9),
+        fg=CyberColors.TEXT_SECONDARY,
+        bg=CyberColors.SURFACE,
+    ).pack(anchor=tk.W)
+
+    # Glassmorphic configuration card
+    body = tk.Frame(win, bg=CyberColors.SURFACE, highlightbackground=CyberColors.GLASS_BORDER_IDLE, highlightthickness=1)
+    body.pack(fill=tk.BOTH, expand=True, padx=22, pady=(0, 14))
+    inner = tk.Frame(body, bg=CyberColors.SURFACE, padx=18, pady=16)
+    inner.pack(fill=tk.BOTH, expand=True)
 
     tk.Label(
-        hdr_text,
-        text="🚀 AI NETCONTROLLER SETUP",
-        bg="#0b1324",
-        fg="#38bdf8",
-        font=("Segoe UI", 13, "bold"),
-    ).pack(anchor="w")
+        inner,
+        text="DESTINATION DIRECTORY",
+        font=(mono_font, 9, "bold"),
+        fg=CyberColors.TEXT_SECONDARY,
+        bg=CyberColors.SURFACE,
+    ).pack(anchor=tk.W)
 
-    tk.Label(
-        hdr_text,
-        text=f"Version {APP_VERSION} • PC Host Agent & Desktop Control Center",
-        bg="#0b1324",
-        fg="#94a3b8",
-        font=("Segoe UI", 9),
-    ).pack(anchor="w", pady=(2, 0))
+    dir_row = tk.Frame(inner, bg=CyberColors.SURFACE)
+    dir_row.pack(fill=tk.X, pady=(6, 14))
 
-    # Content Body
-    body = tk.Frame(win, bg="#070c18", padx=14)
-    body.pack(fill=tk.BOTH, expand=True)
-
-    # Target folder card
-    dest_card = tk.Frame(body, bg="#0b1324", padx=12, pady=10, highlightthickness=1, highlightbackground="#1e293b")
-    dest_card.pack(fill=tk.X, pady=(4, 10))
-
-    tk.Label(
-        dest_card,
-        text="📁 Installation Destination Folder:",
-        bg="#0b1324",
-        fg="#f8fafc",
-        font=("Segoe UI", 9, "bold"),
-    ).pack(anchor="w")
-
-    dest_row = tk.Frame(dest_card, bg="#0b1324")
-    dest_row.pack(fill=tk.X, pady=(6, 4))
-
-    dest_var = tk.StringVar(value=get_default_install_dir())
-    dest_entry = tk.Entry(
-        dest_row,
-        textvariable=dest_var,
-        bg="#050811",
-        fg="#38bdf8",
-        insertbackground="#38bdf8",
+    path_var = tk.StringVar(value=get_default_install_dir())
+    path_entry = tk.Entry(
+        dir_row,
+        textvariable=path_var,
+        bg=CyberColors.TERMINAL_BG,
+        fg=CyberColors.TEXT_PRIMARY,
+        insertbackground=CyberColors.PRIMARY,
         relief=tk.FLAT,
-        font=("Consolas", 9),
+        highlightbackground=CyberColors.GLASS_BORDER,
         highlightthickness=1,
-        highlightbackground="#334155",
+        font=(mono_font, 9),
     )
-    dest_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=4)
+    path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=7)
 
-    def _browse_dir():
-        d = filedialog.askdirectory(initialdir=dest_var.get(), title="Select Installation Folder", parent=win)
-        if d:
-            dest_var.set(os.path.normpath(d))
+    def _browse() -> None:
+        chosen = filedialog.askdirectory(initialdir=path_var.get(), title="Choose Install Directory")
+        if chosen:
+            if os.path.basename(chosen).lower() != APP_NAME.lower():
+                chosen = os.path.join(chosen, APP_NAME)
+            path_var.set(chosen)
 
     tk.Button(
-        dest_row,
-        text="Browse...",
-        command=_browse_dir,
-        bg="#1e293b",
-        fg="#cbd5e1",
-        activebackground="#334155",
+        dir_row,
+        text="BROWSE",
+        command=_browse,
+        bg=CyberColors.SURFACE_ELEVATED,
+        fg=CyberColors.PRIMARY,
+        activebackground=CyberColors.PRIMARY_SOFT,
+        activeforeground=CyberColors.TEXT_PRIMARY,
         relief=tk.FLAT,
-        font=("Segoe UI", 8, "bold"),
-        padx=10,
-        pady=3,
+        font=(mono_font, 9, "bold"),
+        padx=12,
+        pady=5,
         cursor="hand2",
-    ).pack(side=tk.RIGHT)
+    ).pack(side=tk.LEFT, padx=(8, 0))
+
+    opt_desktop = tk.BooleanVar(value=True)
+    opt_startmenu = tk.BooleanVar(value=True)
+    opt_autostart = tk.BooleanVar(value=True)
+    opt_launch = tk.BooleanVar(value=True)
 
     tk.Label(
-        dest_card,
-        text="~45 MB required • Safe per-user install (requires no administrator UAC elevation)",
-        bg="#0b1324",
-        fg="#64748b",
-        font=("Segoe UI", 8),
-    ).pack(anchor="w")
+        inner,
+        text="INTEGRATION OPTIONS",
+        font=(mono_font, 9, "bold"),
+        fg=CyberColors.TEXT_SECONDARY,
+        bg=CyberColors.SURFACE,
+    ).pack(anchor=tk.W, pady=(0, 6))
 
-    # Options card
-    opt_card = tk.Frame(body, bg="#0b1324", padx=12, pady=10, highlightthickness=1, highlightbackground="#1e293b")
-    opt_card.pack(fill=tk.X, pady=(0, 10))
-
-    tk.Label(
-        opt_card,
-        text="⚙️ Installation Options & System Integration:",
-        bg="#0b1324",
-        fg="#f8fafc",
-        font=("Segoe UI", 9, "bold"),
-    ).pack(anchor="w", pady=(0, 4))
-
-    desk_var = tk.BooleanVar(value=True)
-    start_var = tk.BooleanVar(value=True)
-    auto_var = tk.BooleanVar(value=True)
-    launch_var = tk.BooleanVar(value=True)
-
-    def _cb(parent, text, var):
-        cb = tk.Checkbutton(
-            parent,
+    for text, var in (
+        ("Create Desktop Shortcut (Win32 COM Link)", opt_desktop),
+        ("Create Start Menu Entry & Uninstaller Link", opt_startmenu),
+        ("Start Automatically When Windows Signs In", opt_autostart),
+        ("Launch Host Control Center Right After Install", opt_launch),
+    ):
+        tk.Checkbutton(
+            inner,
             text=text,
             variable=var,
-            bg="#0b1324",
-            fg="#e2e8f0",
-            selectcolor="#050811",
-            activebackground="#0b1324",
-            activeforeground="#38bdf8",
-            font=("Segoe UI", 9),
-        )
-        cb.pack(anchor="w", pady=1)
+            bg=CyberColors.SURFACE,
+            fg=CyberColors.TEXT_PRIMARY,
+            selectcolor=CyberColors.TERMINAL_BG,
+            activebackground=CyberColors.SURFACE,
+            activeforeground=CyberColors.PRIMARY,
+            font=(ui_font, 9),
+        ).pack(anchor=tk.W, pady=3)
 
-    _cb(opt_card, "Create Desktop Shortcut (AI NetController.lnk with matching Android app icon)", desk_var)
-    _cb(opt_card, "Create Start Menu Program Folder & Shortcut", start_var)
-    _cb(opt_card, "Start AI NetController automatically on Windows user login", auto_var)
-    _cb(opt_card, "Launch AI NetController immediately after installation completes", launch_var)
-
-    # Progress & Status Card
-    prog_card = tk.Frame(body, bg="#0b1324", padx=12, pady=8, highlightthickness=1, highlightbackground="#1e293b")
-    prog_card.pack(fill=tk.X)
-
-    status_var = tk.StringVar(value="Ready to install. Click '🚀 Install AI NetController' to begin.")
+    status_var = tk.StringVar(value="Ready to deploy verified runtime files.")
     status_lbl = tk.Label(
-        prog_card,
+        inner,
         textvariable=status_var,
-        bg="#0b1324",
-        fg="#34d399",
-        font=("Consolas", 8, "bold"),
-        anchor="w",
+        font=(mono_font, 9),
+        fg=CyberColors.PRIMARY,
+        bg=CyberColors.SURFACE,
+        anchor=tk.W,
     )
-    status_lbl.pack(fill=tk.X, pady=(0, 4))
+    status_lbl.pack(fill=tk.X, pady=(14, 6))
 
-    prog_bar = ttk.Progressbar(prog_card, orient=tk.HORIZONTAL, mode="determinate", maximum=100)
-    prog_bar.pack(fill=tk.X)
+    # Glowing canvas progress bar matching Cyber gauge
+    prog_canvas = tk.Canvas(inner, height=8, bg=CyberColors.TERMINAL_BG, highlightthickness=0)
+    prog_canvas.pack(fill=tk.X)
+    prog_fill = prog_canvas.create_rectangle(0, 0, 0, 8, fill=CyberColors.PRIMARY, width=0)
 
-    # Action Buttons
-    btn_frame = tk.Frame(win, bg="#070c18", padx=14, pady=12)
-    btn_frame.pack(fill=tk.X)
+    def _set_progress(pct: int, msg: str) -> None:
+        w = max(1, prog_canvas.winfo_width() or 490)
+        prog_canvas.coords(prog_fill, 0, 0, int(w * max(0, min(100, pct)) / 100.0), 8)
+        status_var.set(f"[{pct:3d}%] {msg}")
+        win.update()
 
-    install_btn = None
-
-    def _on_portable():
-        win.destroy()
-        if on_portable_launch and callable(on_portable_launch):
-            on_portable_launch()
-
-    def _start_installation():
-        install_btn.configure(state=tk.DISABLED, text="⏳ Installing...")
-        dest_entry.configure(state=tk.DISABLED)
-
-        def _worker():
-            def _progress(pct, msg):
-                def _apply(p=pct, m=msg):
-                    try:
-                        if win.winfo_exists():
-                            prog_bar.configure(value=p)
-                            status_var.set(f"[{p}%] {m}")
-                    except Exception:
-                        pass
-                try:
-                    win.after(0, _apply)
-                except Exception:
-                    pass
-
-            target = dest_var.get()
-            res = perform_full_install(
-                target_dir=target,
-                create_desktop=desk_var.get(),
-                create_start_menu=start_var.get(),
-                autostart=auto_var.get(),
-                launch_after=launch_var.get(),
-                progress_cb=_progress,
-            )
-
-            def _finish():
-                try:
-                    if not win.winfo_exists():
-                        return
-                except Exception:
-                    return
-                if res["success"]:
-                    status_var.set("✓ Installation completed successfully!")
-                    install_btn.configure(
-                        state=tk.NORMAL,
-                        text="✓ Finish & Exit Setup",
-                        command=win.destroy,
-                        bg="#059669",
-                    )
-                    messagebox.showinfo(
-                        "Installation Succeeded",
-                        res["message"],
-                        parent=win
-                    )
-                    if win.winfo_exists():
-                        win.destroy()
-                    if on_complete and callable(on_complete):
-                        on_complete()
-                else:
-                    status_var.set(f"❌ Error: {res.get('message', 'Installation failed')}")
-                    install_btn.configure(state=tk.NORMAL, text="Retry Installation")
-                    dest_entry.configure(state=tk.NORMAL)
-                    messagebox.showerror(
-                        "Installation Error",
-                        f"Installation could not be completed:\n\n{res.get('message', 'Unknown error')}",
-                        parent=win
-                    )
-
-            try:
-                win.after(0, _finish)
-            except Exception:
-                pass
-
-        import threading
-        threading.Thread(target=_worker, daemon=True, name="InstallerWorker").start()
+    btn_row = tk.Frame(win, bg=CyberColors.BACKGROUND)
+    btn_row.pack(fill=tk.X, padx=22, pady=(0, 20))
 
     tk.Button(
-        btn_frame,
-        text="❌ Cancel",
+        btn_row,
+        text="CANCEL",
         command=win.destroy,
-        bg="#1e293b",
-        fg="#94a3b8",
-        activebackground="#334155",
+        bg=CyberColors.SURFACE_ELEVATED,
+        fg=CyberColors.TEXT_SECONDARY,
         relief=tk.FLAT,
-        font=("Segoe UI", 9),
-        padx=12,
-        pady=6,
+        font=(mono_font, 9, "bold"),
+        padx=16,
+        pady=9,
         cursor="hand2",
-    ).pack(side=tk.RIGHT, padx=(8, 0))
-
-    tk.Button(
-        btn_frame,
-        text="⚡ Run Once (Portable)",
-        command=_on_portable,
-        bg="#1e293b",
-        fg="#38bdf8",
-        activebackground="#334155",
-        relief=tk.FLAT,
-        font=("Segoe UI", 9, "bold"),
-        padx=12,
-        pady=6,
-        cursor="hand2",
-    ).pack(side=tk.RIGHT, padx=(8, 0))
+    ).pack(side=tk.LEFT)
 
     install_btn = tk.Button(
-        btn_frame,
-        text="🚀 Install AI NetController",
-        command=_start_installation,
-        bg="#0284c7",
-        fg="#ffffff",
-        activebackground="#0369a1",
+        btn_row,
+        text="DEPLOY NODE",
+        bg=CyberColors.PRIMARY,
+        fg=CyberColors.BACKGROUND,
+        activebackground=CyberColors.SUCCESS,
+        activeforeground=CyberColors.BACKGROUND,
         relief=tk.FLAT,
-        font=("Segoe UI", 10, "bold"),
-        padx=16,
-        pady=6,
+        font=(mono_font, 10, "bold"),
+        padx=22,
+        pady=9,
         cursor="hand2",
     )
+
+    def _do_install() -> None:
+        install_btn.config(state=tk.DISABLED, text="DEPLOYING...")
+        res = perform_full_install(
+            target_dir=path_var.get(),
+            create_desktop=opt_desktop.get(),
+            create_start_menu=opt_startmenu.get(),
+            autostart=opt_autostart.get(),
+            launch_after=opt_launch.get(),
+            progress_cb=_set_progress,
+        )
+        outcome["result"] = res
+        outcome["installed"] = bool(res.get("success"))
+        if res.get("success"):
+            status_lbl.config(fg=CyberColors.SUCCESS)
+            status_var.set("Deployment verified cleanly. Closing wizard...")
+            win.after(900, win.destroy)
+        else:
+            status_lbl.config(fg=CyberColors.ACCENT)
+            status_var.set(str(res.get("message") or "Installation error"))
+            install_btn.config(state=tk.NORMAL, text="RETRY DEPLOY")
+
+    install_btn.config(command=_do_install)
     install_btn.pack(side=tk.RIGHT)
 
     if not parent_root:
         win.mainloop()
+    else:
+        win.wait_window()
+    return outcome
 
+
+def show_uninstall_dialog(parent_root=None, on_uninstalled: Optional[Callable[[], None]] = None) -> None:
+    """Displays the Cyber Glassmorphic Uninstall Modal matching Mobile Design Language."""
+    try:
+        import tkinter as tk
+    except Exception:
+        perform_full_uninstall(interactive=False, remove_config=False, on_complete=on_uninstalled)
+        return
+
+    enable_hidpi_awareness()
+    win = tk.Toplevel(parent_root) if parent_root else tk.Tk()
+    win.title(f"Uninstall {APP_NAME}")
+    win.geometry("500x360")
+    win.configure(bg=CyberColors.BACKGROUND)
+    win.resizable(False, False)
+    apply_window_icon(win)
+    apply_dark_titlebar(win, CyberColors.BACKGROUND)
+
+    ui_font, mono_font = resolve_font_families(win if not parent_root else parent_root)
+
+    card = tk.Frame(
+        win,
+        bg=CyberColors.SURFACE,
+        highlightbackground=CyberColors.GLASS_BORDER_CRITICAL,
+        highlightthickness=1,
+    )
+    card.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+    tk.Frame(card, bg=CyberColors.ACCENT, height=2).pack(fill=tk.X)
+
+    inner = tk.Frame(card, bg=CyberColors.SURFACE, padx=20, pady=18)
+    inner.pack(fill=tk.BOTH, expand=True)
+
+    tk.Label(
+        inner,
+        text="NODE DECOMMISSION",
+        font=(mono_font, 9, "bold"),
+        fg=CyberColors.ACCENT,
+        bg=CyberColors.SURFACE,
+    ).pack(anchor=tk.W)
+    tk.Label(
+        inner,
+        text=f"Uninstall {APP_NAME}?",
+        font=(ui_font, 15, "bold"),
+        fg=CyberColors.TEXT_PRIMARY,
+        bg=CyberColors.SURFACE,
+    ).pack(anchor=tk.W, pady=(2, 8))
+
+    tk.Label(
+        inner,
+        text=(
+            "This cleanly terminates background daemon services, removes Desktop and\n"
+            "Start Menu links, disables Windows startup auto-run, and unregisters the app."
+        ),
+        font=(ui_font, 9),
+        fg=CyberColors.TEXT_SECONDARY,
+        bg=CyberColors.SURFACE,
+        justify=tk.LEFT,
+    ).pack(anchor=tk.W, pady=(0, 12))
+
+    remove_cfg_var = tk.BooleanVar(value=False)
+    tk.Checkbutton(
+        inner,
+        text="Also wipe encrypted pairing keys & DPAPI secret vault (%LOCALAPPDATA%)",
+        variable=remove_cfg_var,
+        bg=CyberColors.SURFACE,
+        fg=CyberColors.WARNING,
+        selectcolor=CyberColors.TERMINAL_BG,
+        activebackground=CyberColors.SURFACE,
+        activeforeground=CyberColors.ACCENT,
+        font=(ui_font, 9),
+    ).pack(anchor=tk.W, pady=(4, 14))
+
+    status_var = tk.StringVar(value="")
+    status_lbl = tk.Label(
+        inner,
+        textvariable=status_var,
+        font=(mono_font, 9),
+        fg=CyberColors.SUCCESS,
+        bg=CyberColors.SURFACE,
+        anchor=tk.W,
+    )
+    status_lbl.pack(fill=tk.X, pady=(0, 12))
+
+    btn_row = tk.Frame(inner, bg=CyberColors.SURFACE)
+    btn_row.pack(fill=tk.X, side=tk.BOTTOM)
+
+    tk.Button(
+        btn_row,
+        text="KEEP INSTALLED",
+        command=win.destroy,
+        bg=CyberColors.SURFACE_ELEVATED,
+        fg=CyberColors.TEXT_PRIMARY,
+        relief=tk.FLAT,
+        font=(mono_font, 9, "bold"),
+        padx=14,
+        pady=8,
+        cursor="hand2",
+    ).pack(side=tk.LEFT)
+
+    def _do_uninstall() -> None:
+        perform_full_uninstall(
+            interactive=False,
+            remove_config=remove_cfg_var.get(),
+            on_complete=on_uninstalled,
+        )
+        status_var.set("AI NetController removed cleanly.")
+        win.after(800, win.destroy)
+
+    tk.Button(
+        btn_row,
+        text="CONFIRM UNINSTALL",
+        command=_do_uninstall,
+        bg=CyberColors.ACCENT,
+        fg=CyberColors.TEXT_PRIMARY,
+        activebackground=CyberColors.ACCENT_SOFT,
+        relief=tk.FLAT,
+        font=(mono_font, 9, "bold"),
+        padx=16,
+        pady=8,
+        cursor="hand2",
+    ).pack(side=tk.RIGHT)
+
+    if not parent_root:
+        win.mainloop()
