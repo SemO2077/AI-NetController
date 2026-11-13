@@ -1,5 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.cst.autonomouslan">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     
     <!-- Core High-Performance Network & Discovery Permissions -->
     <uses-permission android:name="android.permission.INTERNET"/>
@@ -16,8 +15,8 @@
         android:label="AI NetController"
         android:icon="@mipmap/ic_launcher"
         android:hardwareAccelerated="true"
-        android:largeHeap="false"
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
         android:networkSecurityConfig="@xml/network_security_config"> <!-- Loopback/.local only; TLS preferred -->
         
         <activity
@@ -28,9 +27,7 @@
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
 
-            <!-- 120Hz Smooth High Refresh Rate & Low Latency Display Unlock -->
             <meta-data android:name="android.max_aspect" android:value="2.5" />
-            <meta-data android:name="android.hardware.render_ahead" android:value="true" />
 
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"

@@ -393,7 +393,7 @@ class _PipStreamViewerState extends State<PipStreamViewer>
 
           // PiP Mode Trigger Button
           IconButton(
-            tooltip: 'Picture-in-Picture режим',
+            tooltip: 'Picture-in-Picture mode',
             icon: Icon(Icons.picture_in_picture_alt,
                 color: widget.dominantAccentColor, size: 20),
             onPressed: () {
@@ -419,7 +419,7 @@ class _PipStreamViewerState extends State<PipStreamViewer>
           ),
           const SizedBox(height: 12),
           const Text(
-            'Инициализиране на TurboJPEG видео поток...',
+            'Initializing live video stream...',
             style: TextStyle(color: Colors.white54, fontSize: 12),
           ),
         ],

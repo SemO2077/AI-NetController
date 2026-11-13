@@ -197,11 +197,26 @@ def get_config_path() -> str:
     return os.path.join(get_config_dir(), "config.json")
 
 
+_WEAK_PINS = {
+    "000000", "111111", "222222", "333333", "444444",
+    "555555", "666666", "777777", "888888", "999999",
+    "123456", "654321", "012345", "543210",
+}
+
+
+def _generate_strong_pin() -> str:
+    """Generates a cryptographically random 6-digit PIN excluding trivial sequences."""
+    while True:
+        pin = f"{secrets.randbelow(900000) + 100000}"
+        if pin not in _WEAK_PINS and len(set(pin)) >= 2:
+            return pin
+
+
 def _generate_default_config() -> Dict[str, Any]:
     """Generates initial configuration with high-entropy CSPRNG credentials."""
     env_secret = os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET")
     pairing_token = env_secret.strip() if env_secret and env_secret.strip() else f"ainet_{secrets.token_hex(24)}"
-    pairing_pin = f"{secrets.randbelow(900000) + 100000}"
+    pairing_pin = _generate_strong_pin()
 
     return {
         "version": "0.51.0",
@@ -423,7 +438,7 @@ def regenerate_pin() -> str:
     """Regenerates 6-digit pairing PIN with fresh timestamp and returns new PIN."""
     with _CONFIG_LOCK:
         cfg = load_config()
-        new_pin = f"{secrets.randbelow(900000) + 100000}"
+        new_pin = _generate_strong_pin()
         cfg["pairing_pin"] = new_pin
         cfg["pin_issued_at"] = int(time.time())
         save_config(cfg)

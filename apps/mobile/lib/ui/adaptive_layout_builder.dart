@@ -103,6 +103,7 @@ class AdaptiveScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     final tier = ScreenBreakpoint.getTier(context);
     final insets = MediaQuery.viewInsetsOf(context);
     final padding = MediaQuery.paddingOf(context);
@@ -113,7 +114,7 @@ class AdaptiveScaffold extends StatelessWidget {
         textScaler: FluidSize.clampedTextScaler(context),
       ),
       child: Scaffold(
-        backgroundColor: CyberColors.background,
+        backgroundColor: palette.background,
         resizeToAvoidBottomInset:
             false, // Insets manually offset floating overlays
         body: Stack(
@@ -130,8 +131,8 @@ class AdaptiveScaffold extends StatelessWidget {
                     shape: BoxShape.circle,
                     gradient: RadialGradient(
                       colors: [
-                        CyberColors.primary.withValues(alpha: 0.14),
-                        CyberColors.secondary.withValues(alpha: 0.04),
+                        palette.primary.withValues(alpha: 0.14),
+                        palette.secondary.withValues(alpha: 0.04),
                         Colors.transparent,
                       ],
                     ),
@@ -150,8 +151,8 @@ class AdaptiveScaffold extends StatelessWidget {
                     shape: BoxShape.circle,
                     gradient: RadialGradient(
                       colors: [
-                        CyberColors.secondary.withValues(alpha: 0.12),
-                        CyberColors.primary.withValues(alpha: 0.03),
+                        palette.secondary.withValues(alpha: 0.12),
+                        palette.primary.withValues(alpha: 0.03),
                         Colors.transparent,
                       ],
                     ),
@@ -240,126 +241,151 @@ class AdaptiveScaffold extends StatelessWidget {
 
   // Floating Liquid Glass Pill Dock for Mobile
   Widget _buildFloatingPillNav(BuildContext context) {
+    final palette = context.palette;
+    final sigma = palette.glass.blurSigma;
+    final disableAnim = MediaQuery.disableAnimationsOf(context);
+    final dur = disableAnim ? Duration.zero : const Duration(milliseconds: 240);
+
+    final Widget pillContent = Container(
+      height: 60,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: 0.12),
+            palette.surfaceElevated.withValues(alpha: sigma > 0 ? 0.80 : 0.96),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.18),
+          width: 1.1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.60),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+          BoxShadow(
+            color: palette.primary.withValues(alpha: 0.14),
+            blurRadius: 16,
+            spreadRadius: -2,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: List.generate(navItems.length, (index) {
+          final item = navItems[index];
+          final isSelected = selectedIndex == index;
+          return GestureDetector(
+            onTap: () => onIndexChanged(index),
+            behavior: HitTestBehavior.opaque,
+            child: AnimatedContainer(
+              duration: dur,
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.symmetric(
+                horizontal: isSelected ? 16 : 12,
+                vertical: 8,
+              ),
+              decoration: BoxDecoration(
+                gradient: isSelected
+                    ? LinearGradient(
+                        colors: [
+                          palette.primary.withValues(alpha: 0.24),
+                          palette.secondary.withValues(alpha: 0.16),
+                        ],
+                      )
+                    : null,
+                color: isSelected ? null : Colors.transparent,
+                borderRadius: BorderRadius.circular(22),
+                border: isSelected
+                    ? Border.all(
+                        color: palette.primary.withValues(alpha: 0.45),
+                        width: 1,
+                      )
+                    : null,
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: palette.primary.withValues(alpha: 0.22),
+                          blurRadius: 12,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AnimatedScale(
+                    scale: isSelected ? 1.08 : 1.0,
+                    duration: dur,
+                    curve: Curves.easeOutCubic,
+                    child: Icon(
+                      isSelected ? (item.activeIcon ?? item.icon) : item.icon,
+                      size: 19,
+                      color: isSelected
+                          ? palette.primary
+                          : palette.textSecondary,
+                    ),
+                  ),
+                  if (item.badgeCount != null && item.badgeCount! > 0) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: palette.primary.withValues(alpha: 0.25),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '${item.badgeCount}',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: palette.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                  AnimatedSize(
+                    duration: dur,
+                    curve: Curves.easeOutCubic,
+                    child: isSelected
+                        ? Padding(
+                            padding: const EdgeInsets.only(left: 7),
+                            child: Text(
+                              item.label,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: context.fluidFont(11),
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.4,
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+
     return RepaintBoundary(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(30),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-          child: Container(
-            height: 60,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.white.withValues(alpha: 0.12),
-                  CyberColors.surfaceElevated.withValues(alpha: 0.78),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(30),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.18),
-                width: 1.1,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.65),
-                  blurRadius: 24,
-                  offset: const Offset(0, 10),
-                ),
-                BoxShadow(
-                  color: CyberColors.primary.withValues(alpha: 0.12),
-                  blurRadius: 20,
-                  spreadRadius: -2,
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: List.generate(navItems.length, (index) {
-                final item = navItems[index];
-                final isSelected = selectedIndex == index;
-                return GestureDetector(
-                  onTap: () => onIndexChanged(index),
-                  behavior: HitTestBehavior.opaque,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 260),
-                    curve: Curves.easeOutCubic,
-                    padding: EdgeInsets.symmetric(
-                      horizontal: isSelected ? 16 : 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      gradient: isSelected
-                          ? LinearGradient(
-                              colors: [
-                                CyberColors.primary.withValues(alpha: 0.24),
-                                CyberColors.secondary.withValues(alpha: 0.16),
-                              ],
-                            )
-                          : null,
-                      color: isSelected ? null : Colors.transparent,
-                      borderRadius: BorderRadius.circular(22),
-                      border: isSelected
-                          ? Border.all(
-                              color:
-                                  CyberColors.primary.withValues(alpha: 0.45),
-                              width: 1)
-                          : null,
-                      boxShadow: isSelected
-                          ? [
-                              BoxShadow(
-                                color:
-                                    CyberColors.primary.withValues(alpha: 0.22),
-                                blurRadius: 12,
-                              ),
-                            ]
-                          : null,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        AnimatedScale(
-                          scale: isSelected ? 1.08 : 1.0,
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
-                          child: Icon(
-                            isSelected
-                                ? (item.activeIcon ?? item.icon)
-                                : item.icon,
-                            size: 19,
-                            color: isSelected
-                                ? CyberColors.primary
-                                : CyberColors.textSecondary,
-                          ),
-                        ),
-                        AnimatedSize(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
-                          child: isSelected
-                              ? Padding(
-                                  padding: const EdgeInsets.only(left: 7),
-                                  child: Text(
-                                    item.label,
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: context.fluidFont(11),
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 0.4,
-                                    ),
-                                  ),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }),
-            ),
-          ),
-        ),
+        child: sigma > 0
+            ? BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                child: pillContent,
+              )
+            : pillContent,
       ),
     );
   }
@@ -394,47 +420,61 @@ class AdaptiveScaffold extends StatelessWidget {
   }
 
   // -------------------------------------------------------------------
-  // 3. EXPANDED VIEW (>840dp): MASTER-DETAIL SPLIT VIEW (35% / 65%)
+  // 3. EXPANDED VIEW (>840dp): MASTER-DETAIL SPLIT VIEW (OR ACTIVE TAB)
   // -------------------------------------------------------------------
   Widget _buildExpandedSplitView(BuildContext context) {
+    final palette = context.palette;
     return Row(
       children: [
-        // Navigation Rail on far left
         _buildNavigationRail(context, extended: true),
         const VerticalDivider(width: 1, color: Colors.white10),
-
-        // Master Fleet List Pane (Default 35% of remaining space)
-        Expanded(
-          flex: (expandedMasterWidthFraction * 100).round(),
-          child: Column(
-            children: [
-              _buildAppBar(context,
-                  showNavIcon: false, subtitle: 'FLEET DIRECTORY'),
-              Expanded(child: expandedMasterPane ?? compactBody),
-            ],
-          ),
-        ),
-
-        const VerticalDivider(width: 1, color: Colors.white10),
-
-        // Detail Console / Stream / Telemetry Pane (Default 65% of remaining space)
-        Expanded(
-          flex: ((1.0 - expandedMasterWidthFraction) * 100).round(),
-          child: Container(
-            color: CyberColors.surface.withValues(alpha: 0.35),
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 260),
-              switchInCurve: Curves.easeOutCubic,
-              child: expandedDetailPane ??
-                  const Center(
-                    child: Text(
-                      'Select an active host to view live stream & console',
-                      style: TextStyle(color: CyberColors.textSecondary),
-                    ),
-                  ),
+        if (selectedIndex == 0) ...[
+          // Master Fleet List Pane (Default 35% of remaining space)
+          Expanded(
+            flex: (expandedMasterWidthFraction * 100).round(),
+            child: Column(
+              children: [
+                _buildAppBar(context,
+                    showNavIcon: false, subtitle: 'FLEET DIRECTORY'),
+                Expanded(child: expandedMasterPane ?? compactBody),
+              ],
             ),
           ),
-        ),
+          const VerticalDivider(width: 1, color: Colors.white10),
+          // Detail Console / Stream / Telemetry Pane (Default 65% of remaining space)
+          Expanded(
+            flex: ((1.0 - expandedMasterWidthFraction) * 100).round(),
+            child: Container(
+              color: palette.surface.withValues(alpha: 0.35),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 260),
+                switchInCurve: Curves.easeOutCubic,
+                child: expandedDetailPane ??
+                    Center(
+                      child: Text(
+                        'Select an active host to view live stream & console',
+                        style: TextStyle(color: palette.textSecondary),
+                      ),
+                    ),
+              ),
+            ),
+          ),
+        ] else
+          Expanded(
+            child: Column(
+              children: [
+                _buildAppBar(context,
+                    showNavIcon: false,
+                    subtitle: navItems[selectedIndex].label.toUpperCase()),
+                Expanded(
+                  child: KeyedSubtree(
+                    key: ValueKey<int>(selectedIndex),
+                    child: compactBody,
+                  ),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -443,13 +483,13 @@ class AdaptiveScaffold extends StatelessWidget {
   // CYBER NAVIGATION RAIL (MEDIUM / EXPANDED)
   // -------------------------------------------------------------------
   Widget _buildNavigationRail(BuildContext context, {required bool extended}) {
+    final palette = context.palette;
     return Container(
-      width: extended ? 180 : 72,
-      color: CyberColors.surfaceElevated.withValues(alpha: 0.9),
+      width: extended ? 184 : 72,
+      color: palette.surfaceElevated.withValues(alpha: 0.9),
       padding: const EdgeInsets.symmetric(vertical: 16),
       child: Column(
         children: [
-          // Cyber Node Identity Indicator
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
@@ -461,24 +501,24 @@ class AdaptiveScaffold extends StatelessWidget {
                   height: 32,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(color: CyberColors.primary, width: 1.5),
-                    color: CyberColors.primary.withValues(alpha: 0.1),
+                    border: Border.all(color: palette.primary, width: 1.5),
+                    color: palette.primary.withValues(alpha: 0.1),
                   ),
-                  child: const Center(
+                  child: Center(
                     child: Icon(Icons.shield_outlined,
-                        size: 16, color: CyberColors.primary),
+                        size: 16, color: palette.primary),
                   ),
                 ),
                 if (extended) ...[
                   const SizedBox(width: 10),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'AI-NET NODE',
                       style: TextStyle(
                         fontFamily: 'monospace',
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
-                        color: CyberColors.primary,
+                        color: palette.primary,
                         letterSpacing: 1.5,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -490,7 +530,6 @@ class AdaptiveScaffold extends StatelessWidget {
           ),
           const SizedBox(height: 24),
 
-          // Nav Items
           Expanded(
             child: ListView.builder(
               itemCount: navItems.length,
@@ -508,13 +547,12 @@ class AdaptiveScaffold extends StatelessWidget {
                           vertical: 10, horizontal: 12),
                       decoration: BoxDecoration(
                         color: isSelected
-                            ? CyberColors.primary.withValues(alpha: 0.15)
+                            ? palette.primary.withValues(alpha: 0.15)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(12),
                         border: isSelected
                             ? Border.all(
-                                color:
-                                    CyberColors.primary.withValues(alpha: 0.5))
+                                color: palette.primary.withValues(alpha: 0.5))
                             : null,
                       ),
                       child: Row(
@@ -528,21 +566,24 @@ class AdaptiveScaffold extends StatelessWidget {
                                 : item.icon,
                             size: 20,
                             color: isSelected
-                                ? CyberColors.primary
-                                : CyberColors.textSecondary,
+                                ? palette.primary
+                                : palette.textSecondary,
                           ),
                           if (extended) ...[
                             const SizedBox(width: 12),
-                            Text(
-                              item.label,
-                              style: TextStyle(
-                                color: isSelected
-                                    ? CyberColors.primary
-                                    : CyberColors.textSecondary,
-                                fontWeight: isSelected
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                fontSize: 13,
+                            Expanded(
+                              child: Text(
+                                item.label,
+                                style: TextStyle(
+                                  color: isSelected
+                                      ? palette.primary
+                                      : palette.textSecondary,
+                                  fontWeight: isSelected
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                  fontSize: 13,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
@@ -677,18 +718,19 @@ class _HitlSheetContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     return RepaintBoundary(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(isDialog ? 24 : 28),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: CyberColors.surfaceElevated.withValues(alpha: 0.95),
+              color: palette.surfaceElevated.withValues(alpha: 0.96),
               borderRadius: BorderRadius.circular(isDialog ? 24 : 28),
               border: Border.all(
-                  color: CyberColors.accent.withValues(alpha: 0.6), width: 1.5),
+                  color: palette.accent.withValues(alpha: 0.6), width: 1.5),
             ),
             child: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
@@ -755,9 +797,9 @@ class _HitlSheetContent extends StatelessWidget {
                     ),
                     child: SelectableText(
                       command,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'monospace',
-                        color: CyberColors.primary,
+                        color: palette.primary,
                         fontSize: 12,
                       ),
                     ),

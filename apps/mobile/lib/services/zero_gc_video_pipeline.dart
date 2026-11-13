@@ -7,24 +7,39 @@ import 'package:flutter/material.dart';
 const int _maxFrameBytes = 4 * 1024 * 1024;
 
 /// ============================================================================
-/// DOUBLE-BUFFERED REUSABLE FRAME RING BUFFER (ZERO-HEAP ALLOCATION)
+/// DOUBLE-BUFFERED REUSABLE FRAME RING BUFFER (LAZY ZERO-HEAP STEADY STATE)
 /// ============================================================================
-/// Alternates between two pre-allocated 4MB memory buffers.
-/// Slot A is safely accessed by the active GPU codec while Slot B receives
-/// the next incoming high-frequency network frame.
+/// Alternates between two reusable buffers that grow on demand up to 4MB
+/// instead of eagerly reserving 8MB before any video frame arrives.
 class _DoubleFrameRingBuffer {
-  final Uint8List _slotA = Uint8List(_maxFrameBytes);
-  final Uint8List _slotB = Uint8List(_maxFrameBytes);
+  Uint8List? _slotA;
+  Uint8List? _slotB;
   int _activeSlot = 0;
 
-  /// Copies incoming bytes into the alternating slot without heap allocation.
+  static int _nextCapacity(int needed) {
+    int cap = 65536;
+    while (cap < needed && cap < _maxFrameBytes) {
+      cap <<= 1;
+    }
+    return cap > _maxFrameBytes ? _maxFrameBytes : cap;
+  }
+
+  /// Copies incoming bytes into the alternating slot without steady-state allocations.
   Uint8List copy(Uint8List incomingBytes) {
     if (incomingBytes.length > _maxFrameBytes) {
       throw ArgumentError(
           'Incoming frame exceeds maximum size ($_maxFrameBytes bytes)');
     }
 
-    final Uint8List target = (_activeSlot == 0) ? _slotA : _slotB;
+    Uint8List? target = (_activeSlot == 0) ? _slotA : _slotB;
+    if (target == null || target.length < incomingBytes.length) {
+      target = Uint8List(_nextCapacity(incomingBytes.length));
+      if (_activeSlot == 0) {
+        _slotA = target;
+      } else {
+        _slotB = target;
+      }
+    }
     _activeSlot = 1 - _activeSlot;
 
     target.setRange(0, incomingBytes.length, incomingBytes);
@@ -32,8 +47,10 @@ class _DoubleFrameRingBuffer {
   }
 
   void dispose() {
-    _slotA.fillRange(0, _slotA.length, 0);
-    _slotB.fillRange(0, _slotB.length, 0);
+    _slotA?.fillRange(0, _slotA!.length, 0);
+    _slotB?.fillRange(0, _slotB!.length, 0);
+    _slotA = null;
+    _slotB = null;
   }
 }
 

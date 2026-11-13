@@ -5,6 +5,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../protocol/binary_protocol.dart';
+import '../security/network_validators.dart';
 import '../services/host_connection_client.dart';
 import '../services/thermal_governor.dart';
 import '../services/zero_gc_video_pipeline.dart';
@@ -225,6 +226,16 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   void _connect() {
     _cleanupSocket();
     final secret = widget.sharedSecret.trim();
+    if (!NetworkValidators.isValidIpOrHost(widget.hostIp) ||
+        !NetworkValidators.isValidPort(widget.wsPort)) {
+      setState(() {
+        _isConnected = false;
+        _isAuthenticated = false;
+        _isConnecting = false;
+        _errorMessage = 'Invalid host IP or WebSocket port.';
+      });
+      return;
+    }
     if (secret.isEmpty) {
       setState(() {
         _isConnected = false;
@@ -451,11 +462,12 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
   void _showKeyboardDialog() {
     final textCtrl = TextEditingController();
+    final palette = context.palette;
     showDialog<void>(
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: CyberColors.surfaceElevated,
+          backgroundColor: palette.surfaceElevated,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
@@ -468,55 +480,57 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
               fontWeight: FontWeight.bold,
             ),
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: textCtrl,
-                autofocus: true,
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-                decoration: InputDecoration(
-                  hintText: 'Enter text, commands or shortcuts...',
-                  hintStyle: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.35),
-                    fontSize: 12,
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: textCtrl,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: 'Enter text, commands or shortcuts...',
+                    hintStyle: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      fontSize: 12,
+                    ),
                   ),
+                  onSubmitted: (val) {
+                    if (val.isNotEmpty) {
+                      _sendKeyboardText(val, pressEnter: true);
+                      Navigator.of(ctx).pop();
+                    }
+                  },
                 ),
-                onSubmitted: (val) {
-                  if (val.isNotEmpty) {
-                    _sendKeyboardText(val, pressEnter: true);
-                    Navigator.of(ctx).pop();
-                  }
-                },
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  _buildQuickKeyChip('Enter', () {
-                    _sendKey('enter');
-                    Navigator.of(ctx).pop();
-                  }),
-                  _buildQuickKeyChip('Backspace', () => _sendKey('backspace')),
-                  _buildQuickKeyChip('Tab', () => _sendKey('tab')),
-                  _buildQuickKeyChip('Esc', () {
-                    _sendKey('esc');
-                    Navigator.of(ctx).pop();
-                  }),
-                ],
-              ),
-            ],
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    _buildQuickKeyChip('Enter', () {
+                      _sendKey('enter');
+                      Navigator.of(ctx).pop();
+                    }),
+                    _buildQuickKeyChip('Backspace', () => _sendKey('backspace')),
+                    _buildQuickKeyChip('Tab', () => _sendKey('tab')),
+                    _buildQuickKeyChip('Esc', () {
+                      _sendKey('esc');
+                      Navigator.of(ctx).pop();
+                    }),
+                  ],
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel',
-                  style: TextStyle(color: CyberColors.textSecondary)),
+              child: Text('Cancel',
+                  style: TextStyle(color: palette.textSecondary)),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: CyberColors.primary,
+                backgroundColor: palette.primary,
                 foregroundColor: Colors.black,
               ),
               onPressed: () {
@@ -563,6 +577,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   void _cleanupSocket() {
     _inputFlushTimer?.cancel();
     _inputFlushTimer = null;
+    _isConnected = false;
     _isAuthenticated = false;
     unawaited(_frameSub?.cancel());
     unawaited(_telemetrySub?.cancel());
@@ -686,23 +701,28 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                     Positioned(
                       bottom: 10,
                       right: 10,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.6),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.white24),
-                        ),
-                        child: IconButton(
-                          icon: Icon(
-                            widget.isInline
-                                ? Icons.fullscreen_rounded
-                                : Icons.fullscreen_exit_rounded,
-                            color: CyberColors.primary,
-                            size: 20,
-                          ),
-                          onPressed: widget.onToggleFullscreen,
-                          tooltip: 'Toggle Fullscreen',
-                        ),
+                      child: Builder(
+                        builder: (ctx) {
+                          final palette = ctx.palette;
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.6),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.white24),
+                            ),
+                            child: IconButton(
+                              icon: Icon(
+                                widget.isInline
+                                    ? Icons.fullscreen_rounded
+                                    : Icons.fullscreen_exit_rounded,
+                                color: palette.primary,
+                                size: 20,
+                              ),
+                              onPressed: widget.onToggleFullscreen,
+                              tooltip: 'Toggle Fullscreen',
+                            ),
+                          );
+                        },
                       ),
                     ),
                 ],
@@ -715,189 +735,208 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   }
 
   Widget _buildHudHeader(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: CyberColors.surfaceElevated.withValues(alpha: 0.75),
-            borderRadius: BorderRadius.circular(8),
-            border:
-                Border.all(color: CyberColors.primary.withValues(alpha: 0.3)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 7,
-                height: 7,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color:
-                      _isConnected ? CyberColors.success : CyberColors.accent,
-                  boxShadow: [
-                    BoxShadow(
-                      color: (_isConnected
-                              ? CyberColors.success
-                              : CyberColors.accent)
-                          .withValues(alpha: 0.8),
-                      blurRadius: 4,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  widget.hostName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.bold,
-                    fontSize: context.fluidFont(11),
-                    color: CyberColors.textPrimary,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '$_fpsDisplay FPS',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: context.fluidFont(10),
-                  color: CyberColors.primary,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                '${_latencyMs ?? '--'}ms',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: context.fluidFont(10),
-                  color: CyberColors.textSecondary,
-                ),
-              ),
-              if (_lastPhysicalWidth > 0) ...[
-                const SizedBox(width: 10),
-                Text(
-                  '${_lastPhysicalWidth}x$_lastPhysicalHeight',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: context.fluidFont(9),
-                    color: CyberColors.textTertiary,
-                  ),
+    final palette = context.palette;
+    final sigma = palette.glass.blurSigma;
+    final hudBody = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: palette.surfaceElevated.withValues(alpha: sigma > 0 ? 0.75 : 0.94),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: palette.primary.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _isConnected ? palette.success : palette.accent,
+              boxShadow: [
+                BoxShadow(
+                  color: (_isConnected ? palette.success : palette.accent)
+                      .withValues(alpha: 0.8),
+                  blurRadius: 4,
                 ),
               ],
-            ],
+            ),
           ),
-        ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              widget.hostName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.bold,
+                fontSize: context.fluidFont(11),
+                color: palette.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$_fpsDisplay FPS',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: context.fluidFont(10),
+              color: palette.primary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            '${_latencyMs ?? '--'}ms',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: context.fluidFont(10),
+              color: palette.textSecondary,
+            ),
+          ),
+          if (_lastPhysicalWidth > 0) ...[
+            const SizedBox(width: 10),
+            Text(
+              '${_lastPhysicalWidth}x$_lastPhysicalHeight',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: context.fluidFont(9),
+                color: palette.textTertiary,
+              ),
+            ),
+          ],
+        ],
       ),
+    );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: sigma > 0
+          ? BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+              child: hudBody,
+            )
+          : hudBody,
     );
   }
 
   Widget _buildStatusOverlay(BuildContext context) {
+    final palette = context.palette;
     if (_isConnecting) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(
-            width: 28,
-            height: 28,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: CyberColors.primary,
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: palette.primary,
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Connecting to ${widget.hostIp}:${widget.wsPort}...',
-            style: TextStyle(
-              fontSize: context.fluidFont(12),
-              color: CyberColors.textSecondary,
-              fontFamily: 'monospace',
+            const SizedBox(height: 12),
+            Text(
+              'Connecting to ${widget.hostIp}:${widget.wsPort}...',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: context.fluidFont(12),
+                color: palette.textSecondary,
+                fontFamily: 'monospace',
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     }
 
     if (_errorMessage != null) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.signal_wifi_off_rounded,
-              color: CyberColors.accent, size: 36),
-          const SizedBox(height: 8),
-          Text(
-            _errorMessage!,
-            style: TextStyle(
-              color: CyberColors.textSecondary,
-              fontSize: context.fluidFont(11),
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.signal_wifi_off_rounded,
+                color: palette.accent, size: 36),
+            const SizedBox(height: 8),
+            Text(
+              _errorMessage!,
+              style: TextStyle(
+                color: palette.textSecondary,
+                fontSize: context.fluidFont(11),
+              ),
+              textAlign: TextAlign.center,
             ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 12),
-          TextButton.icon(
-            onPressed: _connect,
-            icon: const Icon(Icons.refresh_rounded,
-                size: 16, color: CyberColors.primary),
-            label: const Text('RECONNECT',
-                style: TextStyle(color: CyberColors.primary)),
-          ),
-        ],
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: _connect,
+              icon: Icon(Icons.refresh_rounded,
+                  size: 16, color: palette.primary),
+              label:
+                  Text('RECONNECT', style: TextStyle(color: palette.primary)),
+            ),
+          ],
+        ),
       );
     }
 
     return Text(
       'Awaiting incoming video frames...',
       style: TextStyle(
-        color: CyberColors.textSecondary,
+        color: palette.textSecondary,
         fontSize: context.fluidFont(12),
       ),
     );
   }
 
   Widget _buildInteractiveControllerDock(BuildContext context) {
+    final palette = context.palette;
+    final sigma = palette.glass.blurSigma;
+    final dock = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: palette.surfaceElevated.withValues(alpha: sigma > 0 ? 0.85 : 0.96),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: palette.primary.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildDockButton(context, 'L-CLICK', () => _sendMouseClick('left'),
+              isAccent: true),
+          const SizedBox(width: 5),
+          _buildDockButton(context, 'R-CLICK', () => _sendMouseClick('right')),
+          const SizedBox(width: 5),
+          _buildDockButton(context, 'TYPE', _showKeyboardDialog),
+          const SizedBox(width: 5),
+          _buildDockButton(context, 'WIN', () => _sendHotkey(['win'])),
+          const SizedBox(width: 5),
+          _buildDockButton(
+              context, 'ALT+TAB', () => _sendHotkey(['alt', 'tab'])),
+          const SizedBox(width: 5),
+          _buildDockButton(context, 'ESC', () => _sendKey('esc')),
+        ],
+      ),
+    );
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: CyberColors.surfaceElevated.withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(10),
-            border:
-                Border.all(color: CyberColors.primary.withValues(alpha: 0.3)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildDockButton('L-CLICK', () => _sendMouseClick('left'),
-                  isAccent: true),
-              const SizedBox(width: 5),
-              _buildDockButton('R-CLICK', () => _sendMouseClick('right')),
-              const SizedBox(width: 5),
-              _buildDockButton('⌨️ TYPE', _showKeyboardDialog),
-              const SizedBox(width: 5),
-              _buildDockButton('WIN', () => _sendHotkey(['win'])),
-              const SizedBox(width: 5),
-              _buildDockButton('ALT+TAB', () => _sendHotkey(['alt', 'tab'])),
-              const SizedBox(width: 5),
-              _buildDockButton('ESC', () => _sendKey('esc')),
-            ],
-          ),
-        ),
-      ),
+      child: sigma > 0
+          ? BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+              child: dock,
+            )
+          : dock,
     );
   }
 
-  Widget _buildDockButton(String label, VoidCallback onTap,
-      {bool isAccent = false}) {
+  Widget _buildDockButton(
+    BuildContext context,
+    String label,
+    VoidCallback onTap, {
+    bool isAccent = false,
+  }) {
+    final palette = context.palette;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
@@ -905,19 +944,19 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
           color: isAccent
-              ? CyberColors.primary.withValues(alpha: 0.25)
+              ? palette.primary.withValues(alpha: 0.25)
               : Colors.white.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: isAccent
-                ? CyberColors.primary
+                ? palette.primary
                 : Colors.white.withValues(alpha: 0.15),
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isAccent ? CyberColors.primary : Colors.white,
+            color: isAccent ? palette.primary : Colors.white,
             fontSize: 10,
             fontWeight: FontWeight.bold,
             fontFamily: 'monospace',

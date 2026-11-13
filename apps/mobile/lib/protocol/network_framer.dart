@@ -120,7 +120,7 @@ class NetworkFramer {
   Timer? _reaperTimer;
 
   final StreamController<WirePacket> _packetStreamController =
-      StreamController<WirePacket>.broadcast();
+      StreamController<WirePacket>.broadcast(sync: true);
 
   Stream<WirePacket> get onPacket => _packetStreamController.stream;
 

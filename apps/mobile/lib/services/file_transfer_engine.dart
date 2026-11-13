@@ -106,15 +106,17 @@ class FileTransferEngine {
           : '';
       if (status == kFileStatusCompleted) {
         completedAck = true;
-        if (finishAckWaiter != null && !finishAckWaiter!.isCompleted) {
-          finishAckWaiter!.complete();
+        final waiter = finishAckWaiter;
+        if (waiter != null && !waiter.isCompleted) {
+          waiter.complete();
         }
       } else if (status >= kFileStatusErrTraversal) {
         hostError = msg.isNotEmpty
             ? msg
             : 'Host rejected transfer (status 0x${status.toRadixString(16)})';
-        if (finishAckWaiter != null && !finishAckWaiter!.isCompleted) {
-          finishAckWaiter!.complete();
+        final waiter = finishAckWaiter;
+        if (waiter != null && !waiter.isCompleted) {
+          waiter.complete();
         }
       }
     });
@@ -249,8 +251,9 @@ class FileTransferEngine {
           ..setUint32(1, transferId, Endian.big);
         sendPacket(buildFrame(finishPayload));
 
-        if (finishAckWaiter != null) {
-          await finishAckWaiter!.future.timeout(
+        final pendingWaiter = finishAckWaiter;
+        if (pendingWaiter != null) {
+          await pendingWaiter.future.timeout(
             const Duration(seconds: 10),
             onTimeout: () {
               hostError ??= 'Timed out awaiting host SHA-256 verification ACK.';
@@ -359,7 +362,9 @@ class FileTransferProgressDialog extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        progress.state == TransferState.hashing ? 'ХАШИРАНЕ' : 'ТРАНСФЕР',
+                        progress.state == TransferState.hashing
+                            ? 'HASHING'
+                            : 'TRANSFER',
                         style: const TextStyle(
                           color: Color(0xFF7A93B2),
                           fontSize: 9,
@@ -400,7 +405,7 @@ class FileTransferProgressDialog extends StatelessWidget {
                 ),
                 const Text(' • ', style: TextStyle(color: Colors.white24)),
                 Text(
-                  'Остава: ${progress.eta.inSeconds}s',
+                  'ETA: ${progress.eta.inSeconds}s',
                   style: const TextStyle(
                     color: Color(0xFF7A93B2),
                     fontSize: 12,
@@ -412,15 +417,18 @@ class FileTransferProgressDialog extends StatelessWidget {
             const SizedBox(height: 24),
 
             // Action Button
-            if (progress.state == TransferState.transferring || progress.state == TransferState.hashing)
+            if (progress.state == TransferState.transferring ||
+                progress.state == TransferState.hashing)
               OutlinedButton(
                 onPressed: onCancel,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFFF2A6D),
                   side: const BorderSide(color: Color(0x66FF2A6D)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
-                child: const Text('ОТМЕНИ ТРАНСФЕР'),
+                child: const Text('CANCEL TRANSFER'),
               )
             else if (progress.state == TransferState.completed)
               ElevatedButton(
@@ -428,9 +436,11 @@ class FileTransferProgressDialog extends StatelessWidget {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF00FFA3),
                   foregroundColor: Colors.black,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
-                child: const Text('ГОТОВО'),
+                child: const Text('DONE'),
               )
             else
               ElevatedButton(
@@ -438,9 +448,11 @@ class FileTransferProgressDialog extends StatelessWidget {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFFF2A6D),
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
-                child: const Text('ЗАТВОРИ'),
+                child: const Text('CLOSE'),
               ),
           ],
         ),

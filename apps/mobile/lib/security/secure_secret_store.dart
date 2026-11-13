@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -23,18 +22,21 @@ class SecureSecretStore {
   final Map<String, String> _memoryFallback = <String, String>{};
   bool _initialized = false;
 
+  bool get hasOpenVault => _vaultBox != null && _vaultBox!.isOpen;
+
   SecureSecretStore({
     Future<Uint8List?> Function()? keyProvider,
   }) : _customKeyProvider = keyProvider;
 
   Future<void> init() async {
-    if (_initialized) return;
+    if (_initialized && (_vaultBox == null || _vaultBox!.isOpen)) return;
     _initialized = true;
 
     Uint8List? masterKey;
     try {
-      if (_customKeyProvider != null) {
-        masterKey = await _customKeyProvider!();
+      final keyProvider = _customKeyProvider;
+      if (keyProvider != null) {
+        masterKey = await keyProvider();
       } else if (Platform.isAndroid) {
         masterKey =
             await _keystoreChannel.invokeMethod<Uint8List>('getOrCreateHiveKey');
@@ -79,7 +81,7 @@ class SecureSecretStore {
       _memoryFallback[key] = clean;
     }
     await init();
-    if (_vaultBox != null) {
+    if (_vaultBox != null && _vaultBox!.isOpen) {
       if (clean.isEmpty) {
         await _vaultBox!.delete(key);
       } else {
@@ -94,8 +96,9 @@ class SecureSecretStore {
     if (cached != null && cached.isNotEmpty && cached != legacySentinel) {
       return cached;
     }
-    final String? val =
-        _vaultBox != null ? _vaultBox!.get(key) as String? : null;
+    final String? val = (_vaultBox != null && _vaultBox!.isOpen)
+        ? _vaultBox!.get(key) as String?
+        : null;
     if (val == null || val.isEmpty || val == legacySentinel) return null;
     _memoryFallback[key] = val;
     return val;
@@ -110,7 +113,7 @@ class SecureSecretStore {
       _memoryFallback[key] = clean;
     }
     await init();
-    if (_vaultBox != null) {
+    if (_vaultBox != null && _vaultBox!.isOpen) {
       if (clean.isEmpty) {
         await _vaultBox!.delete(key);
       } else {
@@ -123,8 +126,9 @@ class SecureSecretStore {
     final String key = _certKey(hostId);
     final String? cached = _memoryFallback[key];
     if (cached != null && cached.isNotEmpty) return cached;
-    final String? val =
-        _vaultBox != null ? _vaultBox!.get(key) as String? : null;
+    final String? val = (_vaultBox != null && _vaultBox!.isOpen)
+        ? _vaultBox!.get(key) as String?
+        : null;
     if (val == null || val.isEmpty) return null;
     _memoryFallback[key] = val;
     return val;
@@ -132,12 +136,19 @@ class SecureSecretStore {
 
   Future<void> deleteHostSecrets(String hostId) async {
     await init();
-    if (_vaultBox != null) {
+    if (_vaultBox != null && _vaultBox!.isOpen) {
       await _vaultBox!.delete(_tokenKey(hostId));
       await _vaultBox!.delete(_certKey(hostId));
     }
     _memoryFallback.remove(_tokenKey(hostId));
     _memoryFallback.remove(_certKey(hostId));
+  }
+
+  Future<void> clearAll() async {
+    if (_vaultBox != null && _vaultBox!.isOpen) {
+      await _vaultBox!.clear();
+    }
+    _memoryFallback.clear();
   }
 
   /// Migrates legacy plaintext `token` values out of unencrypted `ghost_devices`

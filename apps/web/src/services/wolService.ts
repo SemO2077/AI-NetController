@@ -1,4 +1,5 @@
 import { HostDevice, Weekday, WolPacketPayload, WolSchedule } from '../types';
+import { getPersistentItem, setPersistentItem } from '../utils/nativeStorage';
 
 export const STORAGE_KEY_WOL_SCHEDULES = 'ai_netcontroller_wol_schedules_v1';
 export const LEGACY_STORAGE_KEY_WOL_SCHEDULES = 'cst_wol_schedules_config_v1';
@@ -110,8 +111,8 @@ export function loadWolSchedules(): WolSchedule[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw =
-      localStorage.getItem(STORAGE_KEY_WOL_SCHEDULES) ||
-      localStorage.getItem(LEGACY_STORAGE_KEY_WOL_SCHEDULES);
+      getPersistentItem(STORAGE_KEY_WOL_SCHEDULES) ||
+      getPersistentItem(LEGACY_STORAGE_KEY_WOL_SCHEDULES);
     if (!raw) {
       return [];
     }
@@ -132,7 +133,7 @@ export function loadWolSchedules(): WolSchedule[] {
 export function saveWolSchedules(schedules: WolSchedule[]): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY_WOL_SCHEDULES, JSON.stringify(schedules));
+    setPersistentItem(STORAGE_KEY_WOL_SCHEDULES, JSON.stringify(schedules));
   } catch (e) {
     console.error('Failed to persist WoL schedules to localStorage:', e);
   }

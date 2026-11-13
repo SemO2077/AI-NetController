@@ -51,8 +51,8 @@ android {
                 throw new GradleException("AI_RELEASE_BUILD=1 requires AI_ANDROID_KEYSTORE, AI_ANDROID_KEYSTORE_PASS, and AI_ANDROID_KEY_ALIAS")
             }
             signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
-            minifyEnabled false
-            shrinkResources false
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }

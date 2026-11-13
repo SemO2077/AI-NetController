@@ -68,6 +68,7 @@ class HostConnectionClient {
   bool _isConnected = false;
   bool _isAuthenticated = false;
   bool _isVaultEstablished = false;
+  bool _authChallengeResponded = false;
   bool _mutualInFlight = false;
   int _controlSeq = 0;
   int _reconnectAttempt = 0;
@@ -462,7 +463,7 @@ class HostConnectionClient {
       if (_disposed) {
         await ws.close();
         if (!completer.isCompleted) completer.completeError(StateError('Disposed'));
-        return completer.future;
+        return await completer.future;
       }
 
       _channel = IOWebSocketChannel(ws);
@@ -526,15 +527,7 @@ class HostConnectionClient {
       if (packet.opcode == BinaryOpcode.auth) {
         final String statusStr =
             utf8.decode(packet.payload, allowMalformed: true).trim();
-        if (!_isAuthenticated && packet.payload.length == 16) {
-          final hmacSha256 = crypto_pkg.Hmac(crypto_pkg.sha256, utf8.encode(secret));
-          final digest = hmacSha256.convert(packet.payload);
-          _channel?.sink.add(packPacket(
-            BinaryOpcode.auth,
-            digest.bytes,
-            seq: _nextControlSeq(),
-          ));
-        } else if (!_isAuthenticated &&
+        if (!_isAuthenticated &&
             (statusStr == 'OK_AUTHENTICATED' || statusStr == 'AUTH_OK')) {
           _isAuthenticated = true;
           _isConnected = true;
@@ -550,6 +543,19 @@ class HostConnectionClient {
               seq: _nextControlSeq(),
             ));
           }
+        } else if (!_isAuthenticated &&
+            !_authChallengeResponded &&
+            packet.payload.length == 16) {
+          // IMPORTANT: Check 'OK_AUTHENTICATED' before length == 16 because
+          // "OK_AUTHENTICATED" is itself 16 ASCII bytes.
+          _authChallengeResponded = true;
+          final hmacSha256 = crypto_pkg.Hmac(crypto_pkg.sha256, utf8.encode(secret));
+          final digest = hmacSha256.convert(packet.payload);
+          _channel?.sink.add(packPacket(
+            BinaryOpcode.auth,
+            digest.bytes,
+            seq: _nextControlSeq(),
+          ));
         } else if (_isAuthenticated &&
             (packet.flags & ProtocolFlags.compressed) != 0 &&
             (packet.payload.length == 91 || packet.payload.length == 59)) {
@@ -888,6 +894,7 @@ class HostConnectionClient {
     _isConnected = false;
     _isAuthenticated = false;
     _isVaultEstablished = false;
+    _authChallengeResponded = false;
     _isConnecting = false;
     _mutualInFlight = false;
     _subscription?.cancel();
@@ -972,9 +979,18 @@ class HostConnectionPool {
     return created;
   }
 
-  void invalidate(String hostIp, {int port = 8765}) {
-    final k = _key(hostIp, port);
-    _clients.remove(k)?.dispose();
+  void invalidate(String hostIp, {int? port}) {
+    if (port != null) {
+      final k = _key(hostIp, port);
+      _clients.remove(k)?.dispose();
+      return;
+    }
+    final prefix = '$hostIp:';
+    final keysToRemove =
+        _clients.keys.where((k) => k.startsWith(prefix)).toList(growable: false);
+    for (final k in keysToRemove) {
+      _clients.remove(k)?.dispose();
+    }
   }
 
   void disposeAll() {

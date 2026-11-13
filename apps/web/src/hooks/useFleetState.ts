@@ -5,6 +5,7 @@ import { logStore } from '../store/logStore';
 import { wolHistoryStore } from '../store/wolHistoryStore';
 import { useUIStore } from '../store/uiStore';
 import { triggerHapticFeedback } from '../services/hapticService';
+import { getPersistentItem, setPersistentItem } from '../utils/nativeStorage';
 
 const STORAGE_KEY = 'ai_netcontroller_hosts';
 const LEGACY_STORAGE_KEY = 'cst_netcontroller_hosts';
@@ -12,7 +13,7 @@ const LEGACY_STORAGE_KEY = 'cst_netcontroller_hosts';
 function loadInitialHosts(): HostDevice[] {
   if (typeof window === 'undefined') return [];
   try {
-    const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
+    const saved = getPersistentItem(STORAGE_KEY) || getPersistentItem(LEGACY_STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed)) {
@@ -66,7 +67,7 @@ export function useFleetState() {
   // Automatically persist hosts state whenever changed
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(hosts));
+      setPersistentItem(STORAGE_KEY, JSON.stringify(hosts));
     } catch (e) {
       console.error('Failed to persist hosts state:', e);
     }

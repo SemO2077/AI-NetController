@@ -61,8 +61,8 @@ class BiometricSecurityGate {
     }
   }
 
-  /// Executes hardware-backed biometric challenge before dispatching Opcode 0x05 approval.
-  /// If authentication fails, cancelled, or locks out: instantly rejects and triggers Opcode 0xEE.
+  /// Executes hardware-backed biometric or device credential challenge before
+  /// dispatching Opcode 0x05 approval or revealing stored secrets.
   Future<BiometricAuthResult> verifyApproval({
     required String commandId,
     required String shellCommand,
@@ -72,10 +72,10 @@ class BiometricSecurityGate {
     final bool isAvailable = await isBiometricAvailable();
 
     if (!isAvailable) {
-      debugPrint('⚠️ Secure Enclave / Biometrics unavailable on host device.');
+      debugPrint('[SecurityGate] Secure Enclave / Biometrics unavailable on host device.');
       return BiometricAuthResult(
         isApproved: false,
-        message: 'Отхвърлено: Устройството няма настроен хардуерен Enclave / биометрия',
+        message: 'Biometric or device credential security is not configured on this device.',
         errorCode: auth_error.notAvailable,
         timestamp: DateTime.now(),
       );
@@ -83,11 +83,12 @@ class BiometricSecurityGate {
 
     try {
       final bool didAuthenticate = await _auth.authenticate(
-        localizedReason: 'Потвърдете изпълнение на критична команда:\n"$shellCommand"\nна хост: $targetHostId [Риск: $riskLevel]',
+        localizedReason:
+            'Authorize sensitive action:\n"$shellCommand"\non $targetHostId [Risk: $riskLevel]',
         options: const AuthenticationOptions(
           useErrorDialogs: true,
           stickyAuth: true,
-          biometricOnly: true,
+          biometricOnly: false,
           sensitiveTransaction: true,
         ),
       );
@@ -95,26 +96,26 @@ class BiometricSecurityGate {
       if (didAuthenticate) {
         return BiometricAuthResult(
           isApproved: true,
-          message: 'Хардуерна биометрична верификация успешна (TrustZone / Secure Enclave)',
+          message: 'Hardware security verification succeeded.',
           timestamp: DateTime.now(),
         );
       } else {
         return BiometricAuthResult(
           isApproved: false,
-          message: 'Потребителят отказа биометричното потвърждение',
+          message: 'Biometric verification was cancelled or rejected.',
           timestamp: DateTime.now(),
         );
       }
     } on PlatformException catch (e) {
-      String errorMessage = 'Грешка при биометрична проверка';
+      String errorMessage = 'Biometric verification error';
       if (e.code == auth_error.notAvailable) {
-        errorMessage = 'Биометричният сензор не е наличен';
+        errorMessage = 'Biometric hardware sensor is unavailable.';
       } else if (e.code == auth_error.passcodeNotSet) {
-        errorMessage = 'Устройството няма зададен ПИН / парола за сигурност';
+        errorMessage = 'Device PIN or passcode is not configured.';
       } else if (e.code == auth_error.notEnrolled) {
-        errorMessage = 'Няма въведени пръстови отпечатъци или FaceID';
+        errorMessage = 'No fingerprints or facial credentials are enrolled.';
       } else if (e.code == auth_error.lockedOut || e.code == auth_error.permanentlyLockedOut) {
-        errorMessage = 'Сензорът е временно заключен поради твърде много неуспешни опити';
+        errorMessage = 'Biometric sensor temporarily locked after failed attempts.';
       }
 
       return BiometricAuthResult(
@@ -126,7 +127,7 @@ class BiometricSecurityGate {
     } catch (e) {
       return BiometricAuthResult(
         isApproved: false,
-        message: 'Неочаквана грешка при автентикация: $e',
+        message: 'Unexpected security authentication error: $e',
         timestamp: DateTime.now(),
       );
     }

@@ -20,7 +20,9 @@ import logging
 import platform
 import subprocess
 import sys
+import threading
 import unicodedata
+from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple, Any
 
 logger = logging.getLogger("CommandFirewall")
@@ -45,8 +47,8 @@ _SAFE_POSIX_ENV_ALLOWLIST = {
 # Dangerous Administrative Keywords & Living-off-the-Land Binaries
 CRITICAL_COMMANDS = {
     "format", "format-volume", "diskpart", "rmdir", "rd", "del", "erase",
-    "rm", "mkfs", "dd", "reg", "bcdedit", "drop", "truncate", "iptables",
-    "netsh", "remove-item", "stop-process", "restart-computer", "stop-computer",
+    "rm", "ri", "mkfs", "dd", "reg", "rp", "bcdedit", "drop", "truncate", "iptables",
+    "netsh", "remove-item", "stop-process", "spps", "restart-computer", "stop-computer",
     "shutdown", "reboot", "poweroff", "init", "vssadmin", "cipher", "takeown",
     "icacls", "chmod", "chown", "kill", "killall", "pkill", "taskkill",
     "wmic", "sc", "rundll32", "regsvr32", "mshta", "certutil", "bitsadmin",
@@ -104,8 +106,9 @@ _SAFE_WIN_ENV_MAP = {
     "windir": os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows",
 }
 
-# Fast bounded LRU cache for high-throughput command inspection (100k+ ops/sec)
-_INSPECTION_CACHE: Dict[str, Tuple[bool, str, str, str]] = {}
+# Fast bounded thread-safe LRU cache for high-throughput command inspection
+_INSPECTION_CACHE: "OrderedDict[str, Tuple[bool, str, str, str]]" = OrderedDict()
+_INSPECTION_CACHE_LOCK = threading.Lock()
 _MAX_INSPECTION_CACHE = 2048
 
 
@@ -151,14 +154,19 @@ class CommandASTFirewall:
         Returns: (is_allowed, risk_level, normalized_cmd, reason)
         Risk levels: "SAFE", "REQUIRES_BIOMETRIC", "BLOCKED"
         """
-        if isinstance(raw_cmd, str) and raw_cmd in _INSPECTION_CACHE:
-            return _INSPECTION_CACHE[raw_cmd]
+        if isinstance(raw_cmd, str):
+            with _INSPECTION_CACHE_LOCK:
+                cached = _INSPECTION_CACHE.get(raw_cmd)
+                if cached is not None:
+                    _INSPECTION_CACHE.move_to_end(raw_cmd)
+                    return cached
 
         res = CommandASTFirewall._inspect_and_sanitize_uncached(raw_cmd)
         if isinstance(raw_cmd, str):
-            if len(_INSPECTION_CACHE) >= _MAX_INSPECTION_CACHE:
-                _INSPECTION_CACHE.pop(next(iter(_INSPECTION_CACHE)), None)
-            _INSPECTION_CACHE[raw_cmd] = res
+            with _INSPECTION_CACHE_LOCK:
+                if len(_INSPECTION_CACHE) >= _MAX_INSPECTION_CACHE:
+                    _INSPECTION_CACHE.popitem(last=False)
+                _INSPECTION_CACHE[raw_cmd] = res
         return res
 
     @staticmethod

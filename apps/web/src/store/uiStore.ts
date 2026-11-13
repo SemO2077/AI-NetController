@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getPersistentItem, setPersistentItem, syncSystemThemeToAndroid } from '../utils/nativeStorage';
 import { NavTab } from '../components/layout/FloatingPillNav';
 import { Language } from '../i18n/translations';
 
@@ -81,6 +82,14 @@ export interface UIState {
 }
 
 const VALID_ACCENTS: AccentColorPreset[] = ['cyan', 'violet', 'emerald', 'rose', 'amber', 'cobalt'];
+const ACCENT_HEX_MAP: Record<AccentColorPreset, string> = {
+  cyan: '#22d3ee',
+  violet: '#c084fc',
+  emerald: '#34d399',
+  rose: '#fb7185',
+  amber: '#fbbf24',
+  cobalt: '#60a5fa',
+};
 const VALID_FONTS: FontFamilyPreset[] = ['geometric', 'jakarta', 'system', 'mono'];
 const VALID_GLASS: GlassIntensityPreset[] = ['clear', 'balanced', 'frosted'];
 const VALID_AMBIENT: AmbientModePreset[] = ['fluid', 'aurora', 'cyber', 'minimal'];
@@ -97,13 +106,14 @@ export const applyAppearanceToDocument = (prefs: {
   root.setAttribute('data-font', prefs.fontFamily);
   root.setAttribute('data-glass', prefs.glassIntensity);
   root.setAttribute('data-ambient', prefs.ambientMode);
+  syncSystemThemeToAndroid(ACCENT_HEX_MAP[prefs.accentColor] || '#22d3ee', '#030712');
 };
 
 const getInitialOnboardingStatus = (): boolean => {
   try {
     return (
-      localStorage.getItem('ai_netcontroller_onboarding_completed') === 'true' ||
-      localStorage.getItem('cst_onboarding_completed') === 'true'
+      getPersistentItem('ai_netcontroller_onboarding_completed') === 'true' ||
+      getPersistentItem('cst_onboarding_completed') === 'true'
     );
   } catch {
     return false;
@@ -112,7 +122,7 @@ const getInitialOnboardingStatus = (): boolean => {
 
 const getInitialLanguage = (): Language => {
   try {
-    const saved = localStorage.getItem('wakeflow_language');
+    const saved = getPersistentItem('wakeflow_language');
     if (saved === 'bg' || saved === 'en') return saved;
     if (typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('bg')) {
       return 'bg';
@@ -123,7 +133,7 @@ const getInitialLanguage = (): Language => {
 
 const getInitialModel = (): string => {
   try {
-    const saved = localStorage.getItem('wakeflow_selected_model');
+    const saved = getPersistentItem('wakeflow_selected_model');
     if (saved) {
       if (/^gemini-(?:1\.[05]|3\.\d)/i.test(saved)) {
         return 'gemini-2.5-flash';
@@ -136,7 +146,7 @@ const getInitialModel = (): string => {
 
 const getInitialAccent = (): AccentColorPreset => {
   try {
-    const saved = localStorage.getItem('ai_netcontroller_accent') as AccentColorPreset;
+    const saved = getPersistentItem('ai_netcontroller_accent') as AccentColorPreset;
     if (saved && VALID_ACCENTS.includes(saved)) return saved;
   } catch {}
   return 'cyan';
@@ -144,7 +154,7 @@ const getInitialAccent = (): AccentColorPreset => {
 
 const getInitialFont = (): FontFamilyPreset => {
   try {
-    const saved = localStorage.getItem('ai_netcontroller_font') as FontFamilyPreset;
+    const saved = getPersistentItem('ai_netcontroller_font') as FontFamilyPreset;
     if (saved && VALID_FONTS.includes(saved)) return saved;
   } catch {}
   return 'geometric';
@@ -152,7 +162,7 @@ const getInitialFont = (): FontFamilyPreset => {
 
 const getInitialGlass = (): GlassIntensityPreset => {
   try {
-    const saved = localStorage.getItem('ai_netcontroller_glass') as GlassIntensityPreset;
+    const saved = getPersistentItem('ai_netcontroller_glass') as GlassIntensityPreset;
     if (saved && VALID_GLASS.includes(saved)) return saved;
   } catch {}
   return 'balanced';
@@ -160,7 +170,7 @@ const getInitialGlass = (): GlassIntensityPreset => {
 
 const getInitialAmbient = (): AmbientModePreset => {
   try {
-    const saved = localStorage.getItem('ai_netcontroller_ambient');
+    const saved = getPersistentItem('ai_netcontroller_ambient');
     if (saved === 'vibrant') return 'fluid';
     if (saved === 'subtle') return 'aurora';
     if (saved && VALID_AMBIENT.includes(saved as AmbientModePreset)) {
@@ -172,7 +182,7 @@ const getInitialAmbient = (): AmbientModePreset => {
 
 const getInitialCustomizationOpen = (): boolean => {
   try {
-    const saved = localStorage.getItem('ai_netcontroller_customization_open');
+    const saved = getPersistentItem('ai_netcontroller_customization_open');
     if (saved !== null) return saved === 'true';
   } catch {}
   return true;
@@ -197,7 +207,7 @@ type SecuritySettingsKey = keyof typeof INITIAL_SECURITY_SETTINGS;
 
 const getInitialSecuritySettings = () => {
   try {
-    const raw = localStorage.getItem('ai_net_ui_settings_v1');
+    const raw = getPersistentItem('ai_net_ui_settings_v1');
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
@@ -234,7 +244,7 @@ const initialSecuritySettings = getInitialSecuritySettings();
 const persistSecuritySetting = (patch: Partial<Record<SecuritySettingsKey, boolean>>) => {
   try {
     const current = getInitialSecuritySettings();
-    localStorage.setItem('ai_net_ui_settings_v1', JSON.stringify({ ...current, ...patch }));
+    setPersistentItem('ai_net_ui_settings_v1', JSON.stringify({ ...current, ...patch }));
   } catch {}
 };
 
@@ -269,16 +279,16 @@ export const useUIStore = create<UIState>((set, get) => ({
   setOmnibarOpen: (isOpen) => set({ isOmnibarOpen: isOpen }),
   setCompletedOnboarding: () => {
     try {
-      localStorage.setItem('ai_netcontroller_onboarding_completed', 'true');
-      localStorage.setItem('cst_onboarding_completed', 'true');
-      localStorage.setItem('ai_netcontroller_onboarding_banner_dismissed', 'true');
-      localStorage.setItem('cst_onboarding_banner_dismissed', 'true');
+      setPersistentItem('ai_netcontroller_onboarding_completed', 'true');
+      setPersistentItem('cst_onboarding_completed', 'true');
+      setPersistentItem('ai_netcontroller_onboarding_banner_dismissed', 'true');
+      setPersistentItem('cst_onboarding_banner_dismissed', 'true');
     } catch {}
     set({ hasCompletedOnboarding: true });
   },
   setLanguage: (lang) => {
     try {
-      localStorage.setItem('wakeflow_language', lang);
+      setPersistentItem('wakeflow_language', lang);
     } catch {}
     set({ language: lang });
   },
@@ -286,13 +296,13 @@ export const useUIStore = create<UIState>((set, get) => ({
     set((state) => {
       const nextLang: Language = state.language === 'bg' ? 'en' : 'bg';
       try {
-        localStorage.setItem('wakeflow_language', nextLang);
+        setPersistentItem('wakeflow_language', nextLang);
       } catch {}
       return { language: nextLang };
     }),
   setSelectedModel: (model) => {
     try {
-      localStorage.setItem('wakeflow_selected_model', model);
+      setPersistentItem('wakeflow_selected_model', model);
     } catch {}
     set({ selectedModel: model });
   },
@@ -300,7 +310,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   setAccentColor: (accentColor) => {
     try {
-      localStorage.setItem('ai_netcontroller_accent', accentColor);
+      setPersistentItem('ai_netcontroller_accent', accentColor);
     } catch {}
     const s = get();
     applyAppearanceToDocument({
@@ -314,7 +324,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   setFontFamily: (fontFamily) => {
     try {
-      localStorage.setItem('ai_netcontroller_font', fontFamily);
+      setPersistentItem('ai_netcontroller_font', fontFamily);
     } catch {}
     const s = get();
     applyAppearanceToDocument({
@@ -328,7 +338,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   setGlassIntensity: (glassIntensity) => {
     try {
-      localStorage.setItem('ai_netcontroller_glass', glassIntensity);
+      setPersistentItem('ai_netcontroller_glass', glassIntensity);
     } catch {}
     const s = get();
     applyAppearanceToDocument({
@@ -342,7 +352,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   setAmbientMode: (ambientMode) => {
     try {
-      localStorage.setItem('ai_netcontroller_ambient', ambientMode);
+      setPersistentItem('ai_netcontroller_ambient', ambientMode);
     } catch {}
     const s = get();
     applyAppearanceToDocument({
@@ -356,7 +366,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   setCustomizationOpen: (open) => {
     try {
-      localStorage.setItem('ai_netcontroller_customization_open', String(open));
+      setPersistentItem('ai_netcontroller_customization_open', String(open));
     } catch {}
     set({ isCustomizationOpen: open });
   },
@@ -365,7 +375,7 @@ export const useUIStore = create<UIState>((set, get) => ({
     set((state) => {
       const next = !state.isCustomizationOpen;
       try {
-        localStorage.setItem('ai_netcontroller_customization_open', String(next));
+        setPersistentItem('ai_netcontroller_customization_open', String(next));
       } catch {}
       return { isCustomizationOpen: next };
     }),
@@ -378,10 +388,10 @@ export const useUIStore = create<UIState>((set, get) => ({
       ambientMode: 'fluid' as AmbientModePreset,
     };
     try {
-      localStorage.setItem('ai_netcontroller_accent', defaults.accentColor);
-      localStorage.setItem('ai_netcontroller_font', defaults.fontFamily);
-      localStorage.setItem('ai_netcontroller_glass', defaults.glassIntensity);
-      localStorage.setItem('ai_netcontroller_ambient', defaults.ambientMode);
+      setPersistentItem('ai_netcontroller_accent', defaults.accentColor);
+      setPersistentItem('ai_netcontroller_font', defaults.fontFamily);
+      setPersistentItem('ai_netcontroller_glass', defaults.glassIntensity);
+      setPersistentItem('ai_netcontroller_ambient', defaults.ambientMode);
     } catch {}
     applyAppearanceToDocument(defaults);
     set(defaults);

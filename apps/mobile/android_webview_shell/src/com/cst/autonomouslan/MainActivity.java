@@ -1,10 +1,12 @@
 package com.cst.autonomouslan;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.res.AssetManager;
 import android.graphics.Color;
@@ -14,6 +16,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.util.Log;
 import android.view.View;
 import android.view.Window;
@@ -26,10 +29,14 @@ import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -51,6 +58,7 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -76,22 +84,97 @@ public class MainActivity extends Activity {
     private static final String TAG = "AINetController";
     private static final String APP_VERSION = "__APP_VERSION__";
     private static final String RELEASE_TAG = "__RELEASE_TAG__";
+    private static final String PREFS_UI_STORE = "ai_netcontroller_native_store_v1";
+    private static final String PREFS_DAEMON = "ai_netcontroller_daemon_v1";
+    private static final int[] PREFERRED_LOCAL_PORTS = new int[] { 47192, 47193, 47194, 47195, 47196 };
+    private static final Pattern SAFE_PREF_KEY_PATTERN = Pattern.compile("^[a-zA-Z0-9_.-]{1,128}$");
+    private static final Pattern HEX_COLOR_PATTERN = Pattern.compile("^#[0-9a-fA-F]{6}$");
+    private static final int MAX_PREF_VALUE_LEN = 262144;
+
     private WebView webView;
+    private FrameLayout rootLayout;
     private ServerSocket localServer;
     private final ExecutorService httpPool = Executors.newFixedThreadPool(12);
+    private final Object scanLock = new Object();
+    private volatile String lastScanJson = "{\"hosts\":[]}";
+    private volatile long lastScanTimestampMs = 0L;
     private int localPort = 0;
     private volatile boolean isRunning = true;
     private volatile boolean isLocalOriginLoaded = false;
     private final long startTimeMs = System.currentTimeMillis();
+    private OnBackInvokedCallback onBackInvokedCallback;
 
-    // Local device daemon controller state & per-launch credentials
+    // Persistent device daemon controller state & credentials
     private volatile boolean daemonRunning = true;
     private volatile boolean daemonTlsActive = true;
     private volatile String daemonHitlMode = "strict";
     private volatile boolean daemonViewOnly = false;
-    private volatile String daemonPin = generatePin();
-    private volatile String daemonToken = generateHexToken("ai_sec_", 16);
+    private volatile String daemonPin = "";
+    private volatile String daemonToken = "";
     private final String bridgeSessionToken = generateHexToken("bridge_", 24);
+
+    private SharedPreferences getUiPrefs() {
+        return getSharedPreferences(PREFS_UI_STORE, Context.MODE_PRIVATE);
+    }
+
+    private SharedPreferences getDaemonPrefs() {
+        return getSharedPreferences(PREFS_DAEMON, Context.MODE_PRIVATE);
+    }
+
+    private void loadPersistedDaemonState() {
+        try {
+            SharedPreferences prefs = getDaemonPrefs();
+            daemonRunning = prefs.getBoolean("running", true);
+            daemonTlsActive = prefs.getBoolean("tlsActive", true);
+            String hitl = prefs.getString("hitlMode", "strict");
+            if ("strict".equals(hitl) || "balanced".equals(hitl) || "permissive".equals(hitl) || "manual".equals(hitl)) {
+                daemonHitlMode = hitl;
+            }
+            daemonViewOnly = prefs.getBoolean("viewOnly", false);
+            String savedPin = prefs.getString("pin", "");
+            if (savedPin != null && savedPin.matches("^[0-9]{6}$")) {
+                daemonPin = savedPin;
+            } else {
+                daemonPin = generatePin();
+            }
+            String savedToken = prefs.getString("token", "");
+            if (savedToken != null && !savedToken.isEmpty() && savedToken.length() >= 16) {
+                daemonToken = savedToken;
+            } else {
+                daemonToken = generateHexToken("ai_sec_", 16);
+            }
+            persistDaemonState();
+        } catch (Throwable ignored) {
+            if (daemonPin.isEmpty()) daemonPin = generatePin();
+            if (daemonToken.isEmpty()) daemonToken = generateHexToken("ai_sec_", 16);
+        }
+    }
+
+    private void persistDaemonState() {
+        try {
+            getDaemonPrefs().edit()
+                .putBoolean("running", daemonRunning)
+                .putBoolean("tlsActive", daemonTlsActive)
+                .putString("hitlMode", daemonHitlMode)
+                .putBoolean("viewOnly", daemonViewOnly)
+                .putString("pin", daemonPin)
+                .putString("token", daemonToken)
+                .apply();
+        } catch (Throwable ignored) {}
+    }
+
+    private static boolean isAllowedPrefKey(String key) {
+        if (key == null || !SAFE_PREF_KEY_PATTERN.matcher(key).matches()) {
+            return false;
+        }
+        String lower = key.toLowerCase(Locale.US);
+        // Never persist bearer auth tokens, secrets, or PINs in UI preference mirror
+        return !lower.contains("auth_token")
+            && !lower.contains("pairing_token")
+            && !lower.contains("secret")
+            && !lower.contains("password")
+            && !lower.contains("api_key");
+    }
 
     private static String generatePin() {
         return String.valueOf(100000 + new SecureRandom().nextInt(900000));
@@ -110,6 +193,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        loadPersistedDaemonState();
 
         // Hardware accelerated UI rendering
         getWindow().setFlags(
@@ -192,7 +276,17 @@ public class MainActivity extends Activity {
         startLocalAssetServer();
 
         final FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(0xFF030712);
+        rootLayout = root;
+        String initialSurfaceHex = "#030712";
+        try {
+            String savedSurface = getUiPrefs().getString("ai_net_surface_hex", "");
+            if (savedSurface != null && HEX_COLOR_PATTERN.matcher(savedSurface).matches()) {
+                initialSurfaceHex = savedSurface;
+            }
+        } catch (Throwable ignored) {}
+        final int initialSurfaceColor = Color.parseColor(initialSurfaceHex);
+        root.setBackgroundColor(initialSurfaceColor);
+        applySystemBarsColors(initialSurfaceColor, initialSurfaceColor);
 
         // Apply exact WindowInsets padding so status bar, camera cutout, gesture bar, and IME keyboard never overlap the UI
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
@@ -223,16 +317,14 @@ public class MainActivity extends Activity {
         setContentView(root);
 
         webView = new WebView(this);
-        webView.setBackgroundColor(0xFF030712);
+        webView.setBackgroundColor(initialSurfaceColor);
         // Use direct Chromium GPU hardware composition (LAYER_TYPE_NONE prevents double-FBO memory overhead)
         webView.setLayerType(View.LAYER_TYPE_NONE, null);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         webView.setVerticalScrollBarEnabled(false);
         webView.setHorizontalScrollBarEnabled(false);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
-            WebView.setWebContentsDebuggingEnabled(isDebuggable);
-        }
+        boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        WebView.setWebContentsDebuggingEnabled(isDebuggable);
         root.addView(webView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -245,6 +337,9 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
+        settings.setGeolocationEnabled(false);
         // HTML5 Mobile Viewport: Enables dynamic 1:1 scaling according to viewport-fit=cover
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
@@ -271,21 +366,26 @@ public class MainActivity extends Activity {
             settings.setOffscreenPreRaster(true);
         }
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setRenderPriority(WebSettings.RenderPriority.HIGH);
         settings.setMediaPlaybackRequiresUserGesture(false);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
 
-        // Native Android Bridge: Haptics, Clipboard, UDP Wake-on-LAN, LAN IP Discovery (loopback-gated)
+        // Native Android Bridge: Haptics, Persistent Preferences, Theme Sync, Clipboard, UDP WoL, LAN IP
         webView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void vibrate(int durationMs) {
                 if (!isLocalOriginLoaded) return;
                 try {
                     int ms = Math.max(5, Math.min(durationMs, 60));
-                    Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                    Vibrator v = null;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        VibratorManager vm = (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                        if (vm != null) v = vm.getDefaultVibrator();
+                    } else {
+                        v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                    }
                     if (v != null && v.hasVibrator()) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                             v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
@@ -297,6 +397,75 @@ public class MainActivity extends Activity {
             }
 
             @JavascriptInterface
+            public String getPref(String key) {
+                if (!isLocalOriginLoaded || !isAllowedPrefKey(key)) return null;
+                try {
+                    return getUiPrefs().getString(key, null);
+                } catch (Throwable ignored) {
+                    return null;
+                }
+            }
+
+            @JavascriptInterface
+            public boolean setPref(String key, String value) {
+                if (!isLocalOriginLoaded || !isAllowedPrefKey(key)) return false;
+                if (value != null && value.length() > MAX_PREF_VALUE_LEN) return false;
+                try {
+                    SharedPreferences.Editor ed = getUiPrefs().edit();
+                    if (value == null) {
+                        ed.remove(key);
+                    } else {
+                        ed.putString(key, value);
+                    }
+                    ed.apply();
+                    return true;
+                } catch (Throwable ignored) {
+                    return false;
+                }
+            }
+
+            @JavascriptInterface
+            public boolean removePref(String key) {
+                if (!isLocalOriginLoaded || !isAllowedPrefKey(key)) return false;
+                try {
+                    getUiPrefs().edit().remove(key).apply();
+                    return true;
+                } catch (Throwable ignored) {
+                    return false;
+                }
+            }
+
+            @JavascriptInterface
+            public boolean setSystemTheme(final String accentHex, final String surfaceHex) {
+                if (!isLocalOriginLoaded) return false;
+                final String safeSurface = (surfaceHex != null && HEX_COLOR_PATTERN.matcher(surfaceHex).matches())
+                    ? surfaceHex : "#030712";
+                final String safeAccent = (accentHex != null && HEX_COLOR_PATTERN.matcher(accentHex).matches())
+                    ? accentHex : "#22d3ee";
+                try {
+                    getUiPrefs().edit()
+                        .putString("ai_net_surface_hex", safeSurface)
+                        .putString("ai_net_accent_hex", safeAccent)
+                        .apply();
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                int surfaceColor = Color.parseColor(safeSurface);
+                                int accentColor = Color.parseColor(safeAccent);
+                                if (rootLayout != null) rootLayout.setBackgroundColor(surfaceColor);
+                                if (webView != null) webView.setBackgroundColor(surfaceColor);
+                                applySystemBarsColors(surfaceColor, accentColor);
+                            } catch (Throwable ignored) {}
+                        }
+                    });
+                    return true;
+                } catch (Throwable ignored) {
+                    return false;
+                }
+            }
+
+            @JavascriptInterface
             public boolean sendWolUdp(String mac, String bcast, int port) {
                 if (!isLocalOriginLoaded) return false;
                 return sendNativeWol(mac, bcast, port, null);
@@ -304,7 +473,7 @@ public class MainActivity extends Activity {
 
             @JavascriptInterface
             public boolean copyToClipboard(final String text) {
-                if (!isLocalOriginLoaded || text == null) return false;
+                if (!isLocalOriginLoaded || text == null || text.length() > MAX_PREF_VALUE_LEN) return false;
                 try {
                     runOnUiThread(new Runnable() {
                         @Override
@@ -347,7 +516,9 @@ public class MainActivity extends Activity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage msg) {
-                Log.i(TAG, "[Console " + msg.messageLevel() + "] " + msg.message() + " (" + msg.sourceId() + ":" + msg.lineNumber() + ")");
+                if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                    Log.i(TAG, "[Console " + msg.messageLevel() + "] " + msg.message());
+                }
                 return true;
             }
 
@@ -380,27 +551,42 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 isLocalOriginLoaded = isTrustedLoopbackUrl(url);
-                Log.i(TAG, "onPageStarted: " + url);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 isLocalOriginLoaded = isTrustedLoopbackUrl(url);
-                Log.i(TAG, "onPageFinished: " + url);
+                // Ensure Chromium flushes localStorage/cookies to disk promptly
+                try {
+                    CookieManager.getInstance().flush();
+                } catch (Throwable ignored) {}
             }
 
             @Override
-            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                Log.e(TAG, "onReceivedError: " + errorCode + " " + description + " URL: " + failingUrl);
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && error != null && request != null) {
+                    Log.e(TAG, "onReceivedError: " + error.getErrorCode() + " " + error.getDescription() + " URL: " + request.getUrl());
+                }
             }
 
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri uri = request != null ? request.getUrl() : null;
+                return handleOverrideUrl(uri != null ? uri.toString() : null);
+            }
+
+            @SuppressWarnings("deprecation")
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleOverrideUrl(url);
+            }
+
+            private boolean handleOverrideUrl(String url) {
                 if (url == null) return true;
                 if (isTrustedLoopbackUrl(url)) {
                     return false;
                 }
-                if (url.startsWith("http://") || url.startsWith("https://")) {
+                if (url.startsWith("https://") || url.startsWith("http://")) {
                     try {
                         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                         startActivity(intent);
@@ -411,7 +597,40 @@ public class MainActivity extends Activity {
             }
         });
 
+        registerModernBackHandler();
         webView.loadUrl("http://127.0.0.1:" + localPort + "/index.html");
+    }
+
+    private void applySystemBarsColors(int surfaceColor, int taskAccentColor) {
+        try {
+            Window window = getWindow();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                window.setStatusBarColor(surfaceColor);
+                window.setNavigationBarColor(surfaceColor);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    setTaskDescription(new ActivityManager.TaskDescription(null, 0, surfaceColor));
+                } else {
+                    @SuppressWarnings("deprecation")
+                    ActivityManager.TaskDescription td = new ActivityManager.TaskDescription(null, null, taskAccentColor);
+                    setTaskDescription(td);
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void registerModernBackHandler() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            onBackInvokedCallback = new OnBackInvokedCallback() {
+                @Override
+                public void onBackInvoked() {
+                    dispatchWebBackNavigation(true);
+                }
+            };
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                onBackInvokedCallback
+            );
+        }
     }
 
     private String detectDeviceLanIp() {
@@ -589,114 +808,132 @@ public class MainActivity extends Activity {
     }
 
     private String scanLocalSubnetJson() {
-        final String selfIp = detectDeviceLanIp();
-        if (selfIp.equals("127.0.0.1") || !selfIp.contains(".")) {
-            return "{\"hosts\":[]}";
+        long now = System.currentTimeMillis();
+        if (now - lastScanTimestampMs < 2500L && lastScanJson != null) {
+            return lastScanJson;
         }
-        final String subnetPrefix = selfIp.substring(0, selfIp.lastIndexOf('.') + 1);
+        synchronized (scanLock) {
+            now = System.currentTimeMillis();
+            if (now - lastScanTimestampMs < 2500L && lastScanJson != null) {
+                return lastScanJson;
+            }
+            final String selfIp = detectDeviceLanIp();
+            if (selfIp.equals("127.0.0.1") || !selfIp.contains(".")) {
+                return "{\"hosts\":[]}";
+            }
+            final String subnetPrefix = selfIp.substring(0, selfIp.lastIndexOf('.') + 1);
 
-        final Map<String, String> arpTable = readArpNeighborTable();
-        ExecutorService pool = Executors.newFixedThreadPool(32);
-        List<Future<String>> futures = new ArrayList<Future<String>>();
+            final Map<String, String> arpTable = readArpNeighborTable();
+            ExecutorService pool = Executors.newFixedThreadPool(24);
+            List<Future<String>> futures = new ArrayList<Future<String>>();
 
-        for (int hostNum = 1; hostNum <= 254; hostNum++) {
-            final int lastOctet = hostNum;
-            final String candidateIp = subnetPrefix + lastOctet;
-            if (candidateIp.equals(selfIp)) continue;
+            try {
+                for (int hostNum = 1; hostNum <= 254; hostNum++) {
+                    final int lastOctet = hostNum;
+                    final String candidateIp = subnetPrefix + lastOctet;
+                    if (candidateIp.equals(selfIp)) continue;
 
-            futures.add(pool.submit(new Callable<String>() {
-                @Override
-                public String call() throws Exception {
-                    long t0 = System.currentTimeMillis();
-                    boolean agentOpen = isTcpPortOpen(candidateIp, 8765, 175);
-                    boolean webOpen = !agentOpen && isTcpPortOpen(candidateIp, 3000, 160);
-                    boolean winOpen = !agentOpen && !webOpen && (isTcpPortOpen(candidateIp, 445, 150) || isTcpPortOpen(candidateIp, 135, 150));
-                    boolean sshOpen = !agentOpen && !webOpen && !winOpen && isTcpPortOpen(candidateIp, 22, 150);
-                    boolean reachable = agentOpen || webOpen || winOpen || sshOpen;
+                    futures.add(pool.submit(new Callable<String>() {
+                        @Override
+                        public String call() throws Exception {
+                            long t0 = System.currentTimeMillis();
+                            boolean agentOpen = isTcpPortOpen(candidateIp, 8765, 175);
+                            boolean webOpen = !agentOpen && isTcpPortOpen(candidateIp, 3000, 160);
+                            boolean winOpen = !agentOpen && !webOpen && (isTcpPortOpen(candidateIp, 445, 150) || isTcpPortOpen(candidateIp, 135, 150));
+                            boolean sshOpen = !agentOpen && !webOpen && !winOpen && isTcpPortOpen(candidateIp, 22, 150);
+                            boolean reachable = agentOpen || webOpen || winOpen || sshOpen;
 
-                    if (!reachable && arpTable.containsKey(candidateIp)) {
-                        reachable = true;
-                    }
-                    if (!reachable) {
-                        try {
-                            reachable = InetAddress.getByName(candidateIp).isReachable(140);
-                        } catch (Throwable ignored) {}
-                    }
-                    if (!reachable) return null;
+                            if (!reachable && arpTable.containsKey(candidateIp)) {
+                                reachable = true;
+                            }
+                            if (!reachable) {
+                                try {
+                                    reachable = InetAddress.getByName(candidateIp).isReachable(140);
+                                } catch (Throwable ignored) {}
+                            }
+                            if (!reachable) return null;
 
-                    int pingMs = Math.max(1, (int) (System.currentTimeMillis() - t0));
-                    String mac = arpTable.get(candidateIp);
-                    if (mac == null) {
-                        mac = "";
-                    }
-                    String os = sshOpen && !winOpen ? "linux" : "windows";
-                    String name = (agentOpen ? "AI-AGENT-" : (sshOpen ? "LINUX-NODE-" : "LAN-PC-")) + lastOctet;
-                    int port = 8765;
+                            int pingMs = Math.max(1, (int) (System.currentTimeMillis() - t0));
+                            String mac = arpTable.get(candidateIp);
+                            if (mac == null) {
+                                mac = "";
+                            }
+                            String os = sshOpen && !winOpen ? "linux" : "windows";
+                            String name = (agentOpen ? "AI-AGENT-" : (sshOpen ? "LINUX-NODE-" : "LAN-PC-")) + lastOctet;
+                            int port = 8765;
 
-                    // If target runs CST Web Console on 3000, query /api/setup/info for exact metadata
-                    if (webOpen || agentOpen) {
-                        try {
-                            URL u = new URL("http://" + candidateIp + ":3000/api/setup/info");
-                            HttpURLConnection conn = (HttpURLConnection) u.openConnection();
-                            conn.setConnectTimeout(220);
-                            conn.setReadTimeout(220);
-                            if (conn.getResponseCode() == 200) {
-                                try (BufferedReader r = new BufferedReader(
-                                        new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-                                    StringBuilder infoSb = new StringBuilder();
-                                    String ln;
-                                    while ((ln = r.readLine()) != null) infoSb.append(ln);
-                                    JSONObject infoObj = new JSONObject(infoSb.toString());
-                                    String hName = infoObj.optString("hostname", "");
-                                    String hMac = infoObj.optString("mac", "");
-                                    String hOs = infoObj.optString("osName", infoObj.optString("os", ""));
-                                    if (!hName.isEmpty()) name = hName;
-                                    if (hMac.length() == 17) mac = hMac.toUpperCase(Locale.US);
-                                    if (!hOs.isEmpty()) os = hOs;
+                            // If target runs CST Web Console on 3000, query /api/setup/info for exact metadata
+                            if (webOpen || agentOpen) {
+                                HttpURLConnection conn = null;
+                                try {
+                                    URL u = new URL("http://" + candidateIp + ":3000/api/setup/info");
+                                    conn = (HttpURLConnection) u.openConnection();
+                                    conn.setConnectTimeout(220);
+                                    conn.setReadTimeout(220);
+                                    if (conn.getResponseCode() == 200) {
+                                        try (BufferedReader r = new BufferedReader(
+                                                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                                            StringBuilder infoSb = new StringBuilder();
+                                            String ln;
+                                            while ((ln = r.readLine()) != null && infoSb.length() < 8192) infoSb.append(ln);
+                                            JSONObject infoObj = new JSONObject(infoSb.toString());
+                                            String hName = infoObj.optString("hostname", "");
+                                            String hMac = infoObj.optString("mac", "");
+                                            String hOs = infoObj.optString("osName", infoObj.optString("os", ""));
+                                            if (!hName.isEmpty()) name = hName;
+                                            if (hMac.length() == 17) mac = hMac.toUpperCase(Locale.US);
+                                            if (!hOs.isEmpty()) os = hOs;
+                                        }
+                                    }
+                                } catch (Throwable ignored) {
+                                } finally {
+                                    if (conn != null) conn.disconnect();
                                 }
                             }
-                            conn.disconnect();
-                        } catch (Throwable ignored) {}
-                    }
 
-                    String safeId = name.toUpperCase(Locale.US).replaceAll("[^A-Z0-9-_]", "-");
-                    JSONObject hostJson = new JSONObject();
-                    hostJson.put("id", safeId);
-                    hostJson.put("name", name);
-                    hostJson.put("ip", candidateIp);
-                    hostJson.put("mac", mac);
-                    hostJson.put("port", port);
-                    hostJson.put("os", os);
-                    hostJson.put("isOnline", true);
-                    hostJson.put("ping", pingMs);
-                    return hostJson.toString();
+                            String safeId = name.toUpperCase(Locale.US).replaceAll("[^A-Z0-9-_]", "-");
+                            JSONObject hostJson = new JSONObject();
+                            hostJson.put("id", safeId);
+                            hostJson.put("name", name);
+                            hostJson.put("ip", candidateIp);
+                            hostJson.put("mac", mac);
+                            hostJson.put("port", port);
+                            hostJson.put("os", os);
+                            hostJson.put("isOnline", true);
+                            hostJson.put("ping", pingMs);
+                            return hostJson.toString();
+                        }
+                    }));
                 }
-            }));
-        }
 
-        pool.shutdown();
-        try {
-            pool.awaitTermination(3800, TimeUnit.MILLISECONDS);
-        } catch (Throwable ignored) {}
-        pool.shutdownNow();
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"hosts\":[");
-        boolean first = true;
-        for (Future<String> f : futures) {
-            if (f.isDone() && !f.isCancelled()) {
+                pool.shutdown();
                 try {
-                    String item = f.get();
-                    if (item != null) {
-                        if (!first) sb.append(",");
-                        sb.append(item);
-                        first = false;
-                    }
+                    pool.awaitTermination(3800, TimeUnit.MILLISECONDS);
                 } catch (Throwable ignored) {}
+            } finally {
+                pool.shutdownNow();
             }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"hosts\":[");
+            boolean first = true;
+            for (Future<String> f : futures) {
+                if (f.isDone() && !f.isCancelled()) {
+                    try {
+                        String item = f.get();
+                        if (item != null) {
+                            if (!first) sb.append(",");
+                            sb.append(item);
+                            first = false;
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
+            sb.append("]}");
+            lastScanJson = sb.toString();
+            lastScanTimestampMs = System.currentTimeMillis();
+            return lastScanJson;
         }
-        sb.append("]}");
-        return sb.toString();
     }
 
     private static boolean isTcpPortOpen(String ip, int port, int timeoutMs) {
@@ -1037,7 +1274,21 @@ public class MainActivity extends Activity {
 
     private void startLocalAssetServer() {
         try {
-            localServer = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+            InetAddress loopback = InetAddress.getByName("127.0.0.1");
+            ServerSocket bound = null;
+            for (int candidatePort : PREFERRED_LOCAL_PORTS) {
+                try {
+                    ServerSocket s = new ServerSocket();
+                    s.setReuseAddress(true);
+                    s.bind(new InetSocketAddress(loopback, candidatePort), 50);
+                    bound = s;
+                    break;
+                } catch (Throwable ignored) {}
+            }
+            if (bound == null) {
+                bound = new ServerSocket(0, 50, loopback);
+            }
+            localServer = bound;
             localPort = localServer.getLocalPort();
             Log.i(TAG, "Local asset server active on http://127.0.0.1:" + localPort);
 
@@ -1156,15 +1407,21 @@ public class MainActivity extends Activity {
                         }
                     }
 
-                    while (headerEnd != -1 && (reqBuf.size() - headerEnd) < contentLength) {
-                        int n = in.read(tmp);
+                    while (headerEnd != -1 && (reqBuf.size() - headerEnd) < contentLength && reqBuf.size() < headerEnd + 1048576) {
+                        int remaining = contentLength - (reqBuf.size() - headerEnd);
+                        int toRead = Math.min(tmp.length, Math.max(0, remaining));
+                        if (toRead <= 0) break;
+                        int n = in.read(tmp, 0, toRead);
                         if (n <= 0) break;
                         reqBuf.write(tmp, 0, n);
                     }
 
                     byte[] fullBytes = reqBuf.toByteArray();
-                    String bodyStr = (headerEnd != -1 && fullBytes.length > headerEnd)
-                        ? new String(fullBytes, headerEnd, fullBytes.length - headerEnd, StandardCharsets.UTF_8)
+                    int availableBodyLen = (headerEnd != -1 && fullBytes.length > headerEnd)
+                        ? Math.min(contentLength > 0 ? contentLength : (fullBytes.length - headerEnd), fullBytes.length - headerEnd)
+                        : 0;
+                    String bodyStr = availableBodyLen > 0
+                        ? new String(fullBytes, headerEnd, availableBodyLen, StandardCharsets.UTF_8)
                         : "";
 
                     String[] parts = headerLines[0].split(" ");
@@ -1175,7 +1432,7 @@ public class MainActivity extends Activity {
 
                     String expectedHost = "127.0.0.1:" + localPort;
                     String expectedLocalhost = "localhost:" + localPort;
-                    if (!hostHeader.isEmpty() && !expectedHost.equalsIgnoreCase(hostHeader) && !expectedLocalhost.equalsIgnoreCase(hostHeader)) {
+                    if (!expectedHost.equalsIgnoreCase(hostHeader) && !expectedLocalhost.equalsIgnoreCase(hostHeader)) {
                         sendJsonResponse(out, 403, "{\"error\":\"FORBIDDEN_HOST\"}");
                         socket.close();
                         return;
@@ -1193,7 +1450,13 @@ public class MainActivity extends Activity {
                     String rawPath = parts[1];
                     int qIdx = rawPath.indexOf('?');
                     if (qIdx != -1) rawPath = rawPath.substring(0, qIdx);
-                    Log.i(TAG, "HTTP " + method + " " + rawPath);
+                    try {
+                        rawPath = URLDecoder.decode(rawPath, "UTF-8");
+                    } catch (Throwable ignored) {
+                        sendJsonResponse(out, 400, "{\"error\":\"BAD_PATH\"}");
+                        socket.close();
+                        return;
+                    }
 
                     if (method.equals("OPTIONS")) {
                         String resp = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n";
@@ -1454,6 +1717,7 @@ public class MainActivity extends Activity {
                             socket.close();
                             return;
                         }
+                        persistDaemonState();
                         String dState = buildDaemonStateJson();
                         String resp = "{\"success\":true,\"daemon\":" + dState + ",\"state\":" + dState + "}";
                         sendJsonResponse(out, 200, resp);
@@ -1492,7 +1756,7 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    if (rawPath.contains("..") || rawPath.contains("\\")) {
+                    if (rawPath.contains("..") || rawPath.contains("\\") || rawPath.indexOf('\0') != -1) {
                         out.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".getBytes(StandardCharsets.UTF_8));
                         out.flush();
                         socket.close();
@@ -1500,6 +1764,7 @@ public class MainActivity extends Activity {
                     }
 
                     if (rawPath.equals("/") || rawPath.isEmpty()) rawPath = "/index.html";
+                    if (!rawPath.startsWith("/")) rawPath = "/" + rawPath;
 
                     String assetPath = "dist" + rawPath;
                     AssetManager assets = getAssets();
@@ -1537,12 +1802,13 @@ public class MainActivity extends Activity {
                     byte[] data = baos.toByteArray();
 
                     String mime = getMimeType(assetPath);
+                    boolean isImmutableBundle = assetPath.startsWith("dist/assets/") || assetPath.endsWith(".woff2") || assetPath.endsWith(".woff");
                     StringBuilder headersSb = new StringBuilder();
                     headersSb.append("HTTP/1.1 200 OK\r\n");
                     headersSb.append("Content-Type: ").append(mime).append("\r\n");
                     headersSb.append("Content-Length: ").append(data.length).append("\r\n");
                     headersSb.append("X-Content-Type-Options: nosniff\r\n");
-                    headersSb.append("Cache-Control: no-store\r\n");
+                    headersSb.append("Cache-Control: ").append(isImmutableBundle ? "public, max-age=31536000, immutable" : "no-store").append("\r\n");
                     if ("dist/index.html".equals(assetPath)) {
                         headersSb.append("Set-Cookie: ai_net_bridge=").append(bridgeSessionToken).append("; HttpOnly; SameSite=Strict; Path=/\r\n");
                     }
@@ -1551,8 +1817,8 @@ public class MainActivity extends Activity {
                     out.write(headersSb.toString().getBytes(StandardCharsets.UTF_8));
                     out.write(data);
                     out.flush();
-                    socket.close();
                 } catch (Exception ignored) {
+                } finally {
                     try { socket.close(); } catch (Exception ignored2) {}
                 }
             }
@@ -1574,19 +1840,18 @@ public class MainActivity extends Activity {
         return "application/octet-stream";
     }
 
-    @Override
-    public void onBackPressed() {
+    private void dispatchWebBackNavigation(final boolean finishIfUnhandled) {
         if (webView != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             webView.evaluateJavascript(
                 "(function(){ try { return Boolean(window.__handleAndroidBack && window.__handleAndroidBack()); } catch(e) { return false; } })()",
                 new ValueCallback<String>() {
                     @Override
                     public void onReceiveValue(String value) {
-                        if (!"true".equals(value)) {
+                        if (!"true".equals(value) && !isFinishing() && !isDestroyed()) {
                             if (webView != null && webView.canGoBack()) {
                                 webView.goBack();
                             } else {
-                                MainActivity.super.onBackPressed();
+                                finish();
                             }
                         }
                     }
@@ -1595,19 +1860,45 @@ public class MainActivity extends Activity {
         } else if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
-            super.onBackPressed();
+            finish();
         }
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    public void onBackPressed() {
+        dispatchWebBackNavigation(false);
+    }
+
+    @Override
+    protected void onPause() {
+        persistDaemonState();
+        try {
+            CookieManager.getInstance().flush();
+        } catch (Throwable ignored) {}
+        super.onPause();
     }
 
     @Override
     protected void onDestroy() {
         isRunning = false;
+        persistDaemonState();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && onBackInvokedCallback != null) {
+            try {
+                getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(onBackInvokedCallback);
+            } catch (Throwable ignored) {}
+            onBackInvokedCallback = null;
+        }
         try { httpPool.shutdownNow(); } catch (Exception ignored) {}
         if (localServer != null) {
             try { localServer.close(); } catch (Exception ignored) {}
         }
         if (webView != null) {
-            webView.destroy();
+            try {
+                if (rootLayout != null) rootLayout.removeAllViews();
+                webView.destroy();
+            } catch (Throwable ignored) {}
+            webView = null;
         }
         super.onDestroy();
     }

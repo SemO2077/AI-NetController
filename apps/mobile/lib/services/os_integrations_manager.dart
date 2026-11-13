@@ -3,14 +3,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:quick_actions/quick_actions.dart';
+import '../security/network_validators.dart';
 
-/// Advanced OS Integrations & Network Edge-Case Manager
+/// Advanced OS Integrations & Wake-on-LAN Manager
 /// ---------------------------------------------------------------------
 /// Capabilities:
-/// 1. Gratuitous ARP (RFC 826) Cache Injection over 802.11 Wi-Fi (WoWLAN)
-/// 2. 102-Byte UDP Magic Packet Transmitter (Ports 7 and 9)
-/// 3. Android Quick Settings Tile & Launcher Shortcuts (quick_actions)
-/// 4. Android/iOS Home Screen Widgets with Background Isolate 1-Tap WoL (home_widget)
+/// 1. RFC 826 Gratuitous ARP builder & 102-Byte IEEE 802.3 UDP Magic Packet (Ports 7 and 9)
+/// 2. Android Quick Settings & Launcher Shortcuts (quick_actions)
+/// 3. Android/iOS Home Screen Widgets with Background Isolate 1-Tap WoL (home_widget)
 
 /// Background entry point for 1-tap Home Screen Widget interactions
 @pragma('vm:entry-point')
@@ -61,18 +61,23 @@ class OsIntegrationsManager {
       await _quickActions.setShortcutItems([
         const ShortcutItem(
           type: 'action_wake_pc',
-          localizedTitle: 'Събуди PC (WoL)',
+          localizedTitle: 'Wake PC (WoL)',
           icon: 'ic_wol_power',
         ),
         const ShortcutItem(
           type: 'action_panic_kill',
-          localizedTitle: 'Аварийно спиране (SIGKILL)',
+          localizedTitle: 'Emergency Lock',
           icon: 'ic_panic_kill',
         ),
         const ShortcutItem(
           type: 'action_scan_fleet',
-          localizedTitle: 'mDNS Сканиране',
+          localizedTitle: 'Scan LAN Fleet',
           icon: 'ic_radar_scan',
+        ),
+        const ShortcutItem(
+          type: 'action_open_terminal',
+          localizedTitle: 'Remote Shell',
+          icon: 'ic_terminal',
         ),
       ]);
     } catch (e) {
@@ -104,10 +109,15 @@ class OsIntegrationsManager {
       await HomeWidget.saveWidgetData<String>('target_ip', hostIp);
       await HomeWidget.saveWidgetData<String>('target_mac', hostMac);
       await HomeWidget.saveWidgetData<bool>('is_online', isOnline);
-      await HomeWidget.saveWidgetData<String>('status_text', isOnline ? 'ОНЛАЙН' : 'ИЗКЛЮЧЕН');
+      await HomeWidget.saveWidgetData<String>(
+        'status_text',
+        isOnline ? 'ONLINE' : 'OFFLINE',
+      );
       await HomeWidget.saveWidgetData<String>(
         'metrics_text',
-        isOnline ? 'CPU ${cpuUsage.toStringAsFixed(0)}% • RAM ${ramUsage.toStringAsFixed(0)}%' : 'В готовност за WoL',
+        isOnline
+            ? 'CPU ${cpuUsage.toStringAsFixed(0)}% • RAM ${ramUsage.toStringAsFixed(0)}%'
+            : 'Ready for WoL',
       );
       await HomeWidget.saveWidgetData<String>(
         'last_updated',
@@ -174,16 +184,16 @@ class OsIntegrationsManager {
   }
 
   /// Broadcasts a standard 102-byte Wake-on-LAN Magic Packet (`6x 0xFF + 16x MAC`)
-  /// across global broadcast and the local /24 subnet (UDP ports 7 and [port]).
+  /// across global broadcast and directed subnet broadcast (UDP ports 7 and [port]).
   Future<bool> sendGratuitousArpAndWake({
     required String targetMac,
     required String targetIp,
     required String routerIp,
     int port = 9,
   }) async {
-    final List<int>? macBytes = _parseMacAddress(targetMac);
-    if (macBytes == null) {
-      debugPrint('WoL rejected invalid target MAC address.');
+    final Uint8List? macBytes = NetworkValidators.parseMacBytes(targetMac);
+    if (macBytes == null || !NetworkValidators.isValidPort(port)) {
+      debugPrint('WoL aborted: invalid MAC ($targetMac) or port ($port)');
       return false;
     }
 
@@ -194,32 +204,32 @@ class OsIntegrationsManager {
 
       // Generate standard 102-byte Magic Packet: 6x 0xFF + 16x MAC
       final Uint8List magicPacket = Uint8List(102);
-      for (int i = 0; i < 6; i++) {
-        magicPacket[i] = 0xFF;
-      }
+      magicPacket.fillRange(0, 6, 0xFF);
       for (int i = 0; i < 16; i++) {
-        for (int j = 0; j < 6; j++) {
-          magicPacket[6 + (i * 6) + j] = macBytes[j];
-        }
+        magicPacket.setRange(6 + (i * 6), 12 + (i * 6), macBytes);
       }
 
-      final InternetAddress broadcastAddr = InternetAddress('255.255.255.255');
-      socket.send(magicPacket, broadcastAddr, port);
-      socket.send(magicPacket, broadcastAddr, 7);
+      final InternetAddress globalBroadcast = InternetAddress('255.255.255.255');
+      socket.send(magicPacket, globalBroadcast, port);
+      if (port != 7) {
+        socket.send(magicPacket, globalBroadcast, 7);
+      }
 
-      // Also send directed subnet broadcast if routerIp is a valid IPv4 address
-      final List<int>? routerParts = _parseIpAddress(routerIp);
-      if (routerParts != null) {
-        final String subnetBroadcast =
-            '${routerParts[0]}.${routerParts[1]}.${routerParts[2]}.255';
-        try {
-          socket.send(magicPacket, InternetAddress(subnetBroadcast), port);
-        } catch (_) {}
+      // Also send directed /24 subnet broadcast using targetIp or routerIp
+      final String subnetSeed =
+          NetworkValidators.isValidIpv4(targetIp) ? targetIp : routerIp;
+      if (NetworkValidators.isValidIpv4(subnetSeed)) {
+        final String directed = NetworkValidators.deriveBroadcastIp(subnetSeed);
+        if (directed != '255.255.255.255') {
+          try {
+            socket.send(magicPacket, InternetAddress(directed), port);
+          } catch (_) {}
+        }
       }
 
       return true;
     } catch (e) {
-      debugPrint('WoWLAN packet broadcast error: $e');
+      debugPrint('WoL packet broadcast error: $e');
       return false;
     } finally {
       socket?.close();
@@ -227,28 +237,13 @@ class OsIntegrationsManager {
   }
 
   List<int>? _parseMacAddress(String mac) {
-    final String clean = mac.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '');
-    if (clean.length != 12 || clean == '000000000000') {
-      return null;
-    }
-    final List<int> bytes = [];
-    for (int i = 0; i < 12; i += 2) {
-      bytes.add(int.parse(clean.substring(i, i + 2), radix: 16));
-    }
-    return bytes;
+    return NetworkValidators.parseMacBytes(mac);
   }
 
   List<int>? _parseIpAddress(String ip) {
-    final List<String> parts = ip.trim().split('.');
-    if (parts.length != 4) {
+    if (!NetworkValidators.isValidIpv4(ip)) {
       return null;
     }
-    final List<int> octets = [];
-    for (final p in parts) {
-      final int? v = int.tryParse(p);
-      if (v == null || v < 0 || v > 255) return null;
-      octets.add(v);
-    }
-    return octets;
+    return ip.trim().split('.').map(int.parse).toList(growable: false);
   }
 }

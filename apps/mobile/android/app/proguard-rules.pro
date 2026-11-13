@@ -11,9 +11,12 @@
     @android.webkit.JavascriptInterface <methods>;
 }
 
-# Preserve QuickActions and HomeWidget native entrypoints
+# Preserve QuickActions, HomeWidget, LocalAuth, and App Entrypoints
+-keep class com.cst.autonomouslan.** { *; }
 -keep class es.antonborri.home_widget.** { *; }
 -keep class io.flutter.plugins.quickactions.** { *; }
+-keep class io.flutter.plugins.localauth.** { *; }
+-keep class androidx.biometric.** { *; }
 
 # Preserve ChaCha20-Poly1305 and Curve25519 reflection models
 -keepclassmembers enum * {

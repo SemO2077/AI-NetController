@@ -55,7 +55,7 @@ void main() {
       final hostPriv = ce.X25519.generatePrivateKey();
       final hostPub = ce.X25519.publicFromPrivate(hostPriv);
       final hostN2 = Uint8List.fromList(List<int>.generate(16, (i) => (i + 30) & 0xFF));
-      final magic = utf8.encode('CST_ECDH_1:');
+      final magic = utf8.encode(ce.kProtocolMagic);
       final chal59 = Uint8List.fromList(<int>[...magic, ...hostPub, ...hostN2]);
 
       final proofInput = <int>[

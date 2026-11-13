@@ -357,7 +357,11 @@ void main() {
 
         await tester.pump();
 
-        expect(receivedTelemetry, isNotEmpty, reason: 'Expected live OP_TELEMETRY from Python daemon');
+        expect(
+          receivedTelemetry,
+          isNotEmpty,
+          reason: 'Expected live OP_TELEMETRY from Python daemon.\nstderr:\n${liveDaemon.stderrText}',
+        );
         final updatedHost = container.read(app.fleetProvider).first;
         expect(updatedHost.name, isNot(equals('Host PC (Local)')));
         expect(updatedHost.osName, isNotEmpty);
@@ -432,7 +436,11 @@ void main() {
 
         await tester.pump();
         final hydrated = container.read(app.fleetProvider).first;
-        expect(hydrated.name, isNot(equals('Host PC (Local)')));
+        expect(
+          hydrated.name,
+          isNot(equals('Host PC (Local)')),
+          reason: 'Expected hostname telemetry update from Python daemon.\nstderr:\n${liveDaemon.stderrText}',
+        );
         expect(find.textContaining('OS: '), findsOneWidget);
         expect(find.textContaining('RAM: '), findsOneWidget);
         expect(find.text('Mode: Interactive'), findsOneWidget);

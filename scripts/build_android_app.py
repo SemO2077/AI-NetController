@@ -80,10 +80,17 @@ def _resolve_jdk_dir():
     javac_bin = shutil.which("javac")
     if javac_bin:
         return os.path.dirname(os.path.dirname(os.path.realpath(javac_bin)))
-    win_jbr = r"C:\Program Files\Android\Android Studio\jbr"
-    if IS_WIN and os.path.isdir(win_jbr):
-        return win_jbr
-    return env_java or (win_jbr if IS_WIN else "")
+    if IS_WIN:
+        candidates = [
+            r"C:\Program Files\Android\Android Studio\jbr",
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Temurin-21"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Temurin-17"),
+            r"C:\Program Files\Eclipse Adoptium\jdk-21",
+        ]
+        for cand in candidates:
+            if os.path.isfile(os.path.join(cand, "bin", "javac.exe")):
+                return cand
+    return env_java or ""
 
 SDK_DIR = _resolve_sdk_dir()
 JDK_DIR = _resolve_jdk_dir()
