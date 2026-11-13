@@ -462,9 +462,13 @@ def zipalign_and_sign():
     ks_pass = os.environ.get("AI_ANDROID_KEYSTORE_PASS", "").strip()
     ks_alias = os.environ.get("AI_ANDROID_KEY_ALIAS", "").strip()
     key_pass = os.environ.get("AI_ANDROID_KEY_PASS", "").strip() or ks_pass
+    strict_release = (os.environ.get("AI_RELEASE_BUILD", "").strip() == "1") or ("--release" in sys.argv)
 
     if ks_path and os.path.isfile(ks_path) and ks_pass and ks_alias:
         print(f"[*] Signing APK with release keystore ({ks_alias})...")
+    elif strict_release:
+        print("[ERROR] Release build requires AI_ANDROID_KEYSTORE, AI_ANDROID_KEYSTORE_PASS, and AI_ANDROID_KEY_ALIAS.")
+        sys.exit(1)
     else:
         ks_path = KEYSTORE_PATH
         ks_pass = "android"

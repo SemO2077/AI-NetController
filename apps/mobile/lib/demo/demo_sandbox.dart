@@ -147,8 +147,5 @@ Virtualization Enabled:    Yes (Hyper-V / WSL2)''';
 
   void dispose() {
     stop();
-    _telemetryController.close();
-    _shellController.close();
-    _hitlController.close();
   }
 }

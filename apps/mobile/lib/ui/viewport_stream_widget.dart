@@ -68,7 +68,7 @@ class StreamBinaryPacket {
     final opcode = StreamOpcode.fromCode(opCodeByte);
     if (opcode == null) return null;
     if (length > _maxStreamPayloadBytes ||
-        bytes.length < _streamHeaderSize + length) {
+        bytes.length != _streamHeaderSize + length) {
       return null;
     }
 
@@ -128,6 +128,8 @@ class ViewportStreamWidget extends StatefulWidget {
 }
 
 class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
+  static int _wakelockRefCount = 0;
+
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   Timer? _pingTimer;
@@ -135,6 +137,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       StreamController<Uint8List>.broadcast(sync: true);
 
   bool _isConnected = false;
+  bool _isAuthenticated = false;
   bool _isConnecting = true;
   bool _hasReceivedFrame = false;
   String? _errorMessage;
@@ -160,6 +163,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   @override
   void initState() {
     super.initState();
+    _wakelockRefCount++;
     WakelockPlus.enable();
     _connect();
 
@@ -179,6 +183,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     if (secret.isEmpty) {
       setState(() {
         _isConnected = false;
+        _isAuthenticated = false;
         _isConnecting = false;
         _errorMessage = 'Pairing secret required before connecting to host stream.';
       });
@@ -186,6 +191,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     }
     setState(() {
       _isConnecting = true;
+      _isAuthenticated = false;
       _errorMessage = null;
     });
 
@@ -222,11 +228,13 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                           statusStr == 'OK_AUTHENTICATED') &&
                       mounted) {
                     setState(() {
+                      _isAuthenticated = true;
                       _isConnected = true;
                       _isConnecting = false;
                     });
                   } else if (mounted) {
                     setState(() {
+                      _isAuthenticated = false;
                       _isConnected = false;
                       _isConnecting = false;
                       _errorMessage = 'Stream authentication rejected: $statusStr';
@@ -234,7 +242,21 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                     _cleanupSocket();
                   }
                 }
+              } else if (packet.opcode == StreamOpcode.error) {
+                final errMsg = utf8.decode(packet.payload, allowMalformed: true).trim();
+                if (mounted) {
+                  setState(() {
+                    _errorMessage = errMsg.isNotEmpty ? errMsg : 'Host stream error';
+                    if (!_isAuthenticated) {
+                      _isConnected = false;
+                      _isConnecting = false;
+                    }
+                  });
+                }
               } else if (packet.opcode == StreamOpcode.frame) {
+                if (!_isAuthenticated) {
+                  return; // Drop unauthenticated pre-auth video frames
+                }
                 _fpsCount++;
                 if (!_frameController.isClosed) {
                   _frameController.add(packet.payload);
@@ -262,6 +284,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
           setState(() {
             _isConnecting = false;
             _isConnected = false;
+            _isAuthenticated = false;
             _errorMessage = 'Socket Connection Error: $err';
           });
         },
@@ -270,6 +293,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
           _stopPingTimer();
           setState(() {
             _isConnected = false;
+            _isAuthenticated = false;
             _isConnecting = false;
           });
         },
@@ -303,7 +327,9 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     if (!constraints.hasBoundedWidth || constraints.maxWidth <= 0) return;
 
     final renderWidth = constraints.maxWidth;
-    final renderHeight = renderWidth * (9.0 / 16.0); // 16:9 aspect ratio
+    final renderHeight = (constraints.hasBoundedHeight && constraints.maxHeight > 0)
+        ? constraints.maxHeight
+        : renderWidth * (9.0 / 16.0);
     final dpr = MediaQuery.devicePixelRatioOf(context);
 
     final physicalWidth = (renderWidth * dpr).round();
@@ -318,6 +344,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     if (dimensionsChanged &&
         _channel != null &&
         _isConnected &&
+        _isAuthenticated &&
         !_resizeScheduled) {
       _resizeScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -465,7 +492,9 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
           ],
         );
       },
-    );
+    ).whenComplete(() {
+      Future<void>.delayed(const Duration(milliseconds: 300), textCtrl.dispose);
+    });
   }
 
   Widget _buildQuickKeyChip(String label, VoidCallback onTap) {
@@ -502,6 +531,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
   void _cleanupSocket() {
     _stopPingTimer();
+    _isAuthenticated = false;
     _subscription?.cancel();
     _subscription = null;
     try {
@@ -516,7 +546,12 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     _fpsTimer = null;
     _cleanupSocket();
     unawaited(_frameController.close());
-    WakelockPlus.disable();
+    if (_wakelockRefCount > 0) {
+      _wakelockRefCount--;
+    }
+    if (_wakelockRefCount == 0) {
+      WakelockPlus.disable();
+    }
     super.dispose();
   }
 
@@ -568,6 +603,19 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                       child: ZeroGcVideoRenderer(
                         frameStream: _frameController.stream,
                         fit: BoxFit.contain,
+                        onRequestKeyframe: (opcode) {
+                          if (_channel != null && _isAuthenticated) {
+                            try {
+                              _channel?.sink.add(
+                                StreamBinaryPacket.pack(
+                                  StreamOpcode.frameSync,
+                                  ++_pingSequence,
+                                  Uint8List(0),
+                                ),
+                              );
+                            } catch (_) {}
+                          }
+                        },
                       ),
                     ),
                   ),

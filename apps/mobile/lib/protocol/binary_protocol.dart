@@ -8,6 +8,9 @@ const int kMagicByte1 = 0x71;
 /// Fixed header length in bytes (2 magic + 1 opcode + 1 flags + 4 seq + 4 length)
 const int kHeaderSize = 12;
 
+/// Maximum canonical binary payload size (10 MiB) per shared protocol contract.
+const int kMaxPayloadSize = 10 * 1024 * 1024;
+
 /// Opcode definitions for the CST Binary Protocol (Part 1.2 Specification)
 class BinaryOpcode {
   static const int ping = 0x01; // 1: Heartbeat Ping/Pong
@@ -99,8 +102,9 @@ ProtocolPacket? parsePacket(Uint8List rawBytes) {
   final int seq = byteData.getUint32(4, Endian.big);
   final int payloadLength = byteData.getUint32(8, Endian.big);
 
-  if (rawBytes.length < kHeaderSize + payloadLength) {
-    return null; // Incomplete packet
+  if (payloadLength > kMaxPayloadSize ||
+      rawBytes.length != kHeaderSize + payloadLength) {
+    return null; // Oversized, truncated, or trailing-byte packet
   }
 
   final Uint8List payload =

@@ -21,6 +21,7 @@ Architectural Highlights:
 import os
 import sys
 import time
+import atexit
 import socket
 import struct
 import ctypes
@@ -380,13 +381,29 @@ class WoLDoctor:
                 except Exception:
                     pass
 
-        # 2. IPv6 Link-Local / Node-Local Multicast
+        # 2. IPv6 Link-Local / Node-Local Multicast across active interface scopes
         s6 = None
         try:
             s6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-            # ff02::1 = All nodes link-local multicast
-            s6.sendto(magic_payload, ("ff02::1", port, 0, 0))
-            results["ipv6"] = True
+            scope_ids: List[int] = []
+            if hasattr(socket, "if_nameindex"):
+                try:
+                    for idx, name in socket.if_nameindex():
+                        if "loopback" not in name.lower() and name.lower() != "lo":
+                            scope_ids.append(idx)
+                except Exception:
+                    pass
+            if not scope_ids:
+                scope_ids = [0]
+            sent_any = False
+            for scope_id in scope_ids:
+                try:
+                    # ff02::1 = All nodes link-local multicast scoped per physical interface
+                    s6.sendto(magic_payload, ("ff02::1", port, 0, scope_id))
+                    sent_any = True
+                except OSError:
+                    continue
+            results["ipv6"] = sent_any
         except Exception as e:
             logger.debug(f"IPv6 WoL transmission skipped or unavailable: {e}")
         finally:
@@ -406,12 +423,31 @@ class WindowsSessionBridge:
     Detects Session 0 isolation issues and queries the active interactive console
     session ID. Bridges execution into user desktop (Session 1+) if running as service.
     """
+    _bindings_ready = False
+
+    @classmethod
+    def _ensure_bindings(cls) -> None:
+        if cls._bindings_ready or not IS_WINDOWS:
+            return
+        try:
+            wtsapi32.WTSGetActiveConsoleSessionId.argtypes = []
+            wtsapi32.WTSGetActiveConsoleSessionId.restype = wintypes.DWORD
+            user32 = ctypes.windll.user32
+            user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            user32.OpenInputDesktop.restype = wintypes.HANDLE
+            user32.CloseDesktop.argtypes = [wintypes.HANDLE]
+            user32.CloseDesktop.restype = wintypes.BOOL
+            cls._bindings_ready = True
+        except Exception:
+            pass
+
     @staticmethod
     def get_active_console_session() -> int:
         if not IS_WINDOWS:
             return 0
         try:
-            return wtsapi32.WTSGetActiveConsoleSessionId()
+            WindowsSessionBridge._ensure_bindings()
+            return int(wtsapi32.WTSGetActiveConsoleSessionId())
         except Exception:
             return 0
 
@@ -423,6 +459,7 @@ class WindowsSessionBridge:
         """
         if not IS_WINDOWS:
             return False
+        WindowsSessionBridge._ensure_bindings()
         user32 = ctypes.windll.user32
         # DESKTOP_SWITCHDESKTOP = 0x0100
         h_desk = user32.OpenInputDesktop(0, False, 0x0100)
@@ -438,112 +475,134 @@ class WindowsSessionBridge:
 SHM_BUFFER_SIZE = 34 * 1024 * 1024
 SHM_NAME = "cst_frame_shm_v1"
 
-def screen_capture_worker_process(shm_name: str, stop_event: Event, ready_event: Event):
+def screen_capture_worker_process(
+    shm_name: str,
+    stop_event: Event,
+    ready_event: Event,
+    active_clients_event: Optional[Event] = None,
+):
     """
     Dedicated worker process running outside the Python Global Interpreter Lock (GIL).
     Gathers desktop frames via DXGI/MSS, encodes to JPEG via SIMD TurboJPEG,
     and writes directly to shared memory with length headers.
     """
     logger.info("Initializing SharedMemory Screen Capture Worker...")
+    shm = None
+    sct = None
     try:
-        shm = shared_memory.SharedMemory(name=shm_name, create=False)
-    except FileNotFoundError:
-        shm = shared_memory.SharedMemory(name=shm_name, create=True, size=SHM_BUFFER_SIZE)
+        try:
+            shm = shared_memory.SharedMemory(name=shm_name, create=False)
+        except FileNotFoundError:
+            shm = shared_memory.SharedMemory(name=shm_name, create=True, size=SHM_BUFFER_SIZE)
 
-    try:
-        import mss
-        sct = mss.mss()
-    except ImportError:
-        sct = None
+        try:
+            import mss
+            sct = mss.mss()
+        except ImportError:
+            sct = None
 
-    try:
-        from turbojpeg import TurboJPEG
-        jpeg = TurboJPEG()
-    except Exception:
-        jpeg = None
+        try:
+            from turbojpeg import TurboJPEG
+            jpeg = TurboJPEG()
+        except Exception:
+            jpeg = None
 
-    ready_event.set()
+        ready_event.set()
 
-    synthetic_locked_frame = None
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        img = Image.new("RGB", (1280, 720), color=(10, 15, 29))
-        draw = ImageDraw.Draw(img)
-        draw.rectangle([0, 0, 1280, 8], fill=(0, 240, 255))
-        draw.text((450, 320), "[ WORKSTATION LOCKED ]", fill=(255, 75, 75))
-        draw.text((410, 360), "Desktop surface suspended by Windows Session 0 Lock", fill=(180, 200, 220))
+        synthetic_locked_frame = None
+        try:
+            from PIL import Image, ImageDraw
+            img = Image.new("RGB", (1280, 720), color=(10, 15, 29))
+            draw = ImageDraw.Draw(img)
+            draw.rectangle([0, 0, 1280, 8], fill=(0, 240, 255))
+            draw.text((450, 320), "[ WORKSTATION LOCKED ]", fill=(255, 75, 75))
+            draw.text((410, 360), "Desktop surface suspended by Windows Session 0 Lock", fill=(180, 200, 220))
+            import io
+            b = io.BytesIO()
+            img.save(b, format="JPEG", quality=75)
+            synthetic_locked_frame = b.getvalue()
+        except Exception:
+            synthetic_locked_frame = None
+
+        try:
+            from PIL import Image
+        except ImportError:
+            Image = None
         import io
-        b = io.BytesIO()
-        img.save(b, format="JPEG", quality=75)
-        synthetic_locked_frame = b.getvalue()
-    except Exception:
-        synthetic_locked_frame = b"LOCKED"
+        reusable_bio = io.BytesIO()
+        frame_seq = 0
+        last_raw_hash = 0
 
-    try:
-        from PIL import Image
-    except ImportError:
-        Image = None
-    import io
-    reusable_bio = io.BytesIO()
-    frame_seq = 0
-    last_raw_hash = 0
+        while not stop_event.is_set():
+            # Avoid burning CPU/DXGI capture cycles at 30 FPS when no peer is streaming
+            if active_clients_event is not None and not active_clients_event.is_set():
+                stop_event.wait(0.25)
+                continue
 
-    while not stop_event.is_set():
-        start_t = time.perf_counter()
-        data = None
+            start_t = time.perf_counter()
+            data = None
 
-        if WindowsSessionBridge.is_workstation_locked():
-            data = synthetic_locked_frame
-        elif sct:
-            try:
-                mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-                frame = sct.grab(mon)
-                raw_mv = memoryview(frame.raw)
-                import zlib
-                curr_hash = zlib.adler32(bytes(raw_mv[::2048]))
-                if curr_hash != last_raw_hash or frame_seq == 0:
-                    last_raw_hash = curr_hash
-                    if jpeg:
-                        try:
-                            import numpy as np
-                            bgra_arr = np.frombuffer(frame.raw, dtype=np.uint8).reshape((frame.height, frame.width, 4))
-                            data = jpeg.encode(bgra_arr, quality=65, pixel_format=3)
-                        except Exception:
-                            data = None
-                    if data is None and Image:
-                        img = Image.frombytes("RGB", frame.size, frame.bgra, "raw", "BGRX")
-                        reusable_bio.seek(0)
-                        reusable_bio.truncate(0)
-                        img.save(reusable_bio, format="JPEG", quality=60)
-                        data = reusable_bio.getvalue()
-                    elif data is None:
-                        data = synthetic_locked_frame
-            except Exception:
+            if WindowsSessionBridge.is_workstation_locked():
                 data = synthetic_locked_frame
-        else:
-            data = synthetic_locked_frame
+            elif sct:
+                try:
+                    mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                    frame = sct.grab(mon)
+                    raw_mv = memoryview(frame.raw)
+                    import zlib
+                    curr_hash = zlib.adler32(bytes(raw_mv[::2048]))
+                    if curr_hash != last_raw_hash or frame_seq == 0:
+                        last_raw_hash = curr_hash
+                        if jpeg:
+                            try:
+                                import numpy as np
+                                bgra_arr = np.frombuffer(frame.raw, dtype=np.uint8).reshape((frame.height, frame.width, 4))
+                                data = jpeg.encode(bgra_arr, quality=65, pixel_format=3)
+                            except Exception:
+                                data = None
+                        if data is None and Image:
+                            img = Image.frombytes("RGB", frame.size, frame.bgra, "raw", "BGRX")
+                            reusable_bio.seek(0)
+                            reusable_bio.truncate(0)
+                            img.save(reusable_bio, format="JPEG", quality=60)
+                            data = reusable_bio.getvalue()
+                        elif data is None:
+                            data = synthetic_locked_frame
+                except Exception:
+                    data = synthetic_locked_frame
+            else:
+                data = synthetic_locked_frame
 
-        # Write frame to shared memory using lock-free seqlock:
-        # Layout: [4-byte uint32 seq (odd=writing, even=ready)] [4-byte uint32 length] [JPEG bytes]
-        if data is not None:
-            data_len = len(data)
-            if 0 < data_len < SHM_BUFFER_SIZE - 8:
-                frame_seq = (frame_seq + 2) & 0x7FFFFFFE
-                if frame_seq == 0:
-                    frame_seq = 2
-                # Mark odd sequence while writing to prevent torn reads
-                struct.pack_into(">II", shm.buf, 0, frame_seq - 1, data_len)
-                shm.buf[8:8 + data_len] = data
-                # Commit even sequence once write is complete
-                struct.pack_into(">I", shm.buf, 0, frame_seq)
+            # Write frame to shared memory using lock-free seqlock:
+            # Layout: [4-byte uint32 seq (odd=writing, even=ready)] [4-byte uint32 length] [JPEG bytes]
+            if data is not None:
+                data_len = len(data)
+                if 0 < data_len < SHM_BUFFER_SIZE - 8:
+                    frame_seq = (frame_seq + 2) & 0x7FFFFFFE
+                    if frame_seq == 0:
+                        frame_seq = 2
+                    # Mark odd sequence while writing to prevent torn reads
+                    struct.pack_into(">II", shm.buf, 0, frame_seq - 1, data_len)
+                    shm.buf[8:8 + data_len] = data
+                    # Commit even sequence once write is complete
+                    struct.pack_into(">I", shm.buf, 0, frame_seq)
 
-        # Target ~30 FPS loop pacing (33ms)
-        elapsed = time.perf_counter() - start_t
-        rem = max(0.001, 0.033 - elapsed)
-        time.sleep(rem)
-
-    shm.close()
-    logger.info("Screen Capture Worker terminated cleanly.")
+            # Target ~30 FPS loop pacing (33ms)
+            elapsed = time.perf_counter() - start_t
+            rem = max(0.001, 0.033 - elapsed)
+            time.sleep(rem)
+    finally:
+        if sct is not None:
+            try:
+                sct.close()
+            except Exception:
+                pass
+        if shm is not None:
+            try:
+                shm.close()
+            except Exception:
+                pass
+        logger.info("Screen Capture Worker terminated cleanly.")
 
 # ------------------------------------------------------------------------------
 # Hardened Socket Server & I/O Reactor
@@ -552,19 +611,14 @@ class DaemonServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 8765, psk: Optional[str] = None):
         self.host = host
         self.port = port
-        cfg = load_config() if callable(load_config) else {}
-        resolved_psk = (
-            psk
-            or os.environ.get("AI_AGENT_SECRET")
-            or os.environ.get("CST_AGENT_SECRET")
-            or (cfg.get("pairing_token") if isinstance(cfg, dict) else None)
-        )
-        if not resolved_psk or not str(resolved_psk).strip():
+        self._explicit_psk = bool(psk and str(psk).strip())
+        resolved_psk = self._resolve_psk_str(psk)
+        if not resolved_psk:
             raise ValueError(
                 "Refusing to start DaemonServer without a provisioned pairing secret "
                 "(set AI_AGENT_SECRET or provision daemon_config)."
             )
-        self.psk = str(resolved_psk).strip().encode("utf-8")
+        self.psk = resolved_psk.encode("utf-8")
         self.running = False
         self.vault: Optional[HostCryptoVault] = None
         self.thread_pool = ThreadPoolExecutor(max_workers=4)
@@ -574,6 +628,39 @@ class DaemonServer:
         self.worker_process: Optional[Process] = None
         self.stop_event = Event()
         self.ready_event = Event()
+        self.active_clients_event = Event()
+        self._active_clients: set = set()
+        self._server_sock: Optional[socket.socket] = None
+        atexit.register(self._cleanup_shm)
+
+    def _resolve_psk_str(self, override: Optional[str] = None) -> str:
+        cfg = load_config() if callable(load_config) else {}
+        resolved = (
+            override
+            or os.environ.get("AI_AGENT_SECRET")
+            or os.environ.get("CST_AGENT_SECRET")
+            or (cfg.get("pairing_token") if isinstance(cfg, dict) else None)
+        )
+        return str(resolved).strip() if resolved and str(resolved).strip() else ""
+
+    def _current_psk_bytes(self) -> bytes:
+        if not self._explicit_psk:
+            latest = self._resolve_psk_str()
+            if latest:
+                self.psk = latest.encode("utf-8")
+        return self.psk
+
+    def _cleanup_shm(self) -> None:
+        if self.shm is not None:
+            try:
+                self.shm.close()
+            except Exception:
+                pass
+            try:
+                self.shm.unlink()
+            except Exception:
+                pass
+            self.shm = None
 
     @staticmethod
     async def _recv_exact(loop: asyncio.AbstractEventLoop, sock: socket.socket, num_bytes: int, timeout: float = 5.0) -> Optional[bytes]:
@@ -627,7 +714,7 @@ class DaemonServer:
 
         self.worker_process = Process(
             target=screen_capture_worker_process,
-            args=(SHM_NAME, self.stop_event, self.ready_event),
+            args=(SHM_NAME, self.stop_event, self.ready_event, self.active_clients_event),
             name="CST_CaptureWorker"
         )
         self.worker_process.start()
@@ -635,6 +722,7 @@ class DaemonServer:
 
         # 3. Create Async Server Loop
         sock = self._bind_hardened_socket()
+        self._server_sock = sock
         loop = asyncio.get_running_loop()
 
         logger.info(f"Daemon Reactor active. Awaiting zero-trust peer connections...")
@@ -644,10 +732,14 @@ class DaemonServer:
                 client_sock, addr = await loop.sock_accept(sock)
                 logger.info(f"Incoming connection established from {addr}")
                 asyncio.create_task(self._handle_client(client_sock, loop))
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, OSError):
             pass
         finally:
-            sock.close()
+            self._server_sock = None
+            try:
+                sock.close()
+            except Exception:
+                pass
             self.stop()
 
     async def _handle_client(self, client_sock: socket.socket, loop: asyncio.AbstractEventLoop):
@@ -656,7 +748,7 @@ class DaemonServer:
             client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception:
             pass
-        vault = HostCryptoVault(self.psk)
+        vault = HostCryptoVault(self._current_psk_bytes())
 
         try:
             # 1. Send Opcode 0x06 Handshake Challenge (Canonical 0xC5 0x71 Framing)
@@ -683,6 +775,8 @@ class DaemonServer:
                 return
 
             logger.info("Zero-Trust Ephemeral Curve25519 Session Established.")
+            self._active_clients.add(client_sock)
+            self.active_clients_event.set()
 
             # 3. Active Encrypted Stream Loop with Seqlock & Delta Deduplication
             last_sent_frame_seq = 0
@@ -696,8 +790,10 @@ class DaemonServer:
                         seq2 = struct.unpack_from(">I", self.shm.buf, 0)[0]
                         if seq1 == seq2:
                             last_sent_frame_seq = seq1
-                            encrypted_payload, seq = vault.encrypt_frame(frame_bytes)
-                            hdr = struct.pack(">BBBBII", 0xC5, 0x71, 0x03, 0x01, seq, len(encrypted_payload))
+                            next_seq = vault.tx_seq + 1
+                            wire_len = len(frame_bytes) + 28  # 12B nonce + ciphertext + 16B tag
+                            hdr = struct.pack(">BBBBII", 0xC5, 0x71, 0x03, 0x02, next_seq, wire_len)
+                            encrypted_payload, _ = vault.encrypt_frame(frame_bytes, aad=hdr, seq=next_seq)
                             await loop.sock_sendall(client_sock, hdr + encrypted_payload)
 
         except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError):
@@ -705,22 +801,30 @@ class DaemonServer:
         except Exception as e:
             logger.error(f"Error handling peer: {e}")
         finally:
+            self._active_clients.discard(client_sock)
+            if not self._active_clients:
+                self.active_clients_event.clear()
             vault.close()
-            client_sock.close()
+            try:
+                client_sock.close()
+            except Exception:
+                pass
 
     def stop(self):
         self.running = False
         self.stop_event.set()
+        self.active_clients_event.clear()
+        if self._server_sock is not None:
+            try:
+                self._server_sock.close()
+            except Exception:
+                pass
+            self._server_sock = None
         if self.worker_process:
             self.worker_process.join(timeout=3)
             if self.worker_process.is_alive():
                 self.worker_process.terminate()
-        if self.shm:
-            try:
-                self.shm.close()
-                self.shm.unlink()
-            except Exception:
-                pass
+        self._cleanup_shm()
         self.thread_pool.shutdown(wait=False)
         logger.info("Host daemon shutdown complete.")
 

@@ -14,6 +14,7 @@ import struct
 import secrets
 import hashlib
 import ctypes
+import threading
 from typing import Tuple, Optional, Union, Any
 
 # Try hardware-accelerated cryptography primitives; fallback to pure-Python
@@ -63,6 +64,8 @@ class SlidingWindowReplayProtector:
     while strictly dropping duplicate packets and backward-skewed nonces.
     """
     def __init__(self, window_size: int = 128):
+        if not isinstance(window_size, int) or isinstance(window_size, bool) or window_size <= 0:
+            raise ValueError("window_size must be a positive integer.")
         self.window_size = window_size
         self.max_seq: int = 0
         # 128-bit bitmask represented by two 64-bit unsigned integers
@@ -253,7 +256,7 @@ def _poly1305_mac(msg: bytes, key: bytes) -> bytes:
     r_bytes = key[:16]
     s_bytes = key[16:32]
     r = int.from_bytes(r_bytes, 'little')
-    r &= 0x0ffffffc0fffffff0ffffffc0fffffff
+    r &= 0x0ffffffc0ffffffc0ffffffc0fffffff
     s = int.from_bytes(s_bytes, 'little')
     p = (1 << 130) - 5
     accumulator = 0
@@ -346,6 +349,7 @@ class HostCryptoVault:
     def __init__(self, psk_secret: bytes):
         if not psk_secret or len(psk_secret) == 0:
             raise ValueError("Pre-shared key (PSK) must not be empty.")
+        self._lock = threading.RLock()
         self.psk: Optional[bytearray] = bytearray(psk_secret)
         self.k_send: Optional[bytearray] = None
         self.k_recv: Optional[bytearray] = None
@@ -374,13 +378,14 @@ class HostCryptoVault:
         Creates Opcode 0x06 Handshake Payload:
         [11B MAGIC] [32B HOST_PUBKEY] [16B NONCE_N2]
         """
-        if self._closed:
-            raise RuntimeError("HostCryptoVault has been closed.")
-        payload = bytearray()
-        payload.extend(PROTOCOL_MAGIC)
-        payload.extend(self._pub_bytes)
-        payload.extend(self.host_nonce_n2)
-        return bytes(payload)
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("HostCryptoVault has been closed.")
+            payload = bytearray()
+            payload.extend(PROTOCOL_MAGIC)
+            payload.extend(self._pub_bytes)
+            payload.extend(self.host_nonce_n2)
+            return bytes(payload)
 
     def complete_handshake(self, client_payload: bytes) -> bool:
         """
@@ -388,134 +393,140 @@ class HostCryptoVault:
         [32B CLIENT_PUBKEY] [16B CLIENT_NONCE_N1] [32B HMAC_PROOF]
         Validates PSK knowledge in constant-time and computes twin session keys.
         """
-        if self._closed or self.is_established or not self.psk:
-            return False
-        if len(client_payload) < 80:
-            return False
-
-        client_pub = client_payload[:32]
-        client_n1 = client_payload[32:48]
-        client_hmac = client_payload[48:80]
-
-        # Constant-time verification of pre-shared key knowledge
-        proof_data = PROTOCOL_MAGIC + self._pub_bytes + client_pub + client_n1 + self.host_nonce_n2
-        expected_hmac = hmac.new(bytes(self.psk), proof_data, hashlib.sha256).digest()
-
-        if not hmac.compare_digest(client_hmac, expected_hmac):
-            return False
-
-        # Compute X25519 Shared Secret
-        try:
-            if HAS_CRYPTOGRAPHY_ACCEL and self._priv_obj:
-                peer_pub_obj = x25519.X25519PublicKey.from_public_bytes(client_pub)
-                shared_secret = bytearray(self._priv_obj.exchange(peer_pub_obj))
-            elif self._priv_bytes is not None:
-                shared_secret = bytearray(FallbackCurve25519.compute_shared_secret(bytes(self._priv_bytes), client_pub))
-            else:
+        with self._lock:
+            if self._closed or self.is_established or not self.psk:
                 return False
-        except Exception:
-            return False
+            if len(client_payload) != 80:
+                return False
 
-        # RFC 7748 low-order point check: reject all-zero shared secret
-        if hmac.compare_digest(bytes(shared_secret), b"\x00" * 32):
+            client_pub = client_payload[:32]
+            client_n1 = client_payload[32:48]
+            client_hmac = client_payload[48:80]
+
+            # Constant-time verification of pre-shared key knowledge
+            proof_data = PROTOCOL_MAGIC + self._pub_bytes + client_pub + client_n1 + self.host_nonce_n2
+            expected_hmac = hmac.new(bytes(self.psk), proof_data, hashlib.sha256).digest()
+
+            if not hmac.compare_digest(client_hmac, expected_hmac):
+                return False
+
+            # Compute X25519 Shared Secret
+            try:
+                if HAS_CRYPTOGRAPHY_ACCEL and self._priv_obj:
+                    peer_pub_obj = x25519.X25519PublicKey.from_public_bytes(client_pub)
+                    shared_secret = bytearray(self._priv_obj.exchange(peer_pub_obj))
+                elif self._priv_bytes is not None:
+                    shared_secret = bytearray(FallbackCurve25519.compute_shared_secret(bytes(self._priv_bytes), client_pub))
+                else:
+                    return False
+            except Exception:
+                return False
+
+            # RFC 7748 low-order point check: reject all-zero shared secret
+            if hmac.compare_digest(bytes(shared_secret), b"\x00" * 32):
+                scrub_memory(shared_secret)
+                return False
+
+            salt = client_n1 + self.host_nonce_n2
+
+            # Derive Twin Symmetric Keys (Separation of Send & Receive keys)
+            host_tx = hkdf_extract_and_expand(salt, bytes(shared_secret), CTX_HOST_TX, KEY_SIZE)
+            host_rx = hkdf_extract_and_expand(salt, bytes(shared_secret), CTX_CLIENT_TX, KEY_SIZE)
+
+            self.k_send = bytearray(host_tx)
+            self.k_recv = bytearray(host_rx)
+            if HAS_CRYPTOGRAPHY_ACCEL:
+                self._send_cipher = ChaCha20Poly1305(bytes(self.k_send))
+                self._recv_cipher = ChaCha20Poly1305(bytes(self.k_recv))
+            self.is_established = True
+
+            # Secure zeroization of intermediate ephemeral secret and private key material
             scrub_memory(shared_secret)
-            return False
+            self._priv_obj = None
+            if self._priv_bytes is not None:
+                scrub_memory(self._priv_bytes)
+                self._priv_bytes = None
 
-        salt = client_n1 + self.host_nonce_n2
-
-        # Derive Twin Symmetric Keys (Separation of Send & Receive keys)
-        host_tx = hkdf_extract_and_expand(salt, bytes(shared_secret), CTX_HOST_TX, KEY_SIZE)
-        host_rx = hkdf_extract_and_expand(salt, bytes(shared_secret), CTX_CLIENT_TX, KEY_SIZE)
-
-        self.k_send = bytearray(host_tx)
-        self.k_recv = bytearray(host_rx)
-        if HAS_CRYPTOGRAPHY_ACCEL:
-            self._send_cipher = ChaCha20Poly1305(bytes(self.k_send))
-            self._recv_cipher = ChaCha20Poly1305(bytes(self.k_recv))
-        self.is_established = True
-
-        # Secure zeroization of intermediate ephemeral secret and private key material
-        scrub_memory(shared_secret)
-        self._priv_obj = None
-        if self._priv_bytes is not None:
-            scrub_memory(self._priv_bytes)
-            self._priv_bytes = None
-
-        return True
+            return True
 
     def encrypt_frame(self, plaintext: bytes, aad: bytes = b"", seq: Optional[int] = None) -> Tuple[bytes, int]:
         """
         Encrypts an outgoing binary frame with ChaCha20-Poly1305.
         Enforces strictly monotonic positive sequence numbers to prevent nonce reuse.
         """
-        if self._closed or not self.is_established or not self.k_send:
-            raise RuntimeError("Cryptographic handshake has not been established or vault is closed.")
+        with self._lock:
+            if self._closed or not self.is_established or not self.k_send:
+                raise RuntimeError("Cryptographic handshake has not been established or vault is closed.")
 
-        if seq is None:
-            self.tx_seq += 1
-            seq = self.tx_seq
-        else:
-            if not isinstance(seq, int) or isinstance(seq, bool) or seq <= self.tx_seq or seq <= 0:
-                raise ValueError("Sequence number must be a strictly increasing positive integer to prevent nonce reuse.")
-            self.tx_seq = seq
+            if seq is None:
+                self.tx_seq += 1
+                seq = self.tx_seq
+            else:
+                if not isinstance(seq, int) or isinstance(seq, bool) or seq <= self.tx_seq or seq <= 0:
+                    raise ValueError("Sequence number must be a strictly increasing positive integer to prevent nonce reuse.")
+                self.tx_seq = seq
 
-        # Nonce format: 4 zero bytes + 8-byte big-endian sequence
-        nonce = struct.pack(">IQ", 0, seq)
+            # Nonce format: 4 zero bytes + 8-byte big-endian sequence
+            nonce = struct.pack(">IQ", 0, seq)
 
-        if self._send_cipher is not None:
-            ct = self._send_cipher.encrypt(nonce, plaintext, aad)
-        else:
-            ct = FallbackChaCha20Poly1305.encrypt(bytes(self.k_send), nonce, plaintext, aad)
+            if self._send_cipher is not None:
+                ct = self._send_cipher.encrypt(nonce, plaintext, aad)
+            else:
+                ct = FallbackChaCha20Poly1305.encrypt(bytes(self.k_send), nonce, plaintext, aad)
 
-        return nonce + ct, seq
+            return nonce + ct, seq
 
     def decrypt_frame(self, framed_payload: bytes, aad: bytes = b"") -> Optional[Tuple[bytes, int]]:
         """
         Decrypts an incoming frame. Verifies AEAD tag and checks sequence number
         against RFC 6479 sliding replay window.
         """
-        if self._closed or not self.is_established or not self.k_recv or len(framed_payload) < 28:
-            return None
-
-        nonce = framed_payload[:12]
-        ciphertext_and_tag = framed_payload[12:]
-
-        _, seq = struct.unpack(">IQ", nonce)
-
-        # 1. Sliding window check without mutating state
-        if not self.replay_guard.check(seq):
-            return None
-
-        # 2. Authenticate MAC and decrypt payload
-        try:
-            if self._recv_cipher is not None:
-                plaintext = self._recv_cipher.decrypt(nonce, ciphertext_and_tag, aad)
-            else:
-                plaintext = FallbackChaCha20Poly1305.decrypt(bytes(self.k_recv), nonce, ciphertext_and_tag, aad)
-            if plaintext is None:
+        with self._lock:
+            if self._closed or not self.is_established or not self.k_recv or len(framed_payload) < 28:
                 return None
-            # 3. Commit into window state only after MAC verification succeeds
-            self.replay_guard.update(seq)
-            return plaintext, seq
-        except Exception:
-            return None
+
+            nonce = framed_payload[:12]
+            ciphertext_and_tag = framed_payload[12:]
+
+            epoch, seq = struct.unpack(">IQ", nonce)
+            if epoch != 0:
+                return None
+
+            # 1. Sliding window check without mutating state
+            if not self.replay_guard.check(seq):
+                return None
+
+            # 2. Authenticate MAC and decrypt payload
+            try:
+                if self._recv_cipher is not None:
+                    plaintext = self._recv_cipher.decrypt(nonce, ciphertext_and_tag, aad)
+                else:
+                    plaintext = FallbackChaCha20Poly1305.decrypt(bytes(self.k_recv), nonce, ciphertext_and_tag, aad)
+                if plaintext is None:
+                    return None
+                # 3. Commit into window state only after MAC verification succeeds
+                self.replay_guard.update(seq)
+                return plaintext, seq
+            except Exception:
+                return None
 
     def close(self):
         """Zeroizes all keys and permanently seals this vault instance."""
-        self._closed = True
-        if self.k_send is not None:
-            scrub_memory(self.k_send)
-            self.k_send = None
-        if self.k_recv is not None:
-            scrub_memory(self.k_recv)
-            self.k_recv = None
-        if self.psk is not None:
-            scrub_memory(self.psk)
-            self.psk = None
-        if self._priv_bytes is not None:
-            scrub_memory(self._priv_bytes)
-            self._priv_bytes = None
-        self._priv_obj = None
-        self._send_cipher = None
-        self._recv_cipher = None
-        self.is_established = False
+        with self._lock:
+            self._closed = True
+            if self.k_send is not None:
+                scrub_memory(self.k_send)
+                self.k_send = None
+            if self.k_recv is not None:
+                scrub_memory(self.k_recv)
+                self.k_recv = None
+            if self.psk is not None:
+                scrub_memory(self.psk)
+                self.psk = None
+            if self._priv_bytes is not None:
+                scrub_memory(self._priv_bytes)
+                self._priv_bytes = None
+            self._priv_obj = None
+            self._send_cipher = None
+            self._recv_cipher = None
+            self.is_established = False

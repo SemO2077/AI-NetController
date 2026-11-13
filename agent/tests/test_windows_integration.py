@@ -81,76 +81,238 @@ class TestWindowsIntegration(unittest.TestCase):
             s2.close()
 
     def test_03_create_and_remove_shortcuts(self):
-        """Verify shortcut creation and removal."""
-        if not IS_WINDOWS:
-            self.skipTest("Shortcut test requires Windows")
+        """Verify shortcut creation and removal inside a sandboxed temp directory (no host Desktop writes)."""
+        import tempfile
+        import windows_integration as wi
+        from unittest.mock import patch
 
-        # Test desktop shortcut creation
-        ok, msg = create_desktop_shortcut()
-        self.assertTrue(ok, f"Desktop shortcut creation failed: {msg}")
+        with tempfile.TemporaryDirectory(prefix="ainet_shortcut_test_") as tmp:
+            fake_desktop = os.path.join(tmp, "Desktop")
+            os.makedirs(fake_desktop, exist_ok=True)
 
-        desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
-        lnk = os.path.join(desktop, f"{APP_NAME}.lnk")
-        self.assertTrue(os.path.exists(lnk), f"Shortcut file missing: {lnk}")
+            def _fake_vbs(_target_exe, target_lnk, *_args, **_kwargs):
+                os.makedirs(os.path.dirname(target_lnk), exist_ok=True)
+                with open(target_lnk, "wb") as f:
+                    f.write(b"LNK")
+                return True
 
-        # Test start menu shortcut creation
-        ok2, msg2 = create_start_menu_shortcut()
-        self.assertTrue(ok2, f"Start Menu shortcut creation failed: {msg2}")
+            with (
+                patch.object(wi, "IS_WINDOWS", True),
+                patch.object(wi, "_resolve_desktop_dir", return_value=fake_desktop),
+                patch.object(wi, "create_vbs_shortcut", side_effect=_fake_vbs),
+                patch.dict(os.environ, {"USERPROFILE": tmp, "APPDATA": tmp}),
+            ):
+                ok, msg = wi.create_desktop_shortcut()
+                self.assertTrue(ok, f"Desktop shortcut creation failed: {msg}")
+                lnk = os.path.join(fake_desktop, f"{APP_NAME}.lnk")
+                self.assertTrue(os.path.exists(lnk), f"Shortcut file missing: {lnk}")
 
-        # Test remove_shortcuts cleans them both up
-        count, r_msg = remove_shortcuts()
-        self.assertGreaterEqual(count, 1)
-        self.assertFalse(os.path.exists(lnk), "Shortcut should be removed")
+                ok2, msg2 = wi.create_start_menu_shortcut()
+                self.assertTrue(ok2, f"Start Menu shortcut creation failed: {msg2}")
+                sm_lnk = os.path.join(
+                    tmp, "Microsoft", "Windows", "Start Menu", "Programs", APP_NAME, f"{APP_NAME}.lnk"
+                )
+                self.assertTrue(os.path.exists(sm_lnk), f"Start Menu shortcut missing: {sm_lnk}")
+
+                count, _ = wi.remove_shortcuts()
+                self.assertGreaterEqual(count, 2)
+                self.assertFalse(os.path.exists(lnk), "Shortcut should be removed")
+                self.assertFalse(os.path.exists(sm_lnk), "Start Menu shortcut should be removed")
 
     def test_04_windows_registry_autostart(self):
-        """Verify Windows Run autostart registry toggle."""
-        if not IS_WINDOWS:
-            self.skipTest("Registry test requires Windows")
+        """Verify Windows Run autostart registry toggle against an in-memory mock winreg store."""
+        import windows_integration as wi
+        from unittest.mock import patch
 
-        # Enable autostart
-        self.assertTrue(set_windows_autostart(enabled=True))
-        # Disable autostart
-        self.assertTrue(set_windows_autostart(enabled=False))
+        reg_store = {wi.REG_RUN_KEY: {}}
+
+        class _MockKey:
+            def __init__(self, path):
+                self.path = path
+                reg_store.setdefault(path, {})
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class _MockWinreg:
+            HKEY_CURRENT_USER = object()
+            KEY_SET_VALUE = 2
+            KEY_READ = 1
+            REG_SZ = 1
+            REG_DWORD = 4
+
+            @staticmethod
+            def OpenKey(_root, subkey, *_args, **_kwargs):
+                if subkey not in reg_store:
+                    raise FileNotFoundError(subkey)
+                return _MockKey(subkey)
+
+            @staticmethod
+            def CreateKey(_root, subkey):
+                return _MockKey(subkey)
+
+            @staticmethod
+            def SetValueEx(key, name, _reserved, _typ, val):
+                reg_store[key.path][name] = val
+
+            @staticmethod
+            def DeleteValue(key, name):
+                if name not in reg_store.get(key.path, {}):
+                    raise FileNotFoundError(name)
+                del reg_store[key.path][name]
+
+        with patch.object(wi, "IS_WINDOWS", True), patch.object(wi, "winreg", _MockWinreg):
+            self.assertTrue(wi.set_windows_autostart(enabled=True))
+            run_vals = reg_store.get(wi.REG_RUN_KEY, {})
+            self.assertIn("AINetController", run_vals)
+            self.assertTrue(wi.set_windows_autostart(enabled=False))
+            self.assertNotIn("AINetController", run_vals)
 
     def test_05_windows_uninstaller_registration(self):
-        """Verify Add/Remove programs uninstaller registration and deregistration."""
-        if not IS_WINDOWS:
-            self.skipTest("Uninstaller test requires Windows")
+        """Verify Add/Remove programs uninstaller registration using an in-memory mock winreg store."""
+        import windows_integration as wi
+        from unittest.mock import patch
 
-        # Register uninstaller
-        self.assertTrue(register_windows_uninstaller())
+        reg_store = {}
 
-        # Verify key exists in registry
-        import winreg
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AI_NetController"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as k:
-            display_name, _ = winreg.QueryValueEx(k, "DisplayName")
-            self.assertEqual(display_name, APP_NAME)
-            uninstall_str, _ = winreg.QueryValueEx(k, "UninstallString")
-            self.assertIn("--uninstall", uninstall_str)
+        class _MockKey:
+            def __init__(self, path):
+                self.path = path
+                reg_store.setdefault(path, {})
 
-        # Deregister uninstaller
-        self.assertTrue(unregister_windows_uninstaller())
+            def __enter__(self):
+                return self
 
-        # Key should no longer exist
-        with self.assertRaises(FileNotFoundError):
-            winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path)
+            def __exit__(self, *args):
+                return False
+
+        class _MockWinreg:
+            HKEY_CURRENT_USER = object()
+            REG_SZ = 1
+            REG_DWORD = 4
+
+            @staticmethod
+            def OpenKey(_root, subkey, *_args, **_kwargs):
+                if subkey not in reg_store:
+                    raise FileNotFoundError(subkey)
+                return _MockKey(subkey)
+
+            @staticmethod
+            def CreateKey(_root, subkey):
+                return _MockKey(subkey)
+
+            @staticmethod
+            def SetValueEx(key, name, _reserved, _typ, val):
+                reg_store[key.path][name] = val
+
+            @staticmethod
+            def QueryValueEx(key, name):
+                if name not in reg_store.get(key.path, {}):
+                    raise FileNotFoundError(name)
+                return reg_store[key.path][name], 1
+
+            @staticmethod
+            def DeleteKey(_root, subkey):
+                if subkey not in reg_store:
+                    raise FileNotFoundError(subkey)
+                del reg_store[subkey]
+
+        key_path = wi.REG_UNINSTALL_KEY
+        with patch.object(wi, "IS_WINDOWS", True), patch.object(wi, "winreg", _MockWinreg):
+            self.assertTrue(wi.register_windows_uninstaller())
+            self.assertIn(key_path, reg_store)
+            self.assertEqual(reg_store[key_path]["DisplayName"], APP_NAME)
+            self.assertIn("--uninstall", reg_store[key_path]["UninstallString"])
+
+            self.assertTrue(wi.unregister_windows_uninstaller())
+            self.assertNotIn(key_path, reg_store)
 
     def test_06_perform_full_uninstall(self):
-        """Verify complete uninstallation routine cleans registry and shortcuts."""
-        if not IS_WINDOWS:
-            self.skipTest("Uninstall routine test requires Windows")
+        """Verify complete uninstallation routine in a sandboxed temp filesystem & mock registry."""
+        import tempfile
+        import windows_integration as wi
+        from unittest.mock import patch
 
-        # Setup dummy shortcut and registry entries
-        create_desktop_shortcut()
-        register_windows_uninstaller()
-        set_windows_autostart(True)
+        reg_store = {wi.REG_RUN_KEY: {}}
 
-        callback_called = []
-        res = perform_full_uninstall(interactive=False, on_complete=lambda: callback_called.append(True))
-        self.assertTrue(res["success"])
-        self.assertTrue(res["removed_uninstaller"])
-        self.assertEqual(len(callback_called), 1)
+        class _MockKey:
+            def __init__(self, path):
+                self.path = path
+                reg_store.setdefault(path, {})
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class _MockWinreg:
+            HKEY_CURRENT_USER = object()
+            KEY_SET_VALUE = 2
+            REG_SZ = 1
+            REG_DWORD = 4
+
+            @staticmethod
+            def OpenKey(_root, subkey, *_args, **_kwargs):
+                if subkey not in reg_store:
+                    raise FileNotFoundError(subkey)
+                return _MockKey(subkey)
+
+            @staticmethod
+            def CreateKey(_root, subkey):
+                return _MockKey(subkey)
+
+            @staticmethod
+            def SetValueEx(key, name, _reserved, _typ, val):
+                reg_store[key.path][name] = val
+
+            @staticmethod
+            def DeleteValue(key, name):
+                if name not in reg_store.get(key.path, {}):
+                    raise FileNotFoundError(name)
+                del reg_store[key.path][name]
+
+            @staticmethod
+            def DeleteKey(_root, subkey):
+                if subkey not in reg_store:
+                    raise FileNotFoundError(subkey)
+                del reg_store[subkey]
+
+        with tempfile.TemporaryDirectory(prefix="ainet_uninstall_test_") as tmp:
+            fake_desktop = os.path.join(tmp, "Desktop")
+            fake_local = os.path.join(tmp, "LocalAppData")
+            fake_roam = os.path.join(tmp, "AppData")
+            fake_install = os.path.join(fake_local, "Programs", APP_NAME)
+            for p in (fake_desktop, fake_install):
+                os.makedirs(p, exist_ok=True)
+            with open(os.path.join(fake_desktop, f"{APP_NAME}.lnk"), "wb") as f:
+                f.write(b"LNK")
+
+            callback_called = []
+            with (
+                patch.object(wi, "IS_WINDOWS", True),
+                patch.object(wi, "winreg", _MockWinreg),
+                patch.object(wi, "_resolve_desktop_dir", return_value=fake_desktop),
+                patch.object(wi, "get_default_install_dir", return_value=fake_install),
+                patch.object(wi, "_stop_external_agent_processes", return_value=True),
+                patch.dict(os.environ, {"USERPROFILE": tmp, "LOCALAPPDATA": fake_local, "APPDATA": fake_roam}),
+            ):
+                wi.register_windows_uninstaller()
+                wi.set_windows_autostart(True)
+                res = wi.perform_full_uninstall(
+                    interactive=False,
+                    on_complete=lambda: callback_called.append(True),
+                )
+            self.assertTrue(res["success"])
+            self.assertTrue(res["removed_uninstaller"])
+            self.assertTrue(res["removed_autostart"])
+            self.assertEqual(len(callback_called), 1)
+            self.assertFalse(os.path.exists(os.path.join(fake_desktop, f"{APP_NAME}.lnk")))
+            self.assertNotIn(wi.REG_UNINSTALL_KEY, reg_store)
+            self.assertNotIn("AINetController", reg_store.get(wi.REG_RUN_KEY, {}))
 
     def test_07_gui_cross_thread_requests(self):
         """Verify HostDaemonState handles thread-safe cross-thread UI requests."""
