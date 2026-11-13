@@ -828,35 +828,54 @@ class DaemonServer:
         self.thread_pool.shutdown(wait=False)
         logger.info("Host daemon shutdown complete.")
 
-async def _run_agent_services(ws_daemon: Any, daemon: "DaemonServer") -> None:
-    """Runs the WebSocket host daemon and IPC DaemonServer resiliently on the active loop."""
+async def _run_agent_services(ws_daemon: Any, daemon: Optional["DaemonServer"] = None) -> None:
+    """Runs the unified WebSocket host daemon (and optional legacy IPC DaemonServer if supplied)."""
     if ws_daemon:
         try:
             await ws_daemon.start()
         except Exception as exc:
             logger.error(f"WebSocket host daemon failed to start: {exc}")
 
-    async def _run_ipc_daemon() -> None:
-        try:
-            await daemon.run()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.error(f"IPC daemon reactor exited: {exc}")
-        finally:
-            daemon.running = False
+    ipc_task = None
+    if daemon is not None:
+        async def _run_ipc_daemon() -> None:
+            try:
+                await daemon.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(f"IPC daemon reactor exited: {exc}")
+            finally:
+                daemon.running = False
 
-    ipc_task = asyncio.create_task(_run_ipc_daemon())
+        ipc_task = asyncio.create_task(_run_ipc_daemon())
+
     try:
-        while (ws_daemon and getattr(ws_daemon, "is_running", False)) or not ipc_task.done():
+        while (ws_daemon and getattr(ws_daemon, "is_running", False)) or (ipc_task is not None and not ipc_task.done()):
             await asyncio.sleep(0.5)
     except asyncio.CancelledError:
         pass
     finally:
-        if not ipc_task.done():
+        if ipc_task is not None and not ipc_task.done() and daemon is not None:
             daemon.stop()
             ipc_task.cancel()
             await asyncio.gather(ipc_task, return_exceptions=True)
+
+
+def _parse_cli_host_port(argv: List[str]) -> Tuple[str, int]:
+    bind_host = "0.0.0.0"
+    bind_port = 8765
+    for idx, arg in enumerate(argv):
+        if arg == "--host" and idx + 1 < len(argv):
+            bind_host = str(argv[idx + 1]).strip() or bind_host
+        elif arg == "--port" and idx + 1 < len(argv):
+            try:
+                p = int(argv[idx + 1])
+                if 1 <= p <= 65535:
+                    bind_port = p
+            except ValueError:
+                pass
+    return bind_host, bind_port
 
 
 def main():
@@ -896,6 +915,7 @@ def main():
             logger.warning("Another instance of AI NetController Host Agent is already running. Existing window activated.")
             sys.exit(0)
 
+    bind_host, bind_port = _parse_cli_host_port(sys.argv[1:])
     job_guard = WindowsJobObjectGuard()
     ws_daemon = None
     try:
@@ -904,19 +924,26 @@ def main():
         except (ImportError, ModuleNotFoundError):
             from agent.agent import HostAgentDaemon
         if HostAgentDaemon:
-            ws_daemon = HostAgentDaemon(host="0.0.0.0", port=8765)
+            ws_daemon = HostAgentDaemon(host=bind_host, port=bind_port)
     except Exception as e:
         logger.warning(f"WebSocket daemon fallback notice: {e}")
 
-    daemon = DaemonServer(
-        port=8766 if ws_daemon else 8765,
-        psk=getattr(ws_daemon, "pairing_token", None) if ws_daemon else None,
+    # Default to lean single-process HostAgentDaemon (eliminates duplicate port 8766 + 34MB SHM spawn)
+    enable_legacy_ipc = ("--legacy-ipc" in sys.argv) or (os.environ.get("AI_ENABLE_LEGACY_IPC") == "1") or (ws_daemon is None)
+    daemon = (
+        DaemonServer(
+            port=(bind_port + 1) if ws_daemon else bind_port,
+            psk=getattr(ws_daemon, "pairing_token", None) if ws_daemon else None,
+        )
+        if enable_legacy_ipc
+        else None
     )
 
     def _stop_all():
         if ws_daemon:
             ws_daemon.stop()
-        daemon.stop()
+        if daemon is not None:
+            daemon.stop()
 
     try:
         if "--headless" not in sys.argv:
@@ -926,7 +953,7 @@ def main():
                 except (ImportError, ModuleNotFoundError):
                     from agent.agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
                 if HAS_TKINTER:
-                    gui_state = HostDaemonState(host="0.0.0.0", port=8765)
+                    gui_state = HostDaemonState(host=bind_host, port=bind_port)
                     if ws_daemon:
                         ws_daemon.gui_state = gui_state
                         if hasattr(ws_daemon, "_sync_gui_state_on_attach"):

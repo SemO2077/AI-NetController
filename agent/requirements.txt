@@ -1,6 +1,5 @@
 # Core Network & Async WebSocket
 websockets>=13.0
-aiohttp>=3.10.0
 
 # ZeroConf mDNS Physical-NIC Discovery (RFC 6762)
 zeroconf>=0.132.0

@@ -48,54 +48,64 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
+def build_windows_exe(output_exe_path: str, output_zip_path: str) -> bool:
+    """
+    Compiles & signs the Windows Host Agent bundle.
+    Prioritizes the clean --onedir layout (no %TEMP%\\_MEI* self-extracting SFX dropper);
+    also signs and copies standalone .exe only if built explicitly via AI_BUILD_ONEFILE=1.
+    Returns True if output_exe_path was produced.
+    """
     agent_dir = os.path.join(ROOT_DIR, "agent")
     dist_dir = os.path.join(agent_dir, "dist")
     standalone_exe = os.path.join(dist_dir, "AI_NetController_HostAgent_standalone.exe")
     onedir_folder = os.path.join(dist_dir, "AI_NetController_HostAgent")
 
-    # Compile with PyInstaller to produce fresh production binaries
     print("[INFO] Compiling Windows Host Agent binaries with PyInstaller...")
     spec_path = os.path.join(agent_dir, "build_agent.spec")
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", spec_path]
     subprocess.run(cmd, cwd=agent_dir, check=True)
 
-    # Apply Authenticode SHA-256 signature & run Defender verification
+    # Sign EVERY .exe/.dll/.pyd inside --onedir (and standalone EXE if generated) + scan with Defender
     sign_script = os.path.join(agent_dir, "sign_binary.ps1")
     if platform.system() == "Windows" and os.path.exists(sign_script):
         try:
-            print("[INFO] Applying Authenticode code-signing & running Defender verification...")
+            print("[INFO] Applying Authenticode code-signing across all PE binaries & scanning with Defender...")
+            if os.path.isdir(onedir_folder):
+                subprocess.run(
+                    ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-TargetPath", onedir_folder],
+                    cwd=agent_dir,
+                    check=False,
+                )
             if os.path.exists(standalone_exe):
                 subprocess.run(
-                    ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-ExePath", standalone_exe],
+                    ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-TargetPath", standalone_exe],
                     cwd=agent_dir,
-                    check=False
-                )
-            onedir_exe = os.path.join(onedir_folder, "AI_NetController_HostAgent.exe")
-            if os.path.exists(onedir_exe):
-                subprocess.run(
-                    ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-ExePath", onedir_exe],
-                    cwd=agent_dir,
-                    check=False
+                    check=False,
                 )
         except Exception as e:
             print(f"[WARN] Code-signing / Defender scan notice: {e}")
 
-    # Copy real standalone executable to destination release path
-    shutil.copy2(standalone_exe, output_exe_path)
-    exe_size = os.path.getsize(output_exe_path)
-    print(f"[SUCCESS] Packaged Real Windows Standalone Executable: {output_exe_path} ({exe_size} bytes)")
+    has_standalone = False
+    if os.path.exists(standalone_exe):
+        shutil.copy2(standalone_exe, output_exe_path)
+        exe_size = os.path.getsize(output_exe_path)
+        print(f"[SUCCESS] Packaged Windows Standalone Executable: {output_exe_path} ({exe_size} bytes)")
+        has_standalone = True
+    else:
+        print("[INFO] Skipping SFX --onefile EXE (using clean --onedir distribution to avoid Smart App Control heuristics).")
 
-    # Build the full portable bundle ZIP
+    # Build the full portable bundle ZIP containing signed --onedir + source + MSIX manifest
     agent_files = [
         "__init__.py",
         "agent.py",
         "agent_daemon.py",
         "agent_gui.py",
+        "cyber_ui_theme.py",
         "command_ast_firewall.py",
         "crypto_handshake.py",
         "crypto_vault.py",
         "daemon_config.py",
+        "tls_manager.py",
         "host_file_writer.py",
         "icon_assets.py",
         "multi_monitor_streamer.py",
@@ -104,15 +114,18 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
         "icon.ico",
         "icon.png",
         "requirements.txt",
+        "app_manifest.xml",
+        "AppxManifest.xml",
         "build_agent.spec",
         "build_exe.bat",
         "sign_binary.ps1",
+        "package_msix.ps1",
         "version_info.txt",
     ]
 
     with zipfile.ZipFile(output_zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as pzf:
         if os.path.exists(onedir_folder):
-            for root, dirs, files in os.walk(onedir_folder):
+            for root, _dirs, files in os.walk(onedir_folder):
                 for f in files:
                     full_p = os.path.join(root, f)
                     rel_p = os.path.relpath(full_p, dist_dir)
@@ -127,6 +140,7 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> None:
 
     zip_size = os.path.getsize(output_zip_path)
     print(f"[SUCCESS] Packaged Windows Portable Bundle ZIP: {output_zip_path} ({zip_size} bytes)")
+    return has_standalone
 
 
 def build_android_apk(output_arm64_path: str, output_univ_path: str) -> None:
@@ -196,17 +210,21 @@ def main() -> None:
     apk_univ_path = os.path.join(RELEASE_DIR, apk_univ_name)
     zip_path = os.path.join(RELEASE_DIR, zip_name)
 
-    build_windows_exe(exe_path, zip_path)
+    has_standalone = build_windows_exe(exe_path, zip_path)
     build_android_apk(apk_arm64_path, apk_univ_path)
+
+    artifact_specs = []
+    if has_standalone and os.path.exists(exe_path):
+        artifact_specs.append((exe_name, "Windows 10/11 x64 (Standalone Host Agent .EXE)", "exe"))
+    artifact_specs.extend([
+        (zip_name, "Windows Signed --onedir Bundle + Source & MSIX Manifest (.ZIP)", "zip"),
+        (apk_arm64_name, "Android 10–15 arm64-v8a (Mobile Companion .APK)", "apk"),
+        (apk_univ_name, "Android Universal (Mobile Companion .APK)", "apk"),
+    ])
 
     artifacts = []
     sums_lines = []
-    for fname, platform_label, kind in [
-        (exe_name, "Windows 10/11 x64 (Standalone Host Agent .EXE)", "exe"),
-        (zip_name, "Windows Portable Agent Bundle + PyInstaller Spec (.ZIP)", "zip"),
-        (apk_arm64_name, "Android 10–15 arm64-v8a (Mobile Companion .APK)", "apk"),
-        (apk_univ_name, "Android Universal (Mobile Companion .APK)", "apk"),
-    ]:
+    for fname, platform_label, kind in artifact_specs:
         fpath = os.path.join(RELEASE_DIR, fname)
         size_bytes = os.path.getsize(fpath)
         digest = sha256_file(fpath)

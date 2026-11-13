@@ -1,24 +1,26 @@
-# AI NetController - Windows Authenticode Signing and Defender Verification Script
-# Purpose: Signs AI_NetController_HostAgent.exe with an Authenticode certificate and runs
-# a Windows Defender scan check to guarantee zero false-positive heuristic detections.
+# AI NetController - Windows Authenticode Signing & Defender Verification Script
+# Signs every PE binary (.exe, .dll, .pyd) in the build output directory or a single target file
+# with SHA-256 Authenticode + optional RFC 3161 timestamping and scans with Windows Defender.
 
 param(
-    [string]$ExePath = ".\dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe",
+    [Alias("ExePath")]
+    [string]$TargetPath = ".\dist\AI_NetController_HostAgent",
     [string]$Thumbprint = $env:AI_CODESIGN_THUMBPRINT,
-    [string]$TimestampUrl = "",
+    [string]$TimestampUrl = "http://timestamp.digicert.com",
+    [switch]$SkipTimestamp,
     [switch]$AllowSelfSigned
 )
 
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host " AI NetController Host Agent -- Authenticode Signing and AV Verification Pipeline" -ForegroundColor Cyan
+Write-Host " AI NetController Host Agent -- Authenticode Signing & AV Pipeline" -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 
-if (-Not (Test-Path $ExePath)) {
-    Write-Host "[WARN] Executable not found at $ExePath. Run build_exe.bat first." -ForegroundColor Yellow
+if (-Not (Test-Path $TargetPath)) {
+    Write-Host "[WARN] Target path not found: $TargetPath. Run build_exe.bat first." -ForegroundColor Yellow
     exit 1
 }
 
-# 1. Locate an explicit / existing code-signing certificate; only mint self-signed when explicitly requested
+# 1. Locate trusted Code Signing cert (or create local self-signed dev cert when -AllowSelfSigned)
 $cert = $null
 if ($Thumbprint) {
     $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.Thumbprint -eq $Thumbprint } | Select-Object -First 1
@@ -28,11 +30,13 @@ if ($Thumbprint) {
 
 if (-Not $cert) {
     if (-Not $AllowSelfSigned) {
-        Write-Host "[ERROR] No Authenticode code-signing certificate found. Set AI_CODESIGN_THUMBPRINT / -Thumbprint or pass -AllowSelfSigned for local dev testing." -ForegroundColor Red
+        Write-Host "[ERROR] No Authenticode code-signing certificate found." -ForegroundColor Red
+        Write-Host "        Set AI_CODESIGN_THUMBPRINT / -Thumbprint for production signing (required for Windows Smart App Control)," -ForegroundColor Red
+        Write-Host "        or pass -AllowSelfSigned for local developer verification only." -ForegroundColor Red
         exit 1
     }
-    $subject = "CN=AI NetController, O=AI_NetController, C=BG"
-    Write-Host "[1/3] Creating local dev Self-Signed Authenticode Certificate (-AllowSelfSigned)..." -ForegroundColor Yellow
+    Write-Host "[WARN] -AllowSelfSigned active: Smart App Control (UMCI) still requires a publicly trusted CA / Azure Trusted Signing cert for end-user PCs." -ForegroundColor Yellow
+    $subject = "CN=AI NetController Dev, O=AI_NetController, C=BG"
     $cert = New-SelfSignedCertificate `
         -Type CodeSigningCert `
         -Subject $subject `
@@ -43,37 +47,57 @@ if (-Not $cert) {
         -NotAfter (Get-Date).AddYears(3)
 }
 
-# 2. Apply Authenticode SHA-256 Digital Signature
-Write-Host "[2/3] Applying SHA-256 Authenticode Signature to $ExePath..." -ForegroundColor Cyan
-if ($TimestampUrl) {
-    $setSig = Set-AuthenticodeSignature -FilePath $ExePath -Certificate $cert -HashAlgorithm SHA256 -TimestampServer $TimestampUrl
+# 2. Gather every PE binary (.exe, .dll, .pyd, .msix) under TargetPath
+$item = Get-Item $TargetPath
+if ($item.PSIsContainer) {
+    $filesToSign = Get-ChildItem -Path $item.FullName -Recurse -File | Where-Object {
+        $_.Extension -in @(".exe", ".dll", ".pyd", ".msix")
+    }
 } else {
-    $setSig = Set-AuthenticodeSignature -FilePath $ExePath -Certificate $cert -HashAlgorithm SHA256
+    $filesToSign = @($item)
 }
-if (-Not $setSig) {
-    Write-Host "[ERROR] Set-AuthenticodeSignature failed for $ExePath." -ForegroundColor Red
+
+if (-Not $filesToSign -or $filesToSign.Count -eq 0) {
+    Write-Host "[ERROR] No signable binaries (.exe, .dll, .pyd) discovered in $TargetPath." -ForegroundColor Red
     exit 1
 }
 
-$sig = Get-AuthenticodeSignature -FilePath $ExePath
-if (-Not $sig -or $sig.Status -eq 'NotSigned' -or $sig.Status -eq 'HashMismatch' -or -Not $sig.SignerCertificate -or ((-Not $AllowSelfSigned) -and $sig.Status -ne 'Valid')) {
-    Write-Host "[ERROR] Authenticode verification failed (Status: $($sig.Status)) for $ExePath." -ForegroundColor Red
-    exit 1
+Write-Host "[1/3] Signing $($filesToSign.Count) PE binary artifact(s) with SHA-256 Authenticode..." -ForegroundColor Cyan
+$signedCount = 0
+foreach ($file in $filesToSign) {
+    $sigResult = $null
+    if (-Not $SkipTimestamp -and $TimestampUrl) {
+        try {
+            $sigResult = Set-AuthenticodeSignature -FilePath $file.FullName -Certificate $cert -HashAlgorithm SHA256 -TimestampServer $TimestampUrl
+        } catch {
+            $sigResult = $null
+        }
+    }
+    if (-Not $sigResult -or $sigResult.Status -eq "UnknownError") {
+        $sigResult = Set-AuthenticodeSignature -FilePath $file.FullName -Certificate $cert -HashAlgorithm SHA256
+    }
+
+    $verify = Get-AuthenticodeSignature -FilePath $file.FullName
+    if (-Not $verify -or $verify.Status -eq "NotSigned" -or $verify.Status -eq "HashMismatch" -or -Not $verify.SignerCertificate -or ((-Not $AllowSelfSigned) -and $verify.Status -ne "Valid")) {
+        Write-Host "[ERROR] Authenticode verification failed ($($verify.Status)) for $($file.Name)" -ForegroundColor Red
+        exit 1
+    }
+    $signedCount++
 }
-Write-Host "      Signature Status     : $($sig.Status)" -ForegroundColor Green
-Write-Host "      Signature Certificate: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
-Write-Host "      Signature Thumbprint : $($sig.SignerCertificate.Thumbprint)" -ForegroundColor Green
+
+Write-Host "[2/3] Signed & verified $signedCount/$($filesToSign.Count) binary files cleanly." -ForegroundColor Green
+Write-Host "      Certificate Subject   : $($cert.Subject)" -ForegroundColor Green
+Write-Host "      Certificate Thumbprint: $($cert.Thumbprint)" -ForegroundColor Green
 
 # 3. Verify with Windows Defender CLI Scanner (if present)
 $defenderCli = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
 if (Test-Path $defenderCli) {
-    Write-Host "[3/3] Running Windows Defender Heuristic and Signature Scan..." -ForegroundColor Cyan
-    $resolvedPath = (Resolve-Path $ExePath).Path
-    & $defenderCli -Scan -ScanType 3 -File $resolvedPath
+    Write-Host "[3/3] Running Windows Defender Heuristic & Signature Scan on $($item.FullName)..." -ForegroundColor Cyan
+    & $defenderCli -Scan -ScanType 3 -File $item.FullName
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "[PASS] Windows Defender verified ${resolvedPath}: CLEAN (0 threats found)." -ForegroundColor Green
+        Write-Host "[PASS] Windows Defender verified $($item.FullName): CLEAN (0 threats)." -ForegroundColor Green
     } else {
-        Write-Host "[ERROR] Defender scan failed with exit code $LASTEXITCODE." -ForegroundColor Red
+        Write-Host "[ERROR] Defender scan exited with code $LASTEXITCODE." -ForegroundColor Red
         exit 1
     }
 } else {
