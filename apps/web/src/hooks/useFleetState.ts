@@ -1,8 +1,9 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { HostDevice, WolSchedule, WolPacketPayload, LatencyDataPoint, WolPacketTriggerSource } from '../types';
 import { loadWolSchedules, saveWolSchedules, generateMagicPacket, resolveScheduleTargets } from '../services/wolService';
 import { logStore } from '../store/logStore';
 import { wolHistoryStore } from '../store/wolHistoryStore';
+import { useUIStore } from '../store/uiStore';
 import { triggerHapticFeedback } from '../services/hapticService';
 
 const STORAGE_KEY = 'ai_netcontroller_hosts';
@@ -75,10 +76,14 @@ export function useFleetState() {
     if (!data) return;
     const now = Date.now();
     const cutoff = now - 30000;
+    const nowLabel = new Date().toLocaleTimeString('en-GB', { hour12: false });
     setHosts((prev) =>
       prev.map((h) => {
-        if (h.id === data.hostname || h.ip === data.ip || (data.targetId && h.id === data.targetId)) {
-          const newPing = typeof data.ping === 'number' ? data.ping : h.ping;
+        const matchesId = (data.targetId && h.id === data.targetId) || (data.hostname && h.id === data.hostname);
+        const matchesIp = Boolean(data.ip && h.ip === data.ip);
+        const matchesPort = !data.port || !h.port || Number(h.port) === Number(data.port);
+        if (matchesId || (matchesIp && matchesPort)) {
+          const newPing = typeof data.ping === 'number' && Number.isFinite(data.ping) ? data.ping : h.ping;
           const prevHistory = (h.latencyHistory || []).filter((p) => p.timestamp >= cutoff);
           const updatedHistory: LatencyDataPoint[] =
             typeof newPing === 'number'
@@ -88,10 +93,12 @@ export function useFleetState() {
           return {
             ...h,
             isOnline: true,
+            lastSeen: nowLabel,
             cpuUsage: data.cpu_percent ?? h.cpuUsage,
             ramUsage: data.ram_percent ?? h.ramUsage,
             ping: newPing,
             latencyHistory: updatedHistory,
+            specStatus: data.cpu_percent !== undefined ? 'READY' : h.specStatus,
           };
         }
         return h;
@@ -103,7 +110,9 @@ export function useFleetState() {
     setHosts((prev) =>
       prev.map((h) => (h.id === targetId ? { ...h, isOnline: false } : h))
     );
-    logStore.addLog('SYSTEM_MDNS', targetId, 'error', `Хостът е недостъпен: ${reason}`);
+    if (useUIStore.getState().isSystemStateAlerts) {
+      logStore.addLog('SYSTEM_MDNS', targetId, 'error', `Хостът е недостъпен: ${reason}`);
+    }
   }, []);
 
   const scanMdns = useCallback(async () => {
@@ -117,24 +126,36 @@ export function useFleetState() {
         const data = await res.json();
         if (data.hosts && Array.isArray(data.hosts) && data.hosts.length > 0) {
           setHosts((prev) => {
+            const isValidUniqueMac = (mac: string) => {
+              const upper = mac.trim().toUpperCase();
+              return Boolean(upper) && upper !== '00:00:00:00:00:00' && upper !== 'FF:FF:FF:FF:FF:FF';
+            };
             const discoveredByIp = new Map<string, any>();
             const discoveredByMac = new Map<string, any>();
             data.hosts.forEach((dh: any) => {
               if (dh.ip) discoveredByIp.set(dh.ip, dh);
-              if (dh.mac) discoveredByMac.set(String(dh.mac).toUpperCase(), dh);
+              if (dh.mac && isValidUniqueMac(String(dh.mac))) {
+                discoveredByMac.set(String(dh.mac).toUpperCase(), dh);
+              }
             });
 
             const existingIps = new Set(prev.map((h) => h.ip));
-            const existingMacs = new Set(prev.map((h) => (h.mac || '').toUpperCase()));
+            const existingMacs = new Set(
+              prev.map((h) => (h.mac || '').toUpperCase()).filter(isValidUniqueMac)
+            );
             const updatedPrev = prev.map((h) => {
-              const match = discoveredByIp.get(h.ip) || discoveredByMac.get((h.mac || '').toUpperCase());
+              const hMacUpper = (h.mac || '').toUpperCase();
+              const match =
+                discoveredByIp.get(h.ip) ||
+                (isValidUniqueMac(hMacUpper) ? discoveredByMac.get(hMacUpper) : undefined);
               if (!match) return h;
               const measuredPing = typeof match.ping === 'number' ? match.ping : h.ping;
+              const nextMac = isValidUniqueMac(String(match.mac || '')) ? match.mac : h.mac;
               return {
                 ...h,
                 isOnline: true,
                 name: h.name || match.name,
-                mac: h.mac || match.mac,
+                mac: nextMac,
                 ping: measuredPing,
                 lastSeen: 'Active (LAN scan)',
               };
@@ -143,7 +164,8 @@ export function useFleetState() {
             const newDiscovered: HostDevice[] = [];
             data.hosts.forEach((dh: any) => {
               const macUpper = String(dh.mac || '').toUpperCase();
-              if (!existingIps.has(dh.ip) && (!macUpper || !existingMacs.has(macUpper))) {
+              const validMac = isValidUniqueMac(macUpper);
+              if (!existingIps.has(dh.ip) && (!validMac || !existingMacs.has(macUpper))) {
                 newDiscovered.push({
                   id: dh.id,
                   name: dh.name,
@@ -163,13 +185,15 @@ export function useFleetState() {
               }
             });
 
-            if (newDiscovered.length > 0) {
+            if (newDiscovered.length > 0 && useUIStore.getState().isSystemStateAlerts) {
               logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'success', `Открити ${newDiscovered.length} нови устройства на подмрежата!`);
             }
             return [...updatedPrev, ...newDiscovered];
           });
         }
-        logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'success', `Сканирането завърши успешно.`);
+        if (useUIStore.getState().isSystemStateAlerts) {
+          logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'success', `Сканирането завърши успешно.`);
+        }
       } else {
         logStore.addLog('SYSTEM_MDNS', 'NETWORK', 'warn', `Сканирането на мрежата върна статус HTTP ${res.status}.`);
       }
@@ -187,27 +211,42 @@ export function useFleetState() {
       payload: WolPacketPayload,
       deviceId: string,
       source: WolPacketTriggerSource = 'manual',
-      customDeviceName?: string
-    ) => {
-      triggerHapticFeedback('heavy');
-      const matchedHost = hosts.find((h) => h.id === deviceId || h.mac?.toUpperCase() === payload.mac?.toUpperCase());
+      customDeviceName?: string,
+      skipConfirm: boolean = false
+    ): Promise<boolean> => {
+      const matchedHost = hosts.find(
+        (h) => h.id === deviceId || h.mac?.toUpperCase() === payload.mac?.toUpperCase()
+      );
       const resolvedDeviceName =
         customDeviceName ||
         matchedHost?.name ||
         (deviceId && deviceId !== 'CUSTOM' && deviceId !== 'CUSTOM-MAC'
           ? deviceId
           : `Custom NIC (${payload.mac})`);
+
+      if (
+        source === 'manual' &&
+        !skipConfirm &&
+        useUIStore.getState().isCommandConfirmations &&
+        typeof window !== 'undefined' &&
+        typeof window.confirm === 'function'
+      ) {
+        const lang = useUIStore.getState().language;
+        const confirmed = window.confirm(
+          lang === 'bg'
+            ? `Потвърдете изпращане на Wake-on-LAN (Magic Packet) към ${resolvedDeviceName} (${payload.mac})?`
+            : `Confirm sending Wake-on-LAN (Magic Packet) to ${resolvedDeviceName} (${payload.mac})?`
+        );
+        if (!confirmed) {
+          return false;
+        }
+      }
+
+      triggerHapticFeedback('heavy');
       const bcast = payload.broadcastIp || '255.255.255.255';
       const port = payload.port || 9;
       const bytesCount = payload.bytesCount || 102;
       const cleanMac = String(payload.mac || '').replace(/[^a-fA-F0-9]/g, '');
-
-      logStore.addLog(
-        'WOL_ENGINE',
-        deviceId,
-        'packet',
-        `Изпратен Magic Packet (${bytesCount} байта) към ${resolvedDeviceName} (${payload.mac})`
-      );
 
       const startTime = Date.now();
       let dispatchSucceeded = true;
@@ -233,6 +272,7 @@ export function useFleetState() {
                 mac: payload.mac,
                 broadcastIp: bcast,
                 port,
+                ...(payload.secureOn ? { secureOn: payload.secureOn } : {}),
               }),
             });
             if (!res.ok) {
@@ -246,6 +286,15 @@ export function useFleetState() {
           dispatchSucceeded = false;
           failureMessage = err?.message || 'UDP broadcast socket unreachable';
         }
+      }
+
+      if (dispatchSucceeded) {
+        logStore.addLog(
+          'WOL_ENGINE',
+          deviceId,
+          'packet',
+          `Изпратен Magic Packet (${bytesCount} байта) към ${resolvedDeviceName} (${payload.mac})`
+        );
       }
 
       const latencyMs = Math.max(1, Date.now() - startTime);
@@ -297,6 +346,8 @@ export function useFleetState() {
           `Грешка при изпращане на Magic Packet към ${resolvedDeviceName}: ${failureMessage}`
         );
       }
+
+      return dispatchSucceeded;
     },
     [hosts]
   );
@@ -370,18 +421,53 @@ export function useFleetState() {
     logStore.addLog('SYSTEM_MDNS', hostId, 'warn', `Хост ${hostId} беше премахнат от флота.`);
   }, []);
 
-  const updateSchedules = useCallback((s: WolSchedule[]) => {
-    setWolSchedules(s);
-    saveWolSchedules(s);
-    if (typeof window !== 'undefined' && typeof fetch === 'function') {
-      fetch('/api/wol/schedules', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schedules: s }),
-      }).catch(() => {});
-    }
-  }, []);
+  const lastTriggeredScheduleRef = useRef<Map<string, string>>(new Map());
+
+  const updateSchedules = useCallback(
+    (s: WolSchedule[]) => {
+      setWolSchedules(s);
+      saveWolSchedules(s);
+      if (typeof window !== 'undefined' && typeof fetch === 'function') {
+        const enriched = s.map((sched) => {
+          const targets = resolveScheduleTargets(sched, hosts);
+          return {
+            ...sched,
+            targetMacs: targets.map((t) => ({ id: t.id, name: t.name, mac: t.mac })),
+          };
+        });
+        fetch('/api/wol/schedules', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ schedules: enriched }),
+        }).catch(() => {});
+      }
+    },
+    [hosts]
+  );
+
+  useEffect(() => {
+    const checkSchedules = () => {
+      const now = new Date();
+      const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+      const dayToken = dayNames[now.getDay()];
+      const dateKey = `${now.toDateString()}-${hhmm}`;
+
+      for (const sched of wolSchedules) {
+        if (!sched.enabled) continue;
+        if (sched.time !== hhmm) continue;
+        const days = sched.days || [];
+        const matchesDay = days.length === 0 || days.includes(dayToken);
+        if (!matchesDay) continue;
+        if (lastTriggeredScheduleRef.current.get(sched.id) === dateKey) continue;
+        lastTriggeredScheduleRef.current.set(sched.id, dateKey);
+        triggerSchedule(sched.id);
+      }
+    };
+    const timer = setInterval(checkSchedules, 20000);
+    return () => clearInterval(timer);
+  }, [wolSchedules, triggerSchedule]);
 
   const activeWolSchedulesCount = useMemo(
     () => wolSchedules.filter((s) => s.enabled).length,

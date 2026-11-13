@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Zap,
@@ -27,7 +27,6 @@ import {
   resolveScheduleTargets,
   localizeWolSchedule,
   DEFAULT_WOL_SCHEDULES,
-  TEST_WOL_SCHEDULES,
   WEEKDAYS_MAP,
 } from '../../services/wolService';
 import { triggerHapticFeedback } from '../../services/hapticService';
@@ -42,7 +41,7 @@ interface WolModalProps {
   hosts?: HostDevice[];
   isOpen: boolean;
   onClose: () => void;
-  onSendPacket: (payload: WolPacketPayload, deviceId: string) => void;
+  onSendPacket: (payload: WolPacketPayload, deviceId: string) => boolean | void | Promise<boolean | void>;
   onTriggerSchedule?: (schedule: WolSchedule) => void;
   schedules?: WolSchedule[];
   onUpdateSchedules?: (schedules: WolSchedule[]) => void;
@@ -76,6 +75,37 @@ export const WolModal: React.FC<WolModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [macTouched, setMacTouched] = useState(false);
+  const timersRef = useRef<Set<number>>(new Set());
+
+  const scheduleTimer = useCallback((fn: () => void, ms: number) => {
+    const id = window.setTimeout(() => {
+      timersRef.current.delete(id);
+      fn();
+    }, ms);
+    timersRef.current.add(id);
+    return id;
+  }, []);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+      timers.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // Schedules State
   const [schedules, setSchedules] = useState<WolSchedule[]>(() => externalSchedules || loadWolSchedules());
@@ -119,19 +149,28 @@ export const WolModal: React.FC<WolModalProps> = ({
   }, [isOpen, initialTab]);
 
   useEffect(() => {
+    if (!mac.trim()) {
+      setPacket(null);
+      setError(null);
+      return;
+    }
     try {
       const generated = generateMagicPacket(mac, broadcastIp, port, secureOnPassword);
       setPacket(generated);
       setError(null);
     } catch {
-      setError(
-        isBg
-          ? 'Невалиден MAC адрес (трябва да съдържа 12 шестнадесетични символа).'
-          : 'Invalid MAC address (must contain 12 hexadecimal characters).'
-      );
       setPacket(null);
+      if (macTouched) {
+        setError(
+          isBg
+            ? 'Невалиден MAC адрес (трябва да съдържа 12 шестнадесетични символа).'
+            : 'Invalid MAC address (must contain 12 hexadecimal characters).'
+        );
+      } else {
+        setError(null);
+      }
     }
-  }, [mac, broadcastIp, port, secureOnPassword, isBg]);
+  }, [mac, broadcastIp, port, secureOnPassword, isBg, macTouched]);
 
   const persistSchedules = (newSchedules: WolSchedule[]) => {
     setSchedules(newSchedules);
@@ -145,21 +184,32 @@ export const WolModal: React.FC<WolModalProps> = ({
     if (packet) {
       copyToClipboard(packet.rawHex);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      scheduleTimer(() => setCopied(false), 2000);
     }
   };
 
-  const handleSendDirect = () => {
-    if (!packet) return;
+  const handleSendDirect = async () => {
+    if (!packet || isSending) return;
     setIsSending(true);
     triggerHapticFeedback('heavy');
     const targetId =
       selectedDirectHostId !== 'CUSTOM' ? selectedDirectHostId : device?.id || 'CUSTOM-MAC';
-    setTimeout(() => {
-      onSendPacket(packet, targetId);
+    try {
+      const res = await Promise.resolve(onSendPacket(packet, targetId));
+      if (res === false) {
+        setIsSending(false);
+        return;
+      }
+      scheduleTimer(() => {
+        setIsSending(false);
+        onClose();
+      }, 300);
+    } catch {
       setIsSending(false);
-      onClose();
-    }, 450);
+      setError(
+        isBg ? 'Неуспешно изпращане на WoL пакета.' : 'Failed to dispatch Wake-on-LAN packet.'
+      );
+    }
   };
 
   const handleToggleSchedule = (id: string, currentEnabled: boolean) => {
@@ -172,7 +222,7 @@ export const WolModal: React.FC<WolModalProps> = ({
     if (confirmDeleteScheduleId !== id) {
       triggerHapticFeedback('light');
       setConfirmDeleteScheduleId(id);
-      setTimeout(() => {
+      scheduleTimer(() => {
         setConfirmDeleteScheduleId((curr) => (curr === id ? null : curr));
       }, 3500);
       return;
@@ -191,7 +241,7 @@ export const WolModal: React.FC<WolModalProps> = ({
     if (!confirmRestoreDefaults) {
       triggerHapticFeedback('light');
       setConfirmRestoreDefaults(true);
-      setTimeout(() => setConfirmRestoreDefaults(false), 3500);
+      scheduleTimer(() => setConfirmRestoreDefaults(false), 3500);
       return;
     }
     triggerHapticFeedback('medium');
@@ -202,7 +252,7 @@ export const WolModal: React.FC<WolModalProps> = ({
   const handleTestTriggerSchedule = (schedule: WolSchedule) => {
     triggerHapticFeedback('heavy');
     setRecentlyFiredId(schedule.id);
-    setTimeout(() => setRecentlyFiredId(null), 2200);
+    scheduleTimer(() => setRecentlyFiredId(null), 2200);
 
     if (onTriggerSchedule) {
       onTriggerSchedule(schedule);
@@ -299,6 +349,19 @@ export const WolModal: React.FC<WolModalProps> = ({
         isBg ? 'Изберете поне един ден от седмицата.' : 'Please select at least one day of the week.'
       );
       return;
+    }
+
+    if (formTargetType === 'custom_mac') {
+      try {
+        generateMagicPacket(formTargetMac, formBroadcastIp, formPort);
+      } catch {
+        setFormError(
+          isBg
+            ? 'Моля, въведете валиден MAC адрес (напр. 00:1A:2B:3C:4D:5E).'
+            : 'Please enter a valid target MAC address (e.g. 00:1A:2B:3C:4D:5E).'
+        );
+        return;
+      }
     }
 
     let targetName = isBg ? 'Лабораторни компютри' : 'Lab Workstations';
@@ -533,6 +596,7 @@ export const WolModal: React.FC<WolModalProps> = ({
                           type="text"
                           value={mac}
                           onChange={(e) => {
+                            setMacTouched(true);
                             setMac(e.target.value);
                             setSelectedDirectHostId('CUSTOM');
                           }}
@@ -915,6 +979,58 @@ export const WolModal: React.FC<WolModalProps> = ({
                               );
                             })}
                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-400 block mb-1">
+                              {isBg ? 'Broadcast IP адрес' : 'Broadcast IP'}
+                            </label>
+                            <input
+                              type="text"
+                              value={formBroadcastIp}
+                              onChange={(e) => setFormBroadcastIp(e.target.value)}
+                              placeholder="255.255.255.255"
+                              className="w-full min-h-[40px] bg-[#0b1324] border border-white/15 rounded-xl px-3 py-2 text-xs text-cyan-100 font-mono focus:border-cyan-400 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[11px] font-mono text-slate-400 block mb-1">
+                              {isBg ? 'UDP порт' : 'UDP Port'}
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={65535}
+                              value={formPort}
+                              onChange={(e) => {
+                                const parsed = parseInt(e.target.value, 10);
+                                setFormPort(
+                                  Number.isFinite(parsed)
+                                    ? Math.min(65535, Math.max(1, parsed))
+                                    : 9
+                                );
+                              }}
+                              className="w-full min-h-[40px] bg-[#0b1324] border border-white/15 rounded-xl px-3 py-2 text-xs text-cyan-100 font-mono focus:border-cyan-400 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[11px] font-mono text-slate-400 block mb-1">
+                            {isBg ? 'Бележки (по избор)' : 'Notes (Optional)'}
+                          </label>
+                          <input
+                            type="text"
+                            value={formNotes}
+                            onChange={(e) => setFormNotes(e.target.value)}
+                            placeholder={
+                              isBg
+                                ? 'Напр. Ранно сутрешно стартиране на GPU клъстера'
+                                : 'e.g. Early morning GPU cluster wake'
+                            }
+                            className="w-full min-h-[40px] bg-[#0b1324] border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                          />
                         </div>
                       </div>
 

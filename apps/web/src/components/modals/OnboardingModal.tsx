@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Sparkles,
@@ -47,8 +47,19 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const setSelectedModel = useUIStore((s) => s.setSelectedModel);
   const setCompletedOnboarding = useUIStore((s) => s.setCompletedOnboarding);
   const [dontShowAgain, setDontShowAgain] = useState(true);
+  const setupTimerRef = useRef<number | null>(null);
 
   const TOTAL_STEPS = 5;
+
+  // Cleanup pending delayed QuickSetup trigger on unmount
+  useEffect(() => {
+    return () => {
+      if (setupTimerRef.current !== null) {
+        window.clearTimeout(setupTimerRef.current);
+        setupTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Reset to first step whenever opened
   useEffect(() => {
@@ -56,6 +67,42 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       setCurrentStep(0);
     }
   }, [isOpen]);
+
+  const handleFinish = useCallback(
+    (openSetup: boolean | unknown = false) => {
+      triggerHapticFeedback('heavy');
+      if (dontShowAgain) {
+        try {
+          setCompletedOnboarding();
+        } catch {}
+      }
+      onClose();
+      if (openSetup === true && onOpenQuickSetup) {
+        if (setupTimerRef.current !== null) {
+          window.clearTimeout(setupTimerRef.current);
+        }
+        setupTimerRef.current = window.setTimeout(() => {
+          setupTimerRef.current = null;
+          onOpenQuickSetup();
+        }, 300);
+      }
+    },
+    [dontShowAgain, setCompletedOnboarding, onClose, onOpenQuickSetup]
+  );
+
+  const handlePrev = useCallback(() => {
+    triggerHapticFeedback('light');
+    setCurrentStep((prev) => (prev > 0 ? prev - 1 : prev));
+  }, []);
+
+  const handleNext = useCallback(() => {
+    triggerHapticFeedback('light');
+    if (currentStep < TOTAL_STEPS - 1) {
+      setCurrentStep((prev) => prev + 1);
+    } else {
+      handleFinish();
+    }
+  }, [currentStep, TOTAL_STEPS, handleFinish]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -80,36 +127,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, currentStep]);
-
-  const handleNext = () => {
-    triggerHapticFeedback('light');
-    if (currentStep < TOTAL_STEPS - 1) {
-      setCurrentStep((prev) => prev + 1);
-    } else {
-      handleFinish();
-    }
-  };
-
-  const handlePrev = () => {
-    triggerHapticFeedback('light');
-    if (currentStep > 0) {
-      setCurrentStep((prev) => prev - 1);
-    }
-  };
-
-  const handleFinish = (openSetup = false) => {
-    triggerHapticFeedback('heavy');
-    try {
-      setCompletedOnboarding();
-    } catch {}
-    onClose();
-    if (openSetup && onOpenQuickSetup) {
-      setTimeout(() => {
-        onOpenQuickSetup();
-      }, 300);
-    }
-  };
+  }, [isOpen, currentStep, TOTAL_STEPS, handleNext, handlePrev, handleFinish]);
 
   const stepTitles = [
     isBg ? 'Добре дошли' : 'Welcome',
@@ -119,10 +137,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     isBg ? 'Готови за Старт' : 'Ready to Launch',
   ];
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
       {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
@@ -755,5 +773,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         </div>
       </motion.div>
     </div>
+      )}
+    </AnimatePresence>
   );
 };

@@ -5,50 +5,6 @@ export const LEGACY_STORAGE_KEY_WOL_SCHEDULES = 'cst_wol_schedules_config_v1';
 
 export const DEFAULT_WOL_SCHEDULES: WolSchedule[] = [];
 
-export const TEST_WOL_SCHEDULES: WolSchedule[] = [
-  {
-    id: 'sched-lab-morning-01',
-    name: 'Wake Lab PCs (Morning Schedule)',
-    targetType: 'all_lab',
-    targetName: 'All Lab PCs (Tag: Lab)',
-    time: '08:00',
-    days: ['mon', 'tue', 'wed', 'thu', 'fri'],
-    enabled: true,
-    broadcastIp: '192.168.1.255',
-    port: 9,
-    notes: 'Automated recurring wake-up for workstation nodes prior to morning 08:30 sessions',
-    createdTimestamp: 1726140000000
-  },
-  {
-    id: 'sched-home-sync-02',
-    name: 'Home Workstation Daily Warm-Up',
-    targetType: 'specific_device',
-    targetDeviceId: 'TEST-WORKSTATION',
-    targetName: 'TEST-WORKSTATION (Laptop)',
-    targetMac: '00:2B:67:89:AB:CD',
-    time: '07:30',
-    days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
-    enabled: false,
-    broadcastIp: '192.168.1.255',
-    port: 9,
-    notes: 'Wake host for remote backup sync, agent daemon heartbeats, and Git sync',
-    createdTimestamp: 1726141000000
-  },
-  {
-    id: 'sched-fleet-night-03',
-    name: 'Weekend Fleet Security Audit Wake',
-    targetType: 'all_offline',
-    targetName: 'All Sleeping / Offline PCs',
-    time: '23:00',
-    days: ['sun'],
-    enabled: false,
-    broadcastIp: '255.255.255.255',
-    port: 9,
-    notes: 'Wakes all sleeping nodes for weekly unattended security patches and Ollama model sync',
-    createdTimestamp: 1726142000000
-  }
-];
-
 export const WEEKDAYS_MAP: {
   id: Weekday;
   label: string;
@@ -107,7 +63,10 @@ export function localizeWolSchedule(
     notes = isBg ? preset.notesBg : preset.notesEn;
   } else {
     // Also translate common default names if user created one with default form value
-    if (name === 'Wake Lab PCs (08:00 AM)' && isBg) {
+    if (
+      (name === 'Wake Lab PCs (08:00 AM)' || name === 'Wake Lab PCs (Morning Schedule)') &&
+      isBg
+    ) {
       name = 'Събуждане на залата (08:00)';
     } else if (name === 'Събуждане на залата (08:00)' && !isBg) {
       name = 'Wake Lab PCs (08:00)';
@@ -322,6 +281,8 @@ export function calculateNextRun(
         let timeUntil = '';
         if (diffHours > 0) {
           timeUntil = isBg ? `${diffHours}ч ${remMins}м` : `${diffHours}h ${remMins}m`;
+        } else if (diffMins === 0 && diffMs > 0) {
+          timeUntil = isBg ? '< 1м' : '< 1m';
         } else {
           timeUntil = isBg ? `${diffMins}м` : `${diffMins}m`;
         }
@@ -371,15 +332,19 @@ function parseSixHexBytes(input: string, out: Uint8Array): boolean {
   let highNibble = 0;
   const len = input.length;
   for (let i = 0; i < len; i++) {
-    const nib = hexCharToNibble(input.charCodeAt(i));
-    if (nib === -1) continue;
+    const ch = input.charCodeAt(i);
+    const nib = hexCharToNibble(ch);
+    if (nib === -1) {
+      // Allow standard MAC/SecureOn delimiters (':', '-', '.') and space; reject arbitrary non-hex characters
+      if (ch === 58 || ch === 45 || ch === 46 || ch === 32) continue;
+      return false;
+    }
+    if (nibbleCount >= 12) return false;
     if ((nibbleCount & 1) === 0) {
       highNibble = nib;
     } else {
       const byteIdx = nibbleCount >> 1;
-      if (byteIdx < 6) {
-        out[byteIdx] = (highNibble << 4) | nib;
-      }
+      out[byteIdx] = (highNibble << 4) | nib;
     }
     nibbleCount++;
   }
@@ -460,6 +425,7 @@ export function generateMagicPacket(
   const mac16 = `${mac8} ${mac8}`;
 
   let rawHex = `FF FF FF FF FF FF ${mac16}`;
+  let normalizedSecureOn: string | undefined;
   if (hasSecureOn) {
     const p0 = HEX_LUT[SCRATCH_PWD_BYTES[0]];
     const p1 = HEX_LUT[SCRATCH_PWD_BYTES[1]];
@@ -468,12 +434,14 @@ export function generateMagicPacket(
     const p4 = HEX_LUT[SCRATCH_PWD_BYTES[4]];
     const p5 = HEX_LUT[SCRATCH_PWD_BYTES[5]];
     rawHex = `${rawHex} ${p0} ${p1} ${p2} ${p3} ${p4} ${p5}`;
+    normalizedSecureOn = `${p0}:${p1}:${p2}:${p3}:${p4}:${p5}`;
   }
 
   return {
     mac: normalizedMac,
     broadcastIp: safeIp,
     port: safePort,
+    ...(normalizedSecureOn ? { secureOn: normalizedSecureOn } : {}),
     rawHex,
     bytesCount: totalLength,
     timestamp: formatCurrentTimeHHMMSS(),

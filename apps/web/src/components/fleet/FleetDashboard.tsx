@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo, useDeferredValue } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useDeferredValue, useRef } from 'react';
 import {
   Plus,
   RefreshCw,
@@ -21,6 +21,7 @@ import { HostDevice, WolPacketPayload } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { useUIStore } from '../../store/uiStore';
+import { useWolHistory } from '../../store/wolHistoryStore';
 import { HostCard } from './HostCard';
 import { generateMagicPacket } from '../../services/wolService';
 import { useTranslation, Language } from '../../i18n/useTranslation';
@@ -193,6 +194,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   onInspectWolPacket,
   onWakeHost,
   onSendCommand,
+  onSendWol,
   onViewScreen,
   onOpenAddHostModal,
   onAddNewHost,
@@ -308,6 +310,38 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   }, []);
 
   const [wakingCountdown, setWakingCountdown] = useState<Record<string, number>>({});
+  const wolHistory = useWolHistory();
+  const seenWolIdsRef = useRef<Set<string> | null>(null);
+  if (seenWolIdsRef.current === null) {
+    seenWolIdsRef.current = new Set(wolHistory.map((e) => e.id));
+  }
+
+  useEffect(() => {
+    const seen = seenWolIdsRef.current;
+    if (!seen) return;
+    const now = Date.now();
+    const newlyWokenIds: string[] = [];
+    for (const entry of wolHistory) {
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      if (entry.status !== 'success' || now - entry.createdAt > 15_000) continue;
+      const matched =
+        hosts.find((h) => h.id === entry.deviceId) ||
+        hosts.find((h) => h.mac && entry.mac && h.mac.toUpperCase() === entry.mac.toUpperCase());
+      if (matched && !matched.isOnline) {
+        newlyWokenIds.push(matched.id);
+      }
+    }
+    if (newlyWokenIds.length > 0) {
+      setWakingCountdown((prev) => {
+        const next = { ...prev };
+        newlyWokenIds.forEach((id) => {
+          next[id] = 45;
+        });
+        return next;
+      });
+    }
+  }, [wolHistory, hosts]);
 
   const onlineCount = useMemo(() => hosts.filter((h) => h.isOnline).length, [hosts]);
   const offlineHosts = useMemo(() => hosts.filter((h) => !h.isOnline), [hosts]);
@@ -330,32 +364,47 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     (e: React.MouseEvent, host: HostDevice) => {
       e.stopPropagation();
       triggerHapticFeedback('heavy');
-      onInspectWolPacket(host);
-      setWakingCountdown((prev) => ({ ...prev, [host.id]: 45 }));
+      if (onSendWol) {
+        onSendWol(host);
+      } else {
+        onInspectWolPacket(host);
+      }
     },
-    [onInspectWolPacket]
+    [onSendWol, onInspectWolPacket]
   );
 
   const handleWakeAllOffline = useCallback(() => {
     triggerHapticFeedback('heavy');
     if (offlineHosts.length === 0) return;
 
-    const countdownUpdates: Record<string, number> = {};
+    if (
+      useUIStore.getState().isCommandConfirmations &&
+      typeof window !== 'undefined' &&
+      typeof window.confirm === 'function'
+    ) {
+      const confirmed = window.confirm(
+        language === 'bg'
+          ? `Потвърдете изпращане на Wake-on-LAN към всички ${offlineHosts.length} спящи хоста?`
+          : `Confirm sending Wake-on-LAN to all ${offlineHosts.length} sleeping hosts?`
+      );
+      if (!confirmed) return;
+    }
+
     offlineHosts.forEach((host) => {
-      countdownUpdates[host.id] = 45;
       if (onWakeHost) {
         try {
           const pkt = generateMagicPacket(host.mac, '255.255.255.255', 9);
-          onWakeHost(pkt, host.id);
+          void (onWakeHost as (...args: any[]) => unknown)(pkt, host.id, 'manual', host.name, true);
         } catch {
           onInspectWolPacket(host);
         }
+      } else if (onSendWol) {
+        onSendWol(host);
       } else {
         onInspectWolPacket(host);
       }
     });
-    setWakingCountdown((prev) => ({ ...prev, ...countdownUpdates }));
-  }, [offlineHosts, onWakeHost, onInspectWolPacket]);
+  }, [offlineHosts, onWakeHost, onSendWol, onInspectWolPacket, language]);
 
   const hasWakingHosts = Object.keys(wakingCountdown).length > 0;
   useEffect(() => {
@@ -436,8 +485,8 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
       }
 
       if (sortMode === 'latency') {
-        const latA = a.isOnline ? (getLatencyConfig(a.ping, a.isOnline, a.id).latency ?? 9999) : 999999;
-        const latB = b.isOnline ? (getLatencyConfig(b.ping, b.isOnline, b.id).latency ?? 9999) : 999999;
+        const latA = a.isOnline ? (getLatencyConfig(a.ping, a.isOnline, a.id, language).latency ?? 9999) : 999999;
+        const latB = b.isOnline ? (getLatencyConfig(b.ping, b.isOnline, b.id, language).latency ?? 9999) : 999999;
 
         if (a.isOnline && b.isOnline) {
           const diff = latA - latB;
@@ -452,7 +501,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
       return 0;
     });
-  }, [activeFilter, hosts, deferredQuery, sortMode, sortDirection, pinnedHostIds, quarantinedHosts]);
+  }, [activeFilter, hosts, deferredQuery, sortMode, sortDirection, pinnedHostIds, quarantinedHosts, language]);
 
   const sortOptions = [
     {
@@ -883,7 +932,6 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               onSelect={onSelectHostSafe}
               onToggleExpand={toggleHostExpansion}
               onTogglePin={togglePinHost}
-              onInspectWolPacket={onInspectWolPacket}
               onViewScreen={onViewScreen}
               onSelectForCommand={onSelectHostForCommand}
               onQuickCommand={onSendCommand}

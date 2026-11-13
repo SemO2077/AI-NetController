@@ -3,21 +3,20 @@
   "short_name": "AI NetController",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#050811",
-  "theme_color": "#050811",
-  "orientation": "portrait-primary",
+  "background_color": "#030712",
+  "theme_color": "#030712",
   "icons": [
     {
       "src": "./icon-192.svg",
       "sizes": "192x192",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "./icon-512.svg",
       "sizes": "512x512",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
   ]
 }

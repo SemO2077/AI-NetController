@@ -11,18 +11,15 @@
  * - RFC 3550 Latency & Jitter algorithm
  */
 
-const MAGIC_0 = 0xc5;
-const MAGIC_1 = 0x71;
-const HEADER_SIZE = 12;
+import {
+  HEADER_SIZE,
+  MAX_PAYLOAD_SIZE,
+  Opcode,
+  packFrame,
+  parseValidatedFrame,
+} from '../utils/binaryFramer';
 
-// Static pre-allocated 16-byte ping frame to eliminate garbage collection churn
-const STATIC_PING_BUFFER = new Uint8Array(16);
-STATIC_PING_BUFFER[0] = MAGIC_0;
-STATIC_PING_BUFFER[1] = MAGIC_1;
-STATIC_PING_BUFFER[2] = 0x01; // OP_PING
-const STATIC_PING_VIEW = new DataView(STATIC_PING_BUFFER.buffer);
-STATIC_PING_VIEW.setUint32(8, 4, false); // Length: 4 bytes payload
-STATIC_PING_BUFFER.set([0x50, 0x49, 0x4e, 0x47], 12); // "PING"
+const PING_PAYLOAD = new Uint8Array([0x50, 0x49, 0x4e, 0x47]); // "PING"
 
 let socket: WebSocket | null = null;
 let currentUrl = 'ws://localhost:8765';
@@ -30,15 +27,15 @@ let currentToken = '';
 let autoReconnectEnabled = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 3;
+const MAX_RECONNECT_ATTEMPTS = 8;
 
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 let pongTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 let connectionWatchdog: ReturnType<typeof setTimeout> | null = null;
+let authHandshakeTimer: ReturnType<typeof setTimeout> | null = null;
 
 let pingSeq = 0;
 let lastPingTime = 0;
-let awaitingPong = false;
 let missedPings = 0;
 let sessionAuthenticated = false;
 const pendingPings = new Map<number, number>();
@@ -139,7 +136,6 @@ function handlePongReceived(seq?: number) {
       clearTimeout(pongTimeoutTimer);
       pongTimeoutTimer = null;
     }
-    awaitingPong = false;
   }
   missedPings = 0;
 
@@ -172,8 +168,15 @@ function flushOutboundQueue() {
   }
 }
 
+function clearAuthHandshakeTimer() {
+  if (authHandshakeTimer) {
+    clearTimeout(authHandshakeTimer);
+    authHandshakeTimer = null;
+  }
+}
+
 function sendPing() {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (!socket || socket.readyState !== WebSocket.OPEN || !sessionAuthenticated) return;
 
   pingSeq = ((pingSeq + 1) >>> 0) || 1;
   const sentSeq = pingSeq;
@@ -186,18 +189,14 @@ function sendPing() {
       pendingPings.delete(oldestKey);
     }
   }
-  awaitingPong = true;
 
   if (activeProtocolMode === 'binary' || activeProtocolMode === 'auto') {
-    // Binary ping packet with static pre-allocated buffer (Zero-GC)
-    STATIC_PING_VIEW.setUint32(4, sentSeq, false);
     try {
-      socket.send(STATIC_PING_BUFFER.buffer);
+      socket.send(packFrame(Opcode.OP_PING, sentSeq, PING_PAYLOAD));
     } catch {
       // ignore
     }
   } else {
-    // Dual-protocol JSON ping for JSON agents/bridges
     try {
       socket.send(
         JSON.stringify({
@@ -212,34 +211,30 @@ function sendPing() {
     }
   }
 
-  // Watchdog: detect delayed or lost pong for sentSeq
+  // Watchdog strictly shorter than 2500ms ping interval so missed PONGs always trigger
   if (pongTimeoutTimer) clearTimeout(pongTimeoutTimer);
   pongTimeoutTimer = setTimeout(() => {
     if (pendingPings.has(sentSeq) && socket && socket.readyState === WebSocket.OPEN) {
       pendingPings.delete(sentSeq);
-      awaitingPong = pendingPings.size > 0;
       missedPings++;
       if (missedPings === 1) {
         self.postMessage({ type: 'STATUS', status: 'degraded', missedPings });
       } else if (missedPings >= 2) {
-        // Socket unresponsive - terminate and trigger recovery
         self.postMessage({ type: 'STATUS', status: 'unresponsive', missedPings });
         try {
-          socket.close(1000, 'Heartbeat timeout');
+          socket.close(4002, 'Heartbeat timeout');
         } catch {
           // ignore
         }
       }
     }
-  }, 2200);
+  }, 2000);
 }
 
 function startHeartbeat() {
   stopHeartbeat();
-  // Immediate instant ping on connection (<1ms)
   sendPing();
-  // Smooth 2-second heartbeat interval for high fidelity
-  heartbeatInterval = setInterval(sendPing, 2000);
+  heartbeatInterval = setInterval(sendPing, 2500);
 }
 
 function stopHeartbeat() {
@@ -251,7 +246,6 @@ function stopHeartbeat() {
     clearTimeout(pongTimeoutTimer);
     pongTimeoutTimer = null;
   }
-  awaitingPong = false;
   missedPings = 0;
 }
 
@@ -264,6 +258,7 @@ function clearConnectionWatchdog() {
 
 function establishConnection(url: string, token: string = currentToken) {
   clearConnectionWatchdog();
+  clearAuthHandshakeTimer();
   stopHeartbeat();
 
   if (socket) {
@@ -286,10 +281,20 @@ function establishConnection(url: string, token: string = currentToken) {
   outboundSeq = 0;
   pingSeq = 0;
   missedPings = 0;
-  awaitingPong = false;
   sessionAuthenticated = false;
   pendingPings.clear();
   activeProtocolMode = 'auto';
+
+  // Fail closed when PSK token is missing (00-shared-contracts §3.1 & §4)
+  if (!currentToken.trim()) {
+    autoReconnectEnabled = false;
+    self.postMessage({
+      type: 'STATUS',
+      status: 'auth_required',
+      message: 'Pre-shared key (PSK) is required before connecting.',
+    });
+    return;
+  }
 
   // Block insecure ws:// on HTTPS to prevent browser SecurityError exceptions
   const isHttps = typeof self !== 'undefined' && self.location && self.location.protocol === 'https:';
@@ -333,25 +338,23 @@ function establishConnection(url: string, token: string = currentToken) {
       reconnectAttempts = 0;
       autoReconnectEnabled = true;
 
-      // Authenticated Handshake Protocol (AI-NET/3.0-SECURE)
-      if (currentToken) {
-        try {
-          ws.send(
-            JSON.stringify({
-              action: 'AUTHENTICATE',
-              token: currentToken,
-              protocolVersion: 'AI-NET/3.0-SECURE',
-              clientTimestamp: Date.now(),
-              capabilities: ['ai_binary_v3', 'tls1_3', 'secure_on', 'hitl_v2', 'panic_kill', 'gemini_multiturn_agent'],
-            })
-          );
-        } catch {
-          // ignore
+      // Wait for binary OP_AUTH HMAC-SHA256 challenge-response; never transmit raw PSK on ws.onopen
+      clearAuthHandshakeTimer();
+      authHandshakeTimer = setTimeout(() => {
+        if (!sessionAuthenticated && socket === ws && ws.readyState === WebSocket.OPEN) {
+          self.postMessage({
+            type: 'STATUS',
+            status: 'timeout',
+            message: 'Host agent did not complete OP_AUTH handshake within 3.5s.',
+          });
+          try {
+            ws.close(4001, 'Auth handshake timeout');
+          } catch {
+            // ignore
+          }
+          scheduleReconnect();
         }
-      }
-
-      self.postMessage({ type: 'STATUS', status: 'connected' });
-      startHeartbeat();
+      }, 3500);
     };
 
     ws.onmessage = (e: MessageEvent) => {
@@ -359,25 +362,40 @@ function establishConnection(url: string, token: string = currentToken) {
         activeProtocolMode = 'binary';
         parseBinaryFrame(new Uint8Array(e.data));
       } else if (typeof e.data === 'string') {
-        activeProtocolMode = 'json';
+        if (activeProtocolMode === 'auto') {
+          activeProtocolMode = 'json';
+        }
         try {
           const json = JSON.parse(e.data);
+          const isPong = json.event === 'PONG' || json.action === 'PONG' || json.type === 'PONG';
 
-          // Anti-Replay: RFC 6479 128-bit sliding window validation if seq provided
-          if (typeof json.seq === 'number' && json.seq > 0) {
+          // Anti-Replay: RFC 6479 128-bit sliding window validation if seq provided on non-PONG frames
+          if (!isPong && typeof json.seq === 'number') {
             if (!verifyInboundSequence(json.seq)) {
-              return; // Drop replayed or stale frame
+              return;
             }
           }
 
-          // Handle JSON Pong response
-          if (json.event === 'PONG' || json.action === 'PONG' || json.type === 'PONG') {
+          // Fail-closed pre-auth JSON gate
+          const isPreAuthEvent =
+            isPong ||
+            json.event === 'AUTHENTICATED' ||
+            json.event === 'ERROR' ||
+            json.event === 'AUTH_CHALLENGE';
+          if (!sessionAuthenticated && !isPreAuthEvent) {
+            return;
+          }
+
+          if (isPong) {
             handlePongReceived(typeof json.seq === 'number' ? json.seq : undefined);
             return;
           }
 
           if (json.event === 'AUTHENTICATED') {
             sessionAuthenticated = true;
+            clearAuthHandshakeTimer();
+            self.postMessage({ type: 'STATUS', status: 'connected' });
+            startHeartbeat();
             flushOutboundQueue();
           }
 
@@ -395,6 +413,7 @@ function establishConnection(url: string, token: string = currentToken) {
 
     ws.onclose = (event) => {
       clearConnectionWatchdog();
+      clearAuthHandshakeTimer();
       stopHeartbeat();
       sessionAuthenticated = false;
       pendingPings.clear();
@@ -534,12 +553,43 @@ function hmacSha256Pure(key: Uint8Array, message: Uint8Array): Uint8Array {
   return sha256Pure(oKeyPad);
 }
 
+async function computeHmacSha256Bytes(secretStr: string, msgBytes: Uint8Array): Promise<Uint8Array> {
+  const keyData = new TextEncoder().encode(secretStr);
+  if (typeof self !== 'undefined' && self.crypto && self.crypto.subtle) {
+    const cryptoKey = await self.crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sigBuffer = await self.crypto.subtle.sign('HMAC', cryptoKey, msgBytes as BufferSource);
+    return new Uint8Array(sigBuffer);
+  }
+  return hmacSha256Pure(keyData, msgBytes);
+}
+
+async function hmacSha256Hex(secretStr: string, msgText: string): Promise<string> {
+  const sigBytes = await computeHmacSha256Bytes(secretStr, new TextEncoder().encode(msgText));
+  let hex = '';
+  for (let i = 0; i < sigBytes.length; i++) {
+    hex += sigBytes[i].toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
 async function respondToBinaryAuthChallenge(nonceBytes: Uint8Array, seq: number) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   const secretStr = currentToken.trim();
   if (!secretStr) {
     autoReconnectEnabled = false;
     sessionAuthenticated = false;
+    clearAuthHandshakeTimer();
+    self.postMessage({
+      type: 'STATUS',
+      status: 'auth_required',
+      message: 'Authentication token required before connecting.',
+    });
     self.postMessage({
       type: 'JSON_FRAME',
       data: {
@@ -554,101 +604,106 @@ async function respondToBinaryAuthChallenge(nonceBytes: Uint8Array, seq: number)
     }
     return;
   }
-  const keyData = new TextEncoder().encode(secretStr);
-  let sigBytes: Uint8Array;
-  if (typeof self !== 'undefined' && self.crypto && self.crypto.subtle) {
-    const cryptoKey = await self.crypto.subtle.importKey(
-      'raw',
-      keyData,
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign']
-    );
-    const sigBuffer = await self.crypto.subtle.sign('HMAC', cryptoKey, nonceBytes);
-    sigBytes = new Uint8Array(sigBuffer);
-  } else {
-    sigBytes = hmacSha256Pure(keyData, nonceBytes);
-  }
-  const packet = new Uint8Array(HEADER_SIZE + sigBytes.length);
-  const view = new DataView(packet.buffer);
-  packet[0] = MAGIC_0;
-  packet[1] = MAGIC_1;
-  packet[2] = 0x06; // OP_AUTH
-  packet[3] = 0x00;
-  view.setUint32(4, seq, false);
-  view.setUint32(8, sigBytes.length, false);
-  packet.set(sigBytes, HEADER_SIZE);
-  socket.send(packet.buffer);
+  const sigBytes = await computeHmacSha256Bytes(secretStr, nonceBytes);
+  socket.send(packFrame(Opcode.OP_AUTH, seq, sigBytes));
 }
 
 function parseBinaryFrame(bytes: Uint8Array) {
-  if (bytes.length < HEADER_SIZE) return;
-  if (bytes[0] !== MAGIC_0 || bytes[1] !== MAGIC_1) return;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const parsed = parseValidatedFrame(dv);
+  if (!parsed.isValid) return;
 
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const opcode = view.getUint8(2);
-  const seq = view.getUint32(4, false);
-  const length = view.getUint32(8, false);
+  const { opcode, flags, sequenceId: seq, payloadLength: length } = parsed;
 
-  if (bytes.length !== HEADER_SIZE + length) return;
+  if ((flags & 0x02) !== 0) {
+    self.postMessage({
+      type: 'JSON_FRAME',
+      data: {
+        event: 'ERROR',
+        error: 'AEAD-encrypted frame (flag 0x02) received without an established ECDH session vault.',
+      },
+    });
+    return;
+  }
 
-  // Skip sequence consumption on OP_PING (0x01), OP_HITL (0x05), OP_AUTH (0x06), OP_LLM_STREAM (0x0B), and OP_FRAME_SYNC (0xED)
-  // so multi-stage responses sharing a request seq are not dropped by the anti-replay bitmap
+  // Fail-closed pre-authentication gate (00-shared-contracts §3.1)
   if (
-    seq > 0 &&
-    opcode !== 0x01 &&
-    opcode !== 0x05 &&
-    opcode !== 0x06 &&
-    opcode !== 0x0b &&
-    opcode !== 0xed &&
-    !verifyInboundSequence(seq)
+    !sessionAuthenticated &&
+    opcode !== Opcode.OP_AUTH &&
+    opcode !== Opcode.OP_PING &&
+    opcode !== Opcode.OP_ERR
   ) {
-    return; // Reject replayed or out-of-window binary frame
+    return;
+  }
+
+  // Enforce monotonic replay protection (seq >= 1) on operational binary frames
+  const replayExempt =
+    opcode === Opcode.OP_PING ||
+    opcode === Opcode.OP_HITL ||
+    opcode === Opcode.OP_AUTH ||
+    opcode === Opcode.OP_LLM_STREAM ||
+    opcode === Opcode.OP_FRAME_SYNC;
+  if (!replayExempt && !verifyInboundSequence(seq)) {
+    return;
   }
 
   const payloadSlice = bytes.subarray(HEADER_SIZE, HEADER_SIZE + length);
 
-  if (opcode === 0x01) {
-    // Binary OP_PING response correlated by sequence
+  if (opcode === Opcode.OP_PING) {
     handlePongReceived(seq);
-  } else if (opcode === 0x02) {
-    // OP_TELEMETRY frame
+  } else if (opcode === Opcode.OP_TELEMETRY) {
     try {
       self.postMessage({ type: 'TELEMETRY', data: JSON.parse(UTF8_DECODER.decode(payloadSlice)) });
     } catch {
       // Ignore parse failure
     }
-  } else if (opcode === 0x03) {
-    // OP_FRAME (pass fresh sliced ArrayBuffer as Transferable to avoid memory copies)
+  } else if (opcode === Opcode.OP_SCREEN_FRAME) {
+    // Validate JPEG SOI (0xFFD8) & EOI (0xFFD9) boundaries before transferring frame (00-shared-contracts §2)
+    if (
+      payloadSlice.length < 4 ||
+      payloadSlice[0] !== 0xff ||
+      payloadSlice[1] !== 0xd8 ||
+      payloadSlice[payloadSlice.length - 2] !== 0xff ||
+      payloadSlice[payloadSlice.length - 1] !== 0xd9
+    ) {
+      return;
+    }
     const frameBuffer = payloadSlice.slice().buffer;
     (self as unknown as Worker).postMessage({ type: 'SCREEN_FRAME', buffer: frameBuffer }, [frameBuffer]);
-  } else if (opcode === 0x04) {
-    // OP_SHELL response
+  } else if (opcode === Opcode.OP_SHELL) {
     try {
-      self.postMessage({ type: 'JSON_FRAME', data: { event: 'SHELL_RESULT', ...JSON.parse(UTF8_DECODER.decode(payloadSlice)) } });
+      self.postMessage({
+        type: 'JSON_FRAME',
+        data: { event: 'SHELL_RESULT', ...JSON.parse(UTF8_DECODER.decode(payloadSlice)) },
+      });
     } catch {
       // Ignore
     }
-  } else if (opcode === 0x05) {
-    // OP_HITL security interrupt
+  } else if (opcode === Opcode.OP_HITL) {
     try {
-      self.postMessage({ type: 'JSON_FRAME', data: { event: 'HITL_REQUIRED', ...JSON.parse(UTF8_DECODER.decode(payloadSlice)) } });
+      self.postMessage({
+        type: 'JSON_FRAME',
+        data: { event: 'HITL_REQUIRED', ...JSON.parse(UTF8_DECODER.decode(payloadSlice)) },
+      });
     } catch {
       // Ignore
     }
-  } else if (opcode === 0x06) {
-    // OP_AUTH challenge (16-byte nonce) or status
+  } else if (opcode === Opcode.OP_AUTH) {
     if (length === 16) {
       void respondToBinaryAuthChallenge(payloadSlice, seq);
     } else if (length > 0) {
-      const statusStr = UTF8_DECODER.decode(payloadSlice);
-      if (statusStr.includes('OK_AUTHENTICATED')) {
+      const statusStr = UTF8_DECODER.decode(payloadSlice).trim();
+      if (statusStr === 'OK_AUTHENTICATED' || statusStr === 'AUTH_OK') {
         sessionAuthenticated = true;
+        clearAuthHandshakeTimer();
+        self.postMessage({ type: 'STATUS', status: 'connected' });
         self.postMessage({ type: 'JSON_FRAME', data: { event: 'AUTHENTICATED', status: 'OK' } });
+        startHeartbeat();
         flushOutboundQueue();
-      } else if (statusStr.includes('AUTH_FAILED') || statusStr.includes('DENIED') || statusStr.includes('ERR')) {
+      } else {
         sessionAuthenticated = false;
         autoReconnectEnabled = false;
+        clearAuthHandshakeTimer();
         self.postMessage({ type: 'JSON_FRAME', data: { event: 'ERROR', error: statusStr } });
         try {
           socket?.close(4001, 'Authentication failed');
@@ -657,30 +712,32 @@ function parseBinaryFrame(bytes: Uint8Array) {
         }
       }
     }
-  } else if (opcode === 0x07) {
-    // OP_CLIP clipboard sync
+  } else if (opcode === Opcode.OP_CLIP) {
     try {
-      self.postMessage({ type: 'JSON_FRAME', data: { event: 'CLIPBOARD_SYNC', text: UTF8_DECODER.decode(payloadSlice) } });
+      self.postMessage({
+        type: 'JSON_FRAME',
+        data: { event: 'CLIPBOARD_SYNC', text: UTF8_DECODER.decode(payloadSlice) },
+      });
     } catch {
       // Ignore
     }
-  } else if (opcode === 0x0b) {
-    // OP_LLM_STREAM chunk
+  } else if (opcode === Opcode.OP_LLM_STREAM) {
     try {
-      self.postMessage({ type: 'JSON_FRAME', data: { event: 'LLM_STREAM', chunk: UTF8_DECODER.decode(payloadSlice), seq } });
+      self.postMessage({
+        type: 'JSON_FRAME',
+        data: { event: 'LLM_STREAM', chunk: UTF8_DECODER.decode(payloadSlice), seq },
+      });
     } catch {
       // Ignore
     }
-  } else if (opcode === 0x0d) {
-    // OP_DISPLAY_ENUM multi-monitor display descriptor list
+  } else if (opcode === Opcode.OP_DISPLAY_ENUM) {
     try {
-      const parsed = JSON.parse(UTF8_DECODER.decode(payloadSlice));
-      self.postMessage({ type: 'JSON_FRAME', data: { event: 'DISPLAY_ENUM', ...parsed } });
+      const parsedEnum = JSON.parse(UTF8_DECODER.decode(payloadSlice));
+      self.postMessage({ type: 'JSON_FRAME', data: { event: 'DISPLAY_ENUM', ...parsedEnum } });
     } catch {
       // Ignore
     }
-  } else if (opcode === 0xed) {
-    // OP_FRAME_SYNC stream resynchronization metadata/ack
+  } else if (opcode === Opcode.OP_FRAME_SYNC) {
     try {
       const rawSync = UTF8_DECODER.decode(payloadSlice);
       const parsedSync = rawSync.startsWith('{') ? JSON.parse(rawSync) : { detail: rawSync };
@@ -688,14 +745,27 @@ function parseBinaryFrame(bytes: Uint8Array) {
     } catch {
       // Ignore
     }
-  } else if (opcode === 0xee) {
-    // OP_ERR structured error
+  } else if (opcode === Opcode.OP_ERR) {
     try {
       const errText = UTF8_DECODER.decode(payloadSlice);
       const parsedErr = errText.startsWith('{') ? JSON.parse(errText) : { error: errText };
       self.postMessage({ type: 'JSON_FRAME', data: { event: 'ERROR', ...parsedErr } });
     } catch {
       // Ignore
+    }
+  }
+}
+
+function sendOrQueueJson(envelope: Record<string, any>, isAuthMsg: boolean) {
+  if (socket && socket.readyState === WebSocket.OPEN && (sessionAuthenticated || isAuthMsg)) {
+    try {
+      socket.send(JSON.stringify(envelope));
+    } catch {
+      // send failed
+    }
+  } else if (autoReconnectEnabled || (socket && socket.readyState === WebSocket.OPEN && !sessionAuthenticated)) {
+    if (outboundQueue.length < MAX_QUEUE_SIZE) {
+      outboundQueue.push({ type: 'json', payload: envelope });
     }
   }
 }
@@ -707,7 +777,9 @@ self.onmessage = (event: MessageEvent) => {
     case 'CONNECT': {
       autoReconnectEnabled = true;
       reconnectAttempts = 0;
-      establishConnection(payload.url || currentUrl, payload.token || currentToken);
+      const nextUrl = payload?.url !== undefined ? String(payload.url) : currentUrl;
+      const nextToken = payload?.token !== undefined ? String(payload.token) : currentToken;
+      establishConnection(nextUrl, nextToken);
       break;
     }
 
@@ -721,11 +793,13 @@ self.onmessage = (event: MessageEvent) => {
 
     case 'DISCONNECT': {
       autoReconnectEnabled = false;
+      sessionAuthenticated = false;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
       clearConnectionWatchdog();
+      clearAuthHandshakeTimer();
       stopHeartbeat();
       if (socket) {
         try {
@@ -742,25 +816,38 @@ self.onmessage = (event: MessageEvent) => {
 
     case 'SEND_JSON': {
       outboundSeq = ((outboundSeq + 1) >>> 0) || 1;
-      const envelope = {
+      const seqNum = outboundSeq;
+      const envelope: Record<string, any> = {
         ...payload,
-        _seq: outboundSeq,
-        _nonce: `${Date.now()}-${outboundSeq}`,
+        _seq: seqNum,
+        _nonce: `${Date.now()}-${seqNum}`,
       };
       const isAuthMsg = payload?.action === 'AUTHENTICATE';
 
-      if (socket && socket.readyState === WebSocket.OPEN && (sessionAuthenticated || isAuthMsg)) {
-        try {
-          socket.send(JSON.stringify(envelope));
-        } catch {
-          // send failed
-        }
-      } else if (autoReconnectEnabled || (socket && socket.readyState === WebSocket.OPEN && !sessionAuthenticated)) {
-        // Queue message until handshake completes or socket reconnects
-        if (outboundQueue.length < MAX_QUEUE_SIZE) {
-          outboundQueue.push({ type: 'json', payload: envelope });
-        }
+      // Sign remote HITL approvals with HMAC-SHA256(secret, "${approval_id}:${nonce}:${command}")
+      if (
+        payload?.action === 'APPROVAL_RESPONSE' &&
+        payload?.approved === true &&
+        typeof payload?.challenge_nonce === 'string' &&
+        payload.challenge_nonce.length > 0 &&
+        currentToken.trim().length > 0
+      ) {
+        const approvalId = String(payload.approval_id || payload.command_id || '');
+        const proofInput = `${approvalId}:${payload.challenge_nonce}:${String(payload.command ?? '')}`;
+        void hmacSha256Hex(currentToken.trim(), proofInput).then((hmacHex) => {
+          sendOrQueueJson(
+            {
+              ...envelope,
+              signature: hmacHex,
+              approval_hmac: hmacHex,
+            },
+            false
+          );
+        });
+        break;
       }
+
+      sendOrQueueJson(envelope, isAuthMsg);
       break;
     }
 
@@ -780,30 +867,29 @@ self.onmessage = (event: MessageEvent) => {
     }
 
     case 'SEND_OPCODE': {
+      const rawOpcode = Number(payload?.opcode);
+      if (!Number.isInteger(rawOpcode) || rawOpcode <= 0 || rawOpcode > 0xff) {
+        return; // Never silently coerce invalid or OP_UNKNOWN (0x00) opcodes (00-shared-contracts §2)
+      }
       outboundSeq = ((outboundSeq + 1) >>> 0) || 1;
-      const opcode = Number(payload.opcode ?? 0x04) & 0xff;
+      const opcode = rawOpcode & 0xff;
       const rawText = typeof payload.data === 'string' ? payload.data : JSON.stringify(payload.data || {});
       const bodyBytes = new TextEncoder().encode(rawText);
-      const packet = new Uint8Array(HEADER_SIZE + bodyBytes.length);
-      const view = new DataView(packet.buffer);
-      packet[0] = MAGIC_0;
-      packet[1] = MAGIC_1;
-      packet[2] = opcode;
-      packet[3] = 0x00;
-      view.setUint32(4, outboundSeq, false);
-      view.setUint32(8, bodyBytes.length, false);
-      packet.set(bodyBytes, HEADER_SIZE);
-      const isHandshakeOp = opcode === 0x01 || opcode === 0x06;
+      if (bodyBytes.length > MAX_PAYLOAD_SIZE) {
+        return;
+      }
+      const packetBuffer = packFrame(opcode, outboundSeq, bodyBytes);
+      const isHandshakeOp = opcode === Opcode.OP_PING || opcode === Opcode.OP_AUTH;
 
       if (socket && socket.readyState === WebSocket.OPEN && (sessionAuthenticated || isHandshakeOp)) {
         try {
-          socket.send(packet.buffer);
+          socket.send(packetBuffer);
         } catch {
           // send failed
         }
       } else if (autoReconnectEnabled || (socket && socket.readyState === WebSocket.OPEN && !sessionAuthenticated)) {
         if (outboundQueue.length < MAX_QUEUE_SIZE) {
-          outboundQueue.push({ type: 'binary', payload: packet.buffer });
+          outboundQueue.push({ type: 'binary', payload: packetBuffer });
         }
       }
       break;

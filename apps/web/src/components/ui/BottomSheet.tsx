@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { motion, AnimatePresence, PanInfo, useDragControls } from 'motion/react';
 import { X } from 'lucide-react';
 import { SPRING_BUBBLY } from '../../utils/springPhysics';
@@ -19,6 +19,18 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   children,
 }) => {
   const dragControls = useDragControls();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const handleDragEnd = (_: unknown, info: PanInfo) => {
     if (info.offset.y > 100 || info.velocity.y > 500) {

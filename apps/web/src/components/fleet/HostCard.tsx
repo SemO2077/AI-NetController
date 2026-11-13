@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Monitor,
   Laptop,
@@ -46,7 +46,6 @@ export interface HostCardProps {
   onSelect: (hostId: string) => void;
   onToggleExpand: (hostId: string) => void;
   onTogglePin?: (hostId: string) => void;
-  onInspectWolPacket: (device: HostDevice) => void;
   onViewScreen: (device: HostDevice) => void;
   onSelectForCommand?: (hostId: string) => void;
   onQuickCommand?: (command: string, targetOverride?: string) => void;
@@ -180,13 +179,30 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   const [copiedUri, setCopiedUri] = useState(false);
   const [dispatchedAction, setDispatchedAction] = useState<string | null>(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  const scheduleTimer = (fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      timersRef.current.delete(id);
+      fn();
+    }, ms);
+    timersRef.current.add(id);
+  };
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((id) => clearTimeout(id));
+      timers.clear();
+    };
+  }, []);
 
   const handleCopyMac = (e: React.MouseEvent) => {
     e.stopPropagation();
     triggerHapticFeedback('light');
     copyToClipboard(host.mac);
     setCopiedMac(true);
-    setTimeout(() => setCopiedMac(false), 1800);
+    scheduleTimer(() => setCopiedMac(false), 1800);
   };
 
   const handleCopyIp = (e: React.MouseEvent) => {
@@ -194,17 +210,19 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     triggerHapticFeedback('light');
     copyToClipboard(host.ip);
     setCopiedIp(true);
-    setTimeout(() => setCopiedIp(false), 1600);
+    scheduleTimer(() => setCopiedIp(false), 1600);
   };
 
-  const connectionUri = `ws://${host.ip}:${host.port || 8765}`;
+  const wsScheme =
+    typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const connectionUri = `${wsScheme}://${host.ip}:${host.port || 8765}`;
 
   const handleCopyUri = (e: React.MouseEvent) => {
     e.stopPropagation();
     triggerHapticFeedback('light');
     copyToClipboard(connectionUri);
     setCopiedUri(true);
-    setTimeout(() => setCopiedUri(false), 1800);
+    scheduleTimer(() => setCopiedUri(false), 1800);
   };
 
   const handleQuickAction = (e: React.MouseEvent, actionId: string, command: string) => {
@@ -212,20 +230,20 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     if (actionId === 'restart' && !confirmRestart) {
       triggerHapticFeedback('warning');
       setConfirmRestart(true);
-      setTimeout(() => setConfirmRestart(false), 3500);
+      scheduleTimer(() => setConfirmRestart(false), 3500);
       return;
     }
     setConfirmRestart(false);
     triggerHapticFeedback('medium');
-    setDispatchedAction(actionId);
     if (onQuickCommand) {
+      setDispatchedAction(actionId);
       onQuickCommand(command, host.id);
+      scheduleTimer(() => {
+        setDispatchedAction((prev) => (prev === actionId ? null : prev));
+      }, 1500);
     } else if (onSelectForCommand) {
       onSelectForCommand(host.id);
     }
-    setTimeout(() => {
-      setDispatchedAction((prev) => (prev === actionId ? null : prev));
-    }, 1500);
   };
 
   const safeId = host.id || 'HOST';
@@ -323,13 +341,8 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   return (
     <div className={`${isExpanded ? 'lg:col-span-2' : ''} contain-paint-layout`}>
       <div
-        onClick={() => {
-          triggerHapticFeedback('light');
-          onSelect(host.id);
-          onToggleExpand(host.id);
-        }}
         className={`
-          glass-liquid w-full max-w-full rounded-2xl p-3.5 sm:p-4 text-left cursor-pointer select-none relative overflow-hidden
+          glass-liquid w-full max-w-full rounded-2xl p-3.5 sm:p-4 text-left select-none relative overflow-hidden
           ${
             isSelected
               ? 'border-cyan-400/60 ring-1 ring-cyan-400/40'
@@ -342,15 +355,22 @@ const HostCardComponent: React.FC<HostCardProps> = ({
         <div className="flex items-center justify-between gap-2.5">
           {/* Left: Device Icon + Identity + Status */}
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
-            <div
+            <button
+              type="button"
+              onClick={() => {
+                triggerHapticFeedback('light');
+                onSelect(host.id);
+                onToggleExpand(host.id);
+              }}
               className={`
-                w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border relative
+                w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border relative cursor-pointer
                 ${
                   isOffline
                     ? 'bg-white/[0.06] text-slate-300 border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]'
                     : 'bg-gradient-to-br from-cyan-400/25 via-cyan-500/15 to-indigo-500/15 text-cyan-200 border-cyan-300/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_16px_var(--theme-accent-glow)]'
                 }
               `}
+              aria-label={host.name || safeId}
             >
               <DeviceIcon className="w-5 h-5" />
               <span
@@ -358,13 +378,21 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                   isOffline ? 'bg-amber-400' : 'bg-emerald-400'
                 }`}
               />
-            </div>
+            </button>
 
             <div className="flex flex-col min-w-0 flex-1">
               <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-fluid-card-title font-bold text-white tracking-tight truncate">
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback('light');
+                    onSelect(host.id);
+                    onToggleExpand(host.id);
+                  }}
+                  className="text-fluid-card-title font-bold text-white tracking-tight truncate text-left hover:text-cyan-200 transition cursor-pointer"
+                >
                   {host.name || safeId}
-                </span>
+                </button>
                 <span className="px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/10 text-[10px] font-mono font-medium text-slate-300 shrink-0">
                   {osBadge}
                 </span>
@@ -548,7 +576,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 </div>
                 <div className="h-1.5 w-full rounded-full telemetry-track overflow-hidden">
                   <div
-                    style={{ width: `${Math.min(100, Math.max(4, cpuVal))}%` }}
+                    style={{ width: `${Math.min(100, Math.max(0, cpuVal))}%` }}
                     className={`h-full rounded-full transition-all duration-300 ${
                       cpuVal >= 75
                         ? 'bg-gradient-to-r from-rose-500 via-pink-500 to-amber-400 shadow-[0_0_10px_rgba(244,63,94,0.6)]'
@@ -571,7 +599,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 </div>
                 <div className="h-1.5 w-full rounded-full telemetry-track overflow-hidden">
                   <div
-                    style={{ width: `${Math.min(100, Math.max(4, ramVal))}%` }}
+                    style={{ width: `${Math.min(100, Math.max(0, ramVal))}%` }}
                     className={`h-full rounded-full transition-all duration-300 ${
                       ramVal >= 75
                         ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 shadow-[0_0_10px_rgba(251,191,36,0.6)]'

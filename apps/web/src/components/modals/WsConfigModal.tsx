@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, Activity, AlertCircle, CheckCircle2, ShieldCheck, Key, Lock } from 'lucide-react';
 import { HeartbeatMetrics } from '../../types';
 import { HeartbeatSparkline } from '../telemetry/HeartbeatSparkline';
@@ -49,11 +49,30 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
   const [pairingPin, setPairingPin] = useState('');
   const [isPairingPin, setIsPairingPin] = useState(false);
   const [pinStatusMsg, setPinStatusMsg] = useState<string | null>(null);
+  const connectTimerRef = useRef<number | null>(null);
 
   const connected = isRealWsConnected ?? isConnected ?? false;
   const connecting = isConnecting || localConnecting;
   const connectFn = onConnectRealWs ?? onConnect ?? (() => {});
   const disconnectFn = onDisconnectRealWs ?? onDisconnect ?? (() => {});
+
+  useEffect(() => {
+    setInputUrl(wsUrl);
+  }, [wsUrl]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setAuthToken(getStoredAuthToken());
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (connectTimerRef.current !== null) {
+        window.clearTimeout(connectTimerRef.current);
+      }
+    };
+  }, []);
 
   const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
   const isMixedContentRisk = isHttps && inputUrl.trim().startsWith('ws://');
@@ -95,7 +114,11 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
     setWsUrl(inputUrl);
     setLocalConnecting(true);
     connectFn(inputUrl);
-    setTimeout(() => {
+    if (connectTimerRef.current !== null) {
+      window.clearTimeout(connectTimerRef.current);
+    }
+    connectTimerRef.current = window.setTimeout(() => {
+      connectTimerRef.current = null;
       setLocalConnecting(false);
     }, 1200);
   };
@@ -124,7 +147,7 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
             <span className="text-xs font-semibold text-slate-300">{t('ws_status_label')}</span>
             <div className="flex items-center space-x-2">
               <span className="text-[10px] px-2 py-0.5 rounded-md bg-white/10 text-cyan-300 font-mono">
-                AI-NET/3.0-SECURE
+                AI-NET/3.0
               </span>
               <span
                 className={`text-xs px-3 py-1 rounded-full font-bold ${
@@ -144,7 +167,6 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
               <HeartbeatSparkline
                 metrics={heartbeatMetrics}
                 variant="detailed"
-                isSimulated={!connected}
               />
             </div>
           )}

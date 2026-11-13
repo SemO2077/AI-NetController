@@ -12,8 +12,8 @@ export class CircularRingBuffer<T> {
   private count: number = 0;
 
   constructor(capacity: number, initialValues: T[] = []) {
-    if (capacity <= 0) {
-      throw new Error('RingBuffer capacity must be strictly greater than 0');
+    if (!Number.isInteger(capacity) || capacity <= 0) {
+      throw new Error('RingBuffer capacity must be a positive integer');
     }
     this.capacity = capacity;
     this.buffer = new Array<T | null>(capacity).fill(null);
@@ -73,8 +73,8 @@ export class Float64RingBuffer {
   private count: number = 0;
 
   constructor(capacity: number) {
-    if (capacity <= 0) {
-      throw new Error('Float64RingBuffer capacity must be strictly greater than 0');
+    if (!Number.isInteger(capacity) || capacity <= 0) {
+      throw new Error('Float64RingBuffer capacity must be a positive integer');
     }
     this.capacity = capacity;
     this.buffer = new Float64Array(capacity);

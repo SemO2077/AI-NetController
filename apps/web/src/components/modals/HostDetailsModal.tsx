@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { HostDevice } from '../../types';
 import { BottomSheet } from '../ui/BottomSheet';
@@ -11,6 +11,7 @@ import {
   Terminal,
   Eye,
   Copy,
+  Check,
   Clock,
   Tag,
   ShieldAlert,
@@ -24,6 +25,7 @@ import { triggerHapticFeedback } from '../../services/hapticService';
 import { getBatteryConfig } from '../fleet/HostCard';
 import { useTranslation } from '../../i18n/useTranslation';
 import { copyToClipboard as copySafe } from '../../utils/clipboard';
+import { clampPercentage } from '../../utils/viewportScale';
 
 interface HostDetailsModalProps {
   isOpen: boolean;
@@ -55,8 +57,22 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
   onDeleteHost,
 }) => {
   const { language } = useTranslation();
+  const [copiedField, setCopiedField] = useState<'ip' | 'mac' | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   if (!host) return null;
+
+  const safeCpu = clampPercentage(host.cpuUsage ?? host.cpu ?? 0);
+  const safeRam = clampPercentage(host.ramUsage ?? host.ram ?? 0);
+  const isMdnsHost = Boolean(host.tags?.some((t) => t.toLowerCase().includes('mdns')));
 
   let DeviceIcon = Monitor;
   if (host.deviceType === 'laptop' || host.id.includes('LAPTOP') || host.id.includes('WORKSTATION')) {
@@ -70,9 +86,17 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
     DeviceIcon = Server;
   }
 
-  const copyToClipboard = (text: string) => {
+  const copyToClipboard = (text: string, field: 'ip' | 'mac') => {
     triggerHapticFeedback('light');
     copySafe(text);
+    setCopiedField(field);
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      copyTimerRef.current = null;
+      setCopiedField(null);
+    }, 1600);
   };
 
   return (
@@ -128,7 +152,13 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
               <span className="flex items-center space-x-1 text-emerald-400 text-xs font-mono">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
                 <span className="hidden sm:inline">
-                  {language === 'bg' ? 'mDNS активен' : 'mDNS Active'}
+                  {isMdnsHost
+                    ? language === 'bg'
+                      ? 'mDNS активен'
+                      : 'mDNS Active'
+                    : language === 'bg'
+                    ? 'Онлайн'
+                    : 'Live Host'}
                 </span>
               </span>
             ) : (
@@ -166,11 +196,15 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
               <span className="text-cyan-300 font-bold">{host.ip}</span>
               <button
                 type="button"
-                onClick={() => copyToClipboard(host.ip)}
+                onClick={() => copyToClipboard(host.ip, 'ip')}
                 className="text-white/40 hover:text-white transition p-1 cursor-pointer"
                 title={language === 'bg' ? 'Копирай IP' : 'Copy IP'}
               >
-                <Copy className="w-3 h-3" />
+                {copiedField === 'ip' ? (
+                  <Check className="w-3 h-3 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
               </button>
             </div>
           </div>
@@ -183,11 +217,15 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
               <span className="text-white/80 font-medium truncate">{host.mac}</span>
               <button
                 type="button"
-                onClick={() => copyToClipboard(host.mac)}
+                onClick={() => copyToClipboard(host.mac, 'mac')}
                 className="text-white/40 hover:text-white transition p-1 cursor-pointer"
                 title={language === 'bg' ? 'Копирай MAC' : 'Copy MAC'}
               >
-                <Copy className="w-3 h-3" />
+                {copiedField === 'mac' ? (
+                  <Check className="w-3 h-3 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
               </button>
             </div>
           </div>
@@ -213,11 +251,11 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
               {language === 'bg' ? 'ПРОЦЕСОР (CPU)' : 'PROCESSOR (CPU)'}
             </span>
             <div className="flex items-center space-x-2">
-              <span className="text-white font-bold">{host.cpuUsage ?? 0}%</span>
+              <span className="text-white font-bold">{safeCpu}%</span>
               <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-cyan-400 rounded-full transition-all duration-500"
-                  style={{ width: `${host.cpuUsage ?? 0}%` }}
+                  style={{ width: `${safeCpu}%` }}
                 />
               </div>
             </div>
@@ -228,11 +266,11 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
               {language === 'bg' ? 'ПАМЕТ (RAM)' : 'MEMORY (RAM)'}
             </span>
             <div className="flex items-center space-x-2">
-              <span className="text-white font-bold">{host.ramUsage ?? 0}%</span>
+              <span className="text-white font-bold">{safeRam}%</span>
               <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-teal-400 rounded-full transition-all duration-500"
-                  style={{ width: `${host.ramUsage ?? 0}%` }}
+                  style={{ width: `${safeRam}%` }}
                 />
               </div>
             </div>
@@ -272,7 +310,7 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
             <span className="text-white/40 text-[10px] block">
               {language === 'bg' ? 'ПОСЛЕДНА ТЕЛЕМЕТРИЯ' : 'LAST TELEMETRY'}
             </span>
-            <span className="text-white/80 truncate block flex items-center space-x-1.5">
+            <span className="text-white/80 truncate flex items-center space-x-1.5">
               <Clock className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               <span>{host.lastSeen}</span>
             </span>
@@ -442,6 +480,13 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
                 type="button"
                 onClick={() => {
                   triggerHapticFeedback('warning');
+                  const confirmMsg =
+                    language === 'bg'
+                      ? `Премахване на хост "${host.name}" (${host.ip}) от флота?`
+                      : `Remove host "${host.name}" (${host.ip}) from fleet?`;
+                  if (typeof window !== 'undefined' && !window.confirm(confirmMsg)) {
+                    return;
+                  }
                   onDeleteHost(host.id);
                   onClose();
                 }}

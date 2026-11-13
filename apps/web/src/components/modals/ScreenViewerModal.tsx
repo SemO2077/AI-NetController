@@ -31,8 +31,9 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HostDevice } from '../../types';
-import { ScreenAspectPreset } from '../../utils/viewportScale';
+import { ScreenAspectPreset, computeContainedScreenRect } from '../../utils/viewportScale';
 import { useScreenStore } from '../../store/screenStore';
+import { useUIStore } from '../../store/uiStore';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { useTranslation } from '../../i18n/useTranslation';
 
@@ -41,6 +42,9 @@ export interface ScreenViewerModalProps {
   device: HostDevice | null;
   onClose: () => void;
   isCapturing?: boolean;
+  isConnected?: boolean;
+  wsUrl?: string;
+  onOpenConnection?: () => void;
   onRefreshFrame?: () => void;
   onSendInputOpcode?: (opcode: number, payload: Record<string, any> | string) => boolean;
 }
@@ -65,11 +69,15 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   device,
   onClose,
   isCapturing: externalCapturing = false,
+  isConnected,
+  wsUrl,
+  onOpenConnection,
   onRefreshFrame,
   onSendInputOpcode
 }) => {
   const { language } = useTranslation();
   const isBg = language === 'bg';
+  const selectedModel = useUIStore((s) => s.selectedModel);
 
   const [quality, setQuality] = useState<'High' | 'Medium' | 'Low'>('High');
   const [aspectPreset, setAspectPreset] = useState<ScreenAspectPreset>('fit');
@@ -77,10 +85,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [localCapturing, setLocalCapturing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [stageSize, setStageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [streamTimedOut, setStreamTimedOut] = useState(false);
   const liveScreenFrame = useScreenStore((s) => s.screenBase64);
   const displayFrameUrl = liveScreenFrame || '';
 
   const isCapturing = localCapturing || externalCapturing;
+  const isWsReady = isConnected !== false;
   const isDeviceOnline = Boolean(device && (device.isOnline || (device as any).status === 'Online'));
 
   // Remote Input State
@@ -107,6 +118,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const lastMouseMoveSentRef = useRef<number>(0);
 
   const holdTimerRef = useRef<number | null>(null);
+  const timersRef = useRef<Set<number>>(new Set());
   const pointerDownInfoRef = useRef<{
     startX: number;
     startY: number;
@@ -115,6 +127,23 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     holdTriggered: boolean;
     pointerId: number;
   } | null>(null);
+
+  const scheduleTimer = useCallback((fn: () => void, ms: number) => {
+    const id = window.setTimeout(() => {
+      timersRef.current.delete(id);
+      fn();
+    }, ms);
+    timersRef.current.add(id);
+    return id;
+  }, []);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+      timers.clear();
+    };
+  }, []);
 
   const showFeedback = useCallback((msg: string) => {
     setLastActionFeedback(msg);
@@ -130,29 +159,38 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     (xPct: number, yPct: number, button: 'left' | 'right' | 'double', label: string) => {
       const id = Date.now() + Math.random();
       setRipples((prev) => [...prev.slice(-4), { id, xPct, yPct, button, label }]);
-      window.setTimeout(() => {
+      scheduleTimer(() => {
         setRipples((prev) => prev.filter((r) => r.id !== id));
       }, 900);
     },
-    []
+    [scheduleTimer]
   );
 
-  // Execute a real PC control action against binary WebSocket + /api/pc-control/execute
+  // Execute a real PC control action via authenticated binary WebSocket (no dual WS+HTTP dispatch)
   const dispatchPcAction = useCallback(
     async (payload: Record<string, any>, feedbackLabel?: string) => {
       if (!device || !isDeviceOnline) return;
+
+      const isShellAction = payload.type === 'terminal_command' || payload.type === 'shell_exec';
+      if (!isShellAction && !isWsReady) {
+        showFeedback(
+          isBg
+            ? 'Няма активна WebSocket връзка с хост агента'
+            : 'Host agent WebSocket disconnected — connect first'
+        );
+        return;
+      }
 
       if (feedbackLabel) {
         showFeedback(feedbackLabel);
       }
 
-      if (
-        onSendInputOpcode &&
-        payload.type !== 'terminal_command' &&
-        payload.type !== 'shell_exec'
-      ) {
+      if (onSendInputOpcode && isWsReady && !isShellAction) {
         const isAudioOrLock = payload.type === 'media_control' || payload.type === 'lock_pc';
-        onSendInputOpcode(isAudioOrLock ? 0x09 : 0x08, payload);
+        const sentViaWs = onSendInputOpcode(isAudioOrLock ? 0x09 : 0x08, payload);
+        if (sentViaWs) {
+          return;
+        }
       }
 
       try {
@@ -177,12 +215,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           showFeedback(data.summary);
         }
       } catch {
-        if (!onSendInputOpcode) {
-          showFeedback(isBg ? 'Няма връзка с Control Server' : 'Control server unreachable');
-        }
+        showFeedback(isBg ? 'Няма връзка с Control Server' : 'Control server unreachable');
       }
     },
-    [device, isBg, isDeviceOnline, onSendInputOpcode, showFeedback]
+    [device, isBg, isDeviceOnline, isWsReady, onSendInputOpcode, showFeedback]
   );
 
   // Apply visual updates when AI returns actions
@@ -242,7 +278,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: [{ role: 'user', content: promptText }],
-          model: 'gemini-2.5-flash',
+          model: selectedModel || 'gemini-2.5-flash',
           role: 'commander',
           autoExecute: true,
           fleetContext: {
@@ -272,8 +308,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
       actions.forEach((act) => {
         showRemoteActionRipple(act);
+        const alreadyExecutedOnServer = Boolean(
+          data.executionResults && act.id && data.executionResults[act.id]?.success
+        );
         if (
+          !alreadyExecutedOnServer &&
           onSendInputOpcode &&
+          isWsReady &&
           act.type &&
           act.type !== 'terminal_command' &&
           act.type !== 'shell_exec' &&
@@ -545,9 +586,26 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     clearHoldTimer();
   };
 
-  // Request live screen frames from the connected host agent
+  // Track remote viewport stage size cleanly via ResizeObserver
   useEffect(() => {
-    if (!isOpen || !device || !isDeviceOnline || isPaused) return;
+    if (!isOpen) return;
+    const el = screenStageRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const updateSize = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setStageSize({ width: Math.round(rect.width), height: Math.round(rect.height) });
+      }
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [isOpen, isFullscreen]);
+
+  // Request live screen frames from the connected host agent when WebSocket is authenticated
+  useEffect(() => {
+    if (!isOpen || !device || !isDeviceOnline || !isWsReady || isPaused) return;
 
     if (onRefreshFrame) {
       onRefreshFrame();
@@ -560,7 +618,17 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     }, 500);
 
     return () => clearInterval(interval);
-  }, [isOpen, device, isDeviceOnline, isPaused, onRefreshFrame]);
+  }, [isOpen, device, isDeviceOnline, isWsReady, isPaused, onRefreshFrame]);
+
+  // Avoid infinite spinner if WebSocket is connected but no JPEG frame arrives within 10s
+  useEffect(() => {
+    if (!isOpen || !device || !isDeviceOnline || !isWsReady || displayFrameUrl) {
+      setStreamTimedOut(false);
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setStreamTimedOut(true), 10000);
+    return () => window.clearTimeout(timeoutId);
+  }, [isOpen, device, isDeviceOnline, isWsReady, displayFrameUrl]);
 
   // Clean up long-press hold timer on unmount
   useEffect(() => {
@@ -615,16 +683,35 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const handleCapture = () => {
     if (!device || !displayFrameUrl) return;
     const safeName = (device.name || device.id || 'host').replace(/\s+/g, '_');
-    const capturedFrame = displayFrameUrl;
+    const filename = `capture_${safeName}_${Date.now()}.jpg`;
     triggerHapticFeedback('medium');
     setLocalCapturing(true);
+
+    // Clone bitmap pixels synchronously before the 500ms stream worker revokes the active blob: URL
+    let snapshotHref = displayFrameUrl;
+    const img = screenImgRef.current;
+    if (img && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          snapshotHref = canvas.toDataURL('image/jpeg', 0.95);
+        }
+      } catch {
+        // Fallback to direct href if canvas export is unavailable
+      }
+    }
+
     const a = document.createElement('a');
-    a.href = capturedFrame;
-    a.download = `capture_${safeName}_${Date.now()}.jpg`;
+    a.href = snapshotHref;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    window.setTimeout(() => {
+    scheduleTimer(() => {
       setLocalCapturing(false);
       triggerHapticFeedback('medium');
     }, 220);
@@ -981,14 +1068,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 title={isPaused ? (isBg ? 'Продължи потока' : 'Resume Stream') : (isBg ? 'Пауза на потока' : 'Pause Stream')}
               >
                 <RefreshCw
-                  className={`w-4 h-4 ${!isPaused && isDeviceOnline ? 'animate-spin' : ''}`}
+                  className={`w-4 h-4 ${!isPaused && isDeviceOnline && isWsReady ? 'animate-spin' : ''}`}
                   style={{ animationDuration: '4s' }}
                 />
               </button>
 
               <button
                 onClick={handleCapture}
-                disabled={isCapturing || !isDeviceOnline}
+                disabled={isCapturing || !isDeviceOnline || !displayFrameUrl}
                 className="p-2 rounded-lg bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors disabled:opacity-50 hidden sm:flex"
                 title={isBg ? 'Снимка на екрана' : 'Take Screenshot'}
               >
@@ -1028,45 +1115,103 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           >
             {isDeviceOnline ? (
               <>
-                {displayFrameUrl ? (
-                  <div
-                    className="relative w-full h-full flex items-center justify-center overflow-hidden"
-                    style={{
-                      transform: zoomFactor > 1 ? `scale(${zoomFactor})` : undefined,
-                      transformOrigin: `${cursorPos.x}% ${cursorPos.y}%`,
-                      transition: 'transform 0.15s ease-out',
-                    }}
-                  >
-                    <img
-                      ref={screenImgRef}
-                      src={displayFrameUrl}
-                      alt="Remote Screen"
-                      draggable={false}
-                      className={`max-w-full max-h-full pointer-events-none transition-opacity duration-200 ${
-                        aspectPreset === 'fill' ? 'w-full h-full object-fill' : 'object-contain'
-                      } ${isCapturing ? 'opacity-50 scale-[0.99]' : 'opacity-100'}`}
-                      style={{
-                        aspectRatio:
-                          aspectPreset === '16:9'
-                            ? '16 / 9'
-                            : aspectPreset === '16:10'
-                            ? '16 / 10'
-                            : aspectPreset === '21:9'
-                            ? '21 / 9'
-                            : aspectPreset === '4:3'
-                            ? '4 / 3'
-                            : undefined,
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-3 text-slate-500">
-                    <RefreshCw className="w-8 h-8 animate-spin text-cyan-500" />
-                    <p className="text-sm font-mono">
+                {!isWsReady ? (
+                  <div className="flex flex-col items-center gap-3 text-slate-300 px-6 text-center max-w-md">
+                    <XCircle className="w-10 h-10 text-amber-400" />
+                    <p className="text-sm font-semibold text-white">
                       {isBg
-                        ? 'Установяване на криптиран видео поток...'
-                        : 'Establishing encrypted video stream...'}
+                        ? 'WebSocket агентът не е свързан или автентикиран'
+                        : 'Host Agent WebSocket Not Connected / Authenticated'}
                     </p>
+                    <p className="text-xs text-slate-400">
+                      {isBg
+                        ? 'Отворете настройките за връзка, за да установите автентикиран поток.'
+                        : 'Open the connection manager to establish an authenticated binary stream before streaming or sending input.'}
+                    </p>
+                    {onOpenConnection && (
+                      <button
+                        type="button"
+                        onClick={onOpenConnection}
+                        className="px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-mono font-bold transition cursor-pointer"
+                      >
+                        {isBg ? 'Свържи / Настрой Агента' : 'Connect / Configure Agent'}
+                      </button>
+                    )}
+                  </div>
+                ) : displayFrameUrl ? (
+                  (() => {
+                    const fittedRect =
+                      stageSize.width > 0 && stageSize.height > 0 && aspectPreset !== 'fit'
+                        ? computeContainedScreenRect(stageSize.width, stageSize.height, aspectPreset, 1)
+                        : null;
+                    return (
+                      <div
+                        className="relative w-full h-full flex items-center justify-center overflow-hidden"
+                        style={{
+                          transform: zoomFactor > 1 ? `scale(${zoomFactor})` : undefined,
+                          transformOrigin: '50% 50%',
+                          transition: 'transform 0.15s ease-out',
+                        }}
+                      >
+                        <img
+                          ref={screenImgRef}
+                          src={displayFrameUrl}
+                          alt="Remote Screen"
+                          draggable={false}
+                          className={`max-w-full max-h-full pointer-events-none transition-opacity duration-200 ${
+                            aspectPreset === 'fill' ? 'w-full h-full object-fill' : 'object-contain'
+                          } ${isCapturing ? 'opacity-50 scale-[0.99]' : 'opacity-100'}`}
+                          style={{
+                            width: fittedRect ? `${fittedRect.width}px` : undefined,
+                            height: fittedRect ? `${fittedRect.height}px` : undefined,
+                            aspectRatio:
+                              aspectPreset === '16:9'
+                                ? '16 / 9'
+                                : aspectPreset === '16:10'
+                                ? '16 / 10'
+                                : aspectPreset === '21:9'
+                                ? '21 / 9'
+                                : aspectPreset === '4:3'
+                                ? '4 / 3'
+                                : undefined,
+                          }}
+                        />
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <div className="flex flex-col items-center gap-3 text-slate-400 px-6 text-center max-w-md">
+                    {streamTimedOut ? (
+                      <>
+                        <XCircle className="w-8 h-8 text-amber-400" />
+                        <p className="text-sm font-mono text-amber-200">
+                          {isBg
+                            ? 'Няма получен видео кадър от хост агента.'
+                            : 'No video frame received yet from host agent.'}
+                        </p>
+                        {onRefreshFrame && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setStreamTimedOut(false);
+                              onRefreshFrame();
+                            }}
+                            className="px-3.5 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-mono font-bold transition cursor-pointer"
+                          >
+                            {isBg ? 'Поискай кадър отново' : 'Request Screen Frame'}
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-8 h-8 animate-spin text-cyan-500" />
+                        <p className="text-sm font-mono">
+                          {isBg
+                            ? 'Установяване на автентикиран видео поток...'
+                            : 'Establishing authenticated screen stream...'}
+                        </p>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -1173,7 +1318,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 >
                   <div className="w-full h-full rounded-full border-2 border-cyan-400 bg-cyan-400/30 shadow-[0_0_12px_rgba(34,211,238,0.9)]" />
                   <span className="absolute left-6 top-0 px-2 py-0.5 rounded bg-black/85 border border-cyan-400/30 text-[10.5px] font-mono font-semibold text-cyan-300 whitespace-nowrap shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
-                    {Math.round(cursorPos.x * 19.2)},{Math.round(cursorPos.y * 10.8)}
+                    {Math.round((cursorPos.x / 100) * (screenImgRef.current?.naturalWidth || 1920))},
+                    {Math.round((cursorPos.y / 100) * (screenImgRef.current?.naturalHeight || 1080))}
                   </span>
                 </div>
 
@@ -1524,19 +1670,26 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           {/* Footer Status */}
           <div className="px-4 py-2 bg-[#0b0f19] border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 shrink-0">
             <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1.5">
-                <Shield className={`w-3.5 h-3.5 ${typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'text-emerald-500' : 'text-cyan-400'}`} />
-                {typeof window !== 'undefined' && window.location.protocol === 'https:'
-                  ? isBg
-                    ? 'Криптиран WSS (TLS) Поток'
-                    : 'Encrypted WSS (TLS) Stream'
-                  : isBg
-                  ? 'HMAC-SHA256 Локален Поток (LAN)'
-                  : 'HMAC-Authenticated LAN Stream'}
-              </span>
+              {(() => {
+                const isEncryptedWs = wsUrl
+                  ? wsUrl.startsWith('wss://')
+                  : typeof window !== 'undefined' && window.location.protocol === 'https:';
+                return (
+                  <span className="flex items-center gap-1.5">
+                    <Shield className={`w-3.5 h-3.5 ${isEncryptedWs ? 'text-emerald-500' : 'text-cyan-400'}`} />
+                    {isEncryptedWs
+                      ? isBg
+                        ? 'Криптиран WSS (TLS) Поток'
+                        : 'Encrypted WSS (TLS) Stream'
+                      : isBg
+                      ? 'HMAC-SHA256 Локален Поток (LAN)'
+                      : 'HMAC-Authenticated LAN Stream'}
+                  </span>
+                );
+              })()}
               <span className="hidden sm:flex items-center gap-1.5">
                 <Terminal className="w-3.5 h-3.5 text-cyan-500" />
-                {isBg ? 'Протокол: AI-NET/3.0-SECURE' : 'Protocol: AI-NET/3.0-SECURE'}
+                {isBg ? 'Протокол: AI-NET/3.0' : 'Protocol: AI-NET/3.0'}
               </span>
             </div>
             <div className="flex items-center gap-3 font-mono">

@@ -105,6 +105,8 @@ const AUTO_EXEC_STORAGE_KEY = 'cst_gemini_auto_exec_v1';
 const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   hosts,
   selectedTarget,
+  onSendWol,
+  onSelectHost,
   onTriggerRescan,
   onToggleLabMode,
   onSendCommand,
@@ -230,6 +232,10 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipPersistRef = useRef(false);
+  const handleSendMessageRef = useRef<(textOverride?: string) => Promise<void>>(async () => {});
 
   const scrollToBottom = useCallback((smooth = true) => {
     if (scrollRef.current) {
@@ -245,6 +251,13 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   }, [messages, isLoading, scrollToBottom]);
 
   useEffect(() => {
+    if (skipPersistRef.current) {
+      skipPersistRef.current = false;
+      return;
+    }
+    if (!messages.some((m) => m.role === 'user') && messages.length <= 1) {
+      return;
+    }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-20)));
     } catch {}
@@ -253,6 +266,8 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) abortControllerRef.current.abort();
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
     };
   }, []);
 
@@ -281,6 +296,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       abortControllerRef.current.abort();
       setIsLoading(false);
     }
+    skipPersistRef.current = true;
     const fresh: ChatMessage = {
       id: `init-${Date.now()}`,
       role: 'model',
@@ -532,26 +548,87 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     triggerHapticFeedback('medium');
     setExecutingActionId(action.id);
 
+    const updateActionResult = (result: NonNullable<AiActionItem['executionResult']>) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId || !m.actions) return m;
+          return {
+            ...m,
+            actions: m.actions.map((a) =>
+              a.id === action.id ? { ...a, executionResult: result } : a
+            ),
+          };
+        })
+      );
+      triggerHapticFeedback(result.success ? 'heavy' : 'warning');
+    };
+
     try {
       if (action.type === 'rescan') {
         onTriggerRescan?.();
-        setExecutingActionId(null);
         return;
       }
       if (action.type === 'lab_mode') {
         onToggleLabMode?.();
-        setExecutingActionId(null);
         return;
       }
 
-      if (action.type === 'shell_exec' && action.payload?.command && onSendCommand) {
-        onSendCommand(action.payload.command, action.target || selectedTarget);
-      } else if (action.type === 'screen_capture' && onViewScreen) {
-        const hostObj = hosts.find((h) => h.id === action.target) || primaryHost;
-        if (hostObj) {
-          onViewScreen(hostObj);
+      const targetKey = String(action.target || '').trim().toLowerCase();
+      const explicitHost = targetKey
+        ? hosts.find(
+            (h) => h.id.toLowerCase() === targetKey || h.name.toLowerCase() === targetKey
+          )
+        : undefined;
+      const targetHost = explicitHost || (!targetKey ? primaryHost : undefined);
+      const resolvedTargetId = targetHost?.id || action.target || selectedTarget || '';
+
+      if (action.type === 'screen_capture') {
+        if (targetHost && onViewScreen) {
+          onSelectHost?.(targetHost.id);
+          onViewScreen(targetHost);
+          updateActionResult({
+            success: true,
+            summary:
+              language === 'bg'
+                ? `Отворен Live екран за ${targetHost.name}`
+                : `Opened live screen for ${targetHost.name}`,
+            opcode: '0x04 (LIVE_FRAME)',
+          });
+        } else {
+          updateActionResult({
+            success: false,
+            summary:
+              language === 'bg'
+                ? `Неуспешно намиране на хост ${action.target || ''}`.trim()
+                : `Target host ${action.target || ''} not found`.trim(),
+          });
         }
-      } else if (
+        return;
+      }
+
+      const canUseLiveWsForTarget =
+        isRealWsConnected && (!targetHost || targetHost.id === selectedTarget);
+
+      if (
+        action.type === 'shell_exec' &&
+        action.payload?.command &&
+        canUseLiveWsForTarget &&
+        onSendCommand
+      ) {
+        onSendCommand(action.payload.command, resolvedTargetId);
+        updateActionResult({
+          success: true,
+          summary:
+            language === 'bg'
+              ? `Командата е изпратена по WebSocket към ${resolvedTargetId}`
+              : `Dispatched command over live WebSocket to ${resolvedTargetId}`,
+          opcode: '0x04 (WS SHELL)',
+        });
+        return;
+      }
+
+      if (
+        canUseLiveWsForTarget &&
         onSendInputOpcode &&
         (action.type === 'mouse_click' ||
           action.type === 'mouse_double_click' ||
@@ -561,10 +638,35 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
           action.type === 'keyboard_hotkey' ||
           action.type === 'media_control')
       ) {
-        onSendInputOpcode(
-          action.type === 'media_control' ? 0x09 : 0x08,
-          { ...(action.payload || {}), type: action.type }
-        );
+        const sent = onSendInputOpcode(action.type === 'media_control' ? 0x09 : 0x08, {
+          ...(action.payload || {}),
+          type: action.type,
+        });
+        if (sent) {
+          updateActionResult({
+            success: true,
+            summary:
+              language === 'bg'
+                ? `Входното събитие е изпратено към ${resolvedTargetId}`
+                : `Dispatched live input event to ${resolvedTargetId}`,
+            opcode: action.type === 'media_control' ? '0x09 (WS_MEDIA)' : '0x08 (WS_INPUT)',
+          });
+          return;
+        }
+      }
+
+      if (action.type === 'wol' && onSendWol && targetHost) {
+        onSelectHost?.(targetHost.id);
+        onSendWol(targetHost);
+        updateActionResult({
+          success: true,
+          summary:
+            language === 'bg'
+              ? `Отворен WoL контролер за ${targetHost.name}`
+              : `Opened WoL dispatcher for ${targetHost.name}`,
+          opcode: 'UDP:9 (MAGIC_PACKET)',
+        });
+        return;
       }
 
       const postControl = async (confirmationId?: string) =>
@@ -575,8 +677,9 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
           body: JSON.stringify({
             ...action.payload,
             type: action.type,
-            target: action.target || primaryHost?.id || '',
-            mac: action.payload?.mac || primaryHost?.mac || '',
+            target: resolvedTargetId,
+            mac: action.payload?.mac || targetHost?.mac || '',
+            hostIp: targetHost?.ip || '',
             ...(confirmationId ? { confirmationId } : {}),
           }),
         });
@@ -607,8 +710,6 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       }
 
       if (action.type === 'wol') {
-        const targetHost =
-          hosts.find((h) => h.id === action.target || h.name === action.target) || primaryHost;
         const resolvedMac = action.payload?.mac || targetHost?.mac || '';
         if (resolvedMac) {
           wolHistoryStore.addEntry({
@@ -631,40 +732,28 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         }
       }
 
-      setMessages((prev) =>
-        prev.map((m) => {
-          if (m.id !== messageId || !m.actions) return m;
-          return {
-            ...m,
-            actions: m.actions.map((a) =>
-              a.id === action.id
-                ? {
-                    ...a,
-                    executionResult: {
-                      success: Boolean(data.success),
-                      summary:
-                        data.summary ||
-                        (data.success ? 'Executed on PC' : data.error || 'Execution blocked'),
-                      output: data.output,
-                      opcode: data.opcode,
-                      durationMs: data.durationMs,
-                      blockedByViewOnly: data.blockedByViewOnly,
-                    },
-                  }
-                : a
-            ),
-          };
-        })
-      );
-      triggerHapticFeedback(data.success ? 'heavy' : 'warning');
+      updateActionResult({
+        success: Boolean(data.success),
+        summary:
+          data.summary ||
+          (data.success ? 'Executed on PC' : data.error || 'Execution blocked'),
+        output: data.output,
+        opcode: data.opcode,
+        durationMs: data.durationMs,
+        blockedByViewOnly: data.blockedByViewOnly,
+      });
     } catch (err: any) {
       console.error('Action execution error:', err);
+      updateActionResult({
+        success: false,
+        summary: err?.message || (language === 'bg' ? 'Грешка при изпълнение' : 'Action execution error'),
+      });
     } finally {
       setExecutingActionId(null);
     }
   };
 
-  const handleSendMessage = async (textOverride?: string) => {
+  const handleSendMessage = useCallback(async (textOverride?: string) => {
     const textToSend = (textOverride || inputPrompt).trim();
     if (!textToSend || isLoading) return;
 
@@ -738,32 +827,37 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       }
 
       const replyContent = data.reply || '';
-      const actions = buildActionItems(replyContent, data.actions, data.executionResults);
+      const serverResultsMap =
+        data.executionResults &&
+        typeof data.executionResults === 'object' &&
+        !Array.isArray(data.executionResults)
+          ? (data.executionResults as Record<string, any>)
+          : undefined;
+      const actions = buildActionItems(replyContent, data.actions, serverResultsMap);
 
       if (autoExecutePcActions && Array.isArray(data.actions)) {
-        data.actions.forEach((act: any, idx: number) => {
-          if (act.type === 'shell_exec' && act.command && onSendCommand) {
-            onSendCommand(act.command, act.target || primaryHost?.id || '');
-          } else if (act.type === 'rescan' && onTriggerRescan) {
+        data.actions.forEach((act: any) => {
+          const execRes = serverResultsMap?.[act.id];
+          const targetHost =
+            hosts.find(
+              (h) =>
+                h.id.toLowerCase() === String(act.target || '').toLowerCase() ||
+                h.name.toLowerCase() === String(act.target || '').toLowerCase()
+            ) || (!act.target ? primaryHost : undefined);
+
+          if (act.type === 'rescan' && onTriggerRescan) {
             onTriggerRescan();
-          } else if (
-            onSendInputOpcode &&
-            (act.type === 'mouse_click' ||
-              act.type === 'mouse_double_click' ||
-              act.type === 'mouse_move' ||
-              act.type === 'mouse_scroll' ||
-              act.type === 'keyboard_type' ||
-              act.type === 'keyboard_hotkey' ||
-              act.type === 'media_control')
-          ) {
-            onSendInputOpcode(act.type === 'media_control' ? 0x09 : 0x08, act);
+          } else if (act.type === 'lab_mode' && onToggleLabMode) {
+            onToggleLabMode();
+          } else if (act.type === 'screen_capture' && onViewScreen && targetHost) {
+            onSelectHost?.(targetHost.id);
+            onViewScreen(targetHost);
           } else if (act.type === 'wol') {
-            const execRes = Array.isArray(data.executionResults)
-              ? data.executionResults[idx]
-              : data.executionResults?.[act.id];
-            const isSuccess = execRes ? Boolean(execRes.success) : true;
-            const targetHost =
-              hosts.find((h) => h.id === act.target || h.name === act.target) || primaryHost;
+            if (!execRes && onSendWol && targetHost) {
+              onSendWol(targetHost);
+              return;
+            }
+            const isSuccess = Boolean(execRes?.success);
             const resolvedMac = act.mac || targetHost?.mac || '';
             if (resolvedMac) {
               wolHistoryStore.addEntry({
@@ -778,11 +872,26 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                 latencyMs: execRes?.durationMs || 8,
                 details: isSuccess
                   ? `AI Copilot auto-dispatched 102-byte UDP Magic Packet to ${targetHost?.name || act.target} (${resolvedMac}).`
-                  : `AI Copilot auto-WoL failed: ${execRes?.error || execRes?.summary || 'Blocked'}`,
+                  : `AI Copilot auto-WoL failed: ${execRes?.error || execRes?.summary || 'Blocked or unexecuted'}`,
                 detailsBg: isSuccess
                   ? `AI Копилот автоматично изпрати 102-байтов UDP Magic Packet към ${targetHost?.name || act.target} (${resolvedMac}).`
                   : `Неуспешно автоматично AI събуждане (WoL): ${execRes?.error || execRes?.summary || 'Блокирано'}`,
               });
+            }
+          } else if (!execRes) {
+            if (act.type === 'shell_exec' && act.command && onSendCommand) {
+              onSendCommand(act.command, targetHost?.id || act.target || primaryHost?.id || '');
+            } else if (
+              onSendInputOpcode &&
+              (act.type === 'mouse_click' ||
+                act.type === 'mouse_double_click' ||
+                act.type === 'mouse_move' ||
+                act.type === 'mouse_scroll' ||
+                act.type === 'keyboard_type' ||
+                act.type === 'keyboard_hotkey' ||
+                act.type === 'media_control')
+            ) {
+              onSendInputOpcode(act.type === 'media_control' ? 0x09 : 0x08, act);
             }
           }
         });
@@ -818,15 +927,39 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
-      setTimeout(() => textareaRef.current?.focus(), 50);
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+      focusTimerRef.current = setTimeout(() => textareaRef.current?.focus(), 50);
     }
-  };
+  }, [
+    inputPrompt,
+    isLoading,
+    messages,
+    isRealWsConnected,
+    primaryHost,
+    hosts,
+    latency,
+    wolSchedules,
+    activeRoleConfig.model,
+    activeRole,
+    autoExecutePcActions,
+    buildActionItems,
+    onTriggerRescan,
+    onToggleLabMode,
+    onViewScreen,
+    onSelectHost,
+    onSendWol,
+    onSendCommand,
+    onSendInputOpcode,
+    language,
+  ]);
+
+  handleSendMessageRef.current = handleSendMessage;
 
   useEffect(() => {
     if (pendingChatPrompt && !isLoading) {
       const promptToRun = pendingChatPrompt;
       setPendingChatPrompt(null);
-      handleSendMessage(promptToRun);
+      handleSendMessageRef.current(promptToRun);
     }
   }, [pendingChatPrompt, isLoading, setPendingChatPrompt]);
 
@@ -834,7 +967,8 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     triggerHapticFeedback('light');
     copyToClipboard(text);
     setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1800);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopiedId(null), 1800);
   };
 
   const quickControlDeck = useMemo(() => {

@@ -4,11 +4,21 @@
  */
 
 import { HeartbeatRingBuffer } from '../utils/heartbeatRingBuffer';
-import { generateMagicPacket, resolveScheduleTargets, DEFAULT_WOL_SCHEDULES, TEST_WOL_SCHEDULES } from '../services/wolService';
-import { INITIAL_HOSTS, TEST_MOCK_HOSTS } from '../data/mockHosts';
+import { generateMagicPacket, resolveScheduleTargets, DEFAULT_WOL_SCHEDULES } from '../services/wolService';
+import { TEST_MOCK_HOSTS, TEST_WOL_SCHEDULES } from './fixtures/mockData';
 import { QUICK_ACTIONS, DESTRUCTIVE_ACTIONS } from '../constants/commandPresets';
 import { logStore } from '../store/logStore';
 import { wolHistoryStore } from '../store/wolHistoryStore';
+import {
+  Opcode,
+  MAGIC_BYTE_0,
+  MAGIC_BYTE_1,
+  MAX_PAYLOAD_SIZE,
+  packControlFrameFast,
+  parseHeaderInto,
+  parseValidatedFrame,
+} from '../utils/binaryFramer';
+import { inspectCommandSecurity } from '../services/securityService';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -31,21 +41,38 @@ console.log('================================================================\n'
 
 // Pillar 1: Binary Wire Protocol Framing (0xC5 0x71 magic bytes & DataView)
 {
-  const buf = new ArrayBuffer(16);
-  const dv = new DataView(buf);
-  dv.setUint8(0, 0xC5);
-  dv.setUint8(1, 0x71);
-  dv.setUint8(2, 0x01); // OP_PING
-  dv.setUint8(3, 0x00);
-  dv.setUint32(4, 42, false); // seq = 42
-  dv.setUint32(8, 4, false); // len = 4
+  const pingPayload = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
+  const packedDv = packControlFrameFast(Opcode.OP_PING, 42, pingPayload);
+  const parsedHeader = parseHeaderInto(packedDv);
+  const validated = parseValidatedFrame(packedDv);
 
-  const isMagicValid = dv.getUint8(0) === 0xC5 && dv.getUint8(1) === 0x71;
-  const opcode = dv.getUint8(2);
-  const seq = dv.getUint32(4, false);
-  const len = dv.getUint32(8, false);
+  const truncated = new DataView(packedDv.buffer.slice(0, packedDv.byteLength - 1));
+  const invalidTruncated = parseValidatedFrame(truncated);
 
-  assert(isMagicValid && opcode === 1 && seq === 42 && len === 4, 'Pillar 1 (Binary Protocol)', 'Zero-allocation DataView reads 0xC5 0x71 magic and ping header');
+  const oversizedDv = new DataView(new ArrayBuffer(12));
+  oversizedDv.setUint8(0, MAGIC_BYTE_0);
+  oversizedDv.setUint8(1, MAGIC_BYTE_1);
+  oversizedDv.setUint8(2, Opcode.OP_PING);
+  oversizedDv.setUint32(8, MAX_PAYLOAD_SIZE + 1, false);
+  const invalidOversized = parseValidatedFrame(oversizedDv);
+
+  assert(
+    MAGIC_BYTE_0 === 0xC5 &&
+      MAGIC_BYTE_1 === 0x71 &&
+      Opcode.OP_DISPLAY_ENUM === 0x0D &&
+      Opcode.OP_FRAME_SYNC === 0xED &&
+      Opcode.OP_ERR === 0xEE &&
+      MAX_PAYLOAD_SIZE === 10 * 1024 * 1024 &&
+      parsedHeader.isValid &&
+      parsedHeader.opcode === Opcode.OP_PING &&
+      parsedHeader.sequenceId === 42 &&
+      parsedHeader.payloadLength === 4 &&
+      validated.isValid &&
+      !invalidTruncated.isValid &&
+      !invalidOversized.isValid,
+    'Pillar 1 (Binary Protocol)',
+    'binaryFramer validates 0xC5 0x71 framing, canonical opcodes (0x0D/0xED/0xEE), and 10MB frame limits'
+  );
 }
 
 // Pillar 2: Heartbeat Ring Buffer & RFC 3550 Jitter Calculation
@@ -91,8 +118,8 @@ console.log('================================================================\n'
 
 // Pillar 5: Wake-on-LAN Recurring Cron & Weekday Scheduler
 {
-  const sched = (TEST_WOL_SCHEDULES || DEFAULT_WOL_SCHEDULES)[0]; // All Lab PCs
-  const targets = resolveScheduleTargets(sched, TEST_MOCK_HOSTS || INITIAL_HOSTS);
+  const sched = (TEST_WOL_SCHEDULES.length > 0 ? TEST_WOL_SCHEDULES : DEFAULT_WOL_SCHEDULES)[0]; // All Lab PCs
+  const targets = resolveScheduleTargets(sched, TEST_MOCK_HOSTS);
   assert(targets.length > 0, 'Pillar 5 (WoL Scheduler)', `Resolved ${targets.length} target devices for schedule "${sched.name}"`);
   assert(sched.days.includes('mon') && sched.days.includes('fri'), 'Pillar 5 (Weekday Resolution)', 'Scheduler contains correct weekday mapping');
 }
@@ -100,11 +127,15 @@ console.log('================================================================\n'
 // Pillar 6: HITL Tiered Risk Gate & Decision Pipeline
 {
   const dangerousCmd = 'taskkill /f /im explorer.exe';
-  const isHighRisk = dangerousCmd.includes('taskkill') || dangerousCmd.includes('rm') || dangerousCmd.includes('format');
+  const verdict = inspectCommandSecurity(dangerousCmd);
   const decisionApproved = { action: 'APPROVAL_RESPONSE', command_id: 'cmd_101', approved: true };
   const decisionRejected = { action: 'APPROVAL_RESPONSE', command_id: 'cmd_101', approved: false };
 
-  assert(isHighRisk, 'Pillar 6 (HITL Risk Assessment)', 'Accurately flags destructive commands as HIGH risk');
+  assert(
+    verdict.category === 'CRITICAL_DESTRUCTIVE' && verdict.requiresHoldConfirmation === true,
+    'Pillar 6 (HITL Risk Assessment)',
+    `Accurately flags destructive commands via inspectCommandSecurity (category=${verdict.category}, hold=${verdict.requiresHoldConfirmation})`
+  );
   assert(decisionApproved.approved === true && decisionRejected.approved === false, 'Pillar 6 (HITL Pipeline)', 'Constructs bidirectional approval/rejection frames');
 }
 

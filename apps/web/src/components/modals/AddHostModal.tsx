@@ -19,7 +19,6 @@ export interface AddHostModalProps {
   onAddHost: (newHost: HostDevice) => void;
   editingHost?: HostDevice | null;
   onEditHost?: (updatedHost: HostDevice, previousId?: string) => void;
-  existingHostsCount?: number;
 }
 
 export const AddHostModal: React.FC<AddHostModalProps> = ({
@@ -28,7 +27,6 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
   onAddHost,
   editingHost = null,
   onEditHost,
-  existingHostsCount = 3
 }) => {
   const { language } = useTranslation();
   const isBg = language === 'bg';
@@ -42,6 +40,18 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
   const [tagsInput, setTagsInput] = useState('');
   const [port, setPort] = useState('8765');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -130,7 +140,9 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
         .replace(/^-+|-+$/g, '') || `HOST-${Date.now()}`;
 
     const parsedPort = Number(port.trim()) || 8765;
+    const isEditing = Boolean(editingHost);
     const newHost: HostDevice = {
+      ...(editingHost || {}),
       id: editingHost ? editingHost.id : safeId,
       name: name.trim().toUpperCase(),
       ip: ip.trim(),
@@ -139,9 +151,17 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
       os,
       deviceType,
       isOnline,
-      lastSeen: isOnline ? 'Active (Manual host added)' : 'Offline (Ready for Wake-on-LAN)',
+      lastSeen: isEditing
+        ? editingHost!.lastSeen || (isOnline ? 'Online' : 'Offline')
+        : isOnline
+        ? 'Active (Manual host)'
+        : 'Offline (Ready for Wake-on-LAN)',
       tags,
-      specStatus: isOnline ? 'READY' : 'SLEEPING',
+      specStatus: isEditing
+        ? editingHost!.specStatus || (isOnline ? 'READY' : 'SLEEPING')
+        : isOnline
+        ? 'READY'
+        : 'SLEEPING',
       cpuUsage: editingHost?.cpuUsage ?? 0,
       ramUsage: editingHost?.ramUsage ?? 0,
       diskUsage: editingHost?.diskUsage,
@@ -165,18 +185,25 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
     setErrors({});
   };
 
-  if (!isOpen) return null;
-
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md overflow-y-auto">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.94, y: 14 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.94, y: 14 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-          className="relative w-full max-w-lg bg-[#091020]/96 backdrop-blur-3xl border border-white/15 border-t-white/25 rounded-2xl sm:rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.9)] overflow-hidden my-auto landscape-compact-modal"
+      {isOpen && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              triggerHapticFeedback('light');
+              onClose();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md overflow-y-auto"
         >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.94, y: 14 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 14 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="relative w-full max-w-lg bg-[#091020]/96 backdrop-blur-3xl border border-white/15 border-t-white/25 rounded-2xl sm:rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.9)] overflow-hidden my-auto landscape-compact-modal"
+          >
           {/* Cyber Accent Top Bar */}
           <div className="h-1 w-full bg-gradient-to-r from-cyan-500 via-teal-400 to-violet-500" />
 
@@ -455,6 +482,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
           </form>
         </motion.div>
       </div>
+      )}
     </AnimatePresence>
   );
 };

@@ -9,6 +9,7 @@ import { HitlApprovalModal } from './components/modals/HitlApprovalModal';
 import { useWorkerEngine } from './hooks/useWorkerEngine';
 import { useFleetState } from './hooks/useFleetState';
 import { useUIStore, applyAppearanceToDocument } from './store/uiStore';
+import { useScreenStore } from './store/screenStore';
 import { triggerHapticFeedback } from './services/hapticService';
 import { pairHostWithPin, saveAuthToken } from './services/securityService';
 import { AlertTriangle, ShieldAlert, X } from 'lucide-react';
@@ -55,6 +56,7 @@ export default function App() {
   const fontFamily = useUIStore((s) => s.fontFamily);
   const glassIntensity = useUIStore((s) => s.glassIntensity);
   const ambientMode = useUIStore((s) => s.ambientMode);
+  const screenBase64 = useScreenStore((s) => s.screenBase64);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -107,6 +109,9 @@ export default function App() {
         const expectedWs = `ws://${targetHost.ip}:${targetHost.port || 8765}`;
         if (agent.wsUrl !== expectedWs) {
           agent.setWsUrl(expectedWs);
+          if (agent.isConnected || agent.isReconnecting) {
+            agent.connect(expectedWs);
+          }
         }
       }
     },
@@ -162,21 +167,26 @@ export default function App() {
     return () => clearTimeout(id);
   }, [qolToast]);
 
-  // Zero-Typing URL Auto-Pairing (QR Scan on Phone) & ?setup=1 Wizard Opener
+  // Zero-Typing URL Auto-Pairing (QR Scan on Phone, reading secrets from URL # fragment first)
   useEffect(() => {
     try {
-      const params = new URLSearchParams(window.location.search);
-      const pairIp = params.get('pair_ip');
-      const setupFlag = params.get('setup');
-      const tourFlag = params.get('tour') || params.get('onboarding');
+      const searchParams = new URLSearchParams(window.location.search);
+      const rawHash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : '';
+      const hashParams = new URLSearchParams(rawHash);
+      const getParam = (key: string) => hashParams.get(key) || searchParams.get(key);
+
+      const pairIp = getParam('pair_ip');
+      const setupFlag = getParam('setup');
+      const tourFlag = getParam('tour') || getParam('onboarding');
 
       if (pairIp) {
-        const pairPort = params.get('pair_port') || '8765';
-        const pairName = params.get('pair_name') || `PC-${pairIp.split('.').pop() || 'HOST'}`;
-        const pairMac = params.get('pair_mac') || '';
-        const pairOs = params.get('pair_os') === 'linux' ? 'linux' : 'windows';
-        const pairToken = params.get('pair_token') || params.get('token');
-        const pairPin = params.get('pair_pin') || params.get('pin');
+        const parsedPort = Number(getParam('pair_port') || '8765');
+        const pairPort = Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535 ? parsedPort : 8765;
+        const pairName = getParam('pair_name') || `PC-${pairIp.split('.').pop() || 'HOST'}`;
+        const pairMac = getParam('pair_mac') || '';
+        const pairOs = getParam('pair_os') === 'linux' ? 'linux' : 'windows';
+        const pairToken = getParam('pair_token') || getParam('token');
+        const pairPin = getParam('pair_pin') || getParam('pin');
         const wsUri = `ws://${pairIp}:${pairPort}`;
 
         fleet.addCustomHost({
@@ -184,10 +194,11 @@ export default function App() {
           name: pairName,
           ip: pairIp,
           mac: pairMac,
+          port: pairPort,
           os: pairOs,
           deviceType: 'pc',
-          isOnline: true,
-          lastSeen: 'Just now',
+          isOnline: false,
+          lastSeen: 'Pairing...',
           tags: ['QR-Paired', `Port-${pairPort}`],
         });
         agent.setWsUrl(wsUri);
@@ -218,6 +229,33 @@ export default function App() {
     } catch {
       // Ignore URL parsing errors
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Hydrate persisted security & automation settings from backend on startup
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/settings', { credentials: 'include', signal: controller.signal })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        if (data?.settings) {
+          useUIStore.getState().hydrateSecuritySettings(data.settings);
+        }
+        const autoDiscovery =
+          typeof data?.settings?.isAutoDiscovery === 'boolean'
+            ? data.settings.isAutoDiscovery
+            : useUIStore.getState().isAutoDiscovery;
+        if (autoDiscovery) {
+          void fleet.scanMdns();
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted && useUIStore.getState().isAutoDiscovery) {
+          void fleet.scanMdns();
+        }
+      });
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -358,7 +396,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.1 } }}
               transition={SPRING_BUBBLY}
-              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.5rem)] left-1/2 -translate-x-1/2 z-[88] px-4 py-2 rounded-full glass-liquid-elevated border border-cyan-400/45 text-cyan-100 text-xs font-semibold shadow-lg pointer-events-none whitespace-nowrap"
+              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.5rem)] left-1/2 -translate-x-1/2 z-[96] px-4 py-2 rounded-full glass-liquid-elevated border border-cyan-400/45 text-cyan-100 text-xs font-semibold shadow-lg pointer-events-none whitespace-nowrap"
             >
               {qolToast}
             </motion.div>
@@ -473,7 +511,7 @@ export default function App() {
                       isExecuting={agent.isSendingCommand}
                       lastExecutionResult={agent.lastExecutionResult}
                       onViewScreen={handleViewScreen}
-                      screenBase64={null}
+                      screenBase64={screenBase64}
                       onRefreshScreen={agent.requestScreenRefresh}
                       isCapturingScreen={agent.isCapturingScreen}
                     />

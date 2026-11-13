@@ -529,6 +529,22 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
     }
   };
 
+  useEffect(() => {
+    if (!isFullScreen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsFullScreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFullScreen]);
+
+  const liveActiveNode = useMemo(
+    () => (activeNode ? graphData.nodes.find((n) => n.id === activeNode.id) || activeNode : null),
+    [activeNode, graphData.nodes]
+  );
+
   return (
     <div
       ref={containerRef}
@@ -679,18 +695,18 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
         </div>
 
         {/* Selected Node Inspector Flyout */}
-        {activeNode && (
+        {liveActiveNode && (
           <div className="p-3 rounded-2xl bg-slate-900/90 backdrop-blur-xl border border-cyan-400/40 shadow-2xl text-xs text-white max-w-sm pointer-events-auto flex items-start space-x-3">
             <div
               className={`p-2 rounded-xl mt-0.5 border ${
-                activeNode.isOnline
+                liveActiveNode.isOnline
                   ? 'bg-cyan-500/20 border-cyan-400/50 text-cyan-300'
                   : 'bg-slate-800 border-white/20 text-slate-400'
               }`}
             >
-              {activeNode.isController ? (
+              {liveActiveNode.isController ? (
                 <Shield className="w-4 h-4 text-cyan-300" />
-              ) : activeNode.deviceType === 'server' ? (
+              ) : liveActiveNode.deviceType === 'server' ? (
                 <Server className="w-4 h-4 text-purple-300" />
               ) : (
                 <Monitor className="w-4 h-4" />
@@ -699,31 +715,31 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
 
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-white truncate">{activeNode.name}</span>
+                <span className="font-bold text-white truncate">{liveActiveNode.name}</span>
                 <span
                   className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                    activeNode.isOnline
+                    liveActiveNode.isOnline
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : 'bg-slate-700 text-slate-400'
                   }`}
                 >
-                  {activeNode.isOnline ? `${activeNode.ping ?? 0}ms` : 'SLEEPING'}
+                  {liveActiveNode.isOnline ? `${liveActiveNode.ping ?? 0}ms` : 'SLEEPING'}
                 </span>
               </div>
 
               <div className="text-[11px] font-mono text-slate-300 mt-0.5 truncate">
-                IP: {activeNode.ip} • MAC: {activeNode.mac}
+                IP: {liveActiveNode.ip} • MAC: {liveActiveNode.mac}
               </div>
 
               {/* Action buttons if not controller */}
-              {!activeNode.isController && (
+              {!liveActiveNode.isController && (
                 <div className="mt-2 pt-2 border-t border-white/10 flex items-center gap-1.5">
-                  {!activeNode.isOnline && onSendWol && (
+                  {!liveActiveNode.isOnline && onSendWol && (
                     <button
                       type="button"
                       onClick={() => {
                         triggerHapticFeedback('heavy');
-                        const targetHost = hosts.find((h) => h.id === activeNode.id);
+                        const targetHost = hosts.find((h) => h.id === liveActiveNode.id);
                         if (targetHost) onSendWol(targetHost);
                       }}
                       className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/40 text-emerald-300 text-[11px] font-semibold flex items-center space-x-1 cursor-pointer transition"
@@ -733,12 +749,12 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
                     </button>
                   )}
 
-                  {activeNode.isOnline && onViewScreen && (
+                  {liveActiveNode.isOnline && onViewScreen && (
                     <button
                       type="button"
                       onClick={() => {
                         triggerHapticFeedback('medium');
-                        const targetHost = hosts.find((h) => h.id === activeNode.id);
+                        const targetHost = hosts.find((h) => h.id === liveActiveNode.id);
                         if (targetHost) onViewScreen(targetHost);
                       }}
                       className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/35 border border-cyan-400/40 text-cyan-300 text-[11px] font-semibold flex items-center space-x-1 cursor-pointer transition"

@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dgram from 'dgram';
-import { exec, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import os from 'os';
 import crypto from 'crypto';
 import net from 'net';
@@ -47,6 +47,91 @@ function getDaemonConfigPath(): string {
 
 function getWolSchedulesPath(): string {
   return path.join(getAppDataDir(), 'wol_schedules.json');
+}
+
+function getUiSettingsPath(): string {
+  return path.join(getAppDataDir(), 'ui_settings.json');
+}
+
+function getHostMemoryPath(): string {
+  return path.join(getAppDataDir(), 'host_memory.json');
+}
+
+interface PersistedUiSettings {
+  isAutoDiscovery: boolean;
+  isHitlEnabled: boolean;
+  isBiometricEnabled: boolean;
+  isCommandConfirmations: boolean;
+  isSystemStateAlerts: boolean;
+}
+
+const DEFAULT_UI_SETTINGS: PersistedUiSettings = {
+  isAutoDiscovery: true,
+  isHitlEnabled: true,
+  isBiometricEnabled: false,
+  isCommandConfirmations: true,
+  isSystemStateAlerts: true,
+};
+
+function readPersistedUiSettings(): PersistedUiSettings {
+  try {
+    const p = getUiSettingsPath();
+    if (!fs.existsSync(p)) return { ...DEFAULT_UI_SETTINGS };
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_UI_SETTINGS };
+    return {
+      isAutoDiscovery:
+        typeof parsed.isAutoDiscovery === 'boolean'
+          ? parsed.isAutoDiscovery
+          : DEFAULT_UI_SETTINGS.isAutoDiscovery,
+      isHitlEnabled:
+        typeof parsed.isHitlEnabled === 'boolean'
+          ? parsed.isHitlEnabled
+          : DEFAULT_UI_SETTINGS.isHitlEnabled,
+      isBiometricEnabled:
+        typeof parsed.isBiometricEnabled === 'boolean'
+          ? parsed.isBiometricEnabled
+          : DEFAULT_UI_SETTINGS.isBiometricEnabled,
+      isCommandConfirmations:
+        typeof parsed.isCommandConfirmations === 'boolean'
+          ? parsed.isCommandConfirmations
+          : DEFAULT_UI_SETTINGS.isCommandConfirmations,
+      isSystemStateAlerts:
+        typeof parsed.isSystemStateAlerts === 'boolean'
+          ? parsed.isSystemStateAlerts
+          : DEFAULT_UI_SETTINGS.isSystemStateAlerts,
+    };
+  } catch {
+    return { ...DEFAULT_UI_SETTINGS };
+  }
+}
+
+function writePersistedUiSettings(settings: PersistedUiSettings): void {
+  const p = getUiSettingsPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(settings, null, 2), { encoding: 'utf-8', mode: 0o600 });
+}
+
+interface HostMemoryRecord {
+  persistent: string[];
+  session: string[];
+}
+
+function readAllHostMemory(): Record<string, HostMemoryRecord> {
+  try {
+    const p = getHostMemoryPath();
+    if (!fs.existsSync(p)) return {};
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAllHostMemory(store: Record<string, HostMemoryRecord>): void {
+  const p = getHostMemoryPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(store, null, 2), { encoding: 'utf-8', mode: 0o600 });
 }
 
 function detectPrimaryLanIp(): string {
@@ -387,9 +472,9 @@ async function isRequestAuthenticated(req: Request): Promise<boolean> {
     }
   }
 
-  // Loopback requests without cross-origin headers are trusted local browser/CLI traffic when using same-origin UI
+  // Direct loopback requests without forwarding headers are trusted local browser/CLI traffic when using same-origin UI
   const remoteIp = req.socket.remoteAddress;
-  if (isLoopbackIp(remoteIp)) {
+  if (isLoopbackIp(remoteIp) && !req.headers['x-forwarded-for']) {
     return true;
   }
 
@@ -608,7 +693,7 @@ function getGenAI() {
 function resolveSupportedGeminiModel(requested?: string): string {
   if (!requested || typeof requested !== 'string') return 'gemini-2.5-flash';
   const clean = requested.trim();
-  if (clean === 'gemini-3.8-flash' || clean === 'gemini-3.1-flash-lite' || clean === 'gemini-flash-latest' || clean === 'gemini-pro') {
+  if (/^gemini-(?:1\.[05]|3\.\d)/i.test(clean) || clean === 'gemini-flash-latest' || clean === 'gemini-pro') {
     return 'gemini-2.5-flash';
   }
   return clean;
@@ -797,22 +882,84 @@ async function dispatchLiveAgentCommand(
 
     try {
       ws = new WebSocket(`ws://${host}:${port}`);
+      ws.binaryType = 'arraybuffer';
     } catch (err: any) {
       finish({ ok: false, error: err?.message || 'WebSocket connection initialization failed' });
       return;
     }
 
-    ws.addEventListener('open', () => {
-      ws.send(
-        JSON.stringify({
-          action: 'AUTHENTICATE',
-          token: secret,
-          device: 'AI NetController Web Control Console',
-        })
-      );
-    });
+    let outboundSeq = 0;
 
     ws.addEventListener('message', (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        const bytes = new Uint8Array(ev.data);
+        if (bytes.length < 12 || bytes[0] !== 0xc5 || bytes[1] !== 0x71) return;
+        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const opcode = dv.getUint8(2);
+        const seq = dv.getUint32(4, false);
+        const len = dv.getUint32(8, false);
+        if (len > 10 * 1024 * 1024 || bytes.length !== 12 + len) return;
+        const payload = bytes.subarray(12, 12 + len);
+
+        if (opcode === 0x06) {
+          if (len === 16) {
+            const sig = crypto
+              .createHmac('sha256', Buffer.from(secret, 'utf-8'))
+              .update(payload)
+              .digest();
+            const reply = new Uint8Array(12 + sig.length);
+            const rView = new DataView(reply.buffer);
+            reply[0] = 0xc5;
+            reply[1] = 0x71;
+            reply[2] = 0x06;
+            reply[3] = 0x00;
+            rView.setUint32(4, seq, false);
+            rView.setUint32(8, sig.length, false);
+            reply.set(sig, 12);
+            ws.send(reply);
+            return;
+          }
+          const statusStr = Buffer.from(payload).toString('utf-8').trim();
+          if (statusStr === 'OK_AUTHENTICATED' || statusStr === 'AUTH_OK') {
+            authenticated = true;
+            outboundSeq += 1;
+            ws.send(JSON.stringify({ ...messagePayload, _seq: outboundSeq }));
+            if (!awaitEvent) {
+              setTimeout(() => finish({ ok: true, response: { event: 'AUTHENTICATED' } }), 40);
+            }
+          } else if (statusStr) {
+            finish({ ok: false, error: statusStr });
+          }
+          return;
+        }
+
+        if (!authenticated) {
+          if (opcode === 0xee) {
+            const errStr = Buffer.from(payload).toString('utf-8');
+            finish({ ok: false, error: errStr || 'Agent authentication rejected' });
+          }
+          return;
+        }
+
+        try {
+          const text = Buffer.from(payload).toString('utf-8');
+          const parsedBin = text.startsWith('{') ? JSON.parse(text) : { output: text };
+          if (opcode === 0xee) {
+            finish({ ok: false, error: parsedBin.error || parsedBin.output || 'Agent returned OP_ERR' });
+          } else if (
+            opcode === 0x04 &&
+            (!awaitEvent || awaitEvent === 'EXECUTION_RESULT' || awaitEvent === 'SHELL_RESULT')
+          ) {
+            finish({ ok: true, response: { event: 'EXECUTION_RESULT', ...parsedBin } });
+          } else if (opcode === 0x05 && awaitEvent === 'HITL_REQUIRED') {
+            finish({ ok: true, response: { event: 'HITL_REQUIRED', ...parsedBin } });
+          }
+        } catch {
+          // ignore malformed payload
+        }
+        return;
+      }
+
       if (typeof ev.data !== 'string') return;
       let parsed: any;
       try {
@@ -824,7 +971,8 @@ async function dispatchLiveAgentCommand(
       if (!authenticated) {
         if (parsed.event === 'AUTHENTICATED') {
           authenticated = true;
-          ws.send(JSON.stringify(messagePayload));
+          outboundSeq += 1;
+          ws.send(JSON.stringify({ ...messagePayload, _seq: outboundSeq }));
           if (!awaitEvent) {
             setTimeout(() => finish({ ok: true, response: parsed }), 40);
           }
@@ -1011,7 +1159,7 @@ app.post('/api/releases/rebuild', requireControlAuth, (_req: Request, res: Respo
   if (!fs.existsSync(scriptPath)) {
     return res.status(404).json({ success: false, error: 'scripts/build_release_binaries.py not found' });
   }
-  execFile(getPythonBin(), [scriptPath], { cwd: ROOT_DIR, timeout: 120_000 }, (err, stdout, stderr) => {
+  execFile(getPythonBin(), [scriptPath], { cwd: ROOT_DIR, timeout: 120_000, env: createSafeChildEnv() }, (err, stdout, stderr) => {
     cachedReleasesPayload = null;
     if (err) {
       return res.status(500).json({ success: false, error: stderr || err.message });
@@ -1162,6 +1310,128 @@ app.delete('/api/ai/models/:id', requireControlAuth, (req: Request, res: Respons
   });
 });
 
+app.get('/api/settings', async (_req: Request, res: Response) => {
+  try {
+    const stored = readPersistedUiSettings();
+    const cfg = await loadDaemonConfig();
+    const settings: PersistedUiSettings = {
+      ...stored,
+      isAutoDiscovery:
+        typeof cfg.mdns_enabled === 'boolean' ? cfg.mdns_enabled : stored.isAutoDiscovery,
+      isHitlEnabled:
+        typeof cfg.require_hitl_approval === 'boolean'
+          ? cfg.require_hitl_approval
+          : stored.isHitlEnabled,
+    };
+    return res.json({ success: true, settings });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/settings', requireControlAuth, async (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const current = readPersistedUiSettings();
+    const next: PersistedUiSettings = {
+      isAutoDiscovery:
+        typeof body.isAutoDiscovery === 'boolean' ? body.isAutoDiscovery : current.isAutoDiscovery,
+      isHitlEnabled:
+        typeof body.isHitlEnabled === 'boolean' ? body.isHitlEnabled : current.isHitlEnabled,
+      isBiometricEnabled:
+        typeof body.isBiometricEnabled === 'boolean'
+          ? body.isBiometricEnabled
+          : current.isBiometricEnabled,
+      isCommandConfirmations:
+        typeof body.isCommandConfirmations === 'boolean'
+          ? body.isCommandConfirmations
+          : current.isCommandConfirmations,
+      isSystemStateAlerts:
+        typeof body.isSystemStateAlerts === 'boolean'
+          ? body.isSystemStateAlerts
+          : current.isSystemStateAlerts,
+    };
+
+    writePersistedUiSettings(next);
+
+    const daemonPatch: Partial<DaemonConfigData> = {};
+    if (typeof body.isAutoDiscovery === 'boolean') {
+      daemonPatch.mdns_enabled = next.isAutoDiscovery;
+    }
+    if (typeof body.isHitlEnabled === 'boolean') {
+      daemonPatch.require_hitl_approval = next.isHitlEnabled;
+    }
+    if (Object.keys(daemonPatch).length > 0) {
+      await saveDaemonConfigPatch(daemonPatch);
+    }
+
+    return res.json({ success: true, settings: next });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/memory/:hostId', (req: Request, res: Response) => {
+  const hostId = String(req.params.hostId || '').trim();
+  if (!hostId || hostId.length > 128) {
+    return res.status(400).json({ error: 'Invalid hostId' });
+  }
+  const store = readAllHostMemory();
+  const hasSavedRecord = Boolean(store[hostId]);
+  const record = store[hostId] || { persistent: [], session: [] };
+  return res.json({
+    success: true,
+    hostId,
+    exists: hasSavedRecord,
+    persistent: Array.isArray(record.persistent) ? record.persistent : [],
+    session: Array.isArray(record.session) ? record.session : [],
+  });
+});
+
+app.post('/api/memory/:hostId', requireControlAuth, (req: Request, res: Response) => {
+  try {
+    const hostId = String(req.params.hostId || '').trim();
+    if (!hostId || hostId.length > 128) {
+      return res.status(400).json({ error: 'Invalid hostId' });
+    }
+    const sanitizeRules = (raw: unknown): string[] =>
+      Array.isArray(raw)
+        ? raw
+            .map((item) => String(item ?? '').trim())
+            .filter((item) => item.length > 0 && item.length <= 500)
+            .slice(0, 200)
+        : [];
+
+    const store = readAllHostMemory();
+    const prev = store[hostId] || { persistent: [], session: [] };
+    const body = req.body || {};
+
+    const nextRecord: HostMemoryRecord = {
+      persistent: Array.isArray(prev.persistent) ? prev.persistent : [],
+      session: Array.isArray(prev.session) ? prev.session : [],
+    };
+
+    if (body.type === 'persistent' && Array.isArray(body.instructions)) {
+      nextRecord.persistent = sanitizeRules(body.instructions);
+    } else if (body.type === 'session' && Array.isArray(body.instructions)) {
+      nextRecord.session = sanitizeRules(body.instructions);
+    } else {
+      if (Array.isArray(body.persistent)) {
+        nextRecord.persistent = sanitizeRules(body.persistent);
+      }
+      if (Array.isArray(body.session)) {
+        nextRecord.session = sanitizeRules(body.session);
+      }
+    }
+
+    store[hostId] = nextRecord;
+    writeAllHostMemory(store);
+    return res.json({ success: true, hostId, ...nextRecord });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post('/api/ai/models/test', requireControlAuth, async (req: Request, res: Response) => {
   const start = performance.now();
   try {
@@ -1253,14 +1523,24 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         break;
       }
       case 'toggle_hitl': {
-        const nextVal = !(cfg.require_hitl_approval !== false);
+        const nextVal =
+          typeof req.body?.enabled === 'boolean'
+            ? req.body.enabled
+            : !(cfg.require_hitl_approval !== false);
         await saveDaemonConfigPatch({ require_hitl_approval: nextVal });
+        const curUi = readPersistedUiSettings();
+        writePersistedUiSettings({ ...curUi, isHitlEnabled: nextVal });
         addServerLog('SECURITY', `HITL approval gate ${nextVal ? 'ENABLED' : 'DISABLED'} in host config.`);
         break;
       }
       case 'toggle_mdns': {
-        const nextVal = !(cfg.mdns_enabled !== false);
+        const nextVal =
+          typeof req.body?.enabled === 'boolean'
+            ? req.body.enabled
+            : !(cfg.mdns_enabled !== false);
         await saveDaemonConfigPatch({ mdns_enabled: nextVal });
+        const curUi = readPersistedUiSettings();
+        writePersistedUiSettings({ ...curUi, isAutoDiscovery: nextVal });
         addServerLog('INFO', `mDNS advertisement ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
@@ -1462,7 +1742,7 @@ app.get('/api/setup/info', requireControlAuth, async (_req: Request, res: Respon
         pairingPin: snap.pairingPin,
         daemonOnline: snap.isRunning,
         webOrigin,
-        mobilePairUrl: `${webOrigin}/?${pairParams.toString()}`,
+        mobilePairUrl: `${webOrigin}/#${pairParams.toString()}`,
         exeDownloadUrl: `/releases/v${APP_VERSION}/AI_NetController_HostAgent_v${APP_VERSION}_win64.exe`,
         apkDownloadUrl: `/releases/v${APP_VERSION}/AI_NetController_v${APP_VERSION}_arm64-v8a.apk`,
         portableZipUrl: `/releases/v${APP_VERSION}/AI_NetController_HostAgent_v${APP_VERSION}_win64_portable.zip`,
@@ -1493,8 +1773,8 @@ app.get('/api/setup/windows-launcher', requireControlAuth, async (_req: Request,
     '    if exist "agent\\requirements.txt" python -m pip install -r agent\\requirements.txt --quiet',
     ')',
     `netsh advfirewall firewall add rule name="AI NetController Daemon" dir=in action=allow protocol=TCP localport=${safePort} profile=private >nul 2>nul`,
-    'if exist "AI_NetController_HostAgent_v0.50.0_win64.exe" (',
-    '    start "AI NetController Host Agent" "AI_NetController_HostAgent_v0.50.0_win64.exe"',
+    `if exist "AI_NetController_HostAgent_v${APP_VERSION}_win64.exe" (`,
+    `    start "AI NetController Host Agent" "AI_NetController_HostAgent_v${APP_VERSION}_win64.exe"`,
     ') else if exist "agent\\agent_daemon.py" (',
     '    start "AI NetController Host Agent" python "agent\\agent_daemon.py"',
     ')',
@@ -1861,6 +2141,8 @@ interface PersistedWolSchedule {
   targetType: 'single' | 'all' | 'tag' | 'selected';
   targetHostId?: string;
   mac?: string;
+  targetMacs?: string[];
+  secureOn?: string;
   broadcastIp?: string;
   port?: number;
   enabled: boolean;
@@ -1896,15 +2178,36 @@ setInterval(async () => {
 
   for (const sched of schedules) {
     if (!sched.enabled || sched.time !== hhmm) continue;
-    if (Array.isArray(sched.days) && sched.days.length > 0 && !sched.days.includes(dayKey)) continue;
-    if (!sched.mac || firedScheduleMinuteKey.get(sched.id) === minuteStamp) continue;
+    const normalizedDays = Array.isArray(sched.days)
+      ? sched.days.map((d) => String(d).trim().toLowerCase().slice(0, 3))
+      : [];
+    if (normalizedDays.length > 0 && !normalizedDays.includes(dayKey)) continue;
+    if (firedScheduleMinuteKey.get(sched.id) === minuteStamp) continue;
+
+    const macTargets = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(sched.targetMacs) ? sched.targetMacs : []),
+          ...(sched.mac ? [sched.mac] : []),
+        ]
+          .map((m) => String(m || '').trim())
+          .filter(Boolean)
+      )
+    );
+    if (macTargets.length === 0) continue;
 
     firedScheduleMinuteKey.set(sched.id, minuteStamp);
-    try {
-      await sendRealWolPacket(sched.mac, sched.broadcastIp || '255.255.255.255', Number(sched.port || 9));
-      addServerLog('INFO', `[WoL Scheduler] Triggered scheduled wake "${sched.name}" (${sched.mac}) at ${hhmm}`);
-    } catch (err: any) {
-      addServerLog('WARN', `[WoL Scheduler] Failed scheduled wake "${sched.name}": ${err?.message}`);
+    const broadcastIp = sched.broadcastIp || '255.255.255.255';
+    const port = Number(sched.port || 9);
+    const secureOn = String(sched.secureOn || '');
+
+    for (const targetMac of macTargets) {
+      try {
+        await sendRealWolPacket(targetMac, broadcastIp, port, secureOn);
+        addServerLog('INFO', `[WoL Scheduler] Triggered scheduled wake "${sched.name}" (${targetMac}) at ${hhmm}`);
+      } catch (err: any) {
+        addServerLog('WARN', `[WoL Scheduler] Failed scheduled wake "${sched.name}" (${targetMac}): ${err?.message}`);
+      }
     }
   }
 }, 20_000).unref();
@@ -2080,8 +2383,10 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
     /%[a-zA-Z0-9_]+:~-?\d+,-?\d+%/,
     /\$env:[a-zA-Z0-9_]+/i,
     /![a-zA-Z0-9_]+!/,
+    /\$\{IFS\}/i,
     /\b(?:0x[0-9a-f]{8}|0[0-7]{10,})\b/i,
     /\b(?:certutil\s+.*-urlcache|bitsadmin\s+.*\/transfer|mshta\s+https?:|regsvr32\s+.*\/i:https?:|rundll32\s+javascript:)/i,
+    /(?:^|\s|\S)(?:\d?>>?|<)(?!=)[^\r\n]*(?:\\windows\\|system32|syswow64|\/etc\/|\/usr\/|\/bin\/|\/sbin\/|\.ssh|\\startup\\)/i,
   ];
 
   for (const pattern of criticalBlockPatterns) {
@@ -2097,12 +2402,20 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
     }
   }
 
+  const hasInlineExec =
+    /\b(?:python|python3|py|node|perl|ruby|php|bash|sh|zsh|powershell|pwsh|cmd)(?:\.exe)?\b[^\r\n]*\s(?:-c|-e|-r|\/c|\/k|-command)\b/i.test(
+      deobfuscatedCmd
+    );
+  const hasPosixBackslashEscape = /(?:^|\s)\\[a-zA-Z]{2,}/.test(trimmed);
+
   const isHighRisk =
     hasEvasionArtifacts ||
+    hasInlineExec ||
+    hasPosixBackslashEscape ||
     /\b(?:rmdir|del|rm|format|diskpart|shutdown|reboot|Restart-Computer|Stop-Computer|reg\s+delete|bcdedit|vssadmin)\b/i.test(
       deobfuscatedCmd
     ) ||
-    /[;&|`$()\r\n]/.test(trimmed);
+    /[;&|`$()<>\r\n]/.test(trimmed);
 
   if (isHighRisk) {
     return {
@@ -2136,6 +2449,10 @@ const SCRUBBED_CHILD_ENV_KEYS = new Set([
   'ANTHROPIC_API_KEY',
   'GITHUB_TOKEN',
   'GH_TOKEN',
+  'GITLAB_TOKEN',
+  'GL_TOKEN',
+  'AWS_SECRET_ACCESS_KEY',
+  'NPM_TOKEN',
 ]);
 
 function createSafeChildEnv(): NodeJS.ProcessEnv {
@@ -2185,7 +2502,7 @@ app.post('/api/command/execute', requireControlAuth, async (req: Request, res: R
     const daemonPort = Number(cfg.port || 8765);
     const targetIp = String(hostIp || '127.0.0.1');
 
-    // Route execution through the live sandboxed Python Host Agent if available
+    // Route execution strictly through the live sandboxed Python Host Agent (never local Node exec)
     const agentExec = await dispatchLiveAgentCommand(
       targetIp,
       daemonPort,
@@ -2207,26 +2524,6 @@ app.post('/api/command/execute', requireControlAuth, async (req: Request, res: R
         viaAgent: true,
         timestamp: new Date().toISOString(),
       });
-    }
-
-    // If explicitly targeting localhost and Python daemon isn't running, execute directly only on SAFE non-chaining commands
-    if (isLoopbackIp(targetIp) && !inspection.requiresConfirmation) {
-      const startTime = Date.now();
-      exec(
-        inspection.sanitizedCmd,
-        { timeout: 15000, maxBuffer: 1024 * 1024, env: createSafeChildEnv() },
-        (error, stdout, stderr) => {
-          return res.json({
-            success: !error,
-            output: stdout || stderr || (error ? error.message : 'Command executed with exit code 0'),
-            durationMs: Date.now() - startTime,
-            hostId,
-            viaAgent: false,
-            timestamp: new Date().toISOString(),
-          });
-        }
-      );
-      return;
     }
 
     return res.status(503).json({
@@ -2777,7 +3074,7 @@ async function startServer() {
       configFile: path.resolve(__dirname, 'vite.config.ts'),
       server: {
         middlewareMode: true,
-        hmr: false,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
       },
       appType: 'spa',
     });

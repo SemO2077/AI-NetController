@@ -98,6 +98,7 @@ export function useWorkerEngine({
             setIsConnected(true);
             setIsConnecting(false);
             setIsReconnecting(false);
+            setIsSendingCommand(false);
             setHeartbeatStatus('healthy');
             setUnreachableAlert(null);
             triggerHapticFeedback('medium');
@@ -117,6 +118,18 @@ export function useWorkerEngine({
             setIsReconnecting(false);
             setHeartbeatStatus('idle');
             logStore.addLog('SYSTEM_MDNS', 'GATEWAY', 'info', message || 'WebSocket сървърът е в режим на готовност (Lab mode).');
+          } else if (status === 'auth_required') {
+            setIsConnected(false);
+            setIsConnecting(false);
+            setIsReconnecting(false);
+            setIsSendingCommand(false);
+            setHeartbeatStatus('idle');
+            const authMsg = message || 'PSK authentication token required before connecting.';
+            setSecurityAlert({
+              title: useUIStore.getState().language === 'bg' ? 'Необходима е автентикация' : 'Authentication Required',
+              reason: authMsg,
+            });
+            logStore.addLog('SYSTEM_MDNS', targetIdRef.current || 'GATEWAY', 'warn', authMsg);
           } else if (status === 'degraded') {
             setHeartbeatStatus('warning');
             logStore.addLog('SYSTEM_MDNS', targetIdRef.current, 'warn', 'Heartbeat забавяне: хостът забави PONG отговора.');
@@ -124,6 +137,8 @@ export function useWorkerEngine({
             setIsConnected(false);
             setIsConnecting(false);
             setIsReconnecting(false);
+            setIsSendingCommand(false);
+            setIsCapturingScreen(false);
             setHeartbeatStatus('idle');
             const alertMsg = message || 'WebSocket хостът не отговори в рамките на 3.5s.';
             setUnreachableAlert({ message: alertMsg });
@@ -135,27 +150,37 @@ export function useWorkerEngine({
             setIsConnected(false);
             setIsConnecting(false);
             setIsReconnecting(false);
+            setIsSendingCommand(false);
+            setIsCapturingScreen(false);
             setHeartbeatStatus('idle');
             setLatency(null);
           } else if (status === 'error') {
             setIsConnected(false);
             setIsConnecting(false);
             setIsReconnecting(false);
+            setIsSendingCommand(false);
+            setIsCapturingScreen(false);
             setHeartbeatStatus('idle');
           }
           break;
         }
 
         case 'METRICS': {
-          setLatency(rtt);
+          const validRtt = typeof rtt === 'number' && Number.isFinite(rtt) ? rtt : null;
+          setLatency(validRtt);
+          const validHistory = Array.isArray(history)
+            ? history.filter((n: unknown): n is number => typeof n === 'number' && Number.isFinite(n))
+            : [];
+          const samples = validHistory.length ? validHistory : (validRtt !== null ? [validRtt] : [0]);
+          const sum = samples.reduce((a: number, b: number) => a + b, 0);
           setHeartbeatMetrics({
-            currentLatencyMs: rtt,
-            history: history || [],
+            currentLatencyMs: validRtt ?? samples[samples.length - 1] ?? 0,
+            history: validHistory,
             jitterMs: jitter ?? 0,
-            minLatencyMs: Math.min(...(history?.length ? history : [rtt])),
-            maxLatencyMs: Math.max(...(history?.length ? history : [rtt])),
-            avgLatencyMs: Math.round((history?.length ? history : [rtt]).reduce((a: number, b: number) => a + b, 0) / (history?.length || 1)),
-            status: 'healthy',
+            minLatencyMs: Math.min(...samples),
+            maxLatencyMs: Math.max(...samples),
+            avgLatencyMs: Math.round(sum / samples.length),
+            status: (validRtt ?? 0) > 180 ? 'warning' : 'healthy',
           });
           break;
         }
@@ -180,7 +205,13 @@ export function useWorkerEngine({
         }
 
         case 'JSON_FRAME': {
-          if (data.event === 'APPROVAL_REQUIRED' || data.event === 'HITL_REQUIRED') {
+          if (data.event === 'AUTHENTICATED') {
+            setUnreachableAlert(null);
+            setIsConnected(true);
+            setIsConnecting(false);
+            setIsReconnecting(false);
+            setHeartbeatStatus('healthy');
+          } else if (data.event === 'APPROVAL_REQUIRED' || data.event === 'HITL_REQUIRED') {
             triggerHapticFeedback('warning');
             setActiveHitlEvent({
               event: 'APPROVAL_REQUIRED',
@@ -200,10 +231,17 @@ export function useWorkerEngine({
             setIsSendingCommand(false);
           } else if (data.event === 'DISPLAY_ENUM' && Array.isArray(data.monitors)) {
             setAvailableDisplays(data.monitors);
+          } else if (data.event === 'CLIPBOARD_SYNC' && typeof data.text === 'string') {
+            logStore.addLog('HOST_AGENT', data.target_id || targetIdRef.current, 'info', 'Clipboard synchronized from remote host.');
+          } else if (data.event === 'LLM_STREAM' && typeof data.chunk === 'string') {
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('ai-netcontroller-llm-chunk', { detail: { chunk: data.chunk, seq: data.seq } }));
+            }
           } else if (data.event === 'ERROR') {
             setIsSendingCommand(false);
+            setIsCapturingScreen(false);
             const errMsg = data.error || data.message || 'Host agent rejected request.';
-            logStore.addLog('HOST_AGENT', targetIdRef.current, 'error', errMsg);
+            logStore.addLog('HOST_AGENT', data.target_id || targetIdRef.current, 'error', errMsg);
             setLastExecutionResult({
               event: 'EXECUTION_RESULT',
               command_id: data.command_id || `err_${Date.now()}`,
@@ -216,11 +254,12 @@ export function useWorkerEngine({
             });
           } else if (data.event === 'EXECUTION_RESULT' || data.event === 'SHELL_RESULT') {
             setIsSendingCommand(false);
+            const resolvedTargetId = data.target_id || targetIdRef.current;
             const normalizedStatus = data.status === 'error' ? 'failed' : (data.status || 'success');
             setLastExecutionResult({
               event: 'EXECUTION_RESULT',
               command_id: data.command_id || `cmd_${Date.now()}`,
-              target_id: data.target_id || targetIdRef.current,
+              target_id: resolvedTargetId,
               status: normalizedStatus,
               output: data.output ?? '',
               exit_code: data.exit_code ?? (normalizedStatus === 'success' ? 0 : 1),
@@ -230,12 +269,14 @@ export function useWorkerEngine({
                   ? data.timestamp
                   : new Date().toLocaleTimeString('en-GB', { hour12: false }),
             });
-            if (normalizedStatus === 'success') {
-              hostCircuitBreaker.recordSuccess(targetIdRef.current);
-              setCircuitTrippedHosts((prev) => prev.filter((id) => id !== targetIdRef.current));
-            } else if (normalizedStatus === 'failed') {
-              if (hostCircuitBreaker.recordFailure(targetIdRef.current)) {
-                setCircuitTrippedHosts((prev) => Array.from(new Set([...prev, targetIdRef.current])));
+            if (resolvedTargetId) {
+              if (normalizedStatus === 'success') {
+                hostCircuitBreaker.recordSuccess(resolvedTargetId);
+                setCircuitTrippedHosts((prev) => prev.filter((id) => id !== resolvedTargetId));
+              } else if (normalizedStatus === 'failed') {
+                if (hostCircuitBreaker.recordFailure(resolvedTargetId)) {
+                  setCircuitTrippedHosts((prev) => Array.from(new Set([...prev, resolvedTargetId])));
+                }
               }
             }
             triggerHapticFeedback('light');
@@ -248,7 +289,9 @@ export function useWorkerEngine({
     return () => {
       if (currentBlobUrlRef.current) {
         URL.revokeObjectURL(currentBlobUrlRef.current);
+        currentBlobUrlRef.current = null;
       }
+      useScreenStore.getState().setScreenBase64(null);
       worker.terminate();
     };
   }, []);
@@ -279,6 +322,11 @@ export function useWorkerEngine({
     setIsConnected(false);
     setIsConnecting(false);
     setIsReconnecting(false);
+    setIsSendingCommand(false);
+    setIsCapturingScreen(false);
+    setHeartbeatStatus('idle');
+    setActiveHitlEvent(null);
+    pendingHitlCommandRef.current = null;
     setLatency(null);
   }, []);
 
@@ -406,9 +454,15 @@ export function useWorkerEngine({
         isBg ? `Команда: "${cmd.prompt}" [Риск: ${verdict.riskLevel}]` : `Command: "${cmd.prompt}" [Risk: ${verdict.riskLevel}]`
       );
 
-      // 5. Critical Destructive Command: Enforce interactive HITL confirmation gate BEFORE dispatching
-      if (verdict.requiresHoldConfirmation) {
-        const hitlCmdId = `cmd_sec_${Date.now()}`;
+      // 5. Critical Destructive commands ALWAYS enforce interactive HITL confirmation (fail-closed).
+      // Non-critical HIGH_RISK commands additionally trigger HITL confirmation when isHitlEnabled is on.
+      const requiresHitlGate =
+        verdict.requiresHoldConfirmation ||
+        verdict.category === 'CRITICAL_DESTRUCTIVE' ||
+        (verdict.category === 'HIGH_RISK' && useUIStore.getState().isHitlEnabled);
+
+      if (requiresHitlGate) {
+        const hitlCmdId = cmd.command_id || `cmd_sec_${Date.now()}`;
         pendingHitlCommandRef.current = {
           commandId: hitlCmdId,
           cmd,
@@ -433,7 +487,8 @@ export function useWorkerEngine({
           payload: {
             action: 'EXECUTE_PROMPT',
             target_id: cmd.target_id,
-            command_id: `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            command_type: cmd.command_type,
+            command_id: cmd.command_id || `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             prompt: cmd.prompt,
             session_rules: cmd.session_instruction || '',
             request_screenshot: cmd.request_screenshot ?? true,
@@ -491,6 +546,7 @@ export function useWorkerEngine({
             payload: {
               action: 'EXECUTE_PROMPT',
               target_id: pendingLocal.cmd.target_id,
+              command_type: pendingLocal.cmd.command_type,
               command_id: commandId,
               prompt: pendingLocal.cmd.prompt,
               session_rules: pendingLocal.cmd.session_instruction || '',
@@ -525,6 +581,7 @@ export function useWorkerEngine({
             command_id: commandId,
             approval_id: prevHitl?.approval_id || commandId,
             challenge_nonce: prevHitl?.challenge_nonce,
+            command: prevHitl?.proposed_command || '',
             signature: prevHitl?.signature,
             approved: decision === 'APPROVED',
           },
@@ -549,12 +606,24 @@ export function useWorkerEngine({
   );
 
   const requestScreenRefresh = useCallback(
-    (_deviceId: string) => {
+    (_deviceId: string, dimensions?: { width: number; height: number }) => {
       if (isConnected) {
         setIsCapturingScreen(true);
+        if (dimensions && dimensions.width > 0 && dimensions.height > 0) {
+          workerRef.current?.postMessage({
+            type: 'SEND_OPCODE',
+            payload: {
+              opcode: 0x0a,
+              data: JSON.stringify({
+                width: Math.round(dimensions.width),
+                height: Math.round(dimensions.height),
+              }),
+            },
+          });
+        }
         workerRef.current?.postMessage({
           type: 'SEND_OPCODE',
-          payload: { opcode: 0x0a, data: JSON.stringify({ width: 1280, height: 720 }) },
+          payload: { opcode: 0xed, data: '{}' },
         });
       } else {
         setIsCapturingScreen(false);

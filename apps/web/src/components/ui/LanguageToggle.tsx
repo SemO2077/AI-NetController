@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { motion } from 'motion/react';
 import { Languages } from 'lucide-react';
 import { useTranslation, Language } from '../../i18n/useTranslation';
@@ -14,6 +14,7 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
   variant = 'pill',
 }) => {
   const { language, setLanguage, toggleLanguage } = useTranslation();
+  const segmentLayoutId = `langActiveSegment-${useId()}`;
 
   const handleSelect = (lang: Language) => {
     if (lang === language) return;
@@ -26,7 +27,7 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
       <div
         className={`glass-liquid-subtle p-1 rounded-full flex items-center border border-white/10 select-none ${className}`}
         role="group"
-        aria-label="Language selection"
+        aria-label={language === 'bg' ? 'Избор на език' : 'Language selection'}
       >
         <button
           type="button"
@@ -37,7 +38,7 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
         >
           {language === 'bg' && (
             <motion.div
-              layoutId="langActiveSegment"
+              layoutId={segmentLayoutId}
               className="absolute inset-0 rounded-full bg-cyan-500/25 border border-cyan-400/50 shadow-[0_0_12px_rgba(0,212,255,0.25)]"
               transition={{ type: 'spring', stiffness: 450, damping: 28 }}
             />
@@ -54,7 +55,7 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
         >
           {language === 'en' && (
             <motion.div
-              layoutId="langActiveSegment"
+              layoutId={segmentLayoutId}
               className="absolute inset-0 rounded-full bg-cyan-500/25 border border-cyan-400/50 shadow-[0_0_12px_rgba(0,212,255,0.25)]"
               transition={{ type: 'spring', stiffness: 450, damping: 28 }}
             />
