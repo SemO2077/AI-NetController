@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   HardDrive,
@@ -10,6 +10,7 @@ import {
   Monitor,
   ShieldCheck,
   RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 import { HostDevice } from '../../types';
 import { useTranslation } from '../../i18n/useTranslation';
@@ -118,6 +119,42 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
   const [newPersistentRule, setNewPersistentRule] = useState('');
   const [newSessionRule, setNewSessionRule] = useState('');
   const [savedFeedback, setSavedFeedback] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const feedbackTimerRef = useRef<number | null>(null);
+  const onUpdateInstructionsRef = useRef(onUpdateInstructions);
+  onUpdateInstructionsRef.current = onUpdateInstructions;
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current !== null) {
+        window.clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedHostId || typeof fetch !== 'function') return;
+    const controller = new AbortController();
+    setSyncError(null);
+    fetch(`/api/memory/${encodeURIComponent(selectedHostId)}`, {
+      credentials: 'include',
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (controller.signal.aborted || !data?.exists) return;
+        if (Array.isArray(data.persistent)) {
+          onUpdateInstructionsRef.current(selectedHostId, 'persistent', data.persistent);
+        }
+        if (Array.isArray(data.session)) {
+          onUpdateInstructionsRef.current(selectedHostId, 'session', data.session);
+        }
+      })
+      .catch(() => {});
+
+    return () => controller.abort();
+  }, [selectedHostId]);
 
   const selectedHost = hosts.find((h) => h.id === selectedHostId) || hosts[0];
 
@@ -126,7 +163,48 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
 
   const triggerFeedback = () => {
     setSavedFeedback(true);
-    setTimeout(() => setSavedFeedback(false), 2200);
+    if (feedbackTimerRef.current !== null) {
+      window.clearTimeout(feedbackTimerRef.current);
+    }
+    feedbackTimerRef.current = window.setTimeout(() => {
+      feedbackTimerRef.current = null;
+      setSavedFeedback(false);
+    }, 2200);
+  };
+
+  const persistMemoryUpdate = async (
+    hostId: string,
+    type: 'persistent' | 'session',
+    instructions: string[]
+  ) => {
+    onUpdateInstructions(hostId, type, instructions);
+    triggerFeedback();
+    setSyncError(null);
+
+    if (typeof fetch !== 'function') return;
+    try {
+      const res = await fetch(`/api/memory/${encodeURIComponent(hostId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ type, instructions }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setSyncError(
+          data.error ||
+            (isBg
+              ? `Неуспешна синхронизация на паметта (HTTP ${res.status}).`
+              : `Failed to sync host memory (HTTP ${res.status}).`)
+        );
+      }
+    } catch {
+      setSyncError(
+        isBg
+          ? 'Контролният сървър е недостъпен — промените са запазени локално.'
+          : 'Control server unavailable — changes saved locally only.'
+      );
+    }
   };
 
   const handleAddPersistent = (e: React.FormEvent) => {
@@ -134,9 +212,8 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
     if (!newPersistentRule.trim() || !selectedHost) return;
     triggerHapticFeedback('medium');
     const updated = [...persistentRules, newPersistentRule.trim()];
-    onUpdateInstructions(selectedHost.id, 'persistent', updated);
     setNewPersistentRule('');
-    triggerFeedback();
+    void persistMemoryUpdate(selectedHost.id, 'persistent', updated);
   };
 
   const handleAddPresetRule = (type: 'persistent' | 'session', text: string) => {
@@ -147,16 +224,14 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
       (r) => localizeRuleText(r, isBg).toLowerCase() === text.toLowerCase()
     );
     if (alreadyExists) return;
-    onUpdateInstructions(selectedHost.id, type, [...currentList, text]);
-    triggerFeedback();
+    void persistMemoryUpdate(selectedHost.id, type, [...currentList, text]);
   };
 
   const handleRemovePersistent = (index: number) => {
     if (!selectedHost) return;
     triggerHapticFeedback('light');
     const updated = persistentRules.filter((_, i) => i !== index);
-    onUpdateInstructions(selectedHost.id, 'persistent', updated);
-    triggerFeedback();
+    void persistMemoryUpdate(selectedHost.id, 'persistent', updated);
   };
 
   const handleAddSession = (e: React.FormEvent) => {
@@ -164,24 +239,21 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
     if (!newSessionRule.trim() || !selectedHost) return;
     triggerHapticFeedback('medium');
     const updated = [...sessionRules, newSessionRule.trim()];
-    onUpdateInstructions(selectedHost.id, 'session', updated);
     setNewSessionRule('');
-    triggerFeedback();
+    void persistMemoryUpdate(selectedHost.id, 'session', updated);
   };
 
   const handleRemoveSession = (index: number) => {
     if (!selectedHost) return;
     triggerHapticFeedback('light');
     const updated = sessionRules.filter((_, i) => i !== index);
-    onUpdateInstructions(selectedHost.id, 'session', updated);
-    triggerFeedback();
+    void persistMemoryUpdate(selectedHost.id, 'session', updated);
   };
 
   const handleClearSession = () => {
     if (!selectedHost) return;
     triggerHapticFeedback('medium');
-    onUpdateInstructions(selectedHost.id, 'session', []);
-    triggerFeedback();
+    void persistMemoryUpdate(selectedHost.id, 'session', []);
   };
 
   const persistentPresets = isBg
@@ -272,6 +344,17 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
                 ? `Правилата за ${selectedHost?.name} са синхронизирани успешно!`
                 : `Memory rules for ${selectedHost?.name} synchronized successfully!`}
             </span>
+          </motion.div>
+        )}
+        {syncError && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className="p-3 bg-amber-500/15 border border-amber-500/35 rounded-xl text-amber-200 text-xs flex items-center gap-2"
+          >
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+            <span>{syncError}</span>
           </motion.div>
         )}
       </AnimatePresence>

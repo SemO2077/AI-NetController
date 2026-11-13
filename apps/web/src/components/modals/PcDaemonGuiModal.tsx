@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import QRCode from 'qrcode';
 import {
@@ -122,9 +122,9 @@ interface PcDaemonGuiModalProps {
   onOpenCodeReleases?: () => void;
 }
 
-const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
+const INITIAL_DAEMON_STATE: DaemonStateSnapshot = {
   version: '0.50.0',
-  protocol: 'AI-NET/3.0-SECURE',
+  protocol: 'AI-NET/3.0',
   hostname: 'LOCAL-HOST',
   osName: 'Windows / Linux Host',
   localIp: '127.0.0.1',
@@ -133,15 +133,15 @@ const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
   uptime: '00:00:00',
   isRunning: false,
   isPaused: false,
-  mdnsEnabled: true,
+  mdnsEnabled: false,
   viewOnlyMode: false,
   requireHitlApproval: true,
   clipboardSyncAllowed: true,
   autoLockOnDisconnect: false,
   autoBanIntrusion: true,
   subnetGeofenceOnly: true,
-  autoStartOnBoot: true,
-  targetFps: 60,
+  autoStartOnBoot: false,
+  targetFps: 30,
   setupCompleted: false,
   securityProfile: 'balanced',
   pairingPin: '',
@@ -158,10 +158,10 @@ const FALLBACK_DAEMON_STATE: DaemonStateSnapshot = {
   blacklistedDevices: [],
   activeAdapters: [],
   avIntegrity: {
-    upxDisabled: true,
-    visibleHwnd: true,
-    zeroHiddenShell: true,
-    manifestAsInvoker: true,
+    upxDisabled: false,
+    visibleHwnd: false,
+    zeroHiddenShell: false,
+    manifestAsInvoker: false,
     authenticodeReady: false,
     sandboxJobObject: false,
   },
@@ -179,7 +179,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   const isBg = language === 'bg';
 
   const [activeTab, setActiveTab] = useState<DaemonGuiTab>('overview');
-  const [daemon, setDaemon] = useState<DaemonStateSnapshot>(FALLBACK_DAEMON_STATE);
+  const [daemon, setDaemon] = useState<DaemonStateSnapshot>(INITIAL_DAEMON_STATE);
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isLoadingAction, setIsLoadingAction] = useState<string | null>(null);
@@ -189,6 +189,24 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   const [copiedPin, setCopiedPin] = useState(false);
   const [portInput, setPortInput] = useState('8765');
   const [isEditingPort, setIsEditingPort] = useState(false);
+  const timersRef = useRef<Set<number>>(new Set());
+
+  const scheduleTimer = useCallback((fn: () => void, ms: number) => {
+    const id = window.setTimeout(() => {
+      timersRef.current.delete(id);
+      fn();
+    }, ms);
+    timersRef.current.add(id);
+    return id;
+  }, []);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+      timers.clear();
+    };
+  }, []);
 
   // Manual Blacklist Form State
   const [manualBanIp, setManualBanIp] = useState('');
@@ -251,7 +269,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       pair_os: daemon.osName?.toLowerCase().includes('linux') ? 'linux' : 'windows',
       ...(daemon.pairingPin ? { pair_pin: daemon.pairingPin } : {}),
     });
-    const pairUrl = `${baseOrigin}/?${params.toString()}`;
+    const pairUrl = `${baseOrigin}/#${params.toString()}`;
     QRCode.toDataURL(pairUrl, {
       width: 200,
       margin: 1,
@@ -302,14 +320,14 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     triggerHapticFeedback('light');
     copyToClipboard(daemon.wsUri);
     setCopiedUri(true);
-    setTimeout(() => setCopiedUri(false), 1800);
+    scheduleTimer(() => setCopiedUri(false), 1800);
   };
 
   const handleCopyToken = () => {
     triggerHapticFeedback('light');
     copyToClipboard(daemon.pairingToken);
     setCopiedToken(true);
-    setTimeout(() => setCopiedToken(false), 1800);
+    scheduleTimer(() => setCopiedToken(false), 1800);
   };
 
   const handleCopyPin = () => {
@@ -317,7 +335,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     triggerHapticFeedback('light');
     copyToClipboard(daemon.pairingPin);
     setCopiedPin(true);
-    setTimeout(() => setCopiedPin(false), 1800);
+    scheduleTimer(() => setCopiedPin(false), 1800);
   };
 
   const handleApplyPort = (e: React.FormEvent) => {
@@ -350,6 +368,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   const avChecks = [
     {
       key: 'upx',
+      passed: Boolean(daemon.avIntegrity?.upxDisabled),
       title: isBg ? 'Нулева UPX компресия (upx=False)' : 'Zero UPX Packing (upx=False)',
       desc: isBg
         ? 'Елиминира фалшивите детекции Win32/Wacatac при евристичен анализ'
@@ -357,6 +376,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     },
     {
       key: 'hwnd',
+      passed: Boolean(daemon.avIntegrity?.visibleHwnd),
       title: isBg ? 'Видим Desktop GUI прозорец (HWND)' : 'Visible Native GUI Window (HWND)',
       desc: isBg
         ? 'Прозрачен Tkinter контролен панел вместо скрит фонов процес'
@@ -364,6 +384,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     },
     {
       key: 'shell',
+      passed: Boolean(daemon.avIntegrity?.zeroHiddenShell),
       title: isBg ? 'Без скрити PowerShell / CMD процеси' : 'Zero Hidden PowerShell / CMD Spawns',
       desc: isBg
         ? 'Чиста Python psutil & socket NIC диагностика без shell=True'
@@ -371,6 +392,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     },
     {
       key: 'manifest',
+      passed: Boolean(daemon.avIntegrity?.manifestAsInvoker),
       title: isBg ? 'Windows 10/11 Манифест (asInvoker)' : 'Windows 10/11 Manifest (asInvoker)',
       desc: isBg
         ? 'Без принудителна UAC ескалация + PerMonitorV2 High-DPI скалиране'
@@ -378,6 +400,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     },
     {
       key: 'sig',
+      passed: Boolean(daemon.avIntegrity?.authenticodeReady),
       title: isBg ? 'SHA-256 Authenticode Подпис' : 'SHA-256 Authenticode Signed',
       desc: isBg
         ? 'Включен sign_binary.ps1 и MpCmdRun.exe Defender верификация'
@@ -385,6 +408,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     },
     {
       key: 'sandbox',
+      passed: Boolean(daemon.avIntegrity?.sandboxJobObject),
       title: isBg ? 'Windows Job Object Изолация' : 'Windows Job Object Sandbox',
       desc: isBg
         ? '256MB RAM лимит и автоматично почистване на дъщерни задачи'
@@ -602,6 +626,19 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   {isBg ? 'Control Server: OFFLINE' : 'Control Server: OFFLINE'}
                 </span>
               )}
+            </div>
+          )}
+
+          {daemon.isRunning && serverReachable === false && !actionError && (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-200 flex items-center justify-between gap-2">
+              <span>
+                {isBg
+                  ? 'Локалният сървър за управление (/api/daemon) не отговаря в момента.'
+                  : 'Local control server (/api/daemon) is currently unreachable.'}
+              </span>
+              <span className="text-[11px] font-mono text-rose-300 shrink-0">
+                Control Server: OFFLINE
+              </span>
             </div>
           )}
 
@@ -1057,7 +1094,11 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                       key={chk.key}
                       className="p-2.5 rounded-xl bg-black/35 border border-white/[0.07] flex items-start gap-2.5"
                     >
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      {chk.passed ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      )}
                       <div className="min-w-0">
                         <div className="text-xs font-mono font-bold text-white">{chk.title}</div>
                         <p className="text-[11px] text-slate-400 leading-snug mt-0.5">{chk.desc}</p>
@@ -1115,8 +1156,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   </div>
                   <p className="text-xs text-slate-400 max-w-md mx-auto">
                     {isBg
-                      ? `Демонът слуша на ${daemon.wsUri}. Свържете телефона си чрез QR кода или натиснете "Симулирай устройство", за да тествате управлението.`
-                      : `The daemon is listening on ${daemon.wsUri}. Pair your phone via QR or click "Simulate New Peer" above to test session disconnection and blacklisting.`}
+                      ? `Демонът е конфигуриран за ${daemon.wsUri}. Свържете телефона или браузъра си чрез QR кода / One-Tap Pairing в секция Бърза Настройка.`
+                      : `Daemon endpoint is configured at ${daemon.wsUri}. Pair your mobile or browser controller via QR / One-Tap Pairing to manage active sessions.`}
                   </p>
                 </div>
               ) : (
@@ -1143,9 +1184,11 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                               <span className="text-xs font-mono text-cyan-300 tabular-nums">
                                 {peer.ip}
                               </span>
-                              <span className="text-[11px] font-mono text-slate-400">
-                                · MAC {peer.mac || 'A4:83:E7:21:9B:04'}
-                              </span>
+                              {peer.mac && (
+                                <span className="text-[11px] font-mono text-slate-400">
+                                  · MAC {peer.mac}
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 flex-wrap tabular-nums">
                               <span className="text-emerald-300">{peer.auth}</span>
@@ -1553,7 +1596,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     onClick={() => {
                       dispatchAction('complete_setup');
                       setSetupCompletedBanner(true);
-                      setTimeout(() => setSetupCompletedBanner(false), 3500);
+                      scheduleTimer(() => setSetupCompletedBanner(false), 3500);
                     }}
                     className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-display font-bold text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer transition shadow-lg shadow-emerald-500/20"
                   >

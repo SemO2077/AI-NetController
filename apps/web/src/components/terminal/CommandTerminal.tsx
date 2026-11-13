@@ -53,6 +53,9 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
   isExecuting,
   lastExecutionResult,
   onViewScreen,
+  screenBase64,
+  onRefreshScreen,
+  isCapturingScreen,
 }) => {
   const { t, language } = useTranslation();
   const [prompt, setPrompt] = useState('');
@@ -88,33 +91,44 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
     });
   };
 
-  const lastSubmittedPromptRef = useRef<string>('');
-  const lastProcessedKeyRef = useRef<string>('');
+  const pendingCommandsRef = useRef<Map<string, string>>(new Map());
+  const lastResultRef = useRef<AgentExecutionResponse | null>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logScrollRef = useRef<HTMLDivElement>(null);
 
   const selectedHost = hosts.find((h) => h.id === selectedTarget) || hosts[0] || null;
 
   useEffect(() => {
-    if (!lastExecutionResult) return;
-    const dedupKey = `${lastExecutionResult.command_id || ''}-${lastExecutionResult.timestamp || ''}-${lastExecutionResult.output?.length || 0}`;
-    if (dedupKey && dedupKey !== lastProcessedKeyRef.current) {
-      lastProcessedKeyRef.current = dedupKey;
-      const resolvedExitCode =
-        typeof (lastExecutionResult as any).exit_code === 'number'
-          ? (lastExecutionResult as any).exit_code
-          : lastExecutionResult.status === 'error'
-          ? 1
-          : 0;
-      setExecutionLogs((prev) => [
-        ...prev.slice(-24),
-        {
-          ...lastExecutionResult,
-          id: `${lastExecutionResult.command_id || lastExecutionResult.timestamp}-${prev.length}`,
-          commandPrompt: lastSubmittedPromptRef.current || undefined,
-          exitCode: resolvedExitCode,
-        },
-      ]);
+    return () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!lastExecutionResult || lastExecutionResult === lastResultRef.current) return;
+    lastResultRef.current = lastExecutionResult;
+
+    const cmdId = lastExecutionResult.command_id || '';
+    const matchedPrompt = cmdId ? pendingCommandsRef.current.get(cmdId) : undefined;
+    if (cmdId) {
+      pendingCommandsRef.current.delete(cmdId);
     }
+
+    const resolvedExitCode =
+      typeof (lastExecutionResult as any).exit_code === 'number'
+        ? (lastExecutionResult as any).exit_code
+        : lastExecutionResult.status === 'error'
+        ? 1
+        : 0;
+    setExecutionLogs((prev) => [
+      ...prev.slice(-24),
+      {
+        ...lastExecutionResult,
+        id: `${cmdId || Date.now()}-${prev.length}`,
+        commandPrompt: matchedPrompt,
+        exitCode: resolvedExitCode,
+      },
+    ]);
   }, [lastExecutionResult]);
 
   useEffect(() => {
@@ -132,32 +146,29 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
         icon: RefreshCw,
         colorClass: 'border-emerald-400/35 hover:border-emerald-400/60 text-emerald-200',
         iconColor: 'text-emerald-400',
+        commandType: 'natural_language' as const,
         prompt:
           language === 'bg'
             ? 'Провери за системни обновления и инсталирани пакети'
             : 'Check for pending OS system updates and installed packages',
       },
       {
-        id: 'stats',
-        label: language === 'bg' ? 'CPU и RAM' : 'CPU & RAM Stats',
+        id: 'sysinfo',
+        label: language === 'bg' ? 'Системно инфо' : 'System Info',
         icon: Activity,
         colorClass: 'border-violet-400/35 hover:border-violet-400/60 text-violet-200',
         iconColor: 'text-violet-400',
-        prompt:
-          language === 'bg'
-            ? 'Покажи топ 10 процеса по натоварване на CPU и RAM памет'
-            : 'List top 10 processes sorted by CPU and RAM utilization',
+        commandType: 'system_command' as const,
+        prompt: selectedHost?.os === 'linux' ? 'uname -a && uptime' : 'systeminfo',
       },
       {
-        id: 'browser',
-        label: language === 'bg' ? 'Отвори браузър' : 'Open Browser',
+        id: 'network',
+        label: language === 'bg' ? 'Мрежов статус' : 'Network Config',
         icon: Globe,
         colorClass: 'border-sky-400/35 hover:border-sky-400/60 text-sky-200',
         iconColor: 'text-sky-400',
-        prompt:
-          language === 'bg'
-            ? 'Отвори системния браузър с таблото за мониторинг'
-            : 'Open default system browser to network status dashboard',
+        commandType: 'system_command' as const,
+        prompt: selectedHost?.os === 'linux' ? 'ip addr show' : 'ipconfig /all',
       },
       {
         id: 'restart',
@@ -165,21 +176,39 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
         icon: RotateCcw,
         colorClass: 'border-amber-400/35 hover:border-amber-400/60 text-amber-200',
         iconColor: 'text-amber-400',
+        commandType: 'system_command' as const,
         prompt:
-          language === 'bg'
-            ? 'Планирай безопасен рестарт на работната станция след 30 секунди'
-            : 'Schedule a safe workstation restart in 30 seconds',
+          selectedHost?.os === 'linux'
+            ? 'sudo shutdown -r +1 "Scheduled maintenance restart"'
+            : 'shutdown /r /t 30 /c "Scheduled maintenance restart"',
       },
     ],
-    [language]
+    [language, selectedHost?.os]
   );
 
-  const dispatchPrompt = (text: string) => {
+  const dispatchPrompt = (
+    text: string,
+    commandTypeOverride?: 'natural_language' | 'system_command'
+  ) => {
     const trimmed = text.trim();
     if (!trimmed || isExecuting) return;
 
+    const commandId = `term_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    pendingCommandsRef.current.set(commandId, trimmed);
+    if (pendingCommandsRef.current.size > 50) {
+      const oldest = pendingCommandsRef.current.keys().next().value;
+      if (oldest) pendingCommandsRef.current.delete(oldest);
+    }
+
+    const inferredType: 'natural_language' | 'system_command' =
+      commandTypeOverride ||
+      (/^(?:ipconfig|ifconfig|systeminfo|whoami|hostname|dir|ls|pwd|uname|uptime|ps|tasklist|netstat|ss|df|free|ping|tracert|traceroute|winget|apt|systemctl|loginctl|shutdown)\b/i.test(
+        trimmed
+      )
+        ? 'system_command'
+        : 'natural_language');
+
     triggerHapticFeedback('medium');
-    lastSubmittedPromptRef.current = trimmed;
     setCommandHistory((prev) => {
       const deduped = prev.filter((item) => item !== trimmed);
       return [...deduped.slice(-29), trimmed];
@@ -187,8 +216,9 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
     setHistoryCursor(-1);
 
     onSendCommand({
+      command_id: commandId,
       target_id: selectedTarget || selectedHost?.id || '',
-      command_type: 'natural_language',
+      command_type: inferredType,
       prompt: trimmed,
     });
   };
@@ -231,7 +261,8 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
     triggerHapticFeedback('light');
     copyToClipboard(text);
     setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1600);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopiedId(null), 1600);
   };
 
   const handleClearConsole = () => {
@@ -316,18 +347,37 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
           )}
 
           {selectedHost && (
-            <button
-              type="button"
-              onClick={() => {
-                triggerHapticFeedback('light');
-                onViewScreen(selectedHost);
-              }}
-              className="h-9 px-2.5 sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/40 text-cyan-300 text-xs font-medium flex items-center gap-1.5 shrink-0 transition active:scale-95"
-              title={t('term_view_screen')}
-            >
-              <Eye className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{t('term_view_screen')}</span>
-            </button>
+            <>
+              {onRefreshScreen && (
+                <button
+                  type="button"
+                  disabled={isCapturingScreen}
+                  onClick={() => {
+                    triggerHapticFeedback('light');
+                    onRefreshScreen(selectedHost.id);
+                  }}
+                  className="h-9 px-2.5 sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/40 text-slate-200 text-xs font-medium flex items-center gap-1.5 shrink-0 transition disabled:opacity-50 active:scale-95"
+                  title={language === 'bg' ? 'Заснеми екран' : 'Capture Frame'}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isCapturingScreen ? 'animate-spin' : ''}`} />
+                  <span className="hidden md:inline">
+                    {language === 'bg' ? 'Кадър' : 'Frame'}
+                  </span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  onViewScreen(selectedHost);
+                }}
+                className="h-9 px-2.5 sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/40 text-cyan-300 text-xs font-medium flex items-center gap-1.5 shrink-0 transition active:scale-95"
+                title={t('term_view_screen')}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{t('term_view_screen')}</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -434,6 +484,31 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
               : 'No Host'}
           </span>
         </div>
+
+        {screenBase64 && selectedHost && (
+          <button
+            type="button"
+            onClick={() => {
+              triggerHapticFeedback('light');
+              onViewScreen(selectedHost);
+            }}
+            className="mt-2.5 flex items-center gap-3 p-2 rounded-xl bg-[#070d1b] border border-white/10 hover:border-cyan-400/45 transition text-left w-full group"
+          >
+            <img
+              src={screenBase64}
+              alt={`${selectedHost.name} screen`}
+              className="w-20 h-12 object-cover rounded-lg border border-white/10 shrink-0"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="text-[11px] font-semibold text-cyan-200 group-hover:text-white truncate">
+                {language === 'bg' ? `Последен кадър · ${selectedHost.name}` : `Latest Frame · ${selectedHost.name}`}
+              </div>
+              <div className="text-[10px] font-mono text-slate-400 truncate">
+                {language === 'bg' ? 'Натисни за пълен интерактивен екран' : 'Click to open interactive screen viewer'}
+              </div>
+            </div>
+          </button>
+        )}
 
         {/* Scrollable Command Output */}
         <div className="flex-1 min-h-[160px] max-h-[52dvh] py-3 font-mono text-xs leading-relaxed space-y-2.5 overflow-y-auto">
@@ -593,7 +668,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                 key={preset.id}
                 type="button"
                 disabled={isExecuting}
-                onClick={() => dispatchPrompt(preset.prompt)}
+                onClick={() => dispatchPrompt(preset.prompt, preset.commandType)}
                 className={`h-8 px-3 rounded-lg bg-[#0b1326] border text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition disabled:opacity-40 active:scale-95 ${preset.colorClass}`}
               >
                 <PresetIcon className={`w-3.5 h-3.5 shrink-0 ${preset.iconColor}`} />

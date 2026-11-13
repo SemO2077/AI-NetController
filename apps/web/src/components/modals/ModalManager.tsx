@@ -54,12 +54,18 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
   const closeModal = useUIStore((s) => s.closeModal);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
 
-  const wolDevice = payload?.device || (payload && typeof payload === 'object' && 'id' in payload ? payload : null);
+  const rawWolDevice =
+    payload?.device || (payload && typeof payload === 'object' && 'id' in payload ? payload : null);
+  const wolDevice = rawWolDevice
+    ? props.hosts.find((h) => h.id === rawWolDevice.id) || rawWolDevice
+    : null;
 
   // Match live host data from props.hosts if payload is a host
-  const hostForDetails = payload && typeof payload === 'object' && 'id' in payload
-    ? props.hosts.find((h) => h.id === payload.id) || payload
-    : null;
+  const hostForDetails =
+    payload && typeof payload === 'object' && 'id' in payload
+      ? props.hosts.find((h) => h.id === payload.id) || payload
+      : null;
+  const liveScreenDevice = activeModal === 'screen' ? hostForDetails : null;
 
   return (
     <>
@@ -83,7 +89,7 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
           }
         }}
         onSendWol={(h) => {
-          props.onSendWolPacket({ mac: h.mac, broadcastIp: '255.255.255.255' }, h.id);
+          props.onSendWolPacket({ mac: h.mac, broadcastIp: '255.255.255.255', port: 9 }, h.id);
         }}
         onEditHost={(h) => {
           useUIStore.getState().openModal('addHost', h);
@@ -105,9 +111,12 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
       <ScreenViewerModal
         isOpen={activeModal === 'screen'}
         onClose={closeModal}
-        device={payload}
+        device={liveScreenDevice}
         isCapturing={props.isCapturingScreen}
-        onRefreshFrame={() => payload && props.onRequestScreenRefresh(payload.id)}
+        isConnected={props.isConnected}
+        wsUrl={props.wsUrl}
+        onOpenConnection={() => useUIStore.getState().openModal('wsConfig')}
+        onRefreshFrame={() => liveScreenDevice && props.onRequestScreenRefresh(liveScreenDevice.id)}
         onSendInputOpcode={props.onSendInputOpcode}
       />
 
@@ -176,8 +185,8 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
               mac: hostData.mac,
               os: hostData.os,
               deviceType: 'pc',
-              isOnline: true,
-              lastSeen: 'Just now',
+              isOnline: false,
+              lastSeen: 'Paired (awaiting handshake)',
               tags: ['Paired-PC', 'LAN-8765'],
             });
           }

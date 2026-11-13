@@ -26,6 +26,8 @@ import {
   Eye,
   EyeOff,
   Code2,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { triggerHapticFeedback } from '../../services/hapticService';
@@ -94,6 +96,17 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
   const isCustomizationOpen = useUIStore((s) => s.isCustomizationOpen);
   const toggleCustomizationOpen = useUIStore((s) => s.toggleCustomizationOpen);
   const resetAppearance = useUIStore((s) => s.resetAppearance);
+  const isAutoDiscovery = useUIStore((s) => s.isAutoDiscovery);
+  const setAutoDiscovery = useUIStore((s) => s.setAutoDiscovery);
+  const isHitlEnabled = useUIStore((s) => s.isHitlEnabled);
+  const setHitlEnabled = useUIStore((s) => s.setHitlEnabled);
+  const isBiometricEnabled = useUIStore((s) => s.isBiometricEnabled);
+  const setBiometricEnabled = useUIStore((s) => s.setBiometricEnabled);
+  const isCommandConfirmations = useUIStore((s) => s.isCommandConfirmations);
+  const setCommandConfirmations = useUIStore((s) => s.setCommandConfirmations);
+  const isSystemStateAlerts = useUIStore((s) => s.isSystemStateAlerts);
+  const setSystemStateAlerts = useUIStore((s) => s.setSystemStateAlerts);
+  const hydrateSecuritySettings = useUIStore((s) => s.hydrateSecuritySettings);
 
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const [isAddModelOpen, setIsAddModelOpen] = useState(false);
@@ -105,12 +118,135 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
   const [newModelDesc, setNewModelDesc] = useState('');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [isTestingModel, setIsTestingModel] = useState(false);
+  const [settingsSyncError, setSettingsSyncError] = useState<string | null>(null);
+  const [biometricNotice, setBiometricNotice] = useState<string | null>(null);
 
-  const [isAutoDiscovery, setIsAutoDiscovery] = useState(true);
-  const [isHitlEnabled, setIsHitlEnabled] = useState(true);
-  const [isBiometricEnabled, setIsBiometricEnabled] = useState(false);
-  const [isCommandConfirmations, setIsCommandConfirmations] = useState(true);
-  const [isSystemStateAlerts, setIsSystemStateAlerts] = useState(true);
+  const DEFAULT_BUILTIN_MODEL_IDS = new Set([
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.0-flash',
+    'gemini-flash-latest',
+    'deepseek-r1:latest',
+  ]);
+
+  const persistSettingPatch = async (
+    patch: Partial<{
+      isAutoDiscovery: boolean;
+      isHitlEnabled: boolean;
+      isBiometricEnabled: boolean;
+      isCommandConfirmations: boolean;
+      isSystemStateAlerts: boolean;
+    }>
+  ) => {
+    setSettingsSyncError(null);
+    if (typeof patch.isAutoDiscovery === 'boolean') setAutoDiscovery(patch.isAutoDiscovery);
+    if (typeof patch.isHitlEnabled === 'boolean') setHitlEnabled(patch.isHitlEnabled);
+    if (typeof patch.isBiometricEnabled === 'boolean') setBiometricEnabled(patch.isBiometricEnabled);
+    if (typeof patch.isCommandConfirmations === 'boolean') {
+      setCommandConfirmations(patch.isCommandConfirmations);
+    }
+    if (typeof patch.isSystemStateAlerts === 'boolean') {
+      setSystemStateAlerts(patch.isSystemStateAlerts);
+    }
+
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSettingsSyncError(
+          data.error ||
+            (language === 'bg'
+              ? `Неуспешно запазване на настройката (HTTP ${res.status}).`
+              : `Failed to persist setting (HTTP ${res.status}).`)
+        );
+        return;
+      }
+      if (data?.settings) {
+        hydrateSecuritySettings(data.settings);
+      }
+    } catch {
+      setSettingsSyncError(
+        language === 'bg'
+          ? 'Контролният сървър е офлайн — настройката е запазена локално.'
+          : 'Control server offline — preference saved locally.'
+      );
+    }
+  };
+
+  const handleToggleBiometric = async (nextVal: boolean) => {
+    setBiometricNotice(null);
+    if (nextVal) {
+      if (
+        typeof window === 'undefined' ||
+        !window.isSecureContext ||
+        typeof window.PublicKeyCredential === 'undefined'
+      ) {
+        setBiometricNotice(
+          language === 'bg'
+            ? 'WebAuthn / биометричната защита изисква HTTPS или защитен локален контекст (localhost).'
+            : 'WebAuthn biometric lock requires HTTPS or a secure localhost context.'
+        );
+        return;
+      }
+      try {
+        const available =
+          typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable ===
+          'function'
+            ? await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+            : true;
+        if (!available) {
+          setBiometricNotice(
+            language === 'bg'
+              ? 'Няма открит хардуерен биометричен/PIN модул (Platform Authenticator) на това устройство.'
+              : 'No platform biometric authenticator detected on this device.'
+          );
+          return;
+        }
+      } catch {
+        setBiometricNotice(
+          language === 'bg'
+            ? 'Неуспешна проверка на биометричния хардуерен модул.'
+            : 'Unable to verify hardware biometric authenticator.'
+        );
+        return;
+      }
+    }
+    await persistSettingPatch({ isBiometricEnabled: nextVal });
+  };
+
+  const handleDeleteCustomModel = async (modelId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (DEFAULT_BUILTIN_MODEL_IDS.has(modelId)) return;
+    triggerHapticFeedback('medium');
+    setSettingsSyncError(null);
+    try {
+      const res = await fetch(`/api/ai/models/${encodeURIComponent(modelId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && Array.isArray(data.models)) {
+        setModelsList(data.models);
+        if (selectedModel === modelId && data.models.length > 0) {
+          setSelectedModel(data.models[0].id);
+        }
+      } else {
+        setSettingsSyncError(
+          data.error ||
+            (language === 'bg' ? 'Неуспешно премахване на модела.' : 'Failed to remove custom model.')
+        );
+      }
+    } catch {
+      setSettingsSyncError(
+        language === 'bg' ? 'Грешка при връзка със сървъра.' : 'Failed to reach control server.'
+      );
+    }
+  };
 
   const [modelsList, setModelsList] = useState<
     Array<{
@@ -166,19 +302,29 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
   ]);
 
   React.useEffect(() => {
-    let cancelled = false;
-    fetch('/api/ai/models', { credentials: 'include' })
+    const controller = new AbortController();
+    fetch('/api/ai/models', { credentials: 'include', signal: controller.signal })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!cancelled && Array.isArray(data?.models) && data.models.length > 0) {
+        if (!controller.signal.aborted && Array.isArray(data?.models) && data.models.length > 0) {
           setModelsList(data.models);
         }
       })
       .catch(() => {});
+
+    fetch('/api/settings', { credentials: 'include', signal: controller.signal })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!controller.signal.aborted && data?.settings) {
+          hydrateSecuritySettings(data.settings);
+        }
+      })
+      .catch(() => {});
+
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, []);
+  }, [hydrateSecuritySettings]);
 
   const handleTestModel = async (modelId: string) => {
     setIsTestingModel(true);
@@ -437,7 +583,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   type="button"
                   onClick={() => {
                     triggerHapticFeedback('light');
-                    setIsAutoDiscovery(!isAutoDiscovery);
+                    void persistSettingPatch({ isAutoDiscovery: !isAutoDiscovery });
                   }}
                   className={`px-3 py-1.5 h-8 rounded-lg text-[10px] font-mono font-bold uppercase transition shrink-0 active:scale-95 ${
                     isAutoDiscovery
@@ -569,32 +715,49 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                         </div>
 
                         {modelsList.map((m) => (
-                          <button
+                          <div
                             key={m.id}
-                            type="button"
-                            onClick={() => {
-                              triggerHapticFeedback('light');
-                              setSelectedModel(m.id);
-                              setIsModelDropdownOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-mono flex flex-col transition ${
+                            className={`w-full rounded-xl text-xs font-mono flex items-stretch transition ${
                               selectedModel === m.id
                                 ? 'bg-cyan-500/20 text-cyan-200 font-semibold border border-cyan-400/40'
                                 : 'text-slate-200 hover:bg-white/10 hover:text-white'
                             }`}
                           >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-bold truncate">
-                                {language === 'bg' ? m.nameBg || m.name : m.name}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                triggerHapticFeedback('light');
+                                setSelectedModel(m.id);
+                                setIsModelDropdownOpen(false);
+                              }}
+                              className="flex-1 min-w-0 text-left px-3 py-2.5 flex flex-col cursor-pointer"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-bold truncate">
+                                  {language === 'bg' ? m.nameBg || m.name : m.name}
+                                </span>
+                                {selectedModel === m.id && (
+                                  <Check className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                                )}
+                              </div>
+                              <span className="text-[10px] text-slate-400 line-clamp-2 mt-0.5 leading-snug">
+                                {language === 'bg' ? m.descriptionBg || m.description : m.description}
                               </span>
-                              {selectedModel === m.id && (
-                                <Check className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                              )}
-                            </div>
-                            <span className="text-[10px] text-slate-400 line-clamp-2 mt-0.5 leading-snug">
-                              {language === 'bg' ? m.descriptionBg || m.description : m.description}
-                            </span>
-                          </button>
+                            </button>
+                            {!DEFAULT_BUILTIN_MODEL_IDS.has(m.id) && (
+                              <button
+                                type="button"
+                                onClick={(e) => void handleDeleteCustomModel(m.id, e)}
+                                title={language === 'bg' ? 'Премахни модела' : 'Remove custom model'}
+                                aria-label={
+                                  language === 'bg' ? `Премахни ${m.name}` : `Remove ${m.name}`
+                                }
+                                className="px-2.5 flex items-center justify-center text-slate-400 hover:text-rose-400 transition shrink-0 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         ))}
                       </motion.div>
                     </>
@@ -788,6 +951,20 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                 : '3. SECURITY, ALERTS & DIAGNOSTICS'}
             </span>
 
+            {settingsSyncError && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{settingsSyncError}</span>
+              </div>
+            )}
+
+            {biometricNotice && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{biometricNotice}</span>
+              </div>
+            )}
+
             <div className="glass-liquid w-full rounded-2xl divide-y divide-white/[0.06] overflow-hidden">
               {/* HITL Gate */}
               <div className="p-3.5 flex items-center justify-between gap-3">
@@ -804,7 +981,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                     </span>
                   </div>
                 </div>
-                <CyberToggle checked={isHitlEnabled} onChange={setIsHitlEnabled} />
+                <CyberToggle
+                  checked={isHitlEnabled}
+                  onChange={(v) => void persistSettingPatch({ isHitlEnabled: v })}
+                />
               </div>
 
               {/* Biometric Hardware Lock */}
@@ -822,7 +1002,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                     </span>
                   </div>
                 </div>
-                <CyberToggle checked={isBiometricEnabled} onChange={setIsBiometricEnabled} />
+                <CyberToggle
+                  checked={isBiometricEnabled}
+                  onChange={(v) => void handleToggleBiometric(v)}
+                />
               </div>
 
               {/* Command Confirmations */}
@@ -842,7 +1025,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                 </div>
                 <CyberToggle
                   checked={isCommandConfirmations}
-                  onChange={setIsCommandConfirmations}
+                  onChange={(v) => void persistSettingPatch({ isCommandConfirmations: v })}
                 />
               </div>
 
@@ -861,7 +1044,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                     </span>
                   </div>
                 </div>
-                <CyberToggle checked={isSystemStateAlerts} onChange={setIsSystemStateAlerts} />
+                <CyberToggle
+                  checked={isSystemStateAlerts}
+                  onChange={(v) => void persistSettingPatch({ isSystemStateAlerts: v })}
+                />
               </div>
 
               {/* Release Binaries (.APK / .EXE) & Source Archive */}

@@ -40,6 +40,12 @@ export interface UIState {
   ambientMode: AmbientModePreset;
   isCustomizationOpen: boolean;
 
+  isAutoDiscovery: boolean;
+  isHitlEnabled: boolean;
+  isBiometricEnabled: boolean;
+  isCommandConfirmations: boolean;
+  isSystemStateAlerts: boolean;
+
   setActiveTab: (tab: NavTab) => void;
   openModal: (type: ModalType, payload?: any) => void;
   closeModal: () => void;
@@ -58,6 +64,20 @@ export interface UIState {
   setCustomizationOpen: (open: boolean) => void;
   toggleCustomizationOpen: () => void;
   resetAppearance: () => void;
+  setAutoDiscovery: (val: boolean) => void;
+  setHitlEnabled: (val: boolean) => void;
+  setBiometricEnabled: (val: boolean) => void;
+  setCommandConfirmations: (val: boolean) => void;
+  setSystemStateAlerts: (val: boolean) => void;
+  hydrateSecuritySettings: (
+    settings: Partial<{
+      isAutoDiscovery: boolean;
+      isHitlEnabled: boolean;
+      isBiometricEnabled: boolean;
+      isCommandConfirmations: boolean;
+      isSystemStateAlerts: boolean;
+    }>
+  ) => void;
 }
 
 const VALID_ACCENTS: AccentColorPreset[] = ['cyan', 'violet', 'emerald', 'rose', 'amber', 'cobalt'];
@@ -105,12 +125,7 @@ const getInitialModel = (): string => {
   try {
     const saved = localStorage.getItem('wakeflow_selected_model');
     if (saved) {
-      if (
-        saved === 'gemini-1.5-flash' ||
-        saved === 'gemini-1.5-pro' ||
-        saved === 'gemini-3.8-flash' ||
-        saved === 'gemini-3.1-flash-lite'
-      ) {
+      if (/^gemini-(?:1\.[05]|3\.\d)/i.test(saved)) {
         return 'gemini-2.5-flash';
       }
       return saved;
@@ -170,6 +185,59 @@ const initialAppearance = {
   ambientMode: getInitialAmbient(),
 };
 
+const INITIAL_SECURITY_SETTINGS = {
+  isAutoDiscovery: true,
+  isHitlEnabled: true,
+  isBiometricEnabled: false,
+  isCommandConfirmations: true,
+  isSystemStateAlerts: true,
+};
+
+type SecuritySettingsKey = keyof typeof INITIAL_SECURITY_SETTINGS;
+
+const getInitialSecuritySettings = () => {
+  try {
+    const raw = localStorage.getItem('ai_net_ui_settings_v1');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          isAutoDiscovery:
+            typeof parsed.isAutoDiscovery === 'boolean'
+              ? parsed.isAutoDiscovery
+              : INITIAL_SECURITY_SETTINGS.isAutoDiscovery,
+          isHitlEnabled:
+            typeof parsed.isHitlEnabled === 'boolean'
+              ? parsed.isHitlEnabled
+              : INITIAL_SECURITY_SETTINGS.isHitlEnabled,
+          isBiometricEnabled:
+            typeof parsed.isBiometricEnabled === 'boolean'
+              ? parsed.isBiometricEnabled
+              : INITIAL_SECURITY_SETTINGS.isBiometricEnabled,
+          isCommandConfirmations:
+            typeof parsed.isCommandConfirmations === 'boolean'
+              ? parsed.isCommandConfirmations
+              : INITIAL_SECURITY_SETTINGS.isCommandConfirmations,
+          isSystemStateAlerts:
+            typeof parsed.isSystemStateAlerts === 'boolean'
+              ? parsed.isSystemStateAlerts
+              : INITIAL_SECURITY_SETTINGS.isSystemStateAlerts,
+        };
+      }
+    }
+  } catch {}
+  return { ...INITIAL_SECURITY_SETTINGS };
+};
+
+const initialSecuritySettings = getInitialSecuritySettings();
+
+const persistSecuritySetting = (patch: Partial<Record<SecuritySettingsKey, boolean>>) => {
+  try {
+    const current = getInitialSecuritySettings();
+    localStorage.setItem('ai_net_ui_settings_v1', JSON.stringify({ ...current, ...patch }));
+  } catch {}
+};
+
 applyAppearanceToDocument(initialAppearance);
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -187,6 +255,12 @@ export const useUIStore = create<UIState>((set, get) => ({
   glassIntensity: initialAppearance.glassIntensity,
   ambientMode: initialAppearance.ambientMode,
   isCustomizationOpen: getInitialCustomizationOpen(),
+
+  isAutoDiscovery: initialSecuritySettings.isAutoDiscovery,
+  isHitlEnabled: initialSecuritySettings.isHitlEnabled,
+  isBiometricEnabled: initialSecuritySettings.isBiometricEnabled,
+  isCommandConfirmations: initialSecuritySettings.isCommandConfirmations,
+  isSystemStateAlerts: initialSecuritySettings.isSystemStateAlerts,
 
   setActiveTab: (tab) => set({ activeTab: tab }),
   openModal: (type, payload = null) => set({ activeModal: type, modalPayload: payload }),
@@ -311,5 +385,53 @@ export const useUIStore = create<UIState>((set, get) => ({
     } catch {}
     applyAppearanceToDocument(defaults);
     set(defaults);
+  },
+
+  setAutoDiscovery: (val) => {
+    persistSecuritySetting({ isAutoDiscovery: val });
+    set({ isAutoDiscovery: val });
+  },
+
+  setHitlEnabled: (val) => {
+    persistSecuritySetting({ isHitlEnabled: val });
+    set({ isHitlEnabled: val });
+  },
+
+  setBiometricEnabled: (val) => {
+    persistSecuritySetting({ isBiometricEnabled: val });
+    set({ isBiometricEnabled: val });
+  },
+
+  setCommandConfirmations: (val) => {
+    persistSecuritySetting({ isCommandConfirmations: val });
+    set({ isCommandConfirmations: val });
+  },
+
+  setSystemStateAlerts: (val) => {
+    persistSecuritySetting({ isSystemStateAlerts: val });
+    set({ isSystemStateAlerts: val });
+  },
+
+  hydrateSecuritySettings: (settings) => {
+    const cleanPatch: Partial<Record<SecuritySettingsKey, boolean>> = {};
+    if (typeof settings.isAutoDiscovery === 'boolean') {
+      cleanPatch.isAutoDiscovery = settings.isAutoDiscovery;
+    }
+    if (typeof settings.isHitlEnabled === 'boolean') {
+      cleanPatch.isHitlEnabled = settings.isHitlEnabled;
+    }
+    if (typeof settings.isBiometricEnabled === 'boolean') {
+      cleanPatch.isBiometricEnabled = settings.isBiometricEnabled;
+    }
+    if (typeof settings.isCommandConfirmations === 'boolean') {
+      cleanPatch.isCommandConfirmations = settings.isCommandConfirmations;
+    }
+    if (typeof settings.isSystemStateAlerts === 'boolean') {
+      cleanPatch.isSystemStateAlerts = settings.isSystemStateAlerts;
+    }
+    if (Object.keys(cleanPatch).length > 0) {
+      persistSecuritySetting(cleanPatch);
+      set(cleanPatch);
+    }
   },
 }));

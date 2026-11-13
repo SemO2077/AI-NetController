@@ -99,10 +99,23 @@ const WolEnergyCalculatorComponent: React.FC<WolEnergyCalculatorProps> = ({
     }
 
     const allDays = new Set<string>();
-    enabledSchedules.forEach((s) => s.days?.forEach((d) => allDays.add(d)));
+    const estimatedDurations: number[] = [];
+    enabledSchedules.forEach((s) => {
+      s.days?.forEach((d) => allDays.add(d));
+      const hour = Number.parseInt(String(s.time || '').split(':')[0], 10);
+      if (Number.isFinite(hour) && hour >= 0 && hour <= 23) {
+        const dur = hour < 18 ? Math.max(4, Math.min(16, 18 - hour)) : 6;
+        estimatedDurations.push(dur);
+      }
+    });
     const calculatedDays = Math.max(1, Math.min(7, allDays.size || 5));
+    const calculatedHours =
+      estimatedDurations.length > 0
+        ? Math.round(estimatedDurations.reduce((a, b) => a + b, 0) / estimatedDurations.length)
+        : 8;
 
     setDaysPerWeek(calculatedDays);
+    setActiveHoursPerDay(calculatedHours);
     setActivePresetIndex(null);
   };
 
@@ -465,12 +478,12 @@ const WolEnergyCalculatorComponent: React.FC<WolEnergyCalculatorProps> = ({
                   <input
                     type="number"
                     step={0.01}
-                    min={0}
+                    min={0.01}
                     max={10.0}
                     value={kwhRate}
                     onChange={(e) => {
                       const parsed = Number(e.target.value);
-                      setKwhRate(Number.isFinite(parsed) ? Math.max(0, Math.min(10.0, parsed)) : 0);
+                      setKwhRate(Number.isFinite(parsed) ? Math.max(0.01, Math.min(10.0, parsed)) : 0.01);
                     }}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-400/50"
                   />
@@ -482,7 +495,7 @@ const WolEnergyCalculatorComponent: React.FC<WolEnergyCalculatorProps> = ({
             <WolEnergyWeeklyChart
               schedules={wolSchedules}
               activeHoursPerDay={activeHoursPerDay}
-              daysPerWeek={daysPerWeek}
+              onActiveHoursChange={setActiveHoursPerDay}
               hostCount={hostCount}
               activeWatts={activePowerWatts}
               standbyWatts={standbyPowerWatts}

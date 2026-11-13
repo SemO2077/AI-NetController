@@ -21,35 +21,35 @@ export interface CommandSecurityVerdict {
 
 // Banned malicious signatures that are blocked client-side immediately
 const BLOCKED_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
-  { regex: /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:?/i, reason: 'Bash fork-bomb detected' },
+  { regex: /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:?/is, reason: 'Bash fork-bomb detected' },
   { regex: /\brm\s+-[rRfF]{1,3}\s+[\/\*]/i, reason: 'Recursive root filesystem deletion prohibited' },
   { regex: /\bformat\s+[c-z]:\s*(\/fs:[a-z]+)?/i, reason: 'Filesystem volume format prohibited' },
-  { regex: /\bdd\s+if=.*of=\/dev\/(sd[a-z]|nvme[0-9]|hd[a-z]|null)/i, reason: 'Raw block device overwrite prohibited' },
+  { regex: /\bdd\s+if=.*of=\/dev\/(sd[a-z]|nvme[0-9]|hd[a-z]|null)/is, reason: 'Raw block device overwrite prohibited' },
   { regex: /\bvssadmin\s+delete\s+shadows/i, reason: 'Ransomware-like shadow copy deletion prohibited' },
   { regex: /\bmkfs(\.[a-z0-9]+)?\s+\/dev\//i, reason: 'Raw disk partition formatting prohibited' },
-  { regex: /\bdel(\.exe)?\s+.*(\/[fF]|\/[sS]|\/[qQ]).*[c-z]:[\\\/]/i, reason: 'System root file deletion prohibited' },
-  { regex: /\b(?:powershell|pwsh).*-e(nc(odedcommand)?)?\s+[a-z0-9+/=]{8,}/i, reason: 'Obfuscated base64 PowerShell payload blocked' },
-  { regex: /nc(\.exe)?\s+(-e|-c)\s+(\/bin\/(ba)?sh|cmd\.exe|powershell)/i, reason: 'Unencrypted reverse shell payload blocked' },
+  { regex: /\bdel(\.exe)?\s+.*(\/[fF]|\/[sS]|\/[qQ]).*[c-z]:[\\\/]/is, reason: 'System root file deletion prohibited' },
+  { regex: /\b(?:powershell|pwsh).*-e(nc(odedcommand)?)?\s+[a-z0-9+/=]{8,}/is, reason: 'Obfuscated base64 PowerShell payload blocked' },
+  { regex: /nc(\.exe)?\s+(-e|-c)\s+(\/bin\/(ba)?sh|cmd\.exe|powershell)/is, reason: 'Unencrypted reverse shell payload blocked' },
   { regex: /%[a-z0-9_]+:~\d+,\d+%/i, reason: 'Environment variable substring slicing evasion blocked' },
-  { regex: /\b(?:certutil\s+.*-urlcache|bitsadmin\s+.*\/transfer|mshta\s+https?:|regsvr32\s+.*\/i:https?:)/i, reason: 'Windows LOLBin remote payload download/execution blocked' },
+  { regex: /\b(?:certutil\s+.*-urlcache|bitsadmin\s+.*\/transfer|mshta\s+https?:|regsvr32\s+.*\/i:https?:)/is, reason: 'Windows LOLBin remote payload download/execution blocked' },
 ];
 
 // Critical destructive patterns that require explicit double-key / hold confirmation
 const CRITICAL_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
-  { regex: /\bshutdown\s+(\/s|\/r|-h|-r|\/l|-t\s*\d+|\/f)\b/i, reason: 'Host system power state change / reboot' },
-  { regex: /\b(taskkill|killall|pkill|kill)\b.*(?:\s+(?:-9|\/f|\/im|\/pid|\/s\s+kill|-s\s+9)|\s+\d+|\s+\S+)/i, reason: 'Forced termination of running system processes' },
-  { regex: /\b(systemctl|service)\s+(stop|disable)\b/i, reason: 'Halting essential OS background services' },
-  { regex: /\b(reg\s+delete|Remove-ItemProperty)\b/i, reason: 'Deletion of system registry keys' },
-  { regex: /\b(drop\s+database|truncate\s+table)\b/i, reason: 'Bulk data wipe in database services' },
-  { regex: /\b(netsh|iptables|ufw)\s+(reset|flush|disable)\b/i, reason: 'Firewall / network isolation policy wipe' },
-  { regex: /\b(?:powershell|pwsh|cmd)\b.*(?:-command|-c|\/c)\s+.*(?:remove-item|format|shutdown|taskkill|del|rm|reg\s+delete)/i, reason: 'Command shell wrapper invoking destructive administrative action' },
-  { regex: /\brundll32(?:\.exe)?\b.*(?:shutdown|setuspendstate|shel32|rundll32)/i, reason: 'Native OS control function invoked with system-impacting side effects' },
+  { regex: /\bshutdown\s+(\/s|\/r|-h|-r|\/l|-t\s*\d+|\/f)\b/is, reason: 'Host system power state change / reboot' },
+  { regex: /\b(taskkill|killall|pkill|kill)\b.*(?:\s+(?:-9|\/f|\/im|\/pid|\/s\s+kill|-s\s+9)|\s+\d+|\s+\S+)/is, reason: 'Forced termination of running system processes' },
+  { regex: /\b(systemctl|service)\s+(stop|disable)\b/is, reason: 'Halting essential OS background services' },
+  { regex: /\b(reg\s+delete|Remove-ItemProperty)\b/is, reason: 'Deletion of system registry keys' },
+  { regex: /\b(drop\s+database|truncate\s+table)\b/is, reason: 'Bulk data wipe in database services' },
+  { regex: /\b(netsh|iptables|ufw)\s+(reset|flush|disable)\b/is, reason: 'Firewall / network isolation policy wipe' },
+  { regex: /\b(?:powershell|pwsh|cmd)\b.*(?:-command|-c|\/c)\s+.*(?:remove-item|format|shutdown|taskkill|del|rm|reg\s+delete)/is, reason: 'Command shell wrapper invoking destructive administrative action' },
+  { regex: /\brundll32(?:\.exe)?\b.*(?:shutdown|setuspendstate|shell32|rundll32)/is, reason: 'Native OS control function invoked with system-impacting side effects' },
 ];
 
 // High risk patterns that require standard HITL modal gate
 const HIGH_RISK_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
   { regex: /\b(npm|yarn|pnpm)\s+(install|add|i)\s+-[gG]\b/i, reason: 'Global package installation with elevated rights' },
-  { regex: /\b(curl|wget)\s+.*\|\s*(bash|sh|powershell|cmd)/i, reason: 'Remote script execution via pipe' },
+  { regex: /\b(curl|wget)\s+.*\|\s*(bash|sh|powershell|cmd)/is, reason: 'Remote script execution via pipe' },
   { regex: /\b(git\s+reset\s+--hard|git\s+clean\s+-fdx)\b/i, reason: 'Destructive uncommitted git workspace purge' },
   { regex: /\b(chmod|chown)\s+(-R\s+)?(777|000)\b/i, reason: 'Dangerous filesystem permission alteration' },
 ];
@@ -78,7 +78,11 @@ const MAX_INSPECT_CACHE = 512;
  */
 export function inspectCommandSecurity(command: string): CommandSecurityVerdict {
   if (typeof command === 'string' && INSPECT_CACHE.has(command)) {
-    return INSPECT_CACHE.get(command)!;
+    const cached = INSPECT_CACHE.get(command)!;
+    // Refresh recency for true LRU eviction
+    INSPECT_CACHE.delete(command);
+    INSPECT_CACHE.set(command, cached);
+    return cached;
   }
 
   const result = inspectCommandSecurityUncached(command);
@@ -309,26 +313,52 @@ export function setHostQuarantined(hostId: string, quarantined: boolean): string
 
 /**
  * Pre-Shared Key (PSK) / Bearer Auth Token Management
+ * Uses sessionStorage (cleared when the tab/browser closes) and purges any
+ * legacy plaintext localStorage keys to avoid disk-persisted PSK exposure.
  */
 const STORAGE_KEY_AUTH_TOKEN = 'ai_netcontroller_auth_token_v1';
 const LEGACY_STORAGE_KEY_AUTH_TOKEN = 'cst_auth_token_v1';
 
 export function getStoredAuthToken(): string {
   if (typeof window === 'undefined') return '';
-  return (
-    localStorage.getItem(STORAGE_KEY_AUTH_TOKEN) ||
-    localStorage.getItem(LEGACY_STORAGE_KEY_AUTH_TOKEN) ||
-    ''
-  );
+  try {
+    const sessionToken = window.sessionStorage.getItem(STORAGE_KEY_AUTH_TOKEN) || '';
+    // One-time cleanup of any legacy localStorage plaintext keys
+    const legacyToken =
+      window.localStorage.getItem(STORAGE_KEY_AUTH_TOKEN) ||
+      window.localStorage.getItem(LEGACY_STORAGE_KEY_AUTH_TOKEN) ||
+      '';
+    if (
+      window.localStorage.getItem(STORAGE_KEY_AUTH_TOKEN) !== null ||
+      window.localStorage.getItem(LEGACY_STORAGE_KEY_AUTH_TOKEN) !== null
+    ) {
+      window.localStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY_AUTH_TOKEN);
+      if (!sessionToken && legacyToken.trim()) {
+        const clean = legacyToken.trim();
+        window.sessionStorage.setItem(STORAGE_KEY_AUTH_TOKEN, clean);
+        return clean;
+      }
+    }
+    return sessionToken;
+  } catch {
+    return '';
+  }
 }
 
 export function saveAuthToken(token: string) {
   if (typeof window !== 'undefined') {
-    if (token) {
-      localStorage.setItem(STORAGE_KEY_AUTH_TOKEN, token.trim());
-    } else {
-      localStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
-      localStorage.removeItem(LEGACY_STORAGE_KEY_AUTH_TOKEN);
+    try {
+      window.localStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY_AUTH_TOKEN);
+      const clean = token.trim();
+      if (clean) {
+        window.sessionStorage.setItem(STORAGE_KEY_AUTH_TOKEN, clean);
+      } else {
+        window.sessionStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
+      }
+    } catch {
+      // Ignore storage failures in restricted contexts
     }
   }
 }

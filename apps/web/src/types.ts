@@ -40,6 +40,7 @@ export interface WolPacketPayload {
   rawHex: string;
   bytesCount: number;
   timestamp: string;
+  secureOn?: string;
 }
 
 export type WolPacketLogStatus = 'success' | 'failed';
@@ -90,6 +91,7 @@ export interface WolSchedule {
 }
 
 export interface ClientCommandMessage {
+  command_id?: string;
   target_id: string; // Unicast ID or tag selector like "[Windows]"
   command_type: 'natural_language' | 'system_command' | 'wol_packet' | 'session_update';
   prompt: string;

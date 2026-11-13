@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useId, useMemo } from 'react';
 import { Activity, Zap, ArrowUpRight, Gauge, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { HeartbeatMetrics } from '../../types';
 import { useTranslation } from '../../i18n/useTranslation';
@@ -8,7 +8,6 @@ interface HeartbeatSparklineProps {
   variant?: 'compact' | 'detailed';
   onClick?: () => void;
   className?: string;
-  isSimulated?: boolean;
 }
 
 const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
@@ -16,9 +15,11 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
   variant = 'compact',
   onClick,
   className = '',
-  isSimulated = false
 }) => {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
+  const uid = useId();
+  const compactGradId = `compactSparklineGrad-${uid}`;
+  const detailedGradId = `detailedSparklineGrad-${uid}`;
   const { currentLatencyMs, history, jitterMs, minLatencyMs, maxLatencyMs, avgLatencyMs, status } = metrics;
 
   // Compute SVG sparkline path from real measured samples only
@@ -67,7 +68,7 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
     const lastPoint = points[points.length - 1];
 
     return { path, area, lastPoint, width, height, minVal, maxVal };
-  }, [history, variant]);
+  }, [history, currentLatencyMs, variant]);
 
   // Color scheme based on status and jitter
   const colorConfig = useMemo(() => {
@@ -112,7 +113,11 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
         type="button"
         onClick={onClick}
         className={`group flex items-center space-x-2 px-2.5 py-1 rounded-xl border ${colorConfig.border} ${colorConfig.bg} hover:border-cyan-400/50 transition-all select-none ${className}`}
-        title={`Heartbeat RTT: ${currentLatencyMs ?? 0}ms • Джитър: ±${jitterMs}ms • Кликни за WebSocket настройки`}
+        title={
+          language === 'bg'
+            ? `Heartbeat RTT: ${currentLatencyMs ?? 0}ms • Джитър: ±${jitterMs}ms • Кликни за WebSocket настройки`
+            : `Heartbeat RTT: ${currentLatencyMs ?? 0}ms • Jitter: ±${jitterMs}ms • Click for WebSocket settings`
+        }
       >
         {/* Activity Icon */}
         <Activity className={`w-3.5 h-3.5 ${colorConfig.text} ${status === 'healthy' ? 'animate-pulse' : ''}`} />
@@ -122,15 +127,15 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
           <svg
             viewBox={`0 0 ${svgData.width} ${svgData.height}`}
             className="w-full h-full overflow-visible"
-            preserveAspectRatio="none"
+            preserveAspectRatio="xMidYMid meet"
           >
             <defs>
-              <linearGradient id="compactSparklineGrad" x1="0" y1="0" x2="0" y2="1">
+              <linearGradient id={compactGradId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={colorConfig.stroke} stopOpacity="0.35" />
                 <stop offset="100%" stopColor={colorConfig.stroke} stopOpacity="0.0" />
               </linearGradient>
             </defs>
-            <path d={svgData.area} fill="url(#compactSparklineGrad)" />
+            <path d={svgData.area} fill={`url(#${compactGradId})`} />
             <path
               d={svgData.path}
               fill="none"
@@ -182,13 +187,8 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
         <div className="flex items-center space-x-2">
           <Gauge className={`w-4 h-4 ${colorConfig.text}`} />
           <span className="text-xs font-semibold text-slate-200 uppercase tracking-wider font-display">
-            Real-Time Heartbeat Jitter & Latency
+            {language === 'bg' ? 'Латентност и джитър в реално време' : 'Real-Time Heartbeat Jitter & Latency'}
           </span>
-          {isSimulated && (
-            <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-cyan-950 text-cyan-300 border border-cyan-800">
-              SIM
-            </span>
-          )}
         </div>
 
         <div className="flex items-center space-x-1.5">
@@ -225,17 +225,17 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
         <svg
           viewBox={`0 0 ${svgData.width} ${svgData.height}`}
           className="w-full h-full overflow-visible"
-          preserveAspectRatio="none"
+          preserveAspectRatio="xMidYMid meet"
         >
           <defs>
-            <linearGradient id="detailedSparklineGrad" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={detailedGradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={colorConfig.stroke} stopOpacity="0.4" />
               <stop offset="100%" stopColor={colorConfig.stroke} stopOpacity="0.0" />
             </linearGradient>
           </defs>
 
           {/* Fill Area */}
-          <path d={svgData.area} fill="url(#detailedSparklineGrad)" />
+          <path d={svgData.area} fill={`url(#${detailedGradId})`} />
 
           {/* Stroke Line */}
           <path

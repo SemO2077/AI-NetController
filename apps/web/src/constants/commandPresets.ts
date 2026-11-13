@@ -44,14 +44,14 @@ export const DESTRUCTIVE_ACTIONS = [
     label: 'Рестарт',
     command: 'shutdown /r /t 0',
     accentColor: '#ffb800',
-    isDestructive: false
+    isDestructive: true
   },
   {
     id: 'sleep',
     label: 'Приспиване',
     command: 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
     accentColor: '#ffb800',
-    isDestructive: false
+    isDestructive: true
   },
   {
     id: 'panic',

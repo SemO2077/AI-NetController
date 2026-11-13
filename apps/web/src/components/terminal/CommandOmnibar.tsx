@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useUIStore } from '../../store/uiStore';
 import { HostDevice } from '../../types';
-import { DEMO_PRESET_COMMANDS } from '../../data/mockHosts';
+import { QUICK_ACTIONS } from '../../constants/commandPresets';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { useTranslation } from '../../i18n/useTranslation';
 
@@ -129,25 +129,26 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
     }
 
     if (isAiMode) {
-      DEMO_PRESET_COMMANDS.filter((p) => {
-        const title = isBg ? p.labelBg : p.labelEn;
-        const sub = isBg ? p.promptBg : p.promptEn;
-        return title.toLowerCase().includes(rawQuery) || sub.toLowerCase().includes(rawQuery);
+      QUICK_ACTIONS.filter((p) => {
+        return (
+          p.label.toLowerCase().includes(rawQuery) ||
+          p.command.toLowerCase().includes(rawQuery) ||
+          p.description.toLowerCase().includes(rawQuery)
+        );
       }).forEach((p, idx) => {
-        const title = isBg ? p.labelBg : p.labelEn;
-        const sub = isBg ? p.promptBg : p.promptEn;
+        const isAiPrompt = p.iconType === 'ai' || p.id === 'ai-diag';
         items.push({
           id: `preset-${idx}`,
           kind: 'preset',
-          title,
-          subtitle: sub,
+          title: p.label,
+          subtitle: `${p.command} · ${p.description}`,
           icon: Sparkles,
           onTrigger: () =>
             executeAction(() =>
               onSendCommand({
                 target_id: selectedTarget,
-                command_type: 'natural_language',
-                prompt: sub,
+                command_type: isAiPrompt ? 'natural_language' : 'system_command',
+                prompt: p.command,
               })
             ),
         });
@@ -155,6 +156,10 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
     }
 
     if (q && !isActionMode && !isHostMode && !isAiMode) {
+      const looksLikeShell =
+        /^(?:ipconfig|ifconfig|systeminfo|whoami|hostname|dir|ls|pwd|uname|uptime|ps|tasklist|netstat|ss|df|free|ping|tracert|traceroute|winget|apt|systemctl|loginctl)\b/i.test(
+          q
+        );
       items.push({
         id: 'direct-query',
         kind: 'query',
@@ -165,8 +170,8 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
           executeAction(() =>
             onSendCommand({
               target_id: selectedTarget,
-              command_type: 'natural_language',
-              prompt: q,
+              command_type: looksLikeShell ? 'system_command' : 'natural_language',
+              prompt: query.trim(),
             })
           ),
       });
@@ -175,6 +180,7 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
     return items;
   }, [
     q,
+    query,
     isHostMode,
     isActionMode,
     isAiMode,
@@ -182,8 +188,10 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
     hosts,
     t,
     isBg,
+    language,
     executeAction,
     onSelectHost,
+    onSendWolDirect,
     onRescanMdns,
     openModal,
     toggleLanguage,
@@ -223,20 +231,20 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, setOmnibarOpen, selectableItems, selectedIndex]);
 
-  // Focus input automatically when opened and prevent body scroll
+  // Focus input automatically when opened and safely save/restore body scroll
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-      const timer = setTimeout(() => inputRef.current?.focus(), 50);
-      return () => {
-        clearTimeout(timer);
-        document.body.style.overflow = '';
-      };
-    } else {
+    if (!isOpen) {
       setQuery('');
       setSelectedIndex(0);
-      document.body.style.overflow = '';
+      return;
     }
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const timer = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => {
+      clearTimeout(timer);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [isOpen]);
 
   return (

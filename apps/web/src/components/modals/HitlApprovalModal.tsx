@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence, PanInfo } from 'motion/react';
 import { ShieldAlert, Copy, Check, X } from 'lucide-react';
 import { ApprovalRequiredEvent } from '../../types';
@@ -23,26 +23,61 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
 }) => {
   const { language } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setCopied(false);
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+  }, [event?.command_id, isOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleCopy = () => {
     if (!event) return;
     triggerHapticFeedback('light');
     copyToClipboard(event.proposed_command);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      copyTimerRef.current = null;
+      setCopied(false);
+    }, 2000);
   };
 
-  const handleApprove = () => {
+  const handleApprove = useCallback(() => {
     if (!event) return;
     triggerHapticFeedback('heavy');
     onDecision(event.command_id, 'APPROVED');
-  };
+  }, [event, onDecision]);
 
-  const handleReject = () => {
+  const handleReject = useCallback(() => {
     if (!event) return;
     triggerHapticFeedback('warning');
     onDecision(event.command_id, 'REJECTED');
-  };
+  }, [event, onDecision]);
+
+  useEffect(() => {
+    if (!isOpen || !event) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleReject();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, event, handleReject]);
 
   const handleDragEnd = (_: any, info: PanInfo) => {
     if (info.offset.y > 100 || info.velocity.y > 500) {
@@ -116,6 +151,7 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
               </div>
 
               <button
+                type="button"
                 onClick={handleReject}
                 className="min-w-[44px] min-h-[44px] w-11 h-11 rounded-full flex items-center justify-center text-slate-400 hover:text-white bg-white/10 active:scale-90 transition cursor-pointer"
                 aria-label={language === 'bg' ? 'Затвори' : 'Close'}
@@ -152,6 +188,7 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
                     {language === 'bg' ? 'Предложена системна команда' : 'Proposed System Command'}
                   </span>
                   <button
+                    type="button"
                     onClick={handleCopy}
                     className="flex items-center space-x-1 text-[11px] text-cyan-400 hover:text-cyan-300 transition min-h-[36px] px-2 py-1 rounded-lg hover:bg-white/5 cursor-pointer"
                   >

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import QRCode from 'qrcode';
 import {
@@ -12,6 +12,7 @@ import {
   Sparkles,
   Wifi,
   ShieldCheck,
+  ShieldAlert,
   Zap,
   RefreshCw,
   ArrowRight,
@@ -70,6 +71,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
 
   const [activeStep, setActiveStep] = useState<'all' | 'pc' | 'phone' | 'verify'>('all');
   const [setupInfo, setSetupInfo] = useState<SetupInfo | null>(null);
+  const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [customIp, setCustomIp] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
@@ -77,6 +79,24 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
   const [isPairedSuccess, setIsPairedSuccess] = useState(false);
   const [showPwaGuide, setShowPwaGuide] = useState(false);
   const [deferredPwaPrompt, setDeferredPwaPrompt] = useState<any>(null);
+  const timersRef = useRef<Set<number>>(new Set());
+
+  const scheduleTimer = useCallback((fn: () => void, ms: number) => {
+    const id = window.setTimeout(() => {
+      timersRef.current.delete(id);
+      fn();
+    }, ms);
+    timersRef.current.add(id);
+    return id;
+  }, []);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+      timers.clear();
+    };
+  }, []);
 
   // Capture browser PWA install prompt if available
   useEffect(() => {
@@ -88,26 +108,44 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 
-  const fetchSetupDetails = useCallback(async () => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
+  const fetchSetupDetails = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/setup/info', { credentials: 'include' });
-      const data = await res.json();
+      const res = await fetch('/api/setup/info', { credentials: 'include', signal });
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success && data.setup) {
+        setServerReachable(true);
         setSetupInfo(data.setup);
         setCustomIp((prev) => prev || data.setup.localIp);
+      } else {
+        setServerReachable(false);
       }
-    } catch {
-      // Fallback if offline
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
+        setServerReachable(false);
+      }
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (isOpen) {
-      fetchSetupDetails();
-    }
+    if (!isOpen) return;
+    const controller = new AbortController();
+    fetchSetupDetails(controller.signal);
+    return () => controller.abort();
   }, [isOpen, fetchSetupDetails]);
 
   // Compute dynamic pairing URL based on detected or user-edited LAN IP
@@ -117,6 +155,8 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
   const effectiveMac = setupInfo?.mac || '';
   const effectivePin = setupInfo?.pairingPin || '';
   const effectiveToken = setupInfo?.pairingToken || '';
+  const isDaemonReady = Boolean(serverReachable && setupInfo && setupInfo.daemonOnline !== false);
+  const hasValidMac = /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(effectiveMac);
   const effectiveWsUri = `ws://${effectiveIp}:${effectivePort}`;
 
   const effectiveMobilePairUrl = React.useMemo(() => {
@@ -133,7 +173,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
       pair_os: setupInfo?.osName?.toLowerCase().includes('linux') ? 'linux' : 'windows',
       ...(effectivePin ? { pair_pin: effectivePin } : {}),
     });
-    return `${baseOrigin}/?${params.toString()}`;
+    return `${baseOrigin}/#${params.toString()}`;
   }, [effectiveIp, effectivePort, effectiveHostname, effectiveMac, effectivePin, setupInfo?.osName]);
 
   // Generate crisp QR Code whenever effectiveMobilePairUrl changes
@@ -162,7 +202,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     triggerHapticFeedback('light');
     copyToClipboard(text);
     setCopiedField(label);
-    setTimeout(() => setCopiedField(null), 2000);
+    scheduleTimer(() => setCopiedField((prev) => (prev === label ? null : prev)), 2000);
   };
 
   const handleOneTapAutoPair = () => {
@@ -178,7 +218,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
       pairingPin: effectivePin || undefined,
     });
     setIsPairedSuccess(true);
-    setTimeout(() => setIsPairedSuccess(false), 3500);
+    scheduleTimer(() => setIsPairedSuccess(false), 3500);
   };
 
   const handleInstallPwa = async () => {
@@ -279,7 +319,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.94 }}
               transition={SPRING_POP}
-              onClick={fetchSetupDetails}
+              onClick={() => void fetchSetupDetails()}
               className="min-h-[38px] px-3 rounded-xl bg-white/[0.05] hover:bg-white/10 border border-white/10 text-xs font-mono text-cyan-300 flex items-center gap-1.5 cursor-pointer shrink-0"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -614,43 +654,79 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </h4>
                   </div>
                   <span className="text-[11px] font-mono text-slate-400 tabular-nums">
-                    {effectiveWsUri} • MAC {effectiveMac}
+                    {effectiveWsUri} • MAC {hasValidMac ? effectiveMac : isBg ? 'Неоткрит' : 'Unverified'}
                   </span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
                   <div className="p-3 rounded-xl bg-[#070c18] border border-white/10 flex items-center gap-2.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    {isDaemonReady ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                    )}
                     <div className="min-w-0">
                       <div className="font-semibold text-white truncate">
                         {isBg ? 'PC Демон Сървър' : 'PC Daemon Listener'}
                       </div>
-                      <div className="text-[11px] text-emerald-300 font-mono truncate">
-                        ONLINE ({effectiveIp}:{effectivePort})
+                      <div
+                        className={`text-[11px] font-mono truncate ${
+                          isDaemonReady ? 'text-emerald-300' : 'text-amber-300'
+                        }`}
+                      >
+                        {isDaemonReady
+                          ? `ONLINE (${effectiveIp}:${effectivePort})`
+                          : serverReachable === false
+                          ? isBg
+                            ? 'OFFLINE (Сървърът не отговаря)'
+                            : 'OFFLINE (Server Unreachable)'
+                          : isBg
+                          ? 'Офлайн / Непотвърден'
+                          : 'OFFLINE / UNVERIFIED'}
                       </div>
                     </div>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[#070c18] border border-white/10 flex items-center gap-2.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    {hasValidMac ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                    )}
                     <div className="min-w-0">
                       <div className="font-semibold text-white truncate">
                         {isBg ? 'Wake-on-LAN (UDP 9)' : 'Wake-on-LAN (UDP 9)'}
                       </div>
-                      <div className="text-[11px] text-cyan-300 font-mono truncate">
-                        {effectiveMac}
+                      <div
+                        className={`text-[11px] font-mono truncate ${
+                          hasValidMac ? 'text-cyan-300' : 'text-amber-300'
+                        }`}
+                      >
+                        {hasValidMac ? effectiveMac : isBg ? 'Липсва валиден MAC' : 'MAC missing / unverified'}
                       </div>
                     </div>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[#070c18] border border-white/10 flex items-center gap-2.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    {isDaemonReady ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <ShieldAlert className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
                     <div className="min-w-0">
                       <div className="font-semibold text-white truncate">
                         {isBg ? 'AV-Safe Защита' : 'AV-Safe Integrity'}
                       </div>
-                      <div className="text-[11px] text-emerald-300 font-mono truncate">
-                        No UPX • HWND Verified
+                      <div
+                        className={`text-[11px] font-mono truncate ${
+                          isDaemonReady ? 'text-emerald-300' : 'text-slate-400'
+                        }`}
+                      >
+                        {isDaemonReady
+                          ? 'No UPX • HWND Verified'
+                          : isBg
+                          ? 'Очаква проверка от демона'
+                          : 'Awaiting Daemon Health'}
                       </div>
                     </div>
                   </div>

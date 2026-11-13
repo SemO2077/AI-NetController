@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Zap,
   CheckCircle2,
@@ -32,6 +32,7 @@ interface WolHistoryLogViewerProps {
 }
 
 export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
+  hosts = [],
   onSendWolPacket,
 }) => {
   const { language } = useTranslation();
@@ -43,6 +44,23 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  const scheduleTimer = (fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      timersRef.current.delete(id);
+      fn();
+    }, ms);
+    timersRef.current.add(id);
+  };
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((id) => clearTimeout(id));
+      timers.clear();
+    };
+  }, []);
 
   const counts = useMemo(() => {
     const total = entries.length;
@@ -70,31 +88,61 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
     triggerHapticFeedback('light');
     copyToClipboard(mac);
     setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1500);
+    scheduleTimer(() => setCopiedId((prev) => (prev === id ? null : prev)), 1500);
   };
 
-  const handleRetryPacket = (entry: WolPacketLogEntry) => {
+  const formatEntryTime = (entry: WolPacketLogEntry): string => {
+    if (typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt)) {
+      return new Date(entry.createdAt).toLocaleTimeString(isBg ? 'bg-BG' : 'en-GB', {
+        hour12: false,
+      });
+    }
+    const parts = entry.timestamp.trim().split(/\s+/);
+    return parts.length > 1 ? parts[parts.length - 1] : entry.timestamp;
+  };
+
+  const handleRetryPacket = async (entry: WolPacketLogEntry) => {
     triggerHapticFeedback('medium');
     setRetryingId(entry.id);
-    setTimeout(() => setRetryingId(null), 700);
 
     try {
       const pkt = generateMagicPacket(entry.mac, entry.broadcastIp, entry.port);
       if (onSendWolPacket) {
         onSendWolPacket(pkt, entry.deviceId, 'manual', entry.deviceName);
       } else {
+        const start = performance.now();
+        const res = await fetch('/api/wol', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            mac: pkt.mac,
+            broadcastIp: pkt.broadcastIp || '255.255.255.255',
+            port: pkt.port || 9,
+          }),
+        });
+        const data = await res.json().catch(() => ({} as any));
+        const rtt = Math.max(1, Math.round(performance.now() - start));
+        const ok = Boolean(res.ok && data?.success);
         wolHistoryStore.addEntry({
           deviceId: entry.deviceId,
           deviceName: entry.deviceName,
-          mac: entry.mac,
-          broadcastIp: entry.broadcastIp,
-          port: entry.port,
+          mac: pkt.mac,
+          broadcastIp: pkt.broadcastIp,
+          port: pkt.port,
           bytesCount: pkt.bytesCount,
-          status: 'success',
+          status: ok ? 'success' : 'failed',
           source: 'manual',
+          latencyMs: ok ? rtt : undefined,
+          details: ok
+            ? undefined
+            : data?.error || `HTTP ${res.status} dispatching Wake-on-LAN packet`,
+          detailsBg: ok
+            ? undefined
+            : data?.error || `Грешка HTTP ${res.status} при изпращане на WoL пакет`,
         });
       }
-    } catch {
+    } catch (err: any) {
       wolHistoryStore.addEntry({
         deviceId: entry.deviceId,
         deviceName: entry.deviceName,
@@ -104,7 +152,11 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
         bytesCount: 102,
         status: 'failed',
         source: 'manual',
+        details: err?.message || 'Wake-on-LAN retry failed',
+        detailsBg: err?.message || 'Неуспешен повторен опит за Wake-on-LAN',
       });
+    } finally {
+      scheduleTimer(() => setRetryingId((prev) => (prev === entry.id ? null : prev)), 700);
     }
   };
 
@@ -136,6 +188,12 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
               type="button"
               onClick={() => {
                 triggerHapticFeedback('medium');
+                const promptText = isBg
+                  ? 'Сигурни ли сте, че искате да изчистите цялата Wake-on-LAN история?'
+                  : 'Clear the entire Wake-on-LAN packet history?';
+                if (typeof window !== 'undefined' && !window.confirm(promptText)) {
+                  return;
+                }
                 wolHistoryStore.clearHistory();
               }}
               className="h-8 px-2.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-300 text-xs flex items-center gap-1.5 transition active:scale-95"
@@ -210,6 +268,12 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
             filteredEntries.map((entry) => {
               const isSuccess = entry.status === 'success';
               const isRetrying = retryingId === entry.id;
+              const resolvedDeviceName =
+                hosts.find(
+                  (h) =>
+                    h.id === entry.deviceId ||
+                    h.mac.toLowerCase() === entry.mac.toLowerCase()
+                )?.name || entry.deviceName;
 
               return (
                 <div
@@ -226,7 +290,7 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="text-xs font-semibold text-white truncate">
-                          {entry.deviceName}
+                          {resolvedDeviceName}
                         </span>
                         <span
                           className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
@@ -263,7 +327,7 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
 
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className="text-[11px] font-mono text-slate-400 tabular-nums">
-                      {entry.timestamp.slice(11) || entry.timestamp}
+                      {formatEntryTime(entry)}
                     </span>
 
                     <button

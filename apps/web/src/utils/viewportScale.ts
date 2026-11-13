@@ -41,11 +41,13 @@ export function computeViewportMetrics(rawWidth: number, rawHeight: number): Vie
   const height = Number.isFinite(rawHeight) && rawHeight > 0 ? Math.round(rawHeight) : 800;
   const aspectRatio = Number((width / Math.max(1, height)).toFixed(3));
 
-  const isShortLandscape = height <= 520 && width > height;
   const isUltrawide = width >= 2560 || (width >= 1440 && aspectRatio >= 2.15);
+  const isShortLandscape = height <= 520 && width > height && !isUltrawide;
 
   let category: ViewportCategory = 'desktop';
-  if (isShortLandscape) {
+  if (isUltrawide) {
+    category = 'ultrawide';
+  } else if (isShortLandscape) {
     category = 'mobile-landscape';
   } else if (width < 360) {
     category = 'compact-mobile';
@@ -53,8 +55,6 @@ export function computeViewportMetrics(rawWidth: number, rawHeight: number): Vie
     category = 'mobile-portrait';
   } else if (width < 1024) {
     category = 'tablet';
-  } else if (isUltrawide) {
-    category = 'ultrawide';
   } else if (width >= 1536) {
     category = 'widescreen';
   } else {

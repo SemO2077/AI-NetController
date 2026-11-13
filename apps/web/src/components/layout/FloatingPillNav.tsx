@@ -22,7 +22,8 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
   latency,
   onOpenNetworkConfig,
 }) => {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
+  const isBg = language === 'bg';
 
   const tabs = [
     {
@@ -54,7 +55,7 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
   return (
     <div className="fixed bottom-0 inset-x-0 z-40 px-2.5 sm:px-4 pb-[calc(env(safe-area-inset-bottom,6px)+0.4rem)] pt-1 select-none pointer-events-none">
       <nav
-        aria-label="Primary Navigation"
+        aria-label={isBg ? 'Основна навигация' : 'Primary Navigation'}
         className="landscape-compact-nav pointer-events-auto mx-auto max-w-xl glass-liquid-elevated rounded-[22px] h-[60px] sm:h-[64px] px-1.5 py-1.5 flex items-center gap-1.5"
       >
         {/* 4 Equal-Width Liquid Glass Navigation Destinations */}
@@ -125,7 +126,11 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
             }`}
             title={
               isConnected
-                ? `Connected (${latency !== null ? `${Math.round(latency)}ms` : 'live'})`
+                ? isBg
+                  ? `Свързан (${latency !== null ? `${Math.round(latency)}ms` : 'на живо'})`
+                  : `Connected (${latency !== null ? `${Math.round(latency)}ms` : 'live'})`
+                : isBg
+                ? 'Настрой адрес на хоста'
                 : 'Configure Host Endpoint'
             }
           >

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import JSZip from 'jszip';
 import {
   BookOpen,
@@ -69,30 +69,123 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
   const [patchNotes, setPatchNotes] = useState<string>('');
   const [liveSnippets, setLiveSnippets] = useState<typeof ALL_SNIPPETS>(ALL_SNIPPETS);
   const [rebuildMessage, setRebuildMessage] = useState<string | null>(null);
+  const timersRef = useRef<Set<number>>(new Set());
+
+  const scheduleTimer = useCallback((fn: () => void, ms: number) => {
+    const id = window.setTimeout(() => {
+      timersRef.current.delete(id);
+      fn();
+    }, ms);
+    timersRef.current.add(id);
+    return id;
+  }, []);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+      timers.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
-    fetch('/api/releases', { credentials: 'include' })
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const controller = new AbortController();
+    fetch('/api/releases', { credentials: 'include', signal: controller.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data) => {
         if (data.manifest) setManifest(data.manifest);
         if (data.patchNotes) setPatchNotes(data.patchNotes);
       })
-      .catch(() => {
-        fetch('/releases/v0.50.0/RELEASE_MANIFEST.json')
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
+        fetch('/releases/v0.50.0/RELEASE_MANIFEST.json', { signal: controller.signal })
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
           .then((m) => setManifest(m))
           .catch(() => {});
       });
 
-    fetch('/api/source-files', { credentials: 'include' })
+    fetch('/api/source-files', { credentials: 'include', signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (Array.isArray(data?.files) && data.files.length > 0) {
-          setLiveSnippets(data.files);
+      .then(async (data) => {
+        if (!Array.isArray(data?.files) || data.files.length === 0) return;
+
+        const completeSnippets = data.files.filter(
+          (f: any) => typeof f?.filename === 'string' && typeof f?.code === 'string'
+        );
+        if (completeSnippets.length > 0) {
+          setLiveSnippets(completeSnippets);
+          return;
         }
+
+        const existingEntries = data.files.filter(
+          (f: any) => typeof f?.id === 'string' && f.exists === true
+        );
+        if (existingEntries.length === 0) return;
+
+        const fetched = await Promise.allSettled(
+          existingEntries.map((entry: { id: string }) =>
+            fetch(`/api/source-files?path=${encodeURIComponent(entry.id)}`, {
+              credentials: 'include',
+              signal: controller.signal,
+            }).then((r) => (r.ok ? r.json() : null))
+          )
+        );
+        if (controller.signal.aborted) return;
+
+        const contentById = new Map<string, { content: string; label?: string; language?: string }>();
+        for (const res of fetched) {
+          if (res.status === 'fulfilled' && res.value?.id && typeof res.value?.content === 'string') {
+            contentById.set(res.value.id, {
+              content: res.value.content,
+              label: res.value.label,
+              language: res.value.language,
+            });
+          }
+        }
+        if (contentById.size === 0) return;
+
+        setLiveSnippets((prev) => {
+          const updated = prev.map((snippet) => {
+            const match = contentById.get(snippet.filename);
+            if (!match) return snippet;
+            contentById.delete(snippet.filename);
+            return { ...snippet, code: match.content };
+          });
+          for (const [id, info] of contentById.entries()) {
+            const category = id.startsWith('apps/mobile/')
+              ? 'crossplatform'
+              : id.startsWith('apps/web/')
+                ? 'frontend'
+                : id.startsWith('docs/')
+                  ? 'docs'
+                  : 'backend';
+            updated.push({
+              filename: id,
+              category,
+              description: info.label || id,
+              language: info.language || 'text',
+              code: info.content,
+            } as (typeof ALL_SNIPPETS)[number]);
+          }
+          return updated;
+        });
       })
       .catch(() => {});
+
+    return () => controller.abort();
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -133,7 +226,7 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
     triggerHapticFeedback('light');
     copyToClipboard(currentFile.code);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    scheduleTimer(() => setCopied(false), 2000);
   };
 
   const handleRebuildBinaries = async () => {
@@ -174,7 +267,7 @@ python scripts/publish_github_release.py`;
     triggerHapticFeedback('light');
     copyToClipboard(ghReleaseCommands);
     setCopiedGhCmd(true);
-    setTimeout(() => setCopiedGhCmd(false), 2000);
+    scheduleTimer(() => setCopiedGhCmd(false), 2000);
   };
 
   const handleDownloadFile = () => {
@@ -185,7 +278,7 @@ python scripts/publish_github_release.py`;
     a.href = url;
     a.download = currentFile.filename.split('/').pop() || currentFile.filename;
     a.click();
-    URL.revokeObjectURL(url);
+    scheduleTimer(() => URL.revokeObjectURL(url), 1000);
   };
 
   const handleDownloadZip = async () => {
@@ -205,7 +298,7 @@ python scripts/publish_github_release.py`;
       a.href = url;
       a.download = 'ai_netcontroller_v0.50.0_source_and_builders.zip';
       a.click();
-      URL.revokeObjectURL(url);
+      scheduleTimer(() => URL.revokeObjectURL(url), 1500);
     } catch (err) {
       console.error('ZIP generation failed:', err);
     } finally {
@@ -366,6 +459,29 @@ python scripts/publish_github_release.py`;
             <span>🤖 Android Manifest</span>
           </button>
 
+          {liveSnippets.some(
+            (s) => s.category === 'frontend' || s.filename.startsWith('apps/web/src/')
+          ) && (
+            <button
+              type="button"
+              onClick={() => {
+                const firstFrontend = liveSnippets.find(
+                  (s) => s.category === 'frontend' || s.filename.startsWith('apps/web/src/')
+                );
+                setSelectedCategory('frontend');
+                if (firstFrontend) setActiveFilename(firstFrontend.filename);
+              }}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-semibold transition flex items-center space-x-2 whitespace-nowrap cursor-pointer ${
+                selectedCategory === 'frontend'
+                  ? 'bg-cyan-400 text-slate-950 shadow-[0_0_12px_rgba(34,211,238,0.45)] font-bold'
+                  : 'bg-white/5 text-slate-300 hover:text-white border border-white/10'
+              }`}
+            >
+              <Code2 className="w-3.5 h-3.5" />
+              <span>⚛️ Web UI (React)</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => {
@@ -484,7 +600,7 @@ python scripts/publish_github_release.py`;
                         onClick={() => {
                           copyToClipboard(art.sha256);
                           setCopiedSha(art.filename);
-                          setTimeout(() => setCopiedSha(null), 1800);
+                          scheduleTimer(() => setCopiedSha(null), 1800);
                         }}
                         className="text-cyan-400 hover:underline cursor-pointer"
                       >

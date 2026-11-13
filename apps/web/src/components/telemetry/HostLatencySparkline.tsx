@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, { useId, useState, useMemo, useRef, useCallback } from 'react';
 import { LatencyDataPoint } from '../../types';
 import { Activity, Clock, ShieldCheck, Zap } from 'lucide-react';
 import { useTranslation } from '../../i18n/useTranslation';
@@ -39,6 +39,10 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
   interactive = true,
 }) => {
   const { t, language } = useTranslation();
+  const safeUid = useId().replace(/:/g, '');
+  const sanitizedHostId = hostId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const gradId = `grad-${sanitizedHostId}-${safeUid}`;
+  const glowId = `glow-${sanitizedHostId}-${safeUid}`;
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredPoint, setHoveredPoint] = useState<PointWithCoord | null>(null);
 
@@ -106,7 +110,7 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
     const jitter =
       latencies.length > 1
         ? Math.round((jitterSum / (latencies.length - 1)) * 10) / 10
-        : 0.6;
+        : 0;
 
     let statusLevel: 'optimal' | 'good' | 'moderate' | 'high' = 'optimal';
     if (current > 120) statusLevel = 'high';
@@ -257,8 +261,14 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<SVGSVGElement>) => {
       if (!interactive || pointCoords.length === 0) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      const svgX = ((e.clientX - rect.left) / rect.width) * width;
+      let svgX: number;
+      const ctm = e.currentTarget.getScreenCTM?.();
+      if (ctm && ctm.a) {
+        svgX = (e.clientX - ctm.e) / ctm.a;
+      } else {
+        const rect = e.currentTarget.getBoundingClientRect();
+        svgX = ((e.clientX - rect.left) / rect.width) * width;
+      }
 
       // Find nearest point
       let closest: PointWithCoord = pointCoords[0];
@@ -356,26 +366,28 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
 
         <svg
           viewBox={`0 0 ${width} ${height}`}
-          className="w-full h-20 sm:h-24 overflow-visible touch-none cursor-crosshair"
-          preserveAspectRatio="none"
+          className={`w-full overflow-visible touch-none cursor-crosshair ${
+            compact ? 'aspect-[240/52] max-h-16' : 'aspect-[380/82] min-h-[76px] max-h-28'
+          }`}
+          preserveAspectRatio="xMidYMid meet"
           onPointerMove={handlePointerMove}
           onPointerLeave={handlePointerLeave}
         >
           <defs>
-            <linearGradient id={`grad-${hostId}`} x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={colors.fillGradStart} />
               <stop offset="100%" stopColor={colors.fillGradEnd} />
             </linearGradient>
 
             {/* Glowing filter for sparkline line */}
-            <filter id={`glow-${hostId}`} x="-20%" y="-20%" width="140%" height="140%">
+            <filter id={glowId} x="-20%" y="-20%" width="140%" height="140%">
               <feDropShadow dx="0" dy="0" stdDeviation="2" floodColor={colors.stroke} floodOpacity="0.4" />
             </filter>
           </defs>
 
           {/* Area Fill */}
           {areaD && isOnline && (
-            <path d={areaD} fill={`url(#grad-${hostId})`} />
+            <path d={areaD} fill={`url(#${gradId})`} />
           )}
 
           {/* Stroke Path */}
@@ -387,7 +399,7 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              filter={`url(#glow-${hostId})`}
+              filter={`url(#${glowId})`}
             />
           ) : (
             /* Offline dashed baseline */

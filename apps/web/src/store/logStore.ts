@@ -20,9 +20,13 @@ class LogStore {
     message: string,
     payload?: unknown
   ) {
+    const langLocale =
+      typeof localStorage !== 'undefined' && localStorage.getItem('wakeflow_language') === 'bg'
+        ? 'bg-BG'
+        : 'en-GB';
     const entry: LogEntry = {
       id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      timestamp: new Date().toLocaleTimeString('bg-BG', { hour12: false }),
+      timestamp: new Date().toLocaleTimeString(langLocale, { hour12: false }),
       sender,
       targetId,
       type,
