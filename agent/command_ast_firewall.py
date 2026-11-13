@@ -285,6 +285,52 @@ class CommandASTFirewall:
             logger.warning("Failed to assign PID %d to JOB_SUPERVISOR: %s", pid, exc)
 
     @staticmethod
+    def _build_spawn_kwargs(safe_env: Dict[str, str]) -> Dict[str, Any]:
+        """Builds isolated OS subprocess kwargs (detached process group on POSIX, no window on Windows)."""
+        kwargs: Dict[str, Any] = {"env": safe_env}
+        if IS_WINDOWS:
+            kwargs["creationflags"] = 0x08000000
+        else:
+            # Start a dedicated session/process group so timeouts kill shell grandchildren too.
+            kwargs["start_new_session"] = True
+        return kwargs
+
+    @staticmethod
+    def _signal_process_tree(proc: asyncio.subprocess.Process, sig: int) -> None:
+        """Signals or kills an entire subprocess tree across Windows and POSIX."""
+        if proc.returncode is not None:
+            return
+        if IS_WINDOWS:
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=3.0,
+                )
+            except Exception as exc:
+                logger.debug("taskkill warning for PID %s: %s", proc.pid, exc)
+            try:
+                if sig == getattr(signal, "SIGKILL", signal.SIGTERM):
+                    proc.kill()
+                else:
+                    proc.terminate()
+            except ProcessLookupError:
+                pass
+            return
+
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                proc.send_signal(sig)
+            except ProcessLookupError:
+                pass
+
+    @staticmethod
     async def _read_stream_bounded(stream: Optional[asyncio.StreamReader], limit: int = _MAX_OUTPUT_BYTES) -> bytes:
         if stream is None:
             return b""
@@ -377,25 +423,20 @@ class CommandASTFirewall:
                 else:
                     args.extend(["-c", "pass"])
 
-                exec_kwargs: Dict[str, Any] = {"env": safe_env}
-                if IS_WINDOWS:
-                    exec_kwargs["creationflags"] = 0x08000000
+                spawn_kwargs = CommandASTFirewall._build_spawn_kwargs(safe_env)
                 proc = await asyncio.create_subprocess_exec(
                     *args,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    **exec_kwargs,
+                    **spawn_kwargs,
                 )
             else:
-                shell_kwargs: Dict[str, Any] = {"env": safe_env}
-                if IS_WINDOWS:
-                    shell_kwargs["creationflags"] = 0x08000000
-
+                spawn_kwargs = CommandASTFirewall._build_spawn_kwargs(safe_env)
                 proc = await asyncio.create_subprocess_shell(
                     normalized_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    **shell_kwargs,
+                    **spawn_kwargs,
                 )
             CommandASTFirewall._assign_to_job_supervisor(proc.pid)
 
@@ -411,33 +452,28 @@ class CommandASTFirewall:
             done, _ = await asyncio.wait({communicate_task}, timeout=timeout_sec)
             if not done:
                 logger.warning("Process timed out (%.2fs). Commencing escalating termination sequence...", timeout_sec)
+                sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
                 try:
                     if proc.returncode is None:
-                        if IS_WINDOWS:
-                            try:
-                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                            except Exception as exc:
-                                logger.debug("taskkill warning for PID %s: %s", proc.pid, exc)
-                            proc.terminate()
-                        else:
-                            proc.send_signal(signal.SIGINT)
+                        CommandASTFirewall._signal_process_tree(proc, signal.SIGINT)
                         await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=0.5)
                 except asyncio.TimeoutError:
                     if proc.returncode is None:
-                        if IS_WINDOWS:
-                            try:
-                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                            except Exception:
-                                pass
-                        proc.terminate()
+                        CommandASTFirewall._signal_process_tree(proc, signal.SIGTERM)
                     try:
                         await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=0.5)
                     except asyncio.TimeoutError:
                         if proc.returncode is None:
-                            proc.kill()
-                        await proc.wait()
+                            CommandASTFirewall._signal_process_tree(proc, sigkill)
+                        try:
+                            await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            pass
                 except ProcessLookupError:
-                    await proc.wait()
+                    try:
+                        await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        pass
 
                 try:
                     await asyncio.wait_for(asyncio.shield(communicate_task), timeout=1.0)
@@ -481,8 +517,6 @@ class CommandASTFirewall:
         finally:
             if proc and proc.returncode is None:
                 try:
-                    if IS_WINDOWS:
-                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                    proc.kill()
+                    CommandASTFirewall._signal_process_tree(proc, getattr(signal, "SIGKILL", signal.SIGTERM))
                 except Exception:
                     pass

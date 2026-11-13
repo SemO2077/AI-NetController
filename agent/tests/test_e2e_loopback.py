@@ -26,7 +26,7 @@ import base64
 import json
 import asyncio
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Set
 
 # Ensure agent directory is in Python path
 AGENT_DIR = Path(__file__).resolve().parents[1]

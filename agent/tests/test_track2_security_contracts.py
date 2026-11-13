@@ -28,7 +28,15 @@ if _REPO_ROOT in sys.path:
     sys.path.remove(_REPO_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
-import agent.agent as agent_mod
+_existing_agent = sys.modules.get("agent")
+if (
+    _existing_agent is not None
+    and not hasattr(_existing_agent, "__path__")
+    and hasattr(_existing_agent, "HostAgentDaemon")
+):
+    agent_mod = _existing_agent
+else:
+    import agent.agent as agent_mod
 from command_ast_firewall import CommandASTFirewall
 from crypto_handshake import (
     HANDSHAKE_MAGIC,
@@ -295,6 +303,8 @@ class TestHostFileWriterContracts(unittest.TestCase):
 class TestHostAgentDaemonContracts(unittest.TestCase):
     def _make_daemon(self, tmp_dir, env_extra=None):
         env_patch = {
+            "HOME": tmp_dir,
+            "XDG_CONFIG_HOME": os.path.join(tmp_dir, ".config"),
             "LOCALAPPDATA": os.path.join(tmp_dir, "Local"),
             "APPDATA": os.path.join(tmp_dir, "Roaming"),
             "USERPROFILE": tmp_dir,
@@ -306,6 +316,10 @@ class TestHostAgentDaemonContracts(unittest.TestCase):
             return daemon
 
     def _cleanup_daemon(self, daemon):
+        try:
+            daemon.stop()
+        except Exception:
+            pass
         try:
             daemon.screen_pipeline.close()
         except Exception:
@@ -342,6 +356,8 @@ class TestHostAgentDaemonContracts(unittest.TestCase):
     def test_pin_lockout_authenticate_omits_token_and_audio_cannot_resize(self):
         with tempfile.TemporaryDirectory(prefix="ainet_daemon_ws_") as tmp_dir:
             env_patch = {
+                "HOME": tmp_dir,
+                "XDG_CONFIG_HOME": os.path.join(tmp_dir, ".config"),
                 "LOCALAPPDATA": os.path.join(tmp_dir, "Local"),
                 "APPDATA": os.path.join(tmp_dir, "Roaming"),
                 "USERPROFILE": tmp_dir,

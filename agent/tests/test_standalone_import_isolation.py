@@ -29,7 +29,7 @@ class TestStandaloneImportIsolation(unittest.TestCase):
                     "print('IMPORT_OK')"
                 ),
             ]
-            res = subprocess.run(cmd, cwd=td, capture_output=True, text=True)
+            res = subprocess.run(cmd, cwd=td, capture_output=True, text=True, timeout=30)
             self.assertEqual(res.returncode, 0, f"Import failed: {res.stderr}")
             self.assertIn("IMPORT_OK", res.stdout)
 
@@ -46,7 +46,7 @@ class TestStandaloneImportIsolation(unittest.TestCase):
                     "print('CRYPTO_VAULT_OK')"
                 ),
             ]
-            res = subprocess.run(cmd, cwd=td, capture_output=True, text=True)
+            res = subprocess.run(cmd, cwd=td, capture_output=True, text=True, timeout=30)
             self.assertEqual(res.returncode, 0, f"Crypto import failed: {res.stderr}")
             self.assertIn("CRYPTO_VAULT_OK", res.stdout)
 
@@ -60,13 +60,76 @@ class TestStandaloneImportIsolation(unittest.TestCase):
         if os.path.exists(exe_path):
             with tempfile.TemporaryDirectory() as td:
                 try:
-                    res = subprocess.run([exe_path, "--create-shortcut"], cwd=td, capture_output=True, text=True)
+                    res = subprocess.run([exe_path, "--create-shortcut"], cwd=td, capture_output=True, text=True, timeout=30)
                     self.assertEqual(res.returncode, 0, f"EXE execution failed: {res.stderr}")
                 except OSError as e:
                     if getattr(e, "winerror", None) == 4551:
                         self.skipTest(f"Skipped execution due to Windows Application Control policy: {e}")
                     else:
                         raise
+
+    def test_04_agent_module_imports_cleanly_when_headless(self):
+        """Verify agent imports, daemon init, and teardown leave no non-daemon threads in headless mode."""
+        with tempfile.TemporaryDirectory(prefix="ainet_headless_") as td:
+            env = os.environ.copy()
+            for var in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"):
+                env.pop(var, None)
+            env.update(
+                {
+                    "AI_HEADLESS": "1",
+                    "HOME": td,
+                    "USERPROFILE": td,
+                    "LOCALAPPDATA": os.path.join(td, "Local"),
+                    "APPDATA": os.path.join(td, "Roaming"),
+                    "XDG_CONFIG_HOME": os.path.join(td, ".config"),
+                }
+            )
+            pkg_code = (
+                "import asyncio, os, sys, threading; "
+                "sys.path.insert(0, sys.argv[1]); "
+                "import agent.agent as a; "
+                "assert not a._has_desktop_display(); "
+                "d1 = a.HostAgentDaemon(host='127.0.0.1', port=0, enable_tray=True, enable_mdns=False); "
+                "d1._start_system_tray(); "
+                "d1.stop(); "
+                "d2 = a.HostAgentDaemon(host='127.0.0.1', port=0, enable_tray=True, enable_mdns=False); "
+                "asyncio.run(d2.async_stop()); "
+                "alive = [t.name for t in threading.enumerate() if t is not threading.main_thread() and not t.daemon]; "
+                "assert not alive, f'Leaked non-daemon threads: {alive}'; "
+                "print('HEADLESS_PKG_OK')"
+            )
+            res = subprocess.run(
+                [sys.executable, "-c", pkg_code, REPO_ROOT],
+                cwd=td,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(res.returncode, 0, f"Headless package test failed:\nstdout={res.stdout}\nstderr={res.stderr}")
+            self.assertIn("HEADLESS_PKG_OK", res.stdout)
+
+            flat_code = (
+                "import os, sys, threading; "
+                "sys.path.insert(0, os.path.join(sys.argv[1], 'agent')); "
+                "import agent as a; "
+                "assert not a._has_desktop_display(); "
+                "d = a.HostAgentDaemon(host='127.0.0.1', port=0, enable_tray=True, enable_mdns=False); "
+                "d.stop(); "
+                "alive = [t.name for t in threading.enumerate() if t is not threading.main_thread() and not t.daemon]; "
+                "assert not alive, f'Leaked non-daemon threads: {alive}'; "
+                "print('HEADLESS_FLAT_OK')"
+            )
+            res_flat = subprocess.run(
+                [sys.executable, "-c", flat_code, REPO_ROOT],
+                cwd=td,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(res_flat.returncode, 0, f"Headless flat import test failed:\nstdout={res_flat.stdout}\nstderr={res_flat.stderr}")
+            self.assertIn("HEADLESS_FLAT_OK", res_flat.stdout)
 
 
 if __name__ == "__main__":
