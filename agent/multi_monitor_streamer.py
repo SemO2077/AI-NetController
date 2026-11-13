@@ -113,7 +113,8 @@ class MultiMonitorStreamer:
     def _refresh_monitors_list(self) -> List[Dict[str, Any]]:
         """Queries MSS for connected monitors and binds default display."""
         if not self._sct:
-            return [{"index": 1, "width": 1920, "height": 1080, "left": 0, "top": 0, "label": "Default Virtual Screen"}]
+            logger.warning("MSS screen capture unavailable; returning empty monitor list.")
+            return []
 
         monitors = []
         with self._lock:
@@ -193,9 +194,13 @@ class MultiMonitorStreamer:
             width, height = raw_sct_img.width, raw_sct_img.height
 
             # Run dynamic color extraction on the first captured frame
-            if not self._has_extracted_color:
+            should_extract = False
+            with self._lock:
+                if not self._has_extracted_color:
+                    self._has_extracted_color = True
+                    should_extract = True
+            if should_extract:
                 self._extract_dominant_color_fast(raw_sct_img.raw, width, height)
-                self._has_extracted_color = True
 
             # 1. Prefer TurboJPEG SIMD hardware compression (<3ms encoding)
             if _TURBO_JPEG_INSTANCE and np is not None:

@@ -10,12 +10,14 @@
     <!-- Sensory & Display Optimization Permissions -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
 
     <application
         android:label="AI NetController"
         android:icon="@mipmap/ic_launcher"
         android:hardwareAccelerated="true"
         android:largeHeap="false"
+        android:allowBackup="false"
         android:usesCleartextTraffic="true"> <!-- Required for low-latency local ws:// LAN connections -->
         
         <activity

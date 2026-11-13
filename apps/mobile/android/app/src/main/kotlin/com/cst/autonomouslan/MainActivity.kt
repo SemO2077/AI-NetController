@@ -35,9 +35,16 @@ class MainActivity : FlutterFragmentActivity() {
                 windowManager.defaultDisplay
             }
             val modes = display?.supportedModes ?: return 0
+            val activeMode = display.mode
             var highestRate = 60.0f
             var targetModeId = 0
             for (mode in modes) {
+                if (activeMode != null &&
+                    (mode.physicalWidth != activeMode.physicalWidth ||
+                        mode.physicalHeight != activeMode.physicalHeight)
+                ) {
+                    continue
+                }
                 if (mode.refreshRate > highestRate) {
                     highestRate = mode.refreshRate
                     targetModeId = mode.modeId

@@ -90,14 +90,16 @@ def _ephemeral_fallback_config() -> Dict[str, Any]:
     }
 
 try:
-    from daemon_config import load_config, save_config, get_config_path
+    from daemon_config import load_config, save_config, get_config_path, rotate_token, regenerate_pin
 except ImportError:
     try:
-        from agent.daemon_config import load_config, save_config, get_config_path
+        from agent.daemon_config import load_config, save_config, get_config_path, rotate_token, regenerate_pin
     except ImportError:
         load_config = _ephemeral_fallback_config
         save_config = lambda cfg: False
         get_config_path = lambda: ""
+        rotate_token = None
+        regenerate_pin = None
 
 logger = logging.getLogger("AI-NetController-GUI")
 
@@ -304,14 +306,41 @@ class HostDaemonState:
 
     @staticmethod
     def _detect_local_ip() -> str:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Prefer passive local interface enumeration (no external 8.8.8.8 probe required on offline LANs)
         try:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
+            if psutil is not None:
+                stats = psutil.net_if_stats()
+                addrs = psutil.net_if_addrs()
+                preferred: List[str] = []
+                secondary: List[str] = []
+                for if_name, if_addrs in addrs.items():
+                    if if_name in stats and not stats[if_name].isup:
+                        continue
+                    lname = if_name.lower()
+                    is_virtual = any(tok in lname for tok in ("loopback", "vethernet", "wsl", "hyper-v", "docker", "vmware", "virtualbox"))
+                    for addr in if_addrs:
+                        if addr.family == socket.AF_INET and addr.address:
+                            ip = addr.address
+                            if ip.startswith("127.") or ip.startswith("169.254.") or ip == "0.0.0.0":
+                                continue
+                            if not is_virtual:
+                                preferred.append(ip)
+                            else:
+                                secondary.append(ip)
+                if preferred:
+                    return preferred[0]
+                if secondary:
+                    return secondary[0]
         except Exception:
-            return "127.0.0.1"
-        finally:
-            s.close()
+            pass
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ip = info[4][0]
+                if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                    return ip
+        except Exception:
+            pass
+        return "127.0.0.1"
 
     def add_log(self, level: str, message: str) -> None:
         ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -517,11 +546,21 @@ class HostDaemonState:
         return summary
 
     def rotate_pairing_token(self) -> str:
-        new_token = f"ai_sec_{secrets.token_hex(12)}"
-        new_pin = f"{secrets.randbelow(900000) + 100000}"
+        if callable(rotate_token):
+            new_token = rotate_token()
+        else:
+            new_token = f"ainet_{secrets.token_hex(24)}"
+        if callable(regenerate_pin):
+            new_pin = regenerate_pin()
+        else:
+            new_pin = f"{secrets.randbelow(900000) + 100000}"
+        now_ts = int(time.time())
         with self.lock:
             self.pairing_token = new_token
             self.pairing_pin = new_pin
+            if not isinstance(self.config, dict):
+                self.config = {}
+            self.config["pin_issued_at"] = now_ts
         os.environ["AI_AGENT_SECRET"] = new_token
         os.environ["CST_AGENT_SECRET"] = new_token
         self.save_policy_config()
@@ -617,17 +656,17 @@ class HostDaemonDesktopGUI:
         self._build_layout()
         self.root.protocol("WM_DELETE_WINDOW", self._handle_close)
 
-        # Auto-register uninstaller in Windows Settings and ensure Desktop shortcut exists
+        # Auto-repair uninstaller & shortcuts only when running from the installed directory
         try:
-            if register_windows_uninstaller:
-                register_windows_uninstaller()
-            user_desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
-            desktop_lnk = os.path.join(user_desktop, f"{APP_NAME}.lnk")
-            if not os.path.exists(desktop_lnk) and create_desktop_shortcut:
-                create_desktop_shortcut()
-                if create_start_menu_shortcut:
-                    create_start_menu_shortcut()
-                self.state.add_log("SUCCESS", f"Desktop & Start Menu shortcuts initialized on startup: {desktop_lnk}")
+            installed_runtime = bool(callable(is_running_from_install_dir) and is_running_from_install_dir())
+            if installed_runtime:
+                if register_windows_uninstaller:
+                    register_windows_uninstaller()
+                if create_desktop_shortcut:
+                    ok_lnk, desktop_lnk = create_desktop_shortcut()
+                    if ok_lnk and create_start_menu_shortcut:
+                        create_start_menu_shortcut()
+                        self.state.add_log("SUCCESS", f"Desktop & Start Menu shortcuts verified on startup: {desktop_lnk}")
         except Exception as e:
             logger.debug(f"Auto-shortcut registration notice: {e}")
 
@@ -1420,12 +1459,12 @@ class HostDaemonDesktopGUI:
             "pair_pin": self.state.pairing_pin,
             "setup": "1",
         })
-        pair_url = f"http://{self.state.local_ip}:3000/?{params}"
+        pair_url = f"http://{self.state.local_ip}:3000/#{params}"
         self.root.clipboard_clear()
         self.root.clipboard_append(pair_url)
         self.state.add_log("INFO", "Phone PIN Pairing URL copied to clipboard & QR Wizard opened (long-lived token withheld).")
         try:
-            webbrowser.open(f"http://localhost:3000/?{params}")
+            webbrowser.open(f"http://localhost:3000/#{params}")
         except Exception:
             pass
         self._refresh_ui()
@@ -1670,6 +1709,7 @@ def launch_gui_with_background_daemon(daemon_runner: Optional[Callable[[HostDaem
                 from agent.agent import HostAgentDaemon
             ws_daemon = HostAgentDaemon(host="0.0.0.0", port=state.port)
             ws_daemon.gui_state = state
+            ws_daemon._owns_loop = True
             if hasattr(ws_daemon, "_sync_gui_state_on_attach"):
                 ws_daemon._sync_gui_state_on_attach()
             state.on_disconnect_callback = ws_daemon.force_disconnect_client

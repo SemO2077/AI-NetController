@@ -51,7 +51,9 @@ class TestStandaloneImportIsolation(unittest.TestCase):
             self.assertIn("CRYPTO_VAULT_OK", res.stdout)
 
     def test_03_standalone_exe_executes_shortcut_flag_outside_repo(self):
-        """Execute the packaged standalone EXE from a temporary directory with --create-shortcut."""
+        """Skip un-mocked OS shortcut creation unless AI_ALLOW_HOST_MUTATION_TESTS=1."""
+        if os.environ.get("AI_ALLOW_HOST_MUTATION_TESTS") != "1":
+            self.skipTest("Skipping host-mutating --create-shortcut EXE test unless AI_ALLOW_HOST_MUTATION_TESTS=1")
         exe_path = os.path.join(
             REPO_ROOT, "public", "releases", "v0.50.0", "AI_NetController_HostAgent_v0.50.0_win64.exe"
         )

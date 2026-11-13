@@ -44,13 +44,42 @@ class _DATA_BLOB(ctypes.Structure):
     ]
 
 
+def _get_dpapi_bindings():
+    """Configures 64-bit safe argtypes/restype for Windows DPAPI and LocalFree."""
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    blob_ptr = ctypes.POINTER(_DATA_BLOB)
+    crypt32.CryptProtectData.argtypes = [
+        blob_ptr,
+        wintypes.LPCWSTR,
+        blob_ptr,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        blob_ptr,
+    ]
+    crypt32.CryptProtectData.restype = wintypes.BOOL
+    crypt32.CryptUnprotectData.argtypes = [
+        blob_ptr,
+        ctypes.c_void_p,
+        blob_ptr,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        blob_ptr,
+    ]
+    crypt32.CryptUnprotectData.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+    return crypt32, kernel32
+
+
 def _dpapi_protect(plaintext: str) -> str:
     """Encrypts a secret string using Windows DPAPI; returns plaintext unchanged on non-Windows."""
     if not _IS_WINDOWS or not plaintext or plaintext.startswith(_DPAPI_PREFIX):
         return plaintext
     try:
-        crypt32 = ctypes.windll.crypt32
-        kernel32 = ctypes.windll.kernel32
+        crypt32, kernel32 = _get_dpapi_bindings()
         raw = plaintext.encode("utf-8")
         entropy_buf = (ctypes.c_ubyte * len(_DPAPI_ENTROPY)).from_buffer_copy(_DPAPI_ENTROPY)
         data_buf = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
@@ -71,7 +100,8 @@ def _dpapi_protect(plaintext: str) -> str:
                 enc = ctypes.string_at(out_blob.pbData, out_blob.cbData)
                 return _DPAPI_PREFIX + base64.b64encode(enc).decode("ascii")
             finally:
-                kernel32.LocalFree(out_blob.pbData)
+                if out_blob.pbData:
+                    kernel32.LocalFree(ctypes.cast(out_blob.pbData, wintypes.HLOCAL))
     except Exception as exc:
         logger.debug("DPAPI protect unavailable (%s); storing with OS file permissions", exc)
     return plaintext
@@ -88,8 +118,7 @@ def _dpapi_unprotect(stored: str) -> Optional[str]:
         return None
     try:
         raw_enc = base64.b64decode(stored[len(_DPAPI_PREFIX):].encode("ascii"))
-        crypt32 = ctypes.windll.crypt32
-        kernel32 = ctypes.windll.kernel32
+        crypt32, kernel32 = _get_dpapi_bindings()
         enc_buf = (ctypes.c_ubyte * len(raw_enc)).from_buffer_copy(raw_enc)
         entropy_buf = (ctypes.c_ubyte * len(_DPAPI_ENTROPY)).from_buffer_copy(_DPAPI_ENTROPY)
         in_blob = _DATA_BLOB(len(raw_enc), enc_buf)
@@ -108,7 +137,8 @@ def _dpapi_unprotect(stored: str) -> Optional[str]:
                 dec = ctypes.string_at(out_blob.pbData, out_blob.cbData)
                 return dec.decode("utf-8")
             finally:
-                kernel32.LocalFree(out_blob.pbData)
+                if out_blob.pbData:
+                    kernel32.LocalFree(ctypes.cast(out_blob.pbData, wintypes.HLOCAL))
     except Exception as exc:
         logger.warning("Failed to decrypt stored DPAPI secret: %s", exc)
     return None

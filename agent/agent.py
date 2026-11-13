@@ -406,7 +406,7 @@ def unpack_packet(raw: bytes) -> Optional[Tuple[bytes, int, int, int, int, bytes
     if len(raw) < HEADER_SIZE:
         return None
     magic, opcode, flags, seq, length = _HEADER_STRUCT.unpack_from(raw, 0)
-    if magic != MAGIC or len(raw) < HEADER_SIZE + length:
+    if magic != MAGIC or length > MAX_PAYLOAD_SIZE or len(raw) != HEADER_SIZE + length:
         return None
     payload = raw[HEADER_SIZE:HEADER_SIZE + length]
     return magic, opcode, flags, seq, length, payload
@@ -596,6 +596,8 @@ class AdaptiveScreenPipeline:
     def close(self):
         """Shuts down executor and releases thread-local resources cleanly."""
         self.is_running = False
+        # Wait for in-flight grab tasks to finish before closing mss handles
+        self.executor.shutdown(wait=True, cancel_futures=True)
         try:
             with self._sct_lock:
                 for sct in self._worker_scts:
@@ -606,7 +608,6 @@ class AdaptiveScreenPipeline:
                 self._worker_scts.clear()
         except Exception:
             pass
-        self.executor.shutdown(wait=False, cancel_futures=True)
         logger.info("Screen grabber pipeline shut down cleanly.")
 
 # =====================================================================
@@ -669,6 +670,15 @@ class HostAgentDaemon:
         self._client_replay: Dict[WebSocketServerProtocol, Any] = {}
         self._ws_write_locks: Dict[WebSocketServerProtocol, asyncio.Lock] = {}
         self._background_tasks: List[asyncio.Task] = []
+        self._background_task_set: Set[asyncio.Task] = set()
+        self._owns_loop: bool = False
+        self._pin_fail_count: int = 0
+        self._pin_lockout_until: float = 0.0
+        self._initial_env_secret: str = (
+            os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET") or ""
+        ).strip()
+        self._secret_rotated: bool = False
+        self._last_cfg_mtime: float = self._safe_cfg_mtime()
 
         # Persistent credentials & policies (CSPRNG only, never hardcoded fallbacks)
         self.pairing_pin: str = str(self.config.get("pairing_pin") or f"{secrets.randbelow(900000) + 100000}")
@@ -706,6 +716,29 @@ class HostAgentDaemon:
         self._loop_thread_id: Optional[int] = None
         self._failed_auth_attempts: Dict[str, List[float]] = {}
 
+    def _safe_cfg_mtime(self) -> float:
+        try:
+            path = get_config_path() if callable(get_config_path) else ""
+            return float(os.path.getmtime(path)) if path and os.path.isfile(path) else 0.0
+        except Exception:
+            return 0.0
+
+    def _track_task(self, coro: Any) -> asyncio.Task:
+        """Schedules an async background task and cleans up / logs errors safely."""
+        task = asyncio.create_task(coro)
+        self._background_task_set.add(task)
+
+        def _on_done(t: asyncio.Task) -> None:
+            self._background_task_set.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                logger.error("Unhandled background task exception: %s", exc)
+
+        task.add_done_callback(_on_done)
+        return task
+
     def _sync_gui_state_on_attach(self) -> None:
         if self.gui_state is None:
             return
@@ -720,12 +753,34 @@ class HostAgentDaemon:
 
     def _refresh_runtime_policies(self) -> None:
         """Synchronizes live policy toggles and credentials from gui_state or persisted config."""
+        cfg_mtime = self._safe_cfg_mtime()
+        if cfg_mtime > self._last_cfg_mtime and callable(load_config):
+            self._last_cfg_mtime = cfg_mtime
+            try:
+                cfg = load_config() or {}
+                if isinstance(cfg, dict):
+                    disk_tok = str(cfg.get("pairing_token") or "").strip()
+                    disk_pin = str(cfg.get("pairing_pin") or "").strip()
+                    if disk_tok and disk_tok != self.pairing_token:
+                        self.pairing_token = disk_tok
+                        self._secret_rotated = True
+                    if disk_pin and disk_pin != self.pairing_pin:
+                        self.pairing_pin = disk_pin
+                        self.pin_issued_at = float(cfg.get("pin_issued_at") or time.time())
+                    self.view_only_mode = bool(cfg.get("view_only_mode", self.view_only_mode))
+                    self.require_hitl_approval = bool(cfg.get("require_hitl_approval", self.require_hitl_approval))
+                    self.clipboard_sync_allowed = bool(cfg.get("clipboard_sync_allowed", self.clipboard_sync_allowed))
+                    self.auto_ban_intrusion = bool(cfg.get("auto_ban_intrusion", self.auto_ban_intrusion))
+                    self.subnet_geofence_only = bool(cfg.get("subnet_geofence_only", self.subnet_geofence_only))
+            except Exception:
+                pass
         if self.gui_state is not None:
             gui_tok = getattr(self.gui_state, "pairing_token", None)
             gui_pin = getattr(self.gui_state, "pairing_pin", None)
-            if gui_tok and gui_tok != self.pairing_token:
+            if gui_tok and str(gui_tok).strip() != self.pairing_token:
                 self.pairing_token = str(gui_tok).strip()
-            if gui_pin and gui_pin != self.pairing_pin:
+                self._secret_rotated = True
+            if gui_pin and str(gui_pin).strip() != self.pairing_pin:
                 self.pairing_pin = str(gui_pin).strip()
                 self.pin_issued_at = time.time()
             self.view_only_mode = bool(getattr(self.gui_state, "view_only_mode", self.view_only_mode))
@@ -813,7 +868,7 @@ class HostAgentDaemon:
         self._refresh_runtime_policies()
         secrets_list: List[bytes] = []
         env_sec = (os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET") or "").strip()
-        if env_sec:
+        if env_sec and (not self._secret_rotated or env_sec != self._initial_env_secret):
             secrets_list.append(env_sec.encode("utf-8"))
         if self.pairing_token:
             tok_b = str(self.pairing_token).strip().encode("utf-8")
@@ -901,10 +956,19 @@ class HostAgentDaemon:
         try:
             key = None
             origin_hdr = None
+            header_lines = 0
+            header_bytes = 0
             while True:
                 line = await asyncio.wait_for(reader.readline(), timeout=5.0)
                 if not line or line == b'\r\n':
                     break
+                header_lines += 1
+                header_bytes += len(line)
+                if header_lines > 64 or header_bytes > 16384:
+                    writer.write(b"HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n")
+                    await writer.drain()
+                    writer.close()
+                    return
                 line_str = line.decode('utf-8', errors='ignore')
                 lower = line_str.lower()
                 if lower.startswith('sec-websocket-key:'):
@@ -1053,16 +1117,41 @@ class HostAgentDaemon:
             logger.warning(f"mDNS Registration error: {e}")
 
     def _get_local_ip(self) -> str:
-        """Determines primary non-loopback IP address."""
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        """Determines primary non-loopback LAN IPv4 passively (no external 8.8.8.8 probe)."""
         try:
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
+            if psutil is not None:
+                stats = psutil.net_if_stats()
+                addrs = psutil.net_if_addrs()
+                preferred: List[str] = []
+                secondary: List[str] = []
+                for if_name, if_addrs in addrs.items():
+                    if if_name in stats and not stats[if_name].isup:
+                        continue
+                    lname = if_name.lower()
+                    is_virtual = any(tok in lname for tok in ("loopback", "vethernet", "wsl", "hyper-v", "docker", "vmware", "virtualbox"))
+                    for addr in if_addrs:
+                        if addr.family == socket.AF_INET and addr.address:
+                            ip = addr.address
+                            if ip.startswith("127.") or ip.startswith("169.254.") or ip == "0.0.0.0":
+                                continue
+                            if not is_virtual:
+                                preferred.append(ip)
+                            else:
+                                secondary.append(ip)
+                if preferred:
+                    return preferred[0]
+                if secondary:
+                    return secondary[0]
         except Exception:
-            ip = "127.0.0.1"
-        finally:
-            s.close()
-        return ip
+            pass
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ip = info[4][0]
+                if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                    return ip
+        except Exception:
+            pass
+        return "127.0.0.1"
 
     def _start_system_tray(self):
         """Initializes high-visibility background Windows system tray icon with rich controls."""
@@ -1318,7 +1407,6 @@ class HostAgentDaemon:
                                     "status": "OK",
                                     "protocol": "AI-NET/3.0-SECURE",
                                     "timestamp": time.time(),
-                                    "pairingToken": self.pairing_token
                                 }))
                                 continue
 
@@ -1332,23 +1420,41 @@ class HostAgentDaemon:
                             ).strip()
                             candidate_token = candidate_raw.encode("utf-8", errors="replace")
 
+                            now_ts = time.time()
                             valid_tokens = self._get_valid_secrets()
-                            token_ok = any(hmac.compare_digest(candidate_token, vt) for vt in valid_tokens)
-                            # Allow 6-digit PIN strictly for explicit PAIR flow within PIN TTL
-                            pin_ok = (action == "PAIR") and self._is_valid_pairing_pin(candidate_token)
+                            token_ok = bool(candidate_token) and any(
+                                hmac.compare_digest(candidate_token, vt) for vt in valid_tokens
+                            )
+                            # Allow 6-digit PIN strictly for explicit PAIR flow within PIN TTL & lockout guard
+                            pin_ok = False
+                            if action == "PAIR" and not token_ok:
+                                if now_ts < self._pin_lockout_until:
+                                    pin_ok = False
+                                else:
+                                    pin_ok = self._is_valid_pairing_pin(candidate_token)
+                                    if pin_ok:
+                                        self._pin_fail_count = 0
+                                    else:
+                                        self._pin_fail_count += 1
+                                        if self._pin_fail_count >= 5:
+                                            self._pin_lockout_until = now_ts + 60.0
+                                            logger.warning("PAIR PIN rate-limit lockout triggered for 60s")
 
                             if token_ok or pin_ok:
                                 label = str(text_data.get("device") or f"Remote Client ({client_ip})")
                                 self._register_authenticated_client(ws, client_ip, client_id, label)
                                 if self.gui_state is not None:
                                     self.gui_state.add_log("SECURITY", f"Client {client_id} authenticated via JSON {action}.")
-                                await self._ws_send(ws, json.dumps({
+                                auth_ack = {
                                     "event": "AUTHENTICATED",
                                     "status": "OK",
                                     "protocol": "AI-NET/3.0-SECURE",
                                     "timestamp": time.time(),
-                                    "pairingToken": self.pairing_token
-                                }))
+                                }
+                                # Provision long-lived pairingToken only during explicit initial PAIR exchange
+                                if action == "PAIR" and pin_ok:
+                                    auth_ack["pairingToken"] = self.pairing_token
+                                await self._ws_send(ws, json.dumps(auth_ack))
                                 logger.info("Client %s authenticated via JSON %s handshake.", client_id, action)
                             else:
                                 logger.warning("JSON Authentication failed from %s", client_id)
@@ -1412,8 +1518,8 @@ class HostAgentDaemon:
 
                 opcode, flags, seq, length = parsed
 
-                if length > MAX_PAYLOAD_SIZE or len(message) < HEADER_SIZE + length:
-                    await self._send_error(ws, "Payload size exceeds limit or frame truncated")
+                if length > MAX_PAYLOAD_SIZE or len(message) != HEADER_SIZE + length:
+                    await self._send_error(ws, "Payload size exceeds limit or frame length mismatch")
                     continue
 
                 payload = message[HEADER_SIZE:HEADER_SIZE + length]
@@ -1477,7 +1583,7 @@ class HostAgentDaemon:
                     await self._ws_send(ws, pack_packet(OP_AUTH, b'OK_AUTHENTICATED', seq=seq))
 
                 elif opcode == OP_SHELL:
-                    asyncio.create_task(self._process_shell_command(ws, payload, seq))
+                    self._track_task(self._process_shell_command(ws, payload, seq))
 
                 elif opcode == OP_HITL:
                     await self._process_hitl_response(payload, ws)
@@ -1489,17 +1595,13 @@ class HostAgentDaemon:
                     await self._process_virtual_input(payload, ws)
 
                 elif opcode == OP_AUDIO:
-                    stripped = payload.lstrip()
-                    if (len(payload) == 8 and not stripped.startswith(b'{')) or b'"width"' in payload:
-                        await self._process_viewport_resize(payload)
-                    else:
-                        await self._process_audio_control(payload, ws)
+                    await self._process_audio_control(payload, ws)
 
                 elif opcode == OP_VIEWPORT_RESIZE:
                     await self._process_viewport_resize(payload)
 
                 elif opcode == OP_LLM_STREAM:
-                    asyncio.create_task(self._process_ollama_query(ws, payload, seq))
+                    self._track_task(self._process_ollama_query(ws, payload, seq))
 
                 elif opcode == OP_FILE_TRANSFER:
                     if not self._is_client_input_allowed(ws):
@@ -1544,6 +1646,13 @@ class HostAgentDaemon:
             self.clients.discard(ws)
             self.authenticated_clients.discard(ws)
             self.active_nonces.pop(ws, None)
+            if self.file_writer:
+                try:
+                    self.file_writer.prune_stale_transfers()
+                    if not self.authenticated_clients:
+                        self.file_writer.abort_all()
+                except Exception:
+                    pass
             if self.auto_lock_on_disconnect and not self.authenticated_clients and platform.system() == "Windows":
                 try:
                     ctypes.windll.user32.LockWorkStation()
@@ -1563,7 +1672,7 @@ class HostAgentDaemon:
         client_port = ws.remote_address[1] if ws.remote_address and len(ws.remote_address) > 1 else id(ws)
         resolved_client_id = client_id or f"{client_ip}:{client_port}"
 
-        nonce_info = self.active_nonces.get(ws)
+        nonce_info = self.active_nonces.pop(ws, None)
         if not nonce_info:
             await self._send_error(ws, "Handshake state invalid")
             await ws.close(code=1008)
@@ -1602,9 +1711,9 @@ class HostAgentDaemon:
     async def _send_encrypted_or_plain(self, ws: WebSocketServerProtocol, opcode: int, payload: bytes, seq: int = 0) -> None:
         vault = self._client_vaults.get(ws)
         if vault is not None and vault.is_established:
-            # Build provisional header with plaintext/envelope length unknown? Wait: compute nonce+ct length first
-            # Encrypt payload with AAD binding opcode and seq
-            aad = _HEADER_STRUCT.pack(MAGIC, opcode, 0x02, seq, len(payload))
+            # AAD binds the exact outer 12-byte wire header (wire_len = len(payload) + 12B nonce + 16B Poly1305 tag)
+            wire_len = len(payload) + 28
+            aad = _HEADER_STRUCT.pack(MAGIC, opcode, 0x02, seq, wire_len)
             enc_payload, _ = vault.encrypt_frame(payload, aad=aad)
             await self._ws_send(ws, pack_packet(opcode, enc_payload, seq=seq, flags=0x02))
             return
@@ -2188,10 +2297,11 @@ class HostAgentDaemon:
                             chunk = json.loads(line.decode('utf-8'))
                             token = chunk.get("response", "")
                             if token:
-                                asyncio.run_coroutine_threadsafe(
+                                send_fut = asyncio.run_coroutine_threadsafe(
                                     self._send_encrypted_or_plain(ws, OP_LLM_STREAM, token.encode('utf-8'), seq=seq),
                                     loop
                                 )
+                                send_fut.result(timeout=5.0)
                             if chunk.get("done", False):
                                 break
 
@@ -2258,7 +2368,7 @@ class HostAgentDaemon:
             await asyncio.sleep(2.0)
             if not self.authenticated_clients:
                 try:
-                    cpu_chk = psutil.cpu_percent(interval=None) if psutil else 2.0
+                    cpu_chk = psutil.cpu_percent(interval=None) if psutil else 0.0
                     if cpu_chk < 5.0:
                         idle_seconds += 2
                         if idle_seconds % 300 == 0:
@@ -2297,9 +2407,9 @@ class HostAgentDaemon:
                 logger.debug("Telemetry error: %s", e)
 
     async def _send_error(self, ws: WebSocketServerProtocol, msg: str):
-        """Sends an OP_ERR frame to a client."""
+        """Sends an OP_ERR frame to a client, encrypting if a vault session is established."""
         try:
-            await self._ws_send(ws, pack_packet(OP_ERR, msg.encode('utf-8')))
+            await self._send_encrypted_or_plain(ws, OP_ERR, msg.encode('utf-8'), seq=0)
         except Exception:
             pass
 
@@ -2309,10 +2419,11 @@ class HostAgentDaemon:
         self.is_running = False
 
         def _cleanup_loop_resources():
-            for t in list(self._background_tasks):
+            for t in list(self._background_tasks) + list(self._background_task_set):
                 if not t.done():
                     t.cancel()
             self._background_tasks.clear()
+            self._background_task_set.clear()
             for ws in list(self.clients):
                 try:
                     asyncio.create_task(ws.close(code=1001, reason="Daemon shutting down"))
@@ -2329,12 +2440,19 @@ class HostAgentDaemon:
                     self.server.close()
                 except Exception:
                     pass
+            if self._owns_loop and self.loop and self.loop.is_running():
+                self.loop.stop()
 
         if self.loop and self.loop.is_running() and threading.get_ident() != self._loop_thread_id:
             self.loop.call_soon_threadsafe(_cleanup_loop_resources)
         else:
             _cleanup_loop_resources()
 
+        if self.file_writer:
+            try:
+                self.file_writer.abort_all()
+            except Exception:
+                pass
         self.screen_pipeline.close()
         if self.multi_monitor:
             self.multi_monitor.close()
@@ -2405,6 +2523,7 @@ def main():
                 if HAS_TKINTER:
                     gui_state = HostDaemonState(host=daemon.host, port=daemon.port)
                     daemon.gui_state = gui_state
+                    daemon._owns_loop = True
                     daemon._sync_gui_state_on_attach()
                     gui_state.on_disconnect_callback = daemon.force_disconnect_client
 

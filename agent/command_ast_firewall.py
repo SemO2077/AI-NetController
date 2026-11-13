@@ -63,7 +63,8 @@ INLINE_EXEC_INTERPRETERS = {
 }
 
 INLINE_EXEC_FLAGS = {
-    "-c", "-e", "/c", "/k", "-command", "-encodedcommand", "-enc", "-f", "-file"
+    "-c", "-e", "/c", "/k", "/e", "/enc", "-m",
+    "-command", "-encodedcommand", "-enc", "-f", "-file",
 }
 
 # Pre-compiled high-performance regular expressions
@@ -73,21 +74,23 @@ _RE_WHITESPACE = re.compile(r"\s+")
 _RE_EVASION_CARET = re.compile(r"\S\^\S")
 _RE_EVASION_BACKTICK = re.compile(r"\S`\S")
 _RE_ENV_SUBSTRING_SLICE = re.compile(r"%[^%:\s]+:~[^%]*%")
+_RE_IFS_EVASION = re.compile(r"\$\{?IFS\b", re.IGNORECASE)
 _RE_DELAYED_OR_PS_ENV = re.compile(r"(?:![A-Za-z_][A-Za-z0-9_]*[:~!]|(?:\$\{?env:))", re.IGNORECASE)
 _RE_UNICODE_INVISIBLE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]")
 _RE_UNICODE_DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
 _RE_PYTHON_CMD = re.compile(r'^(?:"[^"]*?python(?:3)?(?:\.exe)?"|[^\s]*?python(?:3)?(?:\.exe)?|python(?:3)?)(\s+|$)', flags=re.IGNORECASE)
-_RE_ENCODED_POWERSHELL = re.compile(r"(?:powershell|pwsh)(?:\.exe)?\b[^\r\n]*\s-(?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\b", flags=re.IGNORECASE)
+_RE_ENCODED_POWERSHELL = re.compile(r"(?:powershell|pwsh)(?:\.exe)?\b[^\r\n]*\s[-/](?:e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\b", flags=re.IGNORECASE)
 _RE_SUBSHELL_INJECTION = re.compile(r"\$\([^)]+\)|`[^`]+`|\b(?:iex|invoke-expression)\b|(?:^|\s)[&.]\s*\(", flags=re.IGNORECASE)
 _RE_CHAIN_OPERATORS = re.compile(r"(?:&&|\|\||[;&|\r\n])")
+_RE_SEGMENT_SPLIT = re.compile(r"(?:&&|\|\||[;|&()\r\n]+)")
 _RE_REDIRECTION = re.compile(r"(?:^|\s|\S)(?:\d?>>?|<)(?!=)")
 _RE_SENSITIVE_REDIRECT_TARGET = re.compile(r"(?:\\windows\\|system32|syswow64|/etc/|/usr/|/bin/|/sbin/|\.ssh|\\startup\\)", re.IGNORECASE)
 _RE_SAFE_ENV_VARS = re.compile(r"%(COMSPEC|SYSTEMROOT|WINDIR|TEMP|TMP|USERPROFILE|APPDATA|LOCALAPPDATA|PROGRAMFILES)%", flags=re.IGNORECASE)
 
 _SAFE_WIN_ENV_MAP = {
     "comspec": "cmd.exe",
-    "systemroot": r"C:\Windows",
-    "windir": r"C:\Windows",
+    "systemroot": os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows",
+    "windir": os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows",
 }
 
 # Fast bounded LRU cache for high-throughput command inspection (100k+ ops/sec)
@@ -160,6 +163,9 @@ class CommandASTFirewall:
         if _RE_ENV_SUBSTRING_SLICE.search(raw_cmd) or _RE_ENV_SUBSTRING_SLICE.search(nfkc_raw):
             return False, "BLOCKED", nfkc_raw.strip(), "Environment variable substring slicing evasion (%VAR:~...%) is prohibited."
 
+        if _RE_IFS_EVASION.search(nfkc_raw):
+            return False, "BLOCKED", nfkc_raw.strip(), "Internal field separator ($IFS) evasion is prohibited."
+
         cleaned = CommandASTFirewall.strip_obfuscation(raw_cmd)
         if not cleaned:
             return False, "BLOCKED", cleaned, "Empty command sequence."
@@ -210,16 +216,29 @@ class CommandASTFirewall:
                 if sub in CRITICAL_COMMANDS or base_cmd in CRITICAL_COMMANDS:
                     return True, "REQUIRES_BIOMETRIC", single_line_cleaned, f"Critical administrative command '{sub}' requires biometric confirmation."
 
-        # Check all tokens (and segments after chaining/parens) for inline interpreters (including full paths)
-        for idx, token in enumerate(tokens):
-            clean_tok = token.strip('"\'`(){};|&')
-            exe_name = os.path.basename(clean_tok.replace("\\", "/")).lower()
-            base_name = exe_name.split(".")[0]
-            if base_name in INLINE_EXEC_INTERPRETERS:
-                for following in tokens[idx + 1:]:
-                    norm_flag = following.strip('"\'`(){};|&').lower()
-                    if norm_flag in INLINE_EXEC_FLAGS:
-                        return True, "REQUIRES_BIOMETRIC", single_line_cleaned, f"Inline code execution via '{base_name} {norm_flag}' requires biometric confirmation."
+        # Check all tokens and chain-split segments for inline interpreters (including full paths & no-space chains)
+        segments_to_scan: List[List[str]] = [tokens]
+        for seg in _RE_SEGMENT_SPLIT.split(single_line_cleaned):
+            seg = seg.strip()
+            if not seg:
+                continue
+            try:
+                seg_tokens = shlex.split(seg, posix=not IS_WINDOWS)
+            except Exception:
+                seg_tokens = seg.split()
+            if seg_tokens:
+                segments_to_scan.append(seg_tokens)
+
+        for seg_tokens in segments_to_scan:
+            for idx, token in enumerate(seg_tokens):
+                clean_tok = token.strip('"\'`(){};|&')
+                exe_name = os.path.basename(clean_tok.replace("\\", "/")).lower()
+                base_name = exe_name.split(".")[0]
+                if base_name in INLINE_EXEC_INTERPRETERS:
+                    for following in seg_tokens[idx + 1:]:
+                        norm_flag = following.strip('"\'`(){};|&').lower()
+                        if norm_flag in INLINE_EXEC_FLAGS:
+                            return True, "REQUIRES_BIOMETRIC", single_line_cleaned, f"Inline code execution via '{base_name} {norm_flag}' requires biometric confirmation."
 
         # Redirection check outside quoted literals
         unquoted_outside = re.sub(r'"[^"]*"|\'[^\']*\'', " ", single_line_cleaned)
@@ -228,10 +247,9 @@ class CommandASTFirewall:
                 return False, "BLOCKED", single_line_cleaned, "Shell redirection to a sensitive system path is prohibited."
             return True, "REQUIRES_BIOMETRIC", single_line_cleaned, "Shell I/O redirection requires biometric confirmation."
 
-        # Multi-line or chained script check when non-empty
-        if "\n" in cleaned or "\r" in cleaned or _RE_CHAIN_OPERATORS.search(unquoted_outside):
-            if "\n" in cleaned or "\r" in cleaned:
-                return True, "REQUIRES_BIOMETRIC", single_line_cleaned, "Multi-line chained shell execution requires biometric confirmation."
+        # Multi-line script check when non-empty
+        if "\n" in cleaned or "\r" in cleaned:
+            return True, "REQUIRES_BIOMETRIC", single_line_cleaned, "Multi-line shell execution requires biometric confirmation."
 
         return True, "SAFE", single_line_cleaned, "Command passed AST validation."
 

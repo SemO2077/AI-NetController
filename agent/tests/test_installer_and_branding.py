@@ -100,7 +100,10 @@ class TestInstallerAndBranding(unittest.TestCase):
         self.assertEqual(norm, os.path.abspath(valid_target))
 
     def test_04_isolated_installation_workflow(self):
-        """Test full installation workflow into a clean temporary test sandbox directory."""
+        """Test full installation workflow into a sandboxed temp directory with registry/process mocks."""
+        import windows_integration as wi
+        from unittest.mock import patch
+
         with tempfile.TemporaryDirectory(prefix="ainet_test_install_") as tmp_dir:
             test_target = os.path.join(tmp_dir, "AI NetController")
             progress_events = []
@@ -108,14 +111,19 @@ class TestInstallerAndBranding(unittest.TestCase):
             def _on_progress(pct, msg):
                 progress_events.append((pct, msg))
 
-            res = perform_full_install(
-                target_dir=test_target,
-                create_desktop=False,  # Skip creating user desktop shortcut in automated test
-                create_start_menu=False,
-                autostart=False,
-                launch_after=False,
-                progress_cb=_on_progress,
-            )
+            with (
+                patch.object(wi, "register_windows_uninstaller", return_value=True),
+                patch.object(wi, "set_windows_autostart", return_value=True),
+                patch.object(wi, "_stop_external_agent_processes", return_value=0),
+            ):
+                res = perform_full_install(
+                    target_dir=test_target,
+                    create_desktop=False,
+                    create_start_menu=False,
+                    autostart=False,
+                    launch_after=False,
+                    progress_cb=_on_progress,
+                )
 
             self.assertTrue(res["success"], f"Installation must succeed: {res.get('message')}")
             self.assertTrue(os.path.isdir(test_target), "Target install dir must exist")
@@ -134,8 +142,24 @@ class TestInstallerAndBranding(unittest.TestCase):
             self.assertEqual(progress_events[-1][0], 100, "Final progress event must be 100%")
 
     def test_05_uninstallation_workflow(self):
-        """Verify uninstallation cleans up registry and shortcuts cleanly."""
-        res = perform_full_uninstall(interactive=False)
+        """Verify uninstallation cleans up sandboxed directories and mocked registry/shortcuts cleanly."""
+        import windows_integration as wi
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory(prefix="ainet_test_uninstall_") as tmp_dir:
+            fake_local = os.path.join(tmp_dir, "LocalAppData")
+            fake_roam = os.path.join(tmp_dir, "AppData")
+            fake_install = os.path.join(fake_local, "Programs", "AI NetController")
+            os.makedirs(fake_install, exist_ok=True)
+            with (
+                patch.object(wi, "_resolve_desktop_dir", return_value=os.path.join(tmp_dir, "Desktop")),
+                patch.object(wi, "get_default_install_dir", return_value=fake_install),
+                patch.object(wi, "unregister_windows_uninstaller", return_value=True),
+                patch.object(wi, "set_windows_autostart", return_value=True),
+                patch.object(wi, "_stop_external_agent_processes", return_value=0),
+                patch.dict(os.environ, {"USERPROFILE": tmp_dir, "LOCALAPPDATA": fake_local, "APPDATA": fake_roam}),
+            ):
+                res = perform_full_uninstall(interactive=False)
         self.assertTrue(res["success"], "Uninstallation must succeed")
         self.assertIn("uninstalled", res["message"].lower())
 

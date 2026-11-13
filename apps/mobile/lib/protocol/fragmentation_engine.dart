@@ -75,7 +75,8 @@ class _AssemblySession {
 
 /// Slices oversized binary frames (e.g. 2MB JPEG frames) into sub-64KB chunks
 class PacketFragmenter {
-  static int _nextMessageId = 1000;
+  static int _nextControlMessageId = 1000;
+  static int _nextVideoMessageId = 1;
 
   /// Fragments an arbitrary payload into a list of framed packets
   static List<Uint8List> slice({
@@ -90,8 +91,14 @@ class PacketFragmenter {
       return [packPacket(opcode, payload, flags: flags, seq: seq)];
     }
 
-    _nextMessageId = (_nextMessageId >= 0x7FFFFFFE) ? 1 : (_nextMessageId + 1);
-    final int messageId = _nextMessageId;
+    final int messageId;
+    if (opcode == BinaryOpcode.frame) {
+      _nextVideoMessageId = (_nextVideoMessageId >= 0x7FFFFFFE) ? 1 : (_nextVideoMessageId + 1);
+      messageId = _nextVideoMessageId;
+    } else {
+      _nextControlMessageId = (_nextControlMessageId >= 0x7FFFFFFE) ? 1000 : (_nextControlMessageId + 1);
+      messageId = _nextControlMessageId;
+    }
     final int totalLength = payload.length;
     final List<Uint8List> packets = [];
 
@@ -141,7 +148,7 @@ class PacketFragmenter {
 
 /// Reassembles streaming fragmented chunks into complete ProtocolPackets
 class PacketReassembler {
-  final Map<int, _AssemblySession> _sessions = {};
+  final Map<String, _AssemblySession> _sessions = {};
   final StreamController<ProtocolPacket> _completePacketStream =
       StreamController<ProtocolPacket>.broadcast();
   final StreamController<int> _frameSyncRequestStream =
@@ -174,8 +181,8 @@ class PacketReassembler {
     final int seq = bd.getUint32(4, Endian.big);
     final int payloadLength = bd.getUint32(8, Endian.big);
 
-    if (payloadLength > 16 * 1024 * 1024 ||
-        rawBytes.length < kHeaderSize + payloadLength) {
+    if (payloadLength > 10 * 1024 * 1024 ||
+        rawBytes.length != kHeaderSize + payloadLength) {
       return null;
     }
 
@@ -201,13 +208,15 @@ class PacketReassembler {
 
     // Guard against forged/corrupted fragment headers causing OOM
     if (totalLength <= 0 ||
-        totalLength > 16 * 1024 * 1024 ||
+        totalLength > 10 * 1024 * 1024 ||
         offset < 0 ||
+        chunkBytesLength <= 0 ||
         offset + chunkBytesLength > totalLength) {
       return null;
     }
 
-    if (!_sessions.containsKey(messageId) && _sessions.length >= 32) {
+    final String sessionKey = '${opcode}_$messageId';
+    if (!_sessions.containsKey(sessionKey) && _sessions.length >= 32) {
       _purgeStaleSessions();
       if (_sessions.length >= 32) {
         _sessions.remove(_sessions.keys.first);
@@ -229,9 +238,9 @@ class PacketReassembler {
       kHeaderSize + payloadLength,
     );
 
-    // Get or initialize assembly session
+    // Get or initialize assembly session scoped by opcode + messageId
     _AssemblySession session = _sessions.putIfAbsent(
-      messageId,
+      sessionKey,
       () => _AssemblySession(
         messageId: messageId,
         opcode: opcode,
@@ -240,6 +249,10 @@ class PacketReassembler {
         baseSeq: seq,
       ),
     );
+
+    if (session.totalLength != totalLength || session.opcode != opcode) {
+      return null;
+    }
 
     session.lastActivity = DateTime.now();
 
@@ -254,7 +267,7 @@ class PacketReassembler {
 
     // Check completion
     if (session.isComplete) {
-      _sessions.remove(messageId);
+      _sessions.remove(sessionKey);
       final ProtocolPacket reassembled = ProtocolPacket(
         opcode: session.opcode,
         flags: session.baseFlags,
