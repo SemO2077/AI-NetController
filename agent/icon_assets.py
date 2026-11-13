@@ -82,17 +82,18 @@ def get_icon_image(size: int = 64):
         except Exception as e:
             logger.debug(f"Could not load icon from {png_path}: {e}")
 
-    # Fallback: create dynamic in-memory icon matching app brand
-    img = Image.new("RGBA", (size, size), (7, 12, 24, 255))
+    # Fallback: create dynamic in-memory icon matching mobile CyberColors design language
+    img = Image.new("RGBA", (size, size), (4, 8, 18, 255))
     from PIL import ImageDraw
     draw = ImageDraw.Draw(img)
     s = size / 64.0
-    # Cyber boundary ring
-    draw.ellipse([4 * s, 4 * s, 60 * s, 60 * s], outline=(34, 211, 238, 255), width=int(max(1, 3 * s)))
+    # Outer Neon Cyan orbital ring + Electric Violet inner highlight arc
+    draw.ellipse([3 * s, 3 * s, 61 * s, 61 * s], fill=(10, 22, 40, 255), outline=(0, 240, 255, 255), width=int(max(1, 3 * s)))
+    draw.arc([9 * s, 9 * s, 55 * s, 55 * s], start=120, end=310, fill=(138, 43, 226, 230), width=int(max(1, 2.5 * s)))
     # Power stem and arc
-    draw.arc([16 * s, 16 * s, 48 * s, 48 * s], start=-48, end=228, fill=(34, 211, 238, 255), width=int(max(1, 4 * s)))
-    draw.line([(32 * s, 16 * s), (32 * s, 32 * s)], fill=(56, 189, 248, 255), width=int(max(1, 4 * s)))
-    draw.ellipse([30 * s, 30 * s, 34 * s, 34 * s], fill=(56, 189, 248, 255))
+    draw.arc([17 * s, 17 * s, 47 * s, 47 * s], start=-48, end=228, fill=(0, 240, 255, 255), width=int(max(1, 4 * s)))
+    draw.line([(32 * s, 15 * s), (32 * s, 32 * s)], fill=(0, 255, 157, 255), width=int(max(1, 4 * s)))
+    draw.ellipse([29 * s, 29 * s, 35 * s, 35 * s], fill=(0, 240, 255, 255))
     return img
 
 
