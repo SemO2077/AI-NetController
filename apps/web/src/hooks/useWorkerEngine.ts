@@ -60,6 +60,8 @@ export function useWorkerEngine({
   const workerRef = useRef<Worker | null>(null);
   const currentBlobUrlRef = useRef<string | null>(null);
   const targetIdRef = useRef(targetId);
+  const wsUrlRef = useRef(wsUrl);
+  const latencyRef = useRef<number | null>(null);
   const onTelemetryRef = useRef(onTelemetry);
   const onHostUnreachableRef = useRef(onHostUnreachable);
   const pendingHitlCommandRef = useRef<{ commandId: string; cmd: ClientCommandMessage; riskLevel: RiskLevel } | null>(null);
@@ -73,6 +75,10 @@ export function useWorkerEngine({
   useEffect(() => {
     targetIdRef.current = targetId;
   }, [targetId]);
+
+  useEffect(() => {
+    wsUrlRef.current = wsUrl;
+  }, [wsUrl]);
 
   useEffect(() => {
     onTelemetryRef.current = onTelemetry;
@@ -167,6 +173,7 @@ export function useWorkerEngine({
 
         case 'METRICS': {
           const validRtt = typeof rtt === 'number' && Number.isFinite(rtt) ? rtt : null;
+          latencyRef.current = validRtt;
           setLatency(validRtt);
           const validHistory = Array.isArray(history)
             ? history.filter((n: unknown): n is number => typeof n === 'number' && Number.isFinite(n))
@@ -186,7 +193,23 @@ export function useWorkerEngine({
         }
 
         case 'TELEMETRY': {
-          onTelemetryRef.current(data);
+          const rawData = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+          let wsHost: string | undefined;
+          let wsPort: number | undefined;
+          try {
+            const parsedUrl = new URL(wsUrlRef.current);
+            wsHost = parsedUrl.hostname || undefined;
+            wsPort = parsedUrl.port ? Number(parsedUrl.port) : undefined;
+          } catch {
+            // Ignore malformed wsUrl fallback
+          }
+          onTelemetryRef.current({
+            ...rawData,
+            targetId: rawData.targetId ?? (targetIdRef.current || undefined),
+            ip: rawData.ip ?? wsHost ?? rawData.local_ip,
+            port: rawData.port ?? wsPort,
+            ping: rawData.ping ?? latencyRef.current ?? undefined,
+          });
           break;
         }
 
@@ -298,6 +321,7 @@ export function useWorkerEngine({
 
   const connect = useCallback((url?: string) => {
     const targetUrl = url || wsUrl;
+    wsUrlRef.current = targetUrl;
     setWsUrl(targetUrl);
     try {
       localStorage.setItem('cst_ws_url', targetUrl);

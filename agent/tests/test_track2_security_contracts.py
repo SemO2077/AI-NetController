@@ -28,7 +28,11 @@ if _REPO_ROOT in sys.path:
     sys.path.remove(_REPO_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
-import agent.agent as agent_mod
+_existing_agent = sys.modules.get("agent")
+if _existing_agent is not None and not hasattr(_existing_agent, "__path__"):
+    agent_mod = _existing_agent
+else:
+    import agent.agent as agent_mod
 from command_ast_firewall import CommandASTFirewall
 from crypto_handshake import (
     HANDSHAKE_MAGIC,

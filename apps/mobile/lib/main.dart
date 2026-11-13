@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'theme/fluid_theme.dart';
 import 'ui/adaptive_layout_builder.dart';
@@ -17,38 +20,106 @@ import 'ui/onboarding_sheet.dart';
 // =====================================================================
 // STATE MODELS & RIVERPOD STATE MANAGERS
 // =====================================================================
+String loadGlobalPairingSecret() {
+  if (!Hive.isBoxOpen('ghost_devices')) return '';
+  final val = Hive.box('ghost_devices').get('__global_pairing_secret__');
+  return val is String ? val.trim() : '';
+}
+
+String loadHostPairingSecret(String ip) {
+  if (!Hive.isBoxOpen('ghost_devices')) return '';
+  final hostSecret = Hive.box('ghost_devices').get('__secret_$ip');
+  if (hostSecret is String && hostSecret.trim().isNotEmpty) {
+    return hostSecret.trim();
+  }
+  return loadGlobalPairingSecret();
+}
+
+void saveHostPairingSecret(String ip, String secret) {
+  if (!Hive.isBoxOpen('ghost_devices')) return;
+  final trimmed = secret.trim();
+  final box = Hive.box('ghost_devices');
+  if (ip.isNotEmpty) {
+    box.put('__secret_$ip', trimmed);
+  }
+  if (trimmed.isNotEmpty) {
+    box.put('__global_pairing_secret__', trimmed);
+  }
+}
+
+final globalPairingSecretProvider =
+    StateProvider<String>((ref) => loadGlobalPairingSecret());
+
 class HostState {
   final String id;
   final String name;
   final String ip;
+  final int wsPort;
   final String mac;
   final bool isOnline;
   final int cpuUsage;
   final int ramUsage;
+  final int diskUsage;
+  final int cpuCores;
+  final double ramUsedGb;
+  final double ramTotalGb;
+  final int uptimeSec;
+  final bool viewOnlyMode;
+  final String osName;
+  final String sharedSecret;
 
   HostState({
     required this.id,
     required this.name,
     required this.ip,
+    this.wsPort = 8765,
     required this.mac,
     required this.isOnline,
     this.cpuUsage = 0,
     this.ramUsage = 0,
+    this.diskUsage = 0,
+    this.cpuCores = 0,
+    this.ramUsedGb = 0.0,
+    this.ramTotalGb = 0.0,
+    this.uptimeSec = 0,
+    this.viewOnlyMode = false,
+    this.osName = '',
+    this.sharedSecret = '',
   });
 
   HostState copyWith({
+    String? name,
+    int? wsPort,
+    String? mac,
     bool? isOnline,
     int? cpuUsage,
     int? ramUsage,
+    int? diskUsage,
+    int? cpuCores,
+    double? ramUsedGb,
+    double? ramTotalGb,
+    int? uptimeSec,
+    bool? viewOnlyMode,
+    String? osName,
+    String? sharedSecret,
   }) {
     return HostState(
       id: id,
-      name: name,
+      name: name ?? this.name,
       ip: ip,
-      mac: mac,
+      wsPort: wsPort ?? this.wsPort,
+      mac: mac ?? this.mac,
       isOnline: isOnline ?? this.isOnline,
       cpuUsage: cpuUsage ?? this.cpuUsage,
       ramUsage: ramUsage ?? this.ramUsage,
+      diskUsage: diskUsage ?? this.diskUsage,
+      cpuCores: cpuCores ?? this.cpuCores,
+      ramUsedGb: ramUsedGb ?? this.ramUsedGb,
+      ramTotalGb: ramTotalGb ?? this.ramTotalGb,
+      uptimeSec: uptimeSec ?? this.uptimeSec,
+      viewOnlyMode: viewOnlyMode ?? this.viewOnlyMode,
+      osName: osName ?? this.osName,
+      sharedSecret: sharedSecret ?? this.sharedSecret,
     );
   }
 }
@@ -62,9 +133,16 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
   FleetNotifier() : super([]);
 
   void addHost(HostState host) {
+    final effectiveSecret = host.sharedSecret.trim().isNotEmpty
+        ? host.sharedSecret.trim()
+        : loadHostPairingSecret(host.ip);
+    final hydrated = host.copyWith(sharedSecret: effectiveSecret);
+    if (effectiveSecret.isNotEmpty) {
+      saveHostPairingSecret(host.ip, effectiveSecret);
+    }
     state = [
-      ...state.where((h) => h.id != host.id && h.ip != host.ip),
-      host,
+      ...state.where((h) => h.id != hydrated.id && h.ip != hydrated.ip),
+      hydrated,
     ];
   }
 
@@ -73,6 +151,83 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
       for (final h in state)
         if (h.id == id)
           h.copyWith(isOnline: isOnline, cpuUsage: cpu, ramUsage: ram)
+        else
+          h
+    ];
+  }
+
+  void setHostSecret(String ip, String secret) {
+    saveHostPairingSecret(ip, secret);
+    state = [
+      for (final h in state)
+        if (h.ip == ip) h.copyWith(sharedSecret: secret.trim()) else h
+    ];
+  }
+
+  void updateTelemetryByIp(String ip, Map<String, dynamic> data) {
+    final cpuRaw = data['cpu_percent'];
+    final ramRaw = data['ram_percent'];
+    final diskRaw = data['disk_percent'];
+    final coresRaw = data['cpu_cores'];
+    final ramUsedRaw = data['ram_used_gb'];
+    final ramTotalRaw = data['ram_total_gb'];
+    final uptimeRaw = data['uptime_sec'];
+    final viewOnlyRaw = data['view_only_mode'];
+    final osRaw = data['os'];
+
+    final cpuVal = cpuRaw is num ? cpuRaw.round().clamp(0, 100) : null;
+    final ramVal = ramRaw is num ? ramRaw.round().clamp(0, 100) : null;
+    final diskVal = diskRaw is num ? diskRaw.round().clamp(0, 100) : null;
+    final coresVal = coresRaw is num ? coresRaw.toInt() : null;
+    final ramUsedVal = ramUsedRaw is num ? ramUsedRaw.toDouble() : null;
+    final ramTotalVal = ramTotalRaw is num ? ramTotalRaw.toDouble() : null;
+    final uptimeVal = uptimeRaw is num ? uptimeRaw.toInt() : null;
+    final viewOnlyVal = viewOnlyRaw is bool ? viewOnlyRaw : null;
+    final osVal = osRaw is String && osRaw.trim().isNotEmpty ? osRaw.trim() : null;
+
+    final hostnameRaw = data['hostname'];
+    final hostname =
+        hostnameRaw is String ? hostnameRaw.trim() : '';
+    final macRaw = data['mac'];
+    final reportedMac = macRaw is String ? macRaw.trim().toUpperCase() : '';
+    final hasRealMac =
+        reportedMac.isNotEmpty && reportedMac != '00:00:00:00:00:00';
+
+    state = [
+      for (final h in state)
+        if (h.ip == ip)
+          (() {
+            final placeholderName = h.name.startsWith('Host PC') ||
+                h.name.startsWith('PC-') ||
+                h.name == h.id;
+            final nextName =
+                (placeholderName && hostname.isNotEmpty) ? hostname : h.name;
+            final nextMac = (hasRealMac && h.mac == '00:00:00:00:00:00')
+                ? reportedMac
+                : h.mac;
+            if (Hive.isBoxOpen('ghost_devices')) {
+              Hive.box('ghost_devices').put(h.id, {
+                'id': h.id,
+                'name': nextName,
+                'ip': h.ip,
+                'mac': nextMac,
+              });
+            }
+            return h.copyWith(
+              name: nextName,
+              mac: nextMac,
+              isOnline: true,
+              cpuUsage: cpuVal,
+              ramUsage: ramVal,
+              diskUsage: diskVal,
+              cpuCores: coresVal,
+              ramUsedGb: ramUsedVal,
+              ramTotalGb: ramTotalVal,
+              uptimeSec: uptimeVal,
+              viewOnlyMode: viewOnlyVal,
+              osName: osVal,
+            );
+          })()
         else
           h
     ];
@@ -355,18 +510,88 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   void _openStreamScreen(HostState host) {
+    final fallbackSecret = ref.read(globalPairingSecretProvider);
+    final effectiveSecret = host.sharedSecret.trim().isNotEmpty
+        ? host.sharedSecret.trim()
+        : (loadHostPairingSecret(host.ip).isNotEmpty
+            ? loadHostPairingSecret(host.ip)
+            : fallbackSecret);
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => FullscreenStreamPage(host: host),
+        builder: (_) => FullscreenStreamPage(
+          host: host,
+          sharedSecret: effectiveSecret,
+          onTelemetry: (data) => ref
+              .read(fleetProvider.notifier)
+              .updateTelemetryByIp(host.ip, data),
+        ),
       ),
     );
+  }
+
+  Future<String?> _pairWithHostPin(String ip, String pin,
+      {int port = 8765}) async {
+    WebSocketChannel? channel;
+    StreamSubscription? sub;
+    final completer = Completer<String?>();
+    try {
+      channel = WebSocketChannel.connect(
+        Uri(scheme: 'ws', host: ip, port: port),
+      );
+      sub = channel.stream.listen(
+        (message) {
+          if (completer.isCompleted) return;
+          if (message is String) {
+            try {
+              final decoded = jsonDecode(message);
+              if (decoded is Map<String, dynamic>) {
+                if (decoded['event'] == 'AUTHENTICATED' &&
+                    decoded['pairingToken'] is String) {
+                  completer.complete(decoded['pairingToken'] as String);
+                  return;
+                }
+                if (decoded['event'] == 'ERROR') {
+                  completer.complete(null);
+                  return;
+                }
+              }
+            } catch (_) {}
+          }
+        },
+        onError: (_) {
+          if (!completer.isCompleted) completer.complete(null);
+        },
+        onDone: () {
+          if (!completer.isCompleted) completer.complete(null);
+        },
+      );
+      channel.sink.add(jsonEncode({
+        'action': 'PAIR',
+        'pin': pin.trim(),
+        'device': 'AI NetController Mobile',
+      }));
+      return await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
+    } catch (_) {
+      return null;
+    } finally {
+      await sub?.cancel();
+      try {
+        await channel?.sink.close();
+      } catch (_) {}
+    }
   }
 
   Future<void> _showAddHostDialog() async {
     final nameCtrl = TextEditingController();
     final ipCtrl = TextEditingController();
     final macCtrl = TextEditingController();
+    final secretCtrl = TextEditingController(
+      text: ref.read(globalPairingSecretProvider),
+    );
 
     await showDialog<void>(
       context: context,
@@ -416,6 +641,17 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   hintText: 'e.g. AA:BB:CC:DD:EE:FF',
                 ),
               ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: secretCtrl,
+                obscureText: true,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 13, fontFamily: 'monospace'),
+                decoration: const InputDecoration(
+                  labelText: '6-Digit PIN or Pairing Token',
+                  hintText: 'e.g. 482910 or ainet_...',
+                ),
+              ),
             ],
           ),
           actions: [
@@ -429,7 +665,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                 backgroundColor: CyberColors.primary,
                 foregroundColor: Colors.black,
               ),
-              onPressed: () {
+              onPressed: () async {
                 final ip = ipCtrl.text.trim();
                 if (ip.isEmpty) return;
                 final name = nameCtrl.text.trim().isNotEmpty
@@ -438,6 +674,21 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                 final mac = macCtrl.text.trim().isNotEmpty
                     ? macCtrl.text.trim().toUpperCase()
                     : '00:00:00:00:00:00';
+                String secret = secretCtrl.text.trim();
+                bool pinFailed = false;
+                if (RegExp(r'^\d{6}$').hasMatch(secret)) {
+                  final exchanged = await _pairWithHostPin(ip, secret);
+                  if (exchanged != null && exchanged.isNotEmpty) {
+                    secret = exchanged;
+                  } else {
+                    secret = '';
+                    pinFailed = true;
+                  }
+                }
+                if (secret.isNotEmpty) {
+                  saveHostPairingSecret(ip, secret);
+                  ref.read(globalPairingSecretProvider.notifier).state = secret;
+                }
                 final id = name.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9_-]'), '-');
                 final host = HostState(
                   id: id,
@@ -445,10 +696,25 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   ip: ip,
                   mac: mac,
                   isOnline: true,
+                  sharedSecret: secret,
                 );
                 ref.read(fleetProvider.notifier).addHost(host);
                 ref.read(selectedHostIdProvider.notifier).state = host.id;
-                Navigator.of(ctx).pop();
+                if (ctx.mounted) {
+                  Navigator.of(ctx).pop();
+                }
+                if (pinFailed && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      backgroundColor: CyberColors.surfaceElevated,
+                      content: Text(
+                        'PIN pairing failed — workstation added without secret. Open Settings to pair.',
+                        style: TextStyle(
+                            color: CyberColors.warning, fontFamily: 'monospace'),
+                      ),
+                    ),
+                  );
+                }
               },
               child: const Text('Save PC',
                   style: TextStyle(fontWeight: FontWeight.bold)),
@@ -456,10 +722,17 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ],
         );
       },
-    );
+    ).whenComplete(() {
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        nameCtrl.dispose();
+        ipCtrl.dispose();
+        macCtrl.dispose();
+        secretCtrl.dispose();
+      });
+    });
   }
 
-  void _dispatchCommand(String cmd, HostState? targetHost) {
+  Future<void> _dispatchCommand(String cmd, HostState? targetHost) async {
     final trimmed = cmd.trim();
     if (trimmed.isEmpty) return;
     final now = TimeOfDay.now();
@@ -467,7 +740,26 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     final targetLabel = targetHost != null
         ? '${targetHost.name} (${targetHost.ip})'
-        : 'LAN Broadcast';
+        : 'No Target Selected';
+
+    void updateLatestStatus(String status) {
+      if (!mounted) return;
+      setState(() {
+        final idx = _commandLogs.indexWhere(
+            (e) => e.timestamp == timeStr && e.command == trimmed);
+        final updated = CommandLogItem(
+          timestamp: timeStr,
+          hostName: targetLabel,
+          command: trimmed,
+          status: status,
+        );
+        if (idx >= 0) {
+          _commandLogs[idx] = updated;
+        } else {
+          _commandLogs.insert(0, updated);
+        }
+      });
+    }
 
     setState(() {
       _commandLogs.insert(
@@ -476,13 +768,114 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           timestamp: timeStr,
           hostName: targetLabel,
           command: trimmed,
-          status: targetHost != null && targetHost.isOnline
-              ? 'Dispatched over AI-NET/3.0-SECURE WebSocket (Port 8765)'
-              : 'Queued — awaiting online host agent connection',
+          status: targetHost == null
+              ? 'Select a PC workstation in Fleet before dispatching commands.'
+              : 'Authenticating via AI-NET/3.0-SECURE WebSocket (${targetHost.ip}:${targetHost.wsPort})...',
         ),
       );
       _commandController.clear();
     });
+
+    if (targetHost == null) return;
+
+    final effectiveSecret = targetHost.sharedSecret.trim().isNotEmpty
+        ? targetHost.sharedSecret.trim()
+        : (loadHostPairingSecret(targetHost.ip).isNotEmpty
+            ? loadHostPairingSecret(targetHost.ip)
+            : ref.read(globalPairingSecretProvider).trim());
+
+    if (effectiveSecret.isEmpty) {
+      updateLatestStatus(
+          'Pairing secret required. Open Settings or Add Workstation to pair this PC.');
+      return;
+    }
+
+    WebSocketChannel? channel;
+    StreamSubscription? sub;
+    final completer = Completer<String>();
+    var cmdSent = false;
+    var seq = 1;
+
+    try {
+      channel = WebSocketChannel.connect(
+        Uri(scheme: 'ws', host: targetHost.ip, port: targetHost.wsPort),
+      );
+      sub = channel.stream.listen(
+        (message) {
+          if (completer.isCompleted) return;
+          if (message is Uint8List) {
+            final packet = StreamBinaryPacket.parse(message);
+            if (packet == null) return;
+            if (packet.opcode == StreamOpcode.auth) {
+              final statusStr =
+                  utf8.decode(packet.payload, allowMalformed: true).trim();
+              if (statusStr == 'AUTH_OK' || statusStr == 'OK_AUTHENTICATED') {
+                if (!cmdSent) {
+                  cmdSent = true;
+                  channel?.sink.add(StreamBinaryPacket.pack(
+                    StreamOpcode.shell,
+                    seq++,
+                    Uint8List.fromList(utf8.encode(trimmed)),
+                  ));
+                }
+              } else if (packet.payload.length == 16) {
+                final digest = Hmac(sha256, utf8.encode(effectiveSecret))
+                    .convert(packet.payload);
+                channel?.sink.add(StreamBinaryPacket.pack(
+                  StreamOpcode.auth,
+                  packet.seqId,
+                  Uint8List.fromList(digest.bytes),
+                ));
+              } else if (statusStr.isNotEmpty) {
+                completer.complete('Authentication rejected: $statusStr');
+              }
+            } else if (packet.opcode == StreamOpcode.shell) {
+              final raw = utf8.decode(packet.payload, allowMalformed: true);
+              try {
+                final parsed = jsonDecode(raw);
+                if (parsed is Map<String, dynamic>) {
+                  final out = (parsed['output'] ?? parsed['stdout'] ?? parsed['stderr'] ?? raw).toString().trim();
+                  final st = (parsed['status'] ?? 'done').toString();
+                  final code = parsed['exit_code'];
+                  completer.complete('[$st${code != null ? ' · exit $code' : ''}] ${out.isNotEmpty ? out : "(no output)"}');
+                  return;
+                }
+              } catch (_) {}
+              completer.complete(raw.isNotEmpty ? raw : 'Completed.');
+            } else if (packet.opcode == StreamOpcode.hitl) {
+              completer.complete(
+                  'HITL Biometric/Operator approval requested on host PC — approve or deny on host.');
+            } else if (packet.opcode == StreamOpcode.error) {
+              final err = utf8.decode(packet.payload, allowMalformed: true).trim();
+              completer.complete('Error: ${err.isNotEmpty ? err : "Command rejected"}');
+            }
+          }
+        },
+        onError: (err) {
+          if (!completer.isCompleted) {
+            completer.complete('Connection failed: $err');
+          }
+        },
+        onDone: () {
+          if (!completer.isCompleted) {
+            completer.complete('Disconnected before receiving command output.');
+          }
+        },
+      );
+
+      final result = await completer.future.timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => 'Command timed out awaiting response from ${targetHost.ip}:8765.',
+      );
+      updateLatestStatus(result);
+    } catch (e) {
+      updateLatestStatus('Dispatch error: $e');
+    } finally {
+      await sub?.cancel();
+      try {
+        await channel?.sink.close();
+      } catch (_) {}
+    }
   }
 
   @override
@@ -675,7 +1068,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // 1. COMPACT FLEET VIEW (SINGLE COLUMN SCROLL)
   // -------------------------------------------------------------------
   Widget _buildCompactListFleet(List<HostState> hosts) {
-    final ghostBox = Hive.box('ghost_devices');
+    final ghostBox =
+        Hive.isBoxOpen('ghost_devices') ? Hive.box('ghost_devices') : null;
+    final ghostKeys = ghostBox == null
+        ? const <dynamic>[]
+        : ghostBox.keys
+            .where((k) =>
+                !k.toString().startsWith('__') && ghostBox.get(k) is Map)
+            .toList();
 
     return ListView(
       physics: const BouncingScrollPhysics(),
@@ -703,11 +1103,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               onOpenStream: () => _openStreamScreen(host),
             ),
           ),
-        if (ghostBox.isNotEmpty) ...[
+        if (ghostBox != null && ghostKeys.isNotEmpty) ...[
           const SizedBox(height: 24),
           _buildSectionHeader('OFFLINE GHOST CACHE'),
           const SizedBox(height: 8),
-          ...ghostBox.keys.map(
+          ...ghostKeys.map(
             (key) => _buildGhostCacheCard(key.toString(), ghostBox.get(key)),
           ),
         ],
@@ -838,7 +1238,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     child: ViewportStreamWidget(
                       hostIp: host.ip,
                       hostName: host.name,
+                      wsPort: host.wsPort,
                       isInline: true,
+                      sharedSecret: host.sharedSecret.trim().isNotEmpty
+                          ? host.sharedSecret.trim()
+                          : (loadHostPairingSecret(host.ip).isNotEmpty
+                              ? loadHostPairingSecret(host.ip)
+                              : ref.watch(globalPairingSecretProvider)),
+                      onTelemetry: (data) => ref
+                          .read(fleetProvider.notifier)
+                          .updateTelemetryByIp(host.ip, data),
                       onToggleFullscreen: () => _openStreamScreen(host),
                     ),
                   )
@@ -914,6 +1323,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       padding: isEmbedded ? EdgeInsets.zero : const EdgeInsets.all(16),
       children: [
         _buildSectionHeader(targetHeader),
+        if (host != null) ...[
+          const SizedBox(height: 8),
+          _buildTelemetrySummaryStrip(host),
+        ],
         const SizedBox(height: 10),
         Row(
           children: [
@@ -1056,11 +1469,201 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // -------------------------------------------------------------------
   // SETTINGS TAB
   // -------------------------------------------------------------------
+  Future<void> _showPairingSecretDialog() async {
+    final secretCtrl =
+        TextEditingController(text: ref.read(globalPairingSecretProvider));
+    final pinCtrl = TextEditingController();
+    final hosts = ref.read(fleetProvider);
+    final selectedId = ref.read(selectedHostIdProvider);
+    HostState? targetHost;
+    if (hosts.isNotEmpty) {
+      targetHost = hosts.firstWhere(
+        (h) => h.id == selectedId,
+        orElse: () => hosts.first,
+      );
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: CyberColors.surfaceElevated,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          title: const Text(
+            'Pair Workstation Credentials',
+            style: TextStyle(color: Colors.white, fontSize: 16),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: secretCtrl,
+                obscureText: true,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 13, fontFamily: 'monospace'),
+                decoration: const InputDecoration(
+                  labelText: 'Global Pairing Token (ainet_...)',
+                ),
+              ),
+              if (targetHost != null) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pinCtrl,
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontFamily: 'monospace'),
+                  decoration: InputDecoration(
+                    labelText: 'Or Pair ${targetHost.ip} with 6-Digit PIN',
+                    hintText: 'e.g. 482910',
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel',
+                  style: TextStyle(color: CyberColors.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: CyberColors.primary,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () async {
+                String nextSecret = secretCtrl.text.trim();
+                final pin = pinCtrl.text.trim();
+                bool? pinPaired;
+                if (targetHost != null && RegExp(r'^\d{6}$').hasMatch(pin)) {
+                  final exchanged = await _pairWithHostPin(
+                    targetHost.ip,
+                    pin,
+                    port: targetHost.wsPort,
+                  );
+                  if (exchanged != null && exchanged.isNotEmpty) {
+                    nextSecret = exchanged;
+                    pinPaired = true;
+                  } else {
+                    pinPaired = false;
+                  }
+                }
+                if (nextSecret.isNotEmpty) {
+                  ref.read(globalPairingSecretProvider.notifier).state =
+                      nextSecret;
+                  saveHostPairingSecret(
+                      targetHost?.ip ?? '', nextSecret);
+                  if (targetHost != null) {
+                    ref
+                        .read(fleetProvider.notifier)
+                        .setHostSecret(targetHost.ip, nextSecret);
+                  }
+                }
+                if (ctx.mounted) {
+                  Navigator.of(ctx).pop();
+                }
+                if (mounted && pinPaired != null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: CyberColors.surfaceElevated,
+                      content: Text(
+                        pinPaired
+                            ? 'Paired with ${targetHost?.ip} — session token saved.'
+                            : 'PIN pairing failed — check the 6-digit PIN on the PC daemon.',
+                        style: TextStyle(
+                          color: pinPaired
+                              ? CyberColors.success
+                              : CyberColors.warning,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  );
+                }
+              },
+              child: const Text('Save & Pair',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    ).whenComplete(() {
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        secretCtrl.dispose();
+        pinCtrl.dispose();
+      });
+    });
+  }
+
+  Widget _buildTelemetrySummaryStrip(HostState host) {
+    final metrics = <String>[
+      if (host.osName.isNotEmpty) 'OS: ${host.osName}',
+      'CPU: ${host.cpuUsage}%${host.cpuCores > 0 ? ' (${host.cpuCores}c)' : ''}',
+      host.ramTotalGb > 0
+          ? 'RAM: ${host.ramUsedGb.toStringAsFixed(1)}/${host.ramTotalGb.toStringAsFixed(1)} GB (${host.ramUsage}%)'
+          : 'RAM: ${host.ramUsage}%',
+      if (host.diskUsage > 0) 'Disk: ${host.diskUsage}%',
+      if (host.mac.isNotEmpty && host.mac != '00:00:00:00:00:00')
+        'MAC: ${host.mac}',
+      host.viewOnlyMode ? 'Mode: View-Only' : 'Mode: Interactive',
+    ];
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: metrics.map((label) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: CyberColors.surfaceElevated.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: CyberColors.primary.withValues(alpha: 0.25),
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: context.fluidFont(9.5),
+              color: CyberColors.textSecondary,
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Widget _buildSettingsTab() {
+    final savedSecret = ref.watch(globalPairingSecretProvider);
+    final hasSecret = savedSecret.trim().isNotEmpty;
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.all(16),
       children: [
+        _buildSectionHeader('PAIRING & SECURITY CREDENTIALS'),
+        const SizedBox(height: 8),
+        InkWell(
+          onTap: _showPairingSecretDialog,
+          borderRadius: BorderRadius.circular(16),
+          child: _buildSettingsTile(
+            icon: Icons.vpn_key_rounded,
+            title: 'Workstation Pairing Token / PIN',
+            subtitle: hasSecret
+                ? 'Configured (${savedSecret.length} chars) — tap to rotate or pair via PIN'
+                : 'Not configured — tap to enter token or 6-digit PC PIN',
+            trailing: Icon(
+              hasSecret ? Icons.verified_user_rounded : Icons.edit_rounded,
+              color: hasSecret ? CyberColors.success : CyberColors.warning,
+              size: 20,
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
         _buildSectionHeader('NETWORK PROTOCOL & DISCOVERY'),
         const SizedBox(height: 8),
         _buildSettingsTile(
@@ -1201,8 +1804,15 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 // =====================================================================
 class FullscreenStreamPage extends StatefulWidget {
   final HostState host;
+  final String sharedSecret;
+  final void Function(Map<String, dynamic> telemetry)? onTelemetry;
 
-  const FullscreenStreamPage({super.key, required this.host});
+  const FullscreenStreamPage({
+    super.key,
+    required this.host,
+    this.sharedSecret = '',
+    this.onTelemetry,
+  });
 
   @override
   State<FullscreenStreamPage> createState() => _FullscreenStreamPageState();
@@ -1212,17 +1822,22 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
   @override
   void initState() {
     super.initState();
-    WakelockPlus.enable();
+    unawaited(WakelockPlus.enable().catchError((_) {}));
   }
 
   @override
   void dispose() {
-    WakelockPlus.disable();
+    unawaited(WakelockPlus.disable().catchError((_) {}));
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final effectiveSecret = widget.sharedSecret.trim().isNotEmpty
+        ? widget.sharedSecret.trim()
+        : (widget.host.sharedSecret.trim().isNotEmpty
+            ? widget.host.sharedSecret.trim()
+            : loadHostPairingSecret(widget.host.ip));
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -1234,7 +1849,10 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
               child: ViewportStreamWidget(
                 hostIp: widget.host.ip,
                 hostName: widget.host.name,
+                wsPort: widget.host.wsPort,
                 isInline: false,
+                sharedSecret: effectiveSecret,
+                onTelemetry: widget.onTelemetry,
               ),
             ),
             Positioned(

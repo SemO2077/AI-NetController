@@ -93,12 +93,12 @@ class StreamBinaryPacket {
   }
 
   /// Packs 0x0A VIEWPORT_RESIZE control payload containing target width and height
-  static Uint8List packViewportResize(int width, int height) {
+  static Uint8List packViewportResize(int width, int height, {int seqId = 1}) {
     final payload = Uint8List(8);
     final view = ByteData.sublistView(payload);
     view.setUint32(0, width, Endian.big);
     view.setUint32(4, height, Endian.big);
-    return pack(StreamOpcode.viewportResize, 0, payload);
+    return pack(StreamOpcode.viewportResize, seqId, payload);
   }
 }
 
@@ -112,6 +112,7 @@ class ViewportStreamWidget extends StatefulWidget {
   final bool isInline;
   final VoidCallback? onToggleFullscreen;
   final String sharedSecret;
+  final void Function(Map<String, dynamic> telemetry)? onTelemetry;
 
   const ViewportStreamWidget({
     super.key,
@@ -121,6 +122,7 @@ class ViewportStreamWidget extends StatefulWidget {
     this.isInline = true,
     this.onToggleFullscreen,
     this.sharedSecret = '',
+    this.onTelemetry,
   });
 
   @override
@@ -164,7 +166,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   void initState() {
     super.initState();
     _wakelockRefCount++;
-    WakelockPlus.enable();
+    unawaited(WakelockPlus.enable().catchError((_) {}));
     _connect();
 
     _fpsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -175,6 +177,19 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
         });
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant ViewportStreamWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.hostIp != widget.hostIp ||
+        oldWidget.wsPort != widget.wsPort ||
+        oldWidget.sharedSecret.trim() != widget.sharedSecret.trim()) {
+      _hasReceivedFrame = false;
+      _lastSentPhysicalWidth = 0;
+      _lastSentPhysicalHeight = 0;
+      _connect();
+    }
   }
 
   void _connect() {
@@ -193,6 +208,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       _isConnecting = true;
       _isAuthenticated = false;
       _errorMessage = null;
+      _pingSequence = 0;
     });
 
     try {
@@ -210,10 +226,20 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
             final packet = StreamBinaryPacket.parse(message);
             if (packet != null) {
               if (packet.opcode == StreamOpcode.auth) {
-                // Respond to 16-byte HMAC-SHA256 challenge from agent.py
-                if (packet.payload.length == 16) {
-                  final hmacSha256 =
-                      Hmac(sha256, utf8.encode(secret));
+                final statusStr =
+                    utf8.decode(packet.payload, allowMalformed: true).trim();
+                if (statusStr == 'AUTH_OK' ||
+                    statusStr == 'OK_AUTHENTICATED') {
+                  if (mounted) {
+                    setState(() {
+                      _isAuthenticated = true;
+                      _isConnected = true;
+                      _isConnecting = false;
+                    });
+                  }
+                } else if (packet.payload.length == 16) {
+                  // Respond to 16-byte HMAC-SHA256 challenge from agent.py
+                  final hmacSha256 = Hmac(sha256, utf8.encode(secret));
                   final digest = hmacSha256.convert(packet.payload);
                   final authReply = StreamBinaryPacket.pack(
                     StreamOpcode.auth,
@@ -221,26 +247,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                     Uint8List.fromList(digest.bytes),
                   );
                   _channel?.sink.add(authReply);
-                } else {
-                  final statusStr =
-                      utf8.decode(packet.payload, allowMalformed: true).trim();
-                  if ((statusStr == 'AUTH_OK' ||
-                          statusStr == 'OK_AUTHENTICATED') &&
-                      mounted) {
-                    setState(() {
-                      _isAuthenticated = true;
-                      _isConnected = true;
-                      _isConnecting = false;
-                    });
-                  } else if (mounted) {
-                    setState(() {
-                      _isAuthenticated = false;
-                      _isConnected = false;
-                      _isConnecting = false;
-                      _errorMessage = 'Stream authentication rejected: $statusStr';
-                    });
-                    _cleanupSocket();
-                  }
+                } else if (mounted) {
+                  setState(() {
+                    _isAuthenticated = false;
+                    _isConnected = false;
+                    _isConnecting = false;
+                    _errorMessage = 'Stream authentication rejected: $statusStr';
+                  });
+                  _cleanupSocket();
                 }
               } else if (packet.opcode == StreamOpcode.error) {
                 final errMsg = utf8.decode(packet.payload, allowMalformed: true).trim();
@@ -253,6 +267,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                     }
                   });
                 }
+              } else if (packet.opcode == StreamOpcode.telemetry) {
+                try {
+                  final decoded = jsonDecode(
+                    utf8.decode(packet.payload, allowMalformed: true),
+                  );
+                  if (decoded is Map<String, dynamic>) {
+                    widget.onTelemetry?.call(decoded);
+                  }
+                } catch (_) {}
               } else if (packet.opcode == StreamOpcode.frame) {
                 if (!_isAuthenticated) {
                   return; // Drop unauthenticated pre-auth video frames
@@ -272,7 +295,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                 final stopwatch = _pendingPings.remove(packet.seqId);
                 if (stopwatch != null) {
                   stopwatch.stop();
-                  _latencyMs = stopwatch.elapsedMilliseconds;
+                  final nextMs = stopwatch.elapsedMilliseconds;
+                  if (mounted && _latencyMs != nextMs) {
+                    setState(() => _latencyMs = nextMs);
+                  }
                 }
               }
             }
@@ -352,7 +378,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
         if (!mounted || _channel == null || !_isConnected) return;
         try {
           final resizePacket = StreamBinaryPacket.packViewportResize(
-              _lastPhysicalWidth, _lastPhysicalHeight);
+            _lastPhysicalWidth,
+            _lastPhysicalHeight,
+            seqId: ++_pingSequence,
+          );
           _channel?.sink.add(resizePacket);
           _lastSentPhysicalWidth = _lastPhysicalWidth;
           _lastSentPhysicalHeight = _lastPhysicalHeight;
@@ -550,7 +579,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       _wakelockRefCount--;
     }
     if (_wakelockRefCount == 0) {
-      WakelockPlus.disable();
+      unawaited(WakelockPlus.disable().catchError((_) {}));
     }
     super.dispose();
   }
@@ -637,7 +666,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                     Positioned(
                       bottom: 10,
                       left: 10,
-                      child: _buildInteractiveControllerDock(context),
+                      right: widget.onToggleFullscreen != null ? 64 : 10,
+                      child: Align(
+                        alignment: Alignment.bottomLeft,
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: _buildInteractiveControllerDock(context),
+                        ),
+                      ),
                     ),
 
                   // Bottom Quick Controls
@@ -708,16 +744,20 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                widget.hostName,
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.bold,
-                  fontSize: context.fluidFont(11),
-                  color: CyberColors.textPrimary,
+              Expanded(
+                child: Text(
+                  widget.hostName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.bold,
+                    fontSize: context.fluidFont(11),
+                    color: CyberColors.textPrimary,
+                  ),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
               Text(
                 '$_fpsDisplay FPS',
                 style: TextStyle(

@@ -109,11 +109,22 @@ def _detect_av_integrity() -> Dict[str, Any]:
     is_windows = platform.system() == "Windows"
     has_job_obj = False
     try:
-        try:
-            from command_ast_firewall import JOB_SUPERVISOR
-        except ImportError:
-            from agent.command_ast_firewall import JOB_SUPERVISOR
-        has_job_obj = is_windows and JOB_SUPERVISOR is not None and getattr(JOB_SUPERVISOR, "_job_handle", None) is not None
+        supervisor = None
+        for mod_name in ("agent", "agent.agent"):
+            mod = sys.modules.get(mod_name)
+            if mod is not None and hasattr(mod, "JOB_SUPERVISOR"):
+                supervisor = getattr(mod, "JOB_SUPERVISOR")
+                break
+        if supervisor is None:
+            try:
+                from agent import JOB_SUPERVISOR as supervisor
+            except ImportError:
+                from agent.agent import JOB_SUPERVISOR as supervisor
+        has_job_obj = (
+            is_windows
+            and supervisor is not None
+            and (getattr(supervisor, "job_handle", None) is not None or getattr(supervisor, "_job_handle", None) is not None)
+        )
     except Exception:
         has_job_obj = False
 

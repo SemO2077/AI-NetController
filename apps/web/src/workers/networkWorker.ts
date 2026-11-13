@@ -689,27 +689,27 @@ function parseBinaryFrame(bytes: Uint8Array) {
       // Ignore
     }
   } else if (opcode === Opcode.OP_AUTH) {
-    if (length === 16) {
+    // Check explicit ASCII status strings first: 'OK_AUTHENTICATED' is 16 bytes long,
+    // which would otherwise be misclassified as a 16-byte HMAC nonce challenge.
+    const statusStr = length > 0 ? UTF8_DECODER.decode(payloadSlice).trim() : '';
+    if (statusStr === 'OK_AUTHENTICATED' || statusStr === 'AUTH_OK') {
+      sessionAuthenticated = true;
+      clearAuthHandshakeTimer();
+      self.postMessage({ type: 'STATUS', status: 'connected' });
+      self.postMessage({ type: 'JSON_FRAME', data: { event: 'AUTHENTICATED', status: 'OK' } });
+      startHeartbeat();
+      flushOutboundQueue();
+    } else if (length === 16) {
       void respondToBinaryAuthChallenge(payloadSlice, seq);
     } else if (length > 0) {
-      const statusStr = UTF8_DECODER.decode(payloadSlice).trim();
-      if (statusStr === 'OK_AUTHENTICATED' || statusStr === 'AUTH_OK') {
-        sessionAuthenticated = true;
-        clearAuthHandshakeTimer();
-        self.postMessage({ type: 'STATUS', status: 'connected' });
-        self.postMessage({ type: 'JSON_FRAME', data: { event: 'AUTHENTICATED', status: 'OK' } });
-        startHeartbeat();
-        flushOutboundQueue();
-      } else {
-        sessionAuthenticated = false;
-        autoReconnectEnabled = false;
-        clearAuthHandshakeTimer();
-        self.postMessage({ type: 'JSON_FRAME', data: { event: 'ERROR', error: statusStr } });
-        try {
-          socket?.close(4001, 'Authentication failed');
-        } catch {
-          // ignore
-        }
+      sessionAuthenticated = false;
+      autoReconnectEnabled = false;
+      clearAuthHandshakeTimer();
+      self.postMessage({ type: 'JSON_FRAME', data: { event: 'ERROR', error: statusStr } });
+      try {
+        socket?.close(4001, 'Authentication failed');
+      } catch {
+        // ignore
       }
     }
   } else if (opcode === Opcode.OP_CLIP) {
