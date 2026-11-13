@@ -684,15 +684,30 @@ class TestMultiMonitorEnumeration(unittest.TestCase):
 
     def test_monitor_enumeration_schema(self):
         if HAS_STREAMER_MODULE:
+            import os
+            import sys
+
             streamer = MultiMonitorStreamer()
-            monitors = streamer.enumerate_monitors()
-            assert isinstance(monitors, list)
-            assert len(monitors) >= 1
-            m = monitors[0]
-            for key in ("index", "width", "height", "left", "top", "label"):
-                assert key in m, f"Display entry missing key: {key}"
-                assert m["width"] > 0
-                assert m["height"] > 0
+            try:
+                monitors = streamer.enumerate_monitors()
+                assert isinstance(monitors, list)
+                headless_linux = (
+                    sys.platform != "win32"
+                    and not os.environ.get("DISPLAY")
+                    and not os.environ.get("WAYLAND_DISPLAY")
+                )
+                if not monitors and headless_linux and getattr(streamer, "_sct", None) is None:
+                    self.skipTest("No desktop display server available in headless Linux environment")
+                assert len(monitors) >= 1
+                m = monitors[0]
+                for key in ("index", "width", "height", "left", "top", "label"):
+                    assert key in m, f"Display entry missing key: {key}"
+                    assert m["width"] > 0
+                    assert m["height"] > 0
+            finally:
+                close_fn = getattr(streamer, "close", None)
+                if callable(close_fn):
+                    close_fn()
         else:
             # Synthetic fallback assertion
             mock_monitors = [

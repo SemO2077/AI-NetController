@@ -84,15 +84,30 @@ except ImportError:
     ServiceInfo = None
     IPVersion = None
 
+def _has_desktop_display() -> bool:
+    """Returns True if an interactive GUI display is available (avoids X11 errors on headless Linux)."""
+    if os.environ.get("AI_HEADLESS") == "1":
+        return False
+    if platform.system() in ("Windows", "Darwin"):
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 try:
-    import pystray
-except ImportError:
+    if _has_desktop_display():
+        import pystray
+    else:
+        pystray = None
+except Exception:
     pystray = None
 
 try:
-    import pyautogui
-    pyautogui.FAILSAFE = False  # Avoid exceptions when trackpad coordinates reach edge
-except ImportError:
+    if _has_desktop_display():
+        import pyautogui
+        pyautogui.FAILSAFE = False  # Avoid exceptions when trackpad coordinates reach edge
+    else:
+        pyautogui = None
+except Exception:
     pyautogui = None
 
 try:
@@ -140,7 +155,7 @@ except ImportError:
 
 try:
     import pyperclip
-except ImportError:
+except Exception:
     pyperclip = None
 
 try:
@@ -657,7 +672,14 @@ class AstCommandInspector:
 # MAIN AI NETCONTROLLER HOST AGENT DAEMON
 # =====================================================================
 class HostAgentDaemon:
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765, gui_state: Any = None):
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8765,
+        gui_state: Any = None,
+        enable_tray: Optional[bool] = None,
+        enable_mdns: Optional[bool] = None,
+    ):
         self.config = load_config() if load_config else {}
         self.host = host or self.config.get("bind_host", "0.0.0.0")
         self.port = port or int(self.config.get("port", 8765))
@@ -709,6 +731,19 @@ class HostAgentDaemon:
         self.capture_fps: float = 0.0
         self.pending_approvals: Dict[str, Dict[str, Any]] = {}
         self.tray_icon = None
+        self._tray_lock = threading.Lock()
+        self._tray_stop_event = threading.Event()
+        self._tray_thread: Optional[threading.Thread] = None
+        if enable_tray is None:
+            self._enable_tray = (
+                os.environ.get("AI_DISABLE_TRAY") != "1" and _has_desktop_display()
+            )
+        else:
+            self._enable_tray = bool(enable_tray)
+        if enable_mdns is None:
+            self._enable_mdns = os.environ.get("AI_DISABLE_MDNS") != "1"
+        else:
+            self._enable_mdns = bool(enable_mdns)
         self.file_writer = HostFileWriter() if HostFileWriter else None
         chaos_enabled = os.environ.get("AI_CHAOS_MODE", os.environ.get("CST_CHAOS_MODE", "0")) == "1"
         self.chaos_shield = NetworkFuzzerShield(ChaosProfile(enabled=chaos_enabled)) if NetworkFuzzerShield else None
@@ -1089,11 +1124,14 @@ class HostAgentDaemon:
 
     async def _start_mdns(self):
         """Registers mDNS service RFC 6762 (_cst-agent._tcp.local)."""
-        if not AsyncZeroconf:
-            logger.warning("Zeroconf not installed, skipping mDNS broadcast")
+        if not self._enable_mdns or not AsyncZeroconf:
+            if not AsyncZeroconf:
+                logger.warning("Zeroconf not installed, skipping mDNS broadcast")
             return
+        zc = None
         try:
-            self.zeroconf = AsyncZeroconf(ip_version=IPVersion.V4Only)
+            zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
+            self.zeroconf = zc
             local_ip = self._get_local_ip()
             hostname = socket.gethostname()
 
@@ -1103,7 +1141,7 @@ class HostAgentDaemon:
                 'ai': 'ollama-bridge',
                 'hostname': hostname
             }
-            self.service_info = ServiceInfo(
+            info = ServiceInfo(
                 "_cst-agent._tcp.local.",
                 f"{hostname}._cst-agent._tcp.local.",
                 addresses=[socket.inet_aton(local_ip)],
@@ -1111,10 +1149,16 @@ class HostAgentDaemon:
                 properties=desc,
                 server=f"{hostname}.local."
             )
-            await self.zeroconf.async_register_service(self.service_info)
+            self.service_info = info
+            await asyncio.wait_for(zc.async_register_service(info), timeout=3.0)
+            if not self.is_running:
+                await self._close_zeroconf_async()
+                return
             logger.info(f"mDNS Registered: {hostname}._cst-agent._tcp.local at {local_ip}:{self.port}")
         except Exception as e:
             logger.warning(f"mDNS Registration error: {e}")
+            if self.zeroconf is not None:
+                await self._close_zeroconf_async()
 
     def _get_local_ip(self) -> str:
         """Determines primary non-loopback LAN IPv4 passively (no external 8.8.8.8 probe)."""
@@ -1155,7 +1199,9 @@ class HostAgentDaemon:
 
     def _start_system_tray(self):
         """Initializes high-visibility background Windows system tray icon with rich controls."""
-        if not pystray or not Image:
+        if not self._enable_tray or not pystray or not Image:
+            return
+        if not self.is_running or self._tray_stop_event.is_set():
             return
 
         def run_tray():
@@ -1237,24 +1283,38 @@ class HostAgentDaemon:
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Exit & Shut Down", _exit_agent)
             )
-            self.tray_icon = pystray.Icon(
-                "AI_NetController_Agent",
-                img,
-                f"AI NetController — Port: {self.port} (Online)",
-                menu
-            )
+            with self._tray_lock:
+                if not self.is_running or self._tray_stop_event.is_set():
+                    return
+                icon = pystray.Icon(
+                    "AI_NetController_Agent",
+                    img,
+                    f"AI NetController — Port: {self.port} (Online)",
+                    menu
+                )
+                self.tray_icon = icon
             try:
-                if hasattr(self.tray_icon, "notify"):
-                    self.tray_icon.notify(
+                if hasattr(icon, "notify"):
+                    icon.notify(
                         "AI NetController Host Agent is active and listening for remote connections.",
                         "AI NetController"
                     )
             except Exception:
                 pass
+            if not self.is_running or self._tray_stop_event.is_set():
+                try:
+                    icon.stop()
+                except Exception:
+                    pass
+                return
 
-            self.tray_icon.run()
+            icon.run()
 
         tray_thread = threading.Thread(target=run_tray, daemon=True, name="TrayThread")
+        with self._tray_lock:
+            if not self.is_running or self._tray_stop_event.is_set():
+                return
+            self._tray_thread = tray_thread
         tray_thread.start()
 
     def kill_all_tasks(self):
@@ -2413,12 +2473,137 @@ class HostAgentDaemon:
         except Exception:
             pass
 
+    def _stop_tray_sync(self) -> None:
+        """Signals system tray thread shutdown without racing icon creation."""
+        self._tray_stop_event.set()
+        with self._tray_lock:
+            icon = self.tray_icon
+            self.tray_icon = None
+            tray_thread = self._tray_thread
+            self._tray_thread = None
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                pass
+        if tray_thread is not None and tray_thread.is_alive() and threading.current_thread() is not tray_thread:
+            tray_thread.join(timeout=1.0)
+
+    def _close_vaults_and_approvals(self) -> None:
+        """Resolves pending approvals and closes all client AEAD vaults safely."""
+        for _, entry in list(self.pending_approvals.items()):
+            fut = entry.get("future") if isinstance(entry, dict) else entry
+            if fut and not fut.done():
+                try:
+                    fut.set_result(False)
+                except Exception:
+                    pass
+        self.pending_approvals.clear()
+        for v in list(self._client_vaults.values()):
+            try:
+                v.close()
+            except Exception:
+                pass
+        self._client_vaults.clear()
+        self._client_replay.clear()
+        self._ws_write_locks.clear()
+
+    def _close_sync_handles(self) -> None:
+        """Releases file writers, screen encoder thread pools, monitor handles, and job objects."""
+        if self.file_writer:
+            try:
+                self.file_writer.abort_all()
+            except Exception:
+                pass
+        self.screen_pipeline.close()
+        if self.multi_monitor:
+            try:
+                self.multi_monitor.close()
+            except Exception:
+                pass
+        JOB_SUPERVISOR.close()
+
+    async def _close_zeroconf_async(self) -> None:
+        """Unregisters any active mDNS service and closes AsyncZeroconf sockets/timers."""
+        zc = self.zeroconf
+        info = self.service_info
+        self.zeroconf = None
+        self.service_info = None
+        if zc is None:
+            return
+        if info is not None:
+            try:
+                await asyncio.wait_for(zc.async_unregister_service(info), timeout=2.0)
+            except Exception:
+                pass
+        try:
+            await asyncio.wait_for(zc.async_close(), timeout=2.0)
+        except Exception:
+            pass
+
+    async def _cleanup_loop_resources_async(self) -> None:
+        """Cancels background tasks, closes client sockets, awaits server close, and tears down mDNS."""
+        tasks = [
+            t for t in (list(self._background_tasks) + list(self._background_task_set))
+            if not t.done()
+        ]
+        self._background_tasks.clear()
+        self._background_task_set.clear()
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            try:
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=2.0)
+            except Exception:
+                pass
+
+        clients = list(self.clients)
+        self.clients.clear()
+        self.authenticated_clients.clear()
+        if clients:
+            close_coros = [ws.close(code=1001, reason="Daemon shutting down") for ws in clients]
+            try:
+                await asyncio.wait_for(asyncio.gather(*close_coros, return_exceptions=True), timeout=1.5)
+            except Exception:
+                pass
+
+        if self.chaos_shield is not None:
+            for cid in list(self.chaos_shield.client_states.keys()):
+                try:
+                    await self.chaos_shield.cleanup_and_scrub(cid, reason="Daemon shutting down")
+                except Exception:
+                    pass
+
+        self._close_vaults_and_approvals()
+
+        server = self.server
+        self.server = None
+        if server is not None:
+            try:
+                server.close()
+                await asyncio.wait_for(server.wait_closed(), timeout=2.0)
+            except Exception:
+                pass
+
+        await self._close_zeroconf_async()
+
+    async def async_stop(self) -> None:
+        """Awaitable clean shutdown hook closing tasks, WebSockets, mDNS, tray, and hardware handles."""
+        logger.info("Stopping AI NetController Host Agent Daemon (async)...")
+        self.is_running = False
+        self._stop_tray_sync()
+        await self._cleanup_loop_resources_async()
+        self._close_sync_handles()
+        if self._owns_loop and self.loop and self.loop.is_running():
+            self.loop.stop()
+
     def stop(self):
         """Clean shutdown hook closing background tasks, WebSockets, vaults, and hardware handles."""
         logger.info("Stopping AI NetController Host Agent Daemon...")
         self.is_running = False
+        self._stop_tray_sync()
 
-        def _cleanup_loop_resources():
+        def _cleanup_loop_resources_sync():
             for t in list(self._background_tasks) + list(self._background_task_set):
                 if not t.done():
                     t.cancel()
@@ -2429,54 +2614,50 @@ class HostAgentDaemon:
                     asyncio.create_task(ws.close(code=1001, reason="Daemon shutting down"))
                 except Exception:
                     pass
-            for v in self._client_vaults.values():
-                try:
-                    v.close()
-                except Exception:
-                    pass
-            self._client_vaults.clear()
+            self.clients.clear()
+            self.authenticated_clients.clear()
+            self._close_vaults_and_approvals()
             if self.server:
                 try:
                     self.server.close()
                 except Exception:
                     pass
+            if self.zeroconf is not None:
+                try:
+                    asyncio.create_task(self._close_zeroconf_async())
+                except Exception:
+                    pass
             if self._owns_loop and self.loop and self.loop.is_running():
                 self.loop.stop()
 
-        if self.loop and self.loop.is_running() and threading.get_ident() != self._loop_thread_id:
-            self.loop.call_soon_threadsafe(_cleanup_loop_resources)
-        else:
-            _cleanup_loop_resources()
+        if self.loop and self.loop.is_running():
+            if threading.get_ident() != self._loop_thread_id:
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(self._cleanup_loop_resources_async(), self.loop)
+                    fut.result(timeout=3.0)
+                except Exception:
+                    self.loop.call_soon_threadsafe(_cleanup_loop_resources_sync)
+                self._close_sync_handles()
+                if self._owns_loop and self.loop.is_running():
+                    try:
+                        self.loop.call_soon_threadsafe(self.loop.stop)
+                    except Exception:
+                        pass
+                return
+            _cleanup_loop_resources_sync()
+            self._close_sync_handles()
+            return
 
-        if self.file_writer:
+        _cleanup_loop_resources_sync()
+        self._close_sync_handles()
+        if self.zeroconf is not None:
             try:
-                self.file_writer.abort_all()
-            except Exception:
-                pass
-        self.screen_pipeline.close()
-        if self.multi_monitor:
-            self.multi_monitor.close()
-        JOB_SUPERVISOR.close()
-
-        if self.tray_icon:
-            try:
-                self.tray_icon.stop()
-            except Exception:
-                pass
-
-        if self.zeroconf and self.service_info:
-            try:
-                loop = self.loop
-                if loop and loop.is_running():
-                    asyncio.run_coroutine_threadsafe(
-                        self.zeroconf.async_unregister_service(self.service_info), loop
-                    )
-                    asyncio.run_coroutine_threadsafe(self.zeroconf.async_close(), loop)
-                else:
-                    asyncio.run(self.zeroconf.async_unregister_service(self.service_info))
-                    asyncio.run(self.zeroconf.async_close())
-            except Exception:
-                pass
+                asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    asyncio.run(self._close_zeroconf_async())
+                except Exception:
+                    pass
 
 # =====================================================================
 # ENTRY POINT
