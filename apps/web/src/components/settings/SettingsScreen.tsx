@@ -338,14 +338,14 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
-        setTestResult(`⚡ Online (${data.latencyMs}ms)`);
+        setTestResult(`Online (${data.latencyMs}ms)`);
       } else {
         setTestResult(
-          `⚠️ ${data.error || (!res.ok ? `HTTP ${res.status}` : language === 'bg' ? 'Неуспешен тест' : 'Test failed')}`
+          `${data.error || (!res.ok ? `HTTP ${res.status}` : language === 'bg' ? 'Неуспешен тест' : 'Test failed')}`
         );
       }
     } catch {
-      setTestResult(language === 'bg' ? '⚠️ Грешка при връзка' : '⚠️ Connection error');
+      setTestResult(language === 'bg' ? 'Грешка при връзка' : 'Connection error');
     } finally {
       setIsTestingModel(false);
     }
@@ -377,10 +377,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
         setIsAddModelOpen(false);
         triggerHapticFeedback('medium');
       } else {
-        setTestResult(`⚠️ ${data.error || `HTTP ${res.status}`}`);
+        setTestResult(`${data.error || `HTTP ${res.status}`}`);
       }
     } catch {
-      setTestResult(language === 'bg' ? '⚠️ Грешка при запазване' : '⚠️ Failed to save model');
+      setTestResult(language === 'bg' ? 'Грешка при запазване' : 'Failed to save model');
     }
   };
 

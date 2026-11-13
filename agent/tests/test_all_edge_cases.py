@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-CST Capstone Project - Comprehensive System-Wide Edge Case Verification Suite
+AI NetController - System-Wide Edge Case Verification Suite
 File: agent/tests/test_all_edge_cases.py
-Architecture: Deep Edge Case & Boundary Stress Matrix for AI NetController
+Architecture: Edge Case & Boundary Matrix for AI NetController
 Target: Host Daemon, Crypto Vault, AST Firewall, WoL Generator, Wire Protocol
 ================================================================================
-Methodically tests boundary conditions, malformed inputs, malicious injections,
-and network anomalies to certify graduation presentation readiness.
+Tests boundary conditions, malformed inputs, injection patterns, and network
+anomalies across core subsystems.
 ================================================================================
 """
 
@@ -595,7 +595,7 @@ class TestHostDaemonGuiAndAvHardening(unittest.TestCase):
 def run_all_edge_case_tests() -> bool:
     """Executes all edge case suites with real-time latency and status reporting."""
     print("=" * 80)
-    print(" CST CAPSTONE PROJECT: SYSTEM-WIDE EDGE CASE & BOUNDARY VERIFICATION")
+    print(" AI NETCONTROLLER: SYSTEM-WIDE EDGE CASE & BOUNDARY VERIFICATION")
     print(f" Platform: {sys.platform} | Python: {sys.version.split()[0]}")
     print("=" * 80)
 

@@ -8,7 +8,7 @@ on:
 
 jobs:
   web-tests:
-    name: Web Frontend & Server Tests
+    name: Web Console & Server
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -24,17 +24,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck and Lint
+      - name: Typecheck and lint
         run: npm run lint
 
-      - name: Architecture Verification & Benchmarks
+      - name: Run web verification and stress benchmarks
         run: npm test
 
-      - name: Build Web Application
+      - name: Build production web bundle
         run: npm run build
 
   agent-tests:
-    name: Python Host Agent Tests (${{ matrix.os }})
+    name: Host Agent (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -52,11 +52,50 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: agent/requirements.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r agent/requirements.txt
 
-      - name: Run Agent Unit & Security Tests
+      - name: Run unit and security tests
         run: python -m unittest discover -s agent/tests -v
+
+  mobile-tests:
+    name: Mobile Companion (Flutter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12 (for live daemon E2E test)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+
+      - name: Install agent Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r agent/requirements.txt
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Flutter packages
+        working-directory: apps/mobile
+        run: flutter pub get
+
+      - name: Run Flutter static analysis
+        working-directory: apps/mobile
+        run: flutter analyze
+
+      - name: Run Flutter unit and daemon integration tests
+        working-directory: apps/mobile
+        run: flutter test test/

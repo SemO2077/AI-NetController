@@ -1,11 +1,9 @@
-# AI NetController — GitLab CI/CD Pipeline
-# Only runs when manually triggered via GitLab Web UI to prevent automatic pipeline failures.
-
 workflow:
   rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v/
     - if: $CI_PIPELINE_SOURCE == "web"
-      when: always
-    - when: never
 
 stages:
   - test
@@ -13,25 +11,19 @@ stages:
   - release
 
 variables:
-  GIT_SUBMODULE_STRATEGY: recursive
-  NODE_VERSION: "22"
-  PYTHON_VERSION: "3.12"
+  GIT_DEPTH: "1"
 
 default:
   interruptible: true
 
-# -------------------------------------------------------------
-# 1. Test Stage: Web Suite & Type Checking
-# -------------------------------------------------------------
 web:test:
   stage: test
-  image: node:22-bullseye
+  image: node:22-bookworm
+  timeout: 10m
   cache:
-    key: ${CI_COMMIT_REF_SLUG}-web
+    key: npm-$CI_COMMIT_REF_SLUG
     paths:
       - node_modules/
-      - apps/web/node_modules/
-      - apps/mobile/node_modules/
   before_script:
     - npm ci || npm install --no-audit --no-fund
   script:
@@ -39,53 +31,75 @@ web:test:
     - npm test
     - npm run build
   artifacts:
-    name: "web-dist-${CI_COMMIT_REF_SLUG}"
+    name: "web-dist-$CI_COMMIT_REF_SLUG"
     expire_in: 7 days
     paths:
       - apps/web/dist/
 
-# -------------------------------------------------------------
-# 2. Test Stage: Python Agent Edge Cases & Security
-# -------------------------------------------------------------
 agent:test:
   stage: test
   image: python:3.12-slim
-  timeout: 10 minutes
+  timeout: 10m
   variables:
     PYTHONFAULTHANDLER: "1"
+  cache:
+    key: pip-agent-$CI_COMMIT_REF_SLUG
+    paths:
+      - .cache/pip/
   before_script:
     - apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0
-    - python -m pip install --upgrade pip
-    - pip install -r agent/requirements.txt
+    - pip install --cache-dir .cache/pip -r agent/requirements.txt
   script:
     - python -m unittest discover -s agent/tests -v
 
-# -------------------------------------------------------------
-# 3. Build Stage: Native Android APK
-# -------------------------------------------------------------
+mobile:test:
+  stage: test
+  image: ghcr.io/cirruslabs/flutter:stable
+  timeout: 15m
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends python3 python3-venv python3-pip
+    - python3 -m venv /tmp/agent-venv
+    - /tmp/agent-venv/bin/pip install --no-cache-dir -r agent/requirements.txt
+    - export PATH="/tmp/agent-venv/bin:$PATH"
+  script:
+    - export PATH="/tmp/agent-venv/bin:$PATH"
+    - cd apps/mobile
+    - flutter pub get
+    - flutter analyze
+    - flutter test test/
+
 android:build:
   stage: build
-  image: ghcr.io/cirruslabs/flutter:latest
-  before_script:
-    - apt-get update && apt-get install -y --no-install-recommends openjdk-17-jdk python3 python3-pip
-    - npm ci || npm install --no-audit --no-fund
+  image: ghcr.io/cirruslabs/flutter:stable
+  timeout: 20m
+  needs:
+    - mobile:test
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
   script:
-    - python3 scripts/build_android_app.py
+    - cd apps/mobile
+    - flutter pub get
+    - flutter build apk --release --split-per-abi
   artifacts:
-    name: "android-apk-${CI_COMMIT_REF_SLUG}"
+    name: "android-apk-$CI_COMMIT_REF_SLUG"
     expire_in: 30 days
     paths:
-      - public/releases/
+      - apps/mobile/build/app/outputs/flutter-apk/*.apk
 
-# -------------------------------------------------------------
-# 4. Release Stage: Publish GitLab Release
-# -------------------------------------------------------------
 release:publish:
   stage: release
   image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - web:test
+    - agent:test
+    - android:build
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
   script:
-    - echo "Publishing AI NetController release for ${CI_COMMIT_REF_NAME}"
+    - echo "Publishing GitLab release for $CI_COMMIT_TAG"
   release:
-    tag_name: '$CI_COMMIT_TAG'
-    name: 'AI NetController $CI_COMMIT_TAG'
-    description: './PATCH_NOTES.md'
+    tag_name: "$CI_COMMIT_TAG"
+    name: "AI NetController $CI_COMMIT_TAG"
+    description: "./PATCH_NOTES.md"

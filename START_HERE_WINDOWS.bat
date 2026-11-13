@@ -1,8 +1,8 @@
 @echo off
-title AI NetController -- 1-Click PC & Phone Launcher
+title AI NetController -- PC & Phone Setup Launcher
 color 0B
 echo ============================================================================
-echo   AI NetController v0.60.0 ^(Beta 0.60.00^) -- 1-Click PC ^& Phone Setup Launcher
+echo   AI NetController v0.60.0 ^(Beta 0.60.00^) -- PC ^& Phone Setup Launcher
 echo ============================================================================
 echo.
 

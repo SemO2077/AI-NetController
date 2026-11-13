@@ -228,7 +228,7 @@ async def run_daemon_concurrency_stress() -> tuple[bool, float, int]:
 
 def main():
     print("=" * 80)
-    print(" CST CAPSTONE PROJECT: FULL-SYSTEM DEEP STRESS & SECURITY HARNESS")
+    print(" AI NETCONTROLLER: FULL-SYSTEM STRESS & SECURITY SUITE")
     print(f" Platform: {sys.platform} | Python: {sys.version.split()[0]}")
     print("=" * 80)
     print(f"{'SUBSYSTEM STRESS VECTOR':<62} | {'STATUS':<6} | {'OPS / LATENCY'}")

@@ -1,107 +1,71 @@
-# Compilation Guide
+# Compilation & Release Packaging Guide
 
-This document describes how to compile all **AI NetController** (`v0.60.0` / Beta `0.60.00`) deliverables from source code:
-1. The web production bundle (`apps/web/dist/`)
-2. The standalone Windows Host Agent executable (`.exe`) and portable distribution archive (`.zip`)
-3. The signed native Android application package (`.apk`)
+Instructions for building the **AI NetController** (`v0.60.0` / Beta `0.60.00`) web bundle, Windows Host Agent binaries, and Android APKs from source.
 
----
+## 1. Web Production Bundle (`apps/web/`)
 
-## 1. Web Production Bundle
+Prerequisites: Node.js `>= 20.0`, npm `>= 10.0`.
 
-### Prerequisites
-- Node.js 20.0+
-- npm 10.0+
-
-### Build Process
 ```bash
-# Install dependencies
 npm install
-
-# Run static type checking and linting
 npm run lint
-
-# Compile production bundle
+npm test
 npm run build
 ```
 
-Production static assets are emitted into `apps/web/dist/` and served automatically by `apps/web/server.ts` when running in production mode (`npm start`).
+Compiled static files are emitted to `apps/web/dist/` and served automatically by `npm start`.
 
----
+## 2. Windows Host Agent (`agent/`)
 
-## 2. Windows Host Agent (`.exe` and Portable `.zip`)
+Prerequisites: Windows 10/11 x64, Python 3.11+, Visual C++ Redistributable.
 
-### Prerequisites
-- Windows 10 or Windows 11 (64-bit)
-- Python 3.11 or later
-- Visual C++ Redistributable (standard on modern Windows installations)
+### Automated Release Pipeline
 
-### Automated Build Pipeline
-Run the release builder script from the repository root:
 ```bash
 python scripts/build_release_binaries.py
 ```
 
-### Packaging Pipeline Details
-The script executes the following steps:
-1. Validates the existence of all agent modules:
-   - `agent/agent.py`
-   - `agent/agent_daemon.py`
-   - `agent/agent_gui.py`
-   - `agent/command_ast_firewall.py`
-   - `agent/crypto_handshake.py`
-   - `agent/crypto_vault.py`
-   - `agent/daemon_config.py`
-   - `agent/host_file_writer.py`
-   - `agent/icon_assets.py`
-   - `agent/multi_monitor_streamer.py`
-   - `agent/network_fuzzer_shield.py`
-   - `agent/windows_integration.py`
-2. Invokes PyInstaller using `agent/build_agent.spec`:
-   - Configures `upx=False` across both single-file and directory outputs to prevent antivirus heuristics false positives.
-   - Embeds the Per-Monitor V2 DPI manifest (`PerMonitorV2`).
-   - Packages Windows icons (`agent/icon.ico`) and version metadata (`agent/version_info.txt`).
-3. Outputs artifacts to `public/releases/v0.60.0/`:
-   - `AI_NetController_HostAgent_v0.60.0_win64.exe` (Standalone PE32+ executable)
-   - `AI_NetController_HostAgent_v0.60.0_win64_portable.zip` (Portable directory bundle with Python launcher)
-4. Re-computes SHA-256 digests and updates `SHA256SUMS.txt` and `RELEASE_MANIFEST.json`.
+This packages the agent via PyInstaller (`agent/build_agent.spec`, `--onedir`, `upx=False`, PerMonitorV2 manifest, icons, and MSIX helpers), outputs `AI_NetController_HostAgent_v0.60.0_win64.exe` and `AI_NetController_HostAgent_v0.60.0_win64_portable.zip` to `public/releases/v0.60.0/`, and updates `SHA256SUMS.txt` and `RELEASE_MANIFEST.json`.
 
----
+### Direct Local Build
 
-## 3. Android Native Companion App (`.apk`)
+```powershell
+cd agent
+build_exe.bat
+```
 
-### Prerequisites
-- Java Development Kit (JDK 17 or JDK 21+)
-- Android SDK:
-  - Platform: `android-35` or `android-34` (`platforms/android-35/android.jar`)
-  - Build-Tools: `35.0.0` or `34.0.0` (`aapt2`, `d8`, `zipalign`, `apksigner`)
-- Web production bundle compiled (`npm run build`)
+## 3. Android Companion Application (`apps/mobile/`)
 
-### Automated Build Pipeline
-Run the Android build pipeline from the repository root:
+### Option A: Flutter Split-ABI Build (Full Flutter Companion)
+
+Prerequisites: Flutter 3.29+ (`Dart 3.7+`) and Android SDK.
+
+```bash
+cd apps/mobile
+flutter pub get
+flutter build apk --release --split-per-abi
+```
+
+Generated APKs are placed under `apps/mobile/build/app/outputs/flutter-apk/`.
+
+### Option B: Embedded WebView Shell APK Builder
+
+Prerequisites: JDK 17+, Android SDK (`platforms/android-35`, `build-tools/35.0.0`), and a built web bundle (`npm run build`).
+
 ```bash
 python scripts/build_android_app.py
 ```
 
-### Build Steps Executed
-1. **Asset Synchronization**: Copies the compiled web application bundle (`apps/web/dist/`) into `apps/mobile/android_native_build/assets/web/`.
-2. **Java Compilation**: Compiles the native bridge `MainActivity.java` against `android.jar` using `javac`.
-3. **DEX Transformation**: Converts compiled `.class` files into optimized Android DEX bytecode (`classes.dex`) via `d8`.
-4. **Resource Packaging**: Compiles XML resources and layout manifests with `aapt2` into `resources.arsc` and creates the unaligned package.
-5. **Alignment**: Aligns uncompressed assets on 4-byte boundaries with `zipalign`.
-6. **Cryptographic Signing**: Signs the final APK using `apksigner` with APK Signature Scheme V1, V2, and V3.
-7. **Output**:
-   - `public/releases/v0.60.0/AI_NetController_v0.60.0_arm64-v8a.apk`
-   - `public/releases/v0.60.0/AI_NetController_v0.60.0.apk`
+Produces `AI_NetController_v0.60.0_arm64-v8a.apk` and `AI_NetController_v0.60.0.apk` in `public/releases/v0.60.0/`.
 
----
+## 4. Checksum Verification
 
-## 4. Verification and Integrity Validation
-
-To calculate and verify the cryptographic checksums of all release binaries:
+Verify release artifact integrity against `public/releases/v0.60.0/SHA256SUMS.txt`:
 
 ```powershell
 Get-FileHash public\releases\v0.60.0\* -Algorithm SHA256
 ```
 
-Compare the outputs against `public/releases/v0.60.0/SHA256SUMS.txt`.
+```bash
+sha256sum -c public/releases/v0.60.0/SHA256SUMS.txt
+```

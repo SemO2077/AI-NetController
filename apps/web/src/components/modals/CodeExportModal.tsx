@@ -254,13 +254,12 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
     }
   };
 
-  const ghReleaseCommands = `# 1. Tag and push Beta 0.60.00 (v0.60.0)
-git add .
-git commit -m "release: AI NetController Beta 0.60.00 (v0.60.0)"
+  const ghReleaseCommands = `# 1. Tag and push v0.60.0 (Beta 0.60.00)
 git tag -a v0.60.0 -m "AI NetController v0.60.0 (Beta 0.60.00)"
 git push origin main --tags
+git push gitlab main --tags
 
-# 2. Publish pre-built binaries to GitHub Releases:
+# 2. Publish pre-built binaries to GitHub / GitLab Releases:
 python scripts/publish_github_release.py`;
 
   const handleCopyGhCommands = () => {
@@ -359,8 +358,8 @@ python scripts/publish_github_release.py`;
               </div>
               <p className="text-xs text-slate-400 font-mono break-words line-clamp-2 sm:truncate">
                 {isBg
-                  ? 'Готови компилирани .EXE и .APK пакети • GitHub Release Pipeline • Пълен сорс код'
-                  : 'Pre-packaged Windows .EXE & Android .APK binaries • GitHub Release Pipeline • Full Source'}
+                  ? 'Готови компилирани .EXE и .APK пакети • GitHub / GitLab CI • Сорс код'
+                  : 'Pre-packaged Windows .EXE & Android .APK binaries • GitHub / GitLab Releases • Source'}
               </p>
             </div>
           </div>
@@ -424,14 +423,14 @@ python scripts/publish_github_release.py`;
             }`}
           >
             <Server className="w-3.5 h-3.5" />
-            <span>🐍 Python Agent (3.12+)</span>
+            <span>Python Agent (3.11+)</span>
           </button>
 
           <button
             type="button"
             onClick={() => {
               setSelectedCategory('crossplatform');
-              setActiveFilename('apps/mobile/lib/main.dart');
+              setActiveFilename('apps/mobile/lib/protocol/binary_protocol.dart');
             }}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-semibold transition flex items-center space-x-2 whitespace-nowrap cursor-pointer ${
               selectedCategory === 'crossplatform'
@@ -440,7 +439,7 @@ python scripts/publish_github_release.py`;
             }`}
           >
             <Smartphone className="w-3.5 h-3.5" />
-            <span>📱 Flutter 3.29 (Dart)</span>
+            <span>Flutter (Dart)</span>
           </button>
 
           <button
@@ -456,7 +455,7 @@ python scripts/publish_github_release.py`;
             }`}
           >
             <Terminal className="w-3.5 h-3.5" />
-            <span>🤖 Android Manifest</span>
+            <span>Android Manifest</span>
           </button>
 
           {liveSnippets.some(
@@ -478,7 +477,7 @@ python scripts/publish_github_release.py`;
               }`}
             >
               <Code2 className="w-3.5 h-3.5" />
-              <span>⚛️ Web UI (React)</span>
+              <span>Web UI (React)</span>
             </button>
           )}
 
@@ -486,7 +485,7 @@ python scripts/publish_github_release.py`;
             type="button"
             onClick={() => {
               setSelectedCategory('docs');
-              setActiveFilename('docs/OPEN_SOURCE_MODELS_ARCH.md');
+              setActiveFilename('docs/ARCHITECTURE.md');
             }}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-semibold transition flex items-center space-x-2 whitespace-nowrap cursor-pointer ${
               selectedCategory === 'docs'
@@ -495,7 +494,7 @@ python scripts/publish_github_release.py`;
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>📚 Architecture &amp; CI/CD</span>
+            <span>Architecture &amp; Docs</span>
           </button>
 
           <button

@@ -1,5 +1,5 @@
 // ==============================================================================
-// CST CAPSTONE PROJECT: MOBILE CLIENT AUTOMATED INTEGRATION & VERIFICATION HARNESS
+// AI NETCONTROLLER: MOBILE CLIENT INTEGRATION & VERIFICATION SUITE
 // Target: Flutter Mobile Application & Binary Protocol Engine
 // File: integration_test/app_verification_test.dart
 // ==============================================================================
@@ -19,7 +19,7 @@ import 'package:ai_netcontroller/ai_netcontroller.dart';
 
 
 void main() {
-  group('CST Mobile Client Verification Matrix', () {
+  group('AI NetController Mobile Verification Matrix', () {
     // =========================================================================
     // TC-03: BINARY WIRE PROTOCOL FRAMING & SERIALIZATION (ALL OPCODES)
     // =========================================================================

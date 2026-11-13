@@ -1196,6 +1196,26 @@ const EXPORTABLE_SOURCE_MAP: Record<string, { label: string; lang: string; relPa
     lang: 'dart',
     relPath: 'apps/mobile/lib/protocol/binary_protocol.dart',
   },
+  'docs/ARCHITECTURE.md': {
+    label: 'System Architecture (docs/ARCHITECTURE.md)',
+    lang: 'markdown',
+    relPath: 'docs/ARCHITECTURE.md',
+  },
+  'docs/PROTOCOL.md': {
+    label: 'Wire Protocol Specification (docs/PROTOCOL.md)',
+    lang: 'markdown',
+    relPath: 'docs/PROTOCOL.md',
+  },
+  'docs/SETUP_GUIDE.md': {
+    label: 'Setup Guide (docs/SETUP_GUIDE.md)',
+    lang: 'markdown',
+    relPath: 'docs/SETUP_GUIDE.md',
+  },
+  'docs/COMPILATION_GUIDE.md': {
+    label: 'Compilation & Release Packaging Guide (docs/COMPILATION_GUIDE.md)',
+    lang: 'markdown',
+    relPath: 'docs/COMPILATION_GUIDE.md',
+  },
 };
 
 app.get('/api/source-files', requireControlAuth, (req: Request, res: Response) => {
@@ -1761,7 +1781,7 @@ app.get('/api/setup/windows-launcher', requireControlAuth, async (_req: Request,
 
   const batLines = [
     '@echo off',
-    'title AI NetController - 1-Click PC Setup Launcher',
+    'title AI NetController - PC Setup Launcher',
     'color 0B',
     `echo AI NetController v${APP_VERSION} (${APP_VERSION_LABEL}) Setup`,
     `set "AI_AGENT_SECRET=${safeSecret}"`,

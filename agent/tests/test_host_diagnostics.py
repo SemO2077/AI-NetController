@@ -2,7 +2,7 @@ import unittest
 #!/usr/bin/env python3
 """
 ================================================================================
-CST Capstone Project - Gold Master Automated Verification Harness
+AI NetController - Automated Host Diagnostics & Verification Suite
 File: agent/tests/test_host_diagnostics.py
 Architecture: Standalone Automated Host Diagnostic & Isolated Verification Suite
 Target: Host Daemon Core Subsystems (Crypto, AST Firewall, Power/NIC, Video SIMD)
@@ -21,7 +21,7 @@ Implements production-grade pytest assertions and benchmarks for:
 - TC-11: Virtual Trackpad & Media Controls (Opcodes 0x08/0x09 OS input execution)
 - TC-12: Chunked Zero-Trust File Transfer (64KB chunks & SHA-256 parity)
 - TC-13: Multi-Monitor Display Enumeration (Opcode 0x0D & dynamic display switching)
-- TC-14: Presentation Fail-Safe Demo Mode (Offline loopback sandbox simulation)
+- TC-14: Offline Fail-Safe Demo Mode (Loopback sandbox simulation)
 ================================================================================
 """
 
@@ -846,14 +846,14 @@ def test_display_pipeline():
 
 
 # ==============================================================================
-# STANDALONE TEST RUNNER (CLI & GRADUATION PRESENTATION)
+# STANDALONE TEST RUNNER
 # ==============================================================================
 def run_all_diagnostics() -> bool:
     """
-    Custom ANSI test runner for standalone execution during graduation presentation.
+    Standalone ANSI test runner for host diagnostics verification.
     """
     print("=" * 80)
-    print(" CST CAPSTONE PROJECT: AUTOMATED HOST DIAGNOSTICS & VERIFICATION HARNESS")
+    print(" AI NETCONTROLLER: HOST DIAGNOSTICS & VERIFICATION SUITE")
     print(f" Platform: {platform.system()} {platform.release()} | Python: {platform.python_version()}")
     print("=" * 80)
 

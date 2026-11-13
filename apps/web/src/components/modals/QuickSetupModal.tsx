@@ -254,12 +254,12 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 <h2 className="font-display text-base sm:text-lg font-extrabold tracking-tight text-white truncate">
                   {isBg
                     ? 'Бърза Настройка и Свързване (PC + Телефон)'
-                    : '1-Click Easy Setup & Phone/PC Pairing'}
+                    : 'Quick Setup & Phone/PC Pairing'}
                 </h2>
                 <p className="text-fluid-meta text-slate-400 truncate">
                   {isBg
-                    ? 'Автоматично сдвояване с 1 клик, QR код за телефон и готови инсталатори (.EXE / .APK)'
-                    : 'Zero-typing auto-pairing, instant Phone QR code, and 1-click PC/Mobile installers'}
+                    ? 'Автоматично сдвояване, QR код за телефон и инсталатори (.EXE / .APK)'
+                    : 'Zero-typing auto-pairing, instant Phone QR code, and PC/Mobile installers'}
                 </p>
               </div>
             </div>
@@ -329,7 +329,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
 
           {/* Scrollable Body */}
           <div className="p-5 overflow-y-auto space-y-5 flex-1">
-            {/* TOP HERO ACTION: 1-CLICK AUTO-PAIR THIS PC */}
+            {/* Quick Auto-Pair PC Action */}
             <div className="rounded-2xl bg-gradient-to-r from-cyan-500/15 via-sky-500/10 to-emerald-500/15 border border-cyan-400/35 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="space-y-1 min-w-0">
                 <div className="flex items-center gap-2 text-xs font-mono text-cyan-300">
@@ -411,13 +411,13 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                         : 'Pick whichever option is easiest for you — no manual terminal configuration needed:'}
                     </p>
 
-                    {/* Option A: 1-Click Auto-Setup .BAT */}
+                    {/* Option A: Auto-Setup Launcher (.BAT) */}
                     <div className="p-3.5 rounded-xl bg-[#070c18] border border-cyan-400/30 space-y-2.5">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-display font-bold text-cyan-200">
                           {isBg
-                            ? 'Вариант А (Препоръчан): 1-Клик Авто-Стартер (.BAT)'
-                            : 'Option A (Easiest): 1-Click Auto-Setup Script (.BAT)'}
+                            ? 'Вариант А (Препоръчан): Авто-Стартер (.BAT)'
+                            : 'Option A (Recommended): Auto-Setup Script (.BAT)'}
                         </span>
                         <span className="text-[10px] font-mono text-emerald-300">Auto-Firewall + GUI</span>
                       </div>
@@ -435,7 +435,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                         >
                           <Download className="w-4 h-4 text-cyan-300" />
                           <span>
-                            {isBg ? 'Изтегли AI_NetController_PC_Setup.bat' : 'Download 1-Click PC Setup (.BAT)'}
+                            {isBg ? 'Изтегли AI_NetController_PC_Setup.bat' : 'Download PC Setup Launcher (.BAT)'}
                           </span>
                         </a>
                       </div>

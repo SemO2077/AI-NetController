@@ -1,5 +1,5 @@
 """
-Track 2 Regression Tests: Security, Protocol, Crypto & Agent Hardening Contracts
+Agent Security, Protocol & Crypto Regression Suite
 ================================================================================
 Exercises the real implementations in agent/ without mutating Windows Registry,
 user Desktop/Start Menu shortcuts, or host executables.

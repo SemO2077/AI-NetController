@@ -837,7 +837,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
               </span>
             </button>
 
-            {/* 1-CLICK CHECK ALL UPDATES BUTTON */}
+            {/* Check All Updates Action */}
             <button
               id="check-all-updates-btn"
               type="button"
@@ -861,7 +861,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
               </span>
             </button>
 
-            {/* 1-CLICK UPDATE ALL BUTTON */}
+            {/* Update All Action */}
             <button
               id="update-all-btn"
               type="button"

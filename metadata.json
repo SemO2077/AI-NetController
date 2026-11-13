@@ -1,6 +1,0 @@
-{
-  "name": "AI NetController",
-  "description": "Intelligent network controller with Wake-on-LAN and AI OS management agent",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

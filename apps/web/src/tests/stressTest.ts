@@ -1,7 +1,7 @@
 /**
- * AI NetController - Comprehensive System-Wide Stress & Benchmark Suite (v2.6.0)
- * Stress tests & Quantitative Benchmarks:
- * 1. High-throughput CST/3.0 Binary Protocol Framing (100,000 packets via zero-alloc DataView)
+ * AI NetController - Stress & Benchmark Suite
+ * Stress checks and performance benchmarks:
+ * 1. Binary Protocol Framing (100,000 packets via zero-alloc DataView)
  * 2. Float64RingBuffer vs Legacy Array.shift() Zero-Allocation Benchmark (100,000 iterations)
  * 3. RFC 3550 Latency & Jitter Single-Pass HeartbeatRingBuffer Stress
  * 4. Wake-on-LAN Magic Packet Mass Generation & Format Fuzzing (1,000 & 10,000 iterations)
@@ -34,16 +34,16 @@ function assert(condition: boolean, description: string) {
   totalTests++;
   if (condition) {
     passedTests++;
-    console.log(`  ✅ [PASS] ${description}`);
+    console.log(`  [PASS] ${description}`);
   } else {
     failedTests++;
-    console.error(`  ❌ [FAIL] ${description}`);
+    console.error(`  [FAIL] ${description}`);
   }
 }
 
 async function runStressTestSuite() {
   console.log('========================================================================');
-  console.log('  AI NetController - Deep Stress & Quantitative Benchmark Suite');
+  console.log('  AI NetController - Stress & Benchmark Suite');
   console.log('========================================================================\n');
 
   // -------------------------------------------------------------
@@ -420,9 +420,9 @@ async function runStressTestSuite() {
   // Quantitative Before vs. After Benchmark Table
   // -------------------------------------------------------------
   console.log('\n========================================================================');
-  console.log('  QUANTITATIVE PERFORMANCE BENCHMARK COMPARISON (v2.5.0 -> v2.6.0)');
+  console.log('  PERFORMANCE BENCHMARK COMPARISON (BASELINE -> OPTIMIZED)');
   console.log('========================================================================');
-  console.log('  Subsystem Benchmark                    | Before (v2.5) | After (v2.6)  | Improvement');
+  console.log('  Subsystem Benchmark                    | Baseline      | Optimized     | Improvement');
   console.log('  ---------------------------------------+---------------+---------------+-------------');
   console.log(`  WoL Magic Packet Gen (1,000 pkts)      |   262.00 ms   |    ${wolMs.toFixed(2).padStart(5, ' ')} ms   | ${wolSpeedup}x faster`);
   console.log(`  Binary Framing (25,000 packets)        |    ${framingLegacyMs.toFixed(2).padStart(5, ' ')} ms   |    ${framingMs.toFixed(2).padStart(5, ' ')} ms   | ${framingSpeedup}x faster`);
@@ -436,7 +436,7 @@ async function runStressTestSuite() {
   if (failedTests > 0) {
     process.exit(1);
   } else {
-    console.log('🚀 SYSTEM DEMONSTRATES EXCEPTIONAL STABILITY, SPEED & ZERO DEFECTS!\n');
+    console.log('ALL STRESS AND BENCHMARK CHECKS PASSED\n');
   }
 }
 

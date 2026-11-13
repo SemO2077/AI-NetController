@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-CST Capstone Project - Gold Master Automated Verification Harness
+AI NetController - End-to-End Loopback Verification Suite
 File: agent/tests/test_e2e_loopback.py
 Architecture: Asynchronous Client-Emulator & End-to-End Loopback Test Runner
 Target: Real Host Daemon Communication over localhost:8765
@@ -506,7 +506,7 @@ LoopbackHostDaemon = IsolatedHostDaemon
 # ==============================================================================
 async def run_e2e_loopback_suite(target_port: int = 8765) -> bool:
     print("=" * 80)
-    print(" CST CAPSTONE PROJECT: E2E SIMULATED CLIENT LOOPBACK VERIFICATION")
+    print(" AI NETCONTROLLER: E2E SIMULATED CLIENT LOOPBACK VERIFICATION")
     print(" Protocol: CST Binary Wire Protocol (0xC5, 0x71 | 12-byte header)")
     print(f" Target: ws://127.0.0.1:{target_port}")
     print("=" * 80)

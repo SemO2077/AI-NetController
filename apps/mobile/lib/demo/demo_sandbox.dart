@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import '../protocol/binary_protocol.dart';
 
-/// Offline Simulation Engine for defense presentations, demonstration modes,
+/// Offline simulation engine for sandbox preview modes
 /// or testing without active physical LAN PC hardware.
 class DemoSandboxEngine {
   static final DemoSandboxEngine _instance = DemoSandboxEngine._internal();
@@ -105,7 +105,7 @@ Virtualization Enabled:    Yes (Hyper-V / WSL2)''';
       output = ''' Volume in drive C has no label.
  Volume Serial Number is 4C18-932F
 
- Directory of C:\\CST_Capstone\\AutonomousPC
+ Directory of C:\\AI_NetController\\Workspace
 
 09/11/2026  10:14 AM    <DIR>          .
 09/11/2026  10:14 AM    <DIR>          ..

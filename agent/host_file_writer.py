@@ -1,6 +1,6 @@
 """
-CST Capstone Project - Gold Master Enterprise Release
-Host File Writer Service (Opcode 0x0C - FILE_TRANSFER)
+AI NetController Host Agent
+Host File Writer Service (Opcode 0x0C - OP_FILE_TRANSFER)
 ================================================================================
 Handles streaming, chunked, and encrypted binary file transfers from mobile
 clients to the Host PC. Features:

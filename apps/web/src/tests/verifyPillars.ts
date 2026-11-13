@@ -28,15 +28,15 @@ function assert(condition: boolean, pillarName: string, detail: string) {
   totalTests++;
   if (condition) {
     passedTests++;
-    console.log(`  ✅ [PASS] ${pillarName}: ${detail}`);
+    console.log(`  [PASS] ${pillarName}: ${detail}`);
   } else {
     failedTests++;
-    console.error(`  ❌ [FAIL] ${pillarName}: ${detail}`);
+    console.error(`  [FAIL] ${pillarName}: ${detail}`);
   }
 }
 
 console.log('================================================================');
-console.log('  AI NetController - Automated 14-Pillar Verification Harness');
+console.log('  AI NetController - Architecture Verification Suite');
 console.log('================================================================\n');
 
 // Pillar 1: Binary Wire Protocol Framing (0xC5 0x71 magic bytes & DataView)
@@ -327,6 +327,6 @@ console.log('================================================================\n'
 if (failedTests > 0) {
   process.exit(1);
 } else {
-  console.log('🎉 ALL CORE ARCHITECTURAL PILLARS FULLY VERIFIED!\n');
+  console.log('ALL ARCHITECTURAL PILLAR CHECKS PASSED\n');
   process.exit(0);
 }
