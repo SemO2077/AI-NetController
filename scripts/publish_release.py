@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 AI NetController - Release Publisher Dispatcher
-Forwards release publishing calls to GitHub (default) or GitLab.
+Forwards release publishing calls to GitHub (default), GitLab, or both (`all`/`both`).
 
 Usage:
-    python scripts/publish_release.py [--tag v0.60.0] [--platform github|gitlab]
+    python scripts/publish_release.py [--tag v0.60.0] [--platform github|gitlab|all]
 """
-import sys
-import subprocess
 import os
+import subprocess
+import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GITHUB_PUB = os.path.join(SCRIPT_DIR, "publish_github_release.py")
@@ -31,10 +31,22 @@ if __name__ == "__main__":
         filtered_args.append(arg)
         i += 1
 
-    if platform == "gitlab":
-        target_script = GITLAB_PUB
+    if platform in ("all", "both"):
+        targets = [("github", GITHUB_PUB), ("gitlab", GITLAB_PUB)]
+    elif platform == "gitlab":
+        targets = [("gitlab", GITLAB_PUB)]
+    elif platform == "github":
+        targets = [("github", GITHUB_PUB)]
     else:
-        target_script = GITHUB_PUB
+        print(f"[!] Unsupported platform '{platform}'. Choose from: github, gitlab, all, both.")
+        sys.exit(2)
 
-    cmd = [sys.executable, target_script] + filtered_args
-    sys.exit(subprocess.run(cmd).returncode)
+    exit_code = 0
+    for name, target_script in targets:
+        print(f"[*] Dispatching release publisher for platform: {name}")
+        rc = subprocess.run([sys.executable, target_script] + filtered_args).returncode
+        if rc != 0:
+            print(f"[!] Release publisher failed for platform '{name}' (exit code {rc}).")
+            exit_code = rc
+
+    sys.exit(exit_code)

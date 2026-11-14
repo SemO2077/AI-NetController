@@ -67,7 +67,7 @@ The host daemon listens on WebSocket port `8765`, advertises via mDNS (`_cst-age
 
 ### Pre-Built Windows Binary
 
-1. Download `AI_NetController_HostAgent_v0.60.0_win64.exe` (or the portable `.zip` archive) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.60.0).
+1. Download `AI_NetController_HostAgent_v0.60.0_win64.exe` (or the portable `.zip` archive) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.60.0) or [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.60.0).
 2. Run the executable to open the desktop Control Center and tray service.
 
 ### Run from Source
@@ -97,7 +97,7 @@ Configuration is persisted to `%LOCALAPPDATA%\AI NetController\config.json` (Win
 
 ## 5. Android Companion App
 
-1. Download `AI_NetController_v0.60.0_arm64-v8a.apk` (or the universal APK) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.60.0).
+1. Download `AI_NetController_v0.60.0_arm64-v8a.apk` (or the universal APK) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.60.0) or [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.60.0).
 2. Install via ADB (`adb install -r AI_NetController_v0.60.0_arm64-v8a.apk`) or directly on device.
 3. Connect the phone to the same LAN subnet to discover active hosts over mDNS (`_cst-agent._tcp.local.`).
 

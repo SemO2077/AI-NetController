@@ -227,7 +227,7 @@ app.use(
   })
 );
 
-// Strictly anchored fallback redirect to official GitHub Releases
+// Strictly anchored fallback redirect to official GitHub or GitLab Releases
 app.get('/releases/:version/:filename', (req: Request, res: Response) => {
   const version = String(req.params.version || '');
   const filename = String(req.params.filename || '');
@@ -236,10 +236,14 @@ app.get('/releases/:version/:filename', (req: Request, res: Response) => {
     /^[a-zA-Z0-9._-]+\.(?:exe|apk|zip|txt|json)$/i.test(filename) &&
     !filename.includes('..')
   ) {
-    return res.redirect(
-      302,
-      `https://github.com/SemO2077/AI-NetController/releases/download/${encodeURIComponent(version)}/${encodeURIComponent(filename)}`
-    );
+    const requestedMirror = String(
+      req.query.mirror || process.env.RELEASE_MIRROR || 'github'
+    ).toLowerCase();
+    const targetUrl =
+      requestedMirror === 'gitlab'
+        ? `https://gitlab.com/api/v4/projects/ryu-group7483245%2Fai-netcontroller/packages/generic/ainetcontroller/${encodeURIComponent(version)}/${encodeURIComponent(filename)}`
+        : `https://github.com/SemO2077/AI-NetController/releases/download/${encodeURIComponent(version)}/${encodeURIComponent(filename)}`;
+    return res.redirect(302, targetUrl);
   }
   return res.status(404).json({ error: 'Release artifact not found' });
 });
@@ -1823,33 +1827,74 @@ async function queryOllamaInstalledModels(): Promise<Array<{ name: string; size?
   }
 }
 
+async function queryLatestGitLabRelease(now: number) {
+  try {
+    const resp = await fetch(
+      'https://gitlab.com/api/v4/projects/ryu-group7483245%2Fai-netcontroller/releases?per_page=5',
+      {
+        headers: { Accept: 'application/json', 'User-Agent': `AI-NetController/${APP_VERSION}` },
+        signal: AbortSignal.timeout(4500),
+      }
+    );
+    if (!resp.ok) {
+      return { release: null, error: `GitLab API returned HTTP ${resp.status}` };
+    }
+    const data: any = await resp.json();
+    const first = Array.isArray(data) ? data[0] : data;
+    if (first?.tag_name) {
+      const tag = String(first.tag_name);
+      cachedLatestGitHubRelease = {
+        tag,
+        htmlUrl: String(
+          first._links?.self ||
+            `https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/${encodeURIComponent(tag)}`
+        ),
+        body: String(first.description || '').slice(0, 600),
+        fetchedAt: now,
+      };
+      return { release: cachedLatestGitHubRelease, error: null };
+    }
+    return { release: null, error: 'No tag_name found in GitLab response' };
+  } catch (err: any) {
+    return { release: null, error: err?.message || 'GitLab unreachable' };
+  }
+}
+
 async function queryLatestGitHubRelease(force = false) {
   const now = Date.now();
   if (!force && cachedLatestGitHubRelease && now - cachedLatestGitHubRelease.fetchedAt < 300_000) {
     return { release: cachedLatestGitHubRelease, error: null as string | null };
   }
+  let ghError = 'No tag_name found in GitHub response';
   try {
-    const resp = await fetch('https://api.github.com/repos/SemO2077/AI-NetController/releases/latest', {
+    const resp = await fetch('https://api.github.com/repos/SemO2077/AI-NetController/releases?per_page=5', {
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': `AI-NetController/${APP_VERSION}` },
       signal: AbortSignal.timeout(4500),
     });
     if (!resp.ok) {
-      return { release: null, error: `GitHub API returned HTTP ${resp.status}` };
+      ghError = `GitHub API returned HTTP ${resp.status}`;
+    } else {
+      const data: any = await resp.json();
+      const first = Array.isArray(data) ? data[0] : data;
+      if (first?.tag_name) {
+        cachedLatestGitHubRelease = {
+          tag: String(first.tag_name),
+          htmlUrl: String(first.html_url || 'https://github.com/SemO2077/AI-NetController/releases'),
+          body: String(first.body || '').slice(0, 600),
+          fetchedAt: now,
+        };
+        return { release: cachedLatestGitHubRelease, error: null };
+      }
     }
-    const data: any = await resp.json();
-    if (data?.tag_name) {
-      cachedLatestGitHubRelease = {
-        tag: String(data.tag_name),
-        htmlUrl: String(data.html_url || 'https://github.com/SemO2077/AI-NetController/releases'),
-        body: String(data.body || '').slice(0, 600),
-        fetchedAt: now,
-      };
-      return { release: cachedLatestGitHubRelease, error: null };
-    }
-    return { release: null, error: 'No tag_name found in GitHub response' };
   } catch (err: any) {
-    return { release: null, error: err?.message || 'GitHub unreachable' };
+    ghError = err?.message || 'GitHub unreachable';
   }
+
+  const glRes = await queryLatestGitLabRelease(now);
+  if (glRes.release) {
+    return glRes;
+  }
+  return { release: null, error: `${ghError}; ${glRes.error}` };
 }
 
 function compareSemver(aRaw: string, bRaw: string): number {
@@ -2007,9 +2052,9 @@ app.post('/api/update/execute', requireControlAuth, async (req: Request, res: Re
         logs.push(`[RELEASE] Newer version ${latestTag} available at: ${ghCheck.release.htmlUrl}`);
         logs.push('[INFO] Download and run the signed installer or pull git main to upgrade binary builds.');
       } else if (ghCheck.error) {
-        logs.push(`[WARN] Could not contact GitHub Releases (${ghCheck.error}); local packages verified unchanged.`);
+        logs.push(`[WARN] Could not contact GitHub/GitLab Releases (${ghCheck.error}); local packages verified unchanged.`);
       } else {
-        logs.push(`[VERIFIED] Installed suite v${APP_VERSION} matches latest GitHub release (${latestTag}).`);
+        logs.push(`[VERIFIED] Installed suite v${APP_VERSION} matches latest GitHub/GitLab release (${latestTag}).`);
       }
     }
 

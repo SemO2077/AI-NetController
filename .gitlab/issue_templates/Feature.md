@@ -1,13 +1,13 @@
-### Target Component
+## Target Component
 - [ ] Host Agent (`agent/`)
 - [ ] Web Console / Server (`apps/web/`)
 - [ ] Mobile Companion (`apps/mobile/`)
-- [ ] Protocol / Security
+- [ ] Wire Protocol / Security (`docs/PROTOCOL.md`)
 
-### Motivation
-What problem does this solve?
+## Problem Statement
+Describe the workflow limitation or missing capability.
 
-### Proposed Implementation
-Outline protocol, UI, or host-agent changes briefly.
+## Proposed Design
+Outline how the change integrates cleanly with existing protocol, security, and UI contracts.
 
 /label ~enhancement

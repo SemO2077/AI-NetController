@@ -1579,6 +1579,7 @@ public class MainActivity extends Activity {
                         res.put("checkedComponents", new JSONArray());
                         res.put("channel", "beta");
                         res.put("releaseUrl", "https://github.com/SemO2077/AI-NetController/releases/tag/" + RELEASE_TAG);
+                        res.put("gitlabReleaseUrl", "https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/" + RELEASE_TAG);
 
                         JSONArray assetsArr = new JSONArray();
                         String manifestJson = readAssetText("dist/releases/" + RELEASE_TAG + "/RELEASE_MANIFEST.json");
@@ -1604,6 +1605,8 @@ public class MainActivity extends Activity {
 
                         if (rawPath.equals("/api/update/check")) {
                             HttpsURLConnection conn = null;
+                            String ghError = null;
+                            int lastHttpCode = 0;
                             try {
                                 URL ghUrl = new URL("https://api.github.com/repos/SemO2077/AI-NetController/releases");
                                 conn = (HttpsURLConnection) ghUrl.openConnection();
@@ -1631,25 +1634,71 @@ public class MainActivity extends Activity {
                                     res.put("releaseUrl", releaseUrl);
                                     res.put("remoteChecked", true);
                                     sendJsonResponse(out, 200, res.toString());
+                                    socket.close();
+                                    return;
+                                } else {
+                                    lastHttpCode = code;
+                                    ghError = "GitHub API returned HTTP " + code;
+                                }
+                            } catch (Throwable e) {
+                                ghError = e.getMessage() != null ? e.getMessage() : "Unable to reach GitHub Releases.";
+                            } finally {
+                                if (conn != null) conn.disconnect();
+                            }
+
+                            HttpsURLConnection glConn = null;
+                            try {
+                                URL glUrl = new URL("https://gitlab.com/api/v4/projects/ryu-group7483245%2Fai-netcontroller/releases");
+                                glConn = (HttpsURLConnection) glUrl.openConnection();
+                                glConn.setRequestMethod("GET");
+                                glConn.setConnectTimeout(5000);
+                                glConn.setReadTimeout(8000);
+                                glConn.setRequestProperty("Accept", "application/json");
+                                glConn.setRequestProperty("User-Agent", "AI-NetController-Android/" + APP_VERSION);
+                                int glCode = glConn.getResponseCode();
+                                if (glCode >= 200 && glCode < 300) {
+                                    String glBody = readAllStream(glConn.getInputStream());
+                                    JSONArray glRels = new JSONArray(glBody);
+                                    String latestTag = RELEASE_TAG;
+                                    String glReleaseUrl = "https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/" + RELEASE_TAG;
+                                    if (glRels.length() > 0 && glRels.optJSONObject(0) != null) {
+                                        JSONObject first = glRels.optJSONObject(0);
+                                        latestTag = first.optString("tag_name", RELEASE_TAG);
+                                        JSONObject links = first.optJSONObject("_links");
+                                        String selfUrl = links != null ? links.optString("self", "") : "";
+                                        glReleaseUrl = !selfUrl.isEmpty()
+                                                ? selfUrl
+                                                : "https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/" + latestTag;
+                                    }
+                                    String latestVer = latestTag.startsWith("v") ? latestTag.substring(1) : latestTag;
+                                    boolean upToDate = latestVer.equals(APP_VERSION);
+                                    res.put("latestVersion", latestVer);
+                                    res.put("upToDate", upToDate);
+                                    res.put("isUpdateAvailable", !upToDate);
+                                    res.put("status", upToDate ? "up-to-date" : "update-available");
+                                    res.put("gitlabReleaseUrl", glReleaseUrl);
+                                    res.put("remoteChecked", true);
+                                    sendJsonResponse(out, 200, res.toString());
                                 } else {
                                     res.put("latestVersion", APP_VERSION);
                                     res.put("upToDate", JSONObject.NULL);
                                     res.put("isUpdateAvailable", false);
                                     res.put("status", "remote-check-failed");
                                     res.put("remoteChecked", false);
-                                    res.put("error", "GitHub API returned HTTP " + code);
+                                    res.put("error", ghError + "; GitLab API returned HTTP " + glCode);
                                     sendJsonResponse(out, 502, res.toString());
                                 }
-                            } catch (Throwable e) {
+                            } catch (Throwable glErr) {
+                                String glMsg = glErr.getMessage() != null ? glErr.getMessage() : "Unable to reach GitLab Releases.";
                                 res.put("latestVersion", APP_VERSION);
                                 res.put("upToDate", JSONObject.NULL);
                                 res.put("isUpdateAvailable", false);
-                                res.put("status", "offline");
+                                res.put("status", lastHttpCode > 0 ? "remote-check-failed" : "offline");
                                 res.put("remoteChecked", false);
-                                res.put("error", e.getMessage() != null ? e.getMessage() : "Unable to reach GitHub Releases.");
-                                sendJsonResponse(out, 503, res.toString());
+                                res.put("error", ghError + "; " + glMsg);
+                                sendJsonResponse(out, lastHttpCode > 0 ? 502 : 503, res.toString());
                             } finally {
-                                if (conn != null) conn.disconnect();
+                                if (glConn != null) glConn.disconnect();
                             }
                         } else {
                             res.put("latestVersion", APP_VERSION);
@@ -1667,8 +1716,9 @@ public class MainActivity extends Activity {
                         JSONObject res = new JSONObject();
                         res.put("success", false);
                         res.put("error", "SELF_UPDATE_UNSUPPORTED");
-                        res.put("message", "In-place binary self-update is not supported inside the Android APK. Install the updated APK from GitHub Releases.");
+                        res.put("message", "In-place binary self-update is not supported inside the Android APK. Install the updated APK from GitHub or GitLab Releases.");
                         res.put("releaseUrl", "https://github.com/SemO2077/AI-NetController/releases/tag/" + RELEASE_TAG);
+                        res.put("gitlabReleaseUrl", "https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/" + RELEASE_TAG);
                         sendJsonResponse(out, 501, res.toString());
                         socket.close();
                         return;

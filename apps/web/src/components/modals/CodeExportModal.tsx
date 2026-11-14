@@ -259,8 +259,8 @@ git tag -a v0.60.0 -m "AI NetController v0.60.0 (Beta 0.60.00)"
 git push origin main --tags
 git push gitlab main --tags
 
-# 2. Publish pre-built binaries to GitHub / GitLab Releases:
-python scripts/publish_github_release.py`;
+# 2. Publish pre-built binaries to GitHub & GitLab Releases:
+python scripts/publish_release.py --platform all`;
 
   const handleCopyGhCommands = () => {
     triggerHapticFeedback('light');
@@ -621,15 +621,15 @@ python scripts/publish_github_release.py`;
               ))}
             </div>
 
-            {/* GitHub Release Automation & CLI Commands */}
+            {/* GitHub & GitLab Release Automation & CLI Commands */}
             <div className="rounded-2xl bg-[#0b1324]/70 border border-white/10 p-4 space-y-2.5">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <Terminal className="w-4 h-4 text-cyan-400 shrink-0" />
                   <span className="text-xs font-mono font-bold text-white uppercase break-words">
                     {isBg
-                      ? 'Публикуване в GitHub Releases (gh CLI / CI Pipeline)'
-                      : 'Publish to GitHub Releases (gh CLI / CI Pipeline)'}
+                      ? 'Публикуване в GitHub и GitLab Releases (CLI / CI Pipeline)'
+                      : 'Publish to GitHub & GitLab Releases (CLI / CI Pipeline)'}
                   </span>
                 </div>
                 <button

@@ -27,7 +27,7 @@ AI NetController implements defense-in-depth across the Host Agent, Control Serv
 ### 2. Process Sandboxing & Secret Scrubbing
 - **Windows Job Object Isolation**: Processes executed by the Host Agent are assigned to a Windows Job Object configured with a `256 MB` memory limit and `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. When the supervisor terminates, all descendant processes are automatically terminated.
 - **Tree Termination**: Timeouts trigger escalating termination (`SIGINT` → `SIGTERM` → `taskkill /F /T`) to prevent orphaned background tasks.
-- **Secret Scrubbing**: Child process environments are stripped of sensitive variables (`AI_AGENT_SECRET`, `GEMINI_API_KEY`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
+- **Secret Scrubbing**: Child process environments are stripped of sensitive variables (`AI_AGENT_SECRET`, `GEMINI_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
 - **Credential Storage**: Persistent host secrets and paired client tokens are protected using the Windows Data Protection API (DPAPI) via `agent/crypto_vault.py`.
 
 ### 3. Binary Protocol Shielding & Mutual Authentication
@@ -48,8 +48,8 @@ AI NetController implements defense-in-depth across the Host Agent, Control Serv
 
 We appreciate the responsible disclosure of security issues. If you identify a vulnerability:
 
-1. **Do not create a public GitHub issue.**
-2. Report the vulnerability privately via **[GitHub Security Advisories](https://github.com/SemO2077/AI-NetController/security/advisories/new)**.
+1. **Do not create a public GitHub or GitLab issue.**
+2. Report the vulnerability privately via **[GitHub Security Advisories](https://github.com/SemO2077/AI-NetController/security/advisories/new)** or a **confidential issue on [GitLab](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/issues/new)**.
 3. Include the following details:
    - Affected component (`agent/`, `apps/web/`, or `apps/mobile/`)
    - Step-by-step reproduction instructions or proof-of-concept script

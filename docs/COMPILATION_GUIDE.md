@@ -69,3 +69,22 @@ Get-FileHash public\releases\v0.60.0\* -Algorithm SHA256
 ```bash
 sha256sum -c public/releases/v0.60.0/SHA256SUMS.txt
 ```
+
+## 5. Publishing Releases (GitHub & GitLab)
+
+Publish built release artifacts and checksums from `public/releases/<tag>/` to both mirrors using the unified dispatcher:
+
+```bash
+# Preview release artifacts and metadata without uploading
+python scripts/publish_release.py --platform all --dry-run
+
+# Publish to both GitHub Releases and GitLab Releases + Generic Packages
+python scripts/publish_release.py --platform all --tag v0.60.0
+```
+
+You can also target a single mirror directly:
+
+```bash
+python scripts/publish_github_release.py --tag v0.60.0
+python scripts/publish_gitlab_release.py --tag v0.60.0
+```

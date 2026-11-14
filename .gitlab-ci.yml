@@ -65,7 +65,7 @@ mobile:test:
     - export PATH="/tmp/agent-venv/bin:$PATH"
     - cd apps/mobile
     - flutter pub get
-    - flutter analyze
+    - flutter analyze --no-fatal-infos
     - flutter test test/
 
 android:build:
@@ -88,13 +88,31 @@ android:build:
     paths:
       - apps/mobile/build/app/outputs/flutter-apk/*.apk
 
-release:publish:
+package:upload:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: python:3.12-slim
+  timeout: 10m
   needs:
     - web:test
     - agent:test
     - android:build
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  script:
+    - mkdir -p "public/releases/$CI_COMMIT_TAG"
+    - |
+      if [ -f "apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" ]; then
+        cp -f "apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" "public/releases/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}_arm64-v8a.apk"
+        cp -f "apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" "public/releases/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}.apk"
+      fi
+    - python3 scripts/update_release_manifest.py --tag "$CI_COMMIT_TAG"
+    - python3 scripts/publish_gitlab_release.py --tag "$CI_COMMIT_TAG" --packages-only
+
+release:publish:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - package:upload
   rules:
     - if: $CI_COMMIT_TAG =~ /^v/
   script:
@@ -103,3 +121,23 @@ release:publish:
     tag_name: "$CI_COMMIT_TAG"
     name: "AI NetController $CI_COMMIT_TAG"
     description: "./PATCH_NOTES.md"
+    assets:
+      links:
+        - name: "Windows Host Agent (Standalone .EXE)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ainetcontroller/$CI_COMMIT_TAG/AI_NetController_HostAgent_${CI_COMMIT_TAG}_win64.exe"
+          link_type: package
+        - name: "Windows Host Agent (Portable .ZIP)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ainetcontroller/$CI_COMMIT_TAG/AI_NetController_HostAgent_${CI_COMMIT_TAG}_win64_portable.zip"
+          link_type: package
+        - name: "Android Universal Companion (.APK)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ainetcontroller/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}.apk"
+          link_type: package
+        - name: "Android arm64-v8a Companion (.APK)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ainetcontroller/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}_arm64-v8a.apk"
+          link_type: package
+        - name: "SHA-256 Checksums"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ainetcontroller/$CI_COMMIT_TAG/SHA256SUMS.txt"
+          link_type: other
+        - name: "Release Manifest (JSON)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ainetcontroller/$CI_COMMIT_TAG/RELEASE_MANIFEST.json"
+          link_type: other

@@ -1,27 +1,27 @@
-### Component
+## Component
 - [ ] Host Agent (`agent/`)
 - [ ] Web Console / Server (`apps/web/`)
 - [ ] Mobile Companion (`apps/mobile/`)
 - [ ] Packaging / Release scripts (`scripts/`)
 
-### Environment
+## Environment
 - Version / Tag (e.g., `v0.60.0`):
 - OS / Android Version:
-- Runtime versions (Python / Node.js / Flutter):
+- Python / Node.js / Flutter Version (if running from source):
 
-### Description
-A concise explanation of what went wrong.
+## Description
+A clear summary of the unexpected behavior.
 
-### Steps to Reproduce
+## Steps to Reproduce
 1.
 2.
 3.
 
-### Expected vs. Actual Behavior
+## Expected vs. Actual Behavior
 - **Expected:**
 - **Actual:**
 
-### Logs
-Attach logs or terminal output (remove any pairing tokens or secrets).
+## Logs / Diagnostics
+Paste relevant console logs or stack traces (redact any pairing tokens or secrets).
 
 /label ~bug
