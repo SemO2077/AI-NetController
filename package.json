@@ -1,8 +1,8 @@
 {
   "name": "ai-netcontroller",
   "private": true,
-  "version": "0.60.0",
-  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.60.00)",
+  "version": "0.70.0",
+  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.70.00)",
   "type": "module",
   "scripts": {
     "dev": "tsx apps/web/server.ts",
@@ -15,34 +15,34 @@
     "test": "tsx apps/web/src/tests/verifyPillars.ts && tsx apps/web/src/tests/stressTest.ts"
   },
   "dependencies": {
-    "@google/genai": "^1.52.0",
-    "d3": "^7.9.0",
-    "dotenv": "^16.6.1",
-    "express": "^4.22.3",
+    "@google/genai": "^3.3.0",
+    "d3": "^7.9.2",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
     "jszip": "^3.10.2",
-    "lucide-react": "^0.546.0",
-    "motion": "^12.43.0",
+    "lucide-react": "^1.73.0",
+    "motion": "^14.14.0",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "recharts": "^2.15.4",
+    "recharts": "^3.10.1",
     "tsx": "^4.23.15",
-    "zustand": "^5.0.16"
+    "zustand": "^5.1.0"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.5",
     "@types/d3": "^7.4.3",
-    "@types/express": "^4.17.25",
+    "@types/express": "^5.0.6",
     "@types/jszip": "^3.4.1",
-    "@types/node": "^22.20.5",
+    "@types/node": "^26.6.6",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^5.2.0",
-    "autoprefixer": "^10.6.1",
-    "esbuild": "^0.25.12",
-    "tailwindcss": "^4.3.3",
-    "typescript": "~5.8.3",
-    "vite": "^6.4.5"
+    "@vitejs/plugin-react": "^6.3.0",
+    "autoprefixer": "^10.6.2",
+    "esbuild": "^0.28.2",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
   }
 }

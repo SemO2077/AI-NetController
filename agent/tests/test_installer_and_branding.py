@@ -70,7 +70,7 @@ class TestInstallerAndBranding(unittest.TestCase):
         self.assertEqual(APP_NAME, "AI NetController")
         self.assertIn("AI NetController", APP_DESCRIPTION)
         self.assertEqual(APP_PUBLISHER, "AI NetController")
-        self.assertEqual(APP_VERSION, "0.60.0")
+        self.assertEqual(APP_VERSION, "0.70.0")
 
     def test_03_installer_path_security_checks(self):
         """Verify installer rejects illegal paths, traversal, null bytes, and critical Windows dirs."""
@@ -115,6 +115,7 @@ class TestInstallerAndBranding(unittest.TestCase):
                 patch.object(wi, "register_windows_uninstaller", return_value=True),
                 patch.object(wi, "set_windows_autostart", return_value=True),
                 patch.object(wi, "_stop_external_agent_processes", return_value=0),
+                patch.dict(os.environ, {"LOCALAPPDATA": tmp_dir}),
             ):
                 res = perform_full_install(
                     target_dir=test_target,
@@ -162,6 +163,80 @@ class TestInstallerAndBranding(unittest.TestCase):
                 res = perform_full_uninstall(interactive=False)
         self.assertTrue(res["success"], "Uninstallation must succeed")
         self.assertIn("uninstalled", res["message"].lower())
+
+    def test_06_android_apk_and_pc_icon_assets_complete(self):
+        """Verify high-DPI 3D Cyber-Glass icons exist for both PC EXE and Android APK mipmaps."""
+        repo_root = os.path.dirname(_AGENT_DIR)
+        android_res = os.path.join(repo_root, "apps", "mobile", "android", "app", "src", "main", "res")
+        expected_mipmaps = {
+            "mipmap-mdpi": 48,
+            "mipmap-hdpi": 72,
+            "mipmap-xhdpi": 96,
+            "mipmap-xxhdpi": 144,
+            "mipmap-xxxhdpi": 192,
+        }
+        from PIL import Image
+        for folder, px in expected_mipmaps.items():
+            for fname in ("ic_launcher.png", "ic_launcher_round.png"):
+                fpath = os.path.join(android_res, folder, fname)
+                self.assertTrue(os.path.isfile(fpath), f"Missing Android APK icon {fpath}")
+                with Image.open(fpath) as im:
+                    self.assertEqual(im.size, (px, px), f"{fpath} must be {px}x{px}")
+
+        for xml_rel in (
+            os.path.join("drawable", "ic_launcher_foreground.xml"),
+            os.path.join("drawable", "ic_launcher_background.xml"),
+            os.path.join("mipmap-anydpi-v26", "ic_launcher.xml"),
+            os.path.join("mipmap-anydpi-v26", "ic_launcher_round.xml"),
+        ):
+            xml_path = os.path.join(android_res, xml_rel)
+            self.assertTrue(os.path.isfile(xml_path), f"Missing Android adaptive icon XML: {xml_path}")
+
+    def test_07_installer_custom_feature_and_startup_flags(self):
+        """Verify installer persists user-disabled startup & optional feature flags into daemon_config."""
+        import windows_integration as wi
+        from daemon_config import load_or_create_config
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory(prefix="ainet_test_opts_") as tmp_dir:
+            test_target = os.path.join(tmp_dir, "AI NetController")
+            autostart_calls = []
+
+            def _mock_autostart(enabled, target_exe=None):
+                autostart_calls.append(bool(enabled))
+                return True
+
+            with (
+                patch.object(wi, "register_windows_uninstaller", return_value=True),
+                patch.object(wi, "set_windows_autostart", side_effect=_mock_autostart),
+                patch.object(wi, "_stop_external_agent_processes", return_value=0),
+                patch.dict(os.environ, {"LOCALAPPDATA": tmp_dir}),
+            ):
+                res = perform_full_install(
+                    target_dir=test_target,
+                    create_desktop=False,
+                    create_start_menu=False,
+                    autostart=False,
+                    launch_after=False,
+                    start_minimized=True,
+                    close_to_tray=False,
+                    mdns_enabled=False,
+                    clipboard_sync_allowed=False,
+                    file_transfer_enabled=False,
+                    audio_control_enabled=False,
+                    ollama_bridge_enabled=False,
+                )
+                self.assertTrue(res["success"])
+                self.assertEqual(autostart_calls, [False])
+                cfg = load_or_create_config()
+                self.assertFalse(cfg["autostart_on_boot"])
+                self.assertTrue(cfg["start_minimized"])
+                self.assertFalse(cfg["close_to_tray"])
+                self.assertFalse(cfg["mdns_enabled"])
+                self.assertFalse(cfg["clipboard_sync_allowed"])
+                self.assertFalse(cfg["file_transfer_enabled"])
+                self.assertFalse(cfg["audio_control_enabled"])
+                self.assertFalse(cfg["ollama_bridge_enabled"])
 
 
 if __name__ == "__main__":

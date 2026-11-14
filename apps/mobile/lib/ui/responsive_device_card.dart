@@ -24,7 +24,7 @@ class CyberNodeBadgePainter extends CustomPainter {
     final baseColor = isOnline ? activeColor : Colors.grey;
 
     final ringPaint = Paint()
-      ..color = baseColor.withValues(alpha: isOnline ? 0.35 : 0.15)
+      ..color = baseColor.withValues(alpha: isOnline ? 0.38 : 0.16)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5
       ..isAntiAlias = true
@@ -32,23 +32,56 @@ class CyberNodeBadgePainter extends CustomPainter {
 
     canvas.drawCircle(center, radius, ringPaint);
 
+    // Subtle 4-quadrant tech ticks for 3D instrument depth
+    final tickPaint = Paint()
+      ..color = baseColor.withValues(alpha: isOnline ? 0.65 : 0.22)
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    for (int i = 0; i < 4; i++) {
+      final angle = (i * math.pi / 2) + (pulsePhase * 0.25);
+      final inner = Offset(
+        center.dx + math.cos(angle) * (radius - 2.2),
+        center.dy + math.sin(angle) * (radius - 2.2),
+      );
+      final outer = Offset(
+        center.dx + math.cos(angle) * (radius + 0.6),
+        center.dy + math.sin(angle) * (radius + 0.6),
+      );
+      canvas.drawLine(inner, outer, tickPaint);
+    }
+
     if (isOnline) {
       final glowPaint = Paint()
         ..color = activeColor
-            .withValues(alpha: 0.16 + (math.sin(pulsePhase) * 0.1).abs())
+            .withValues(alpha: 0.20 + (math.sin(pulsePhase) * 0.1).abs())
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.8
         ..isAntiAlias = true
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.8);
       canvas.drawCircle(center, radius - 1, glowPaint);
     }
 
+    final coreRadius = radius * 0.46;
+    final coreRect = Rect.fromCircle(center: center, radius: coreRadius);
     final corePaint = Paint()
-      ..color = isOnline ? activeColor : Colors.grey.shade600
+      ..shader = RadialGradient(
+        center: const Alignment(-0.3, -0.3),
+        radius: 0.95,
+        colors: isOnline
+            ? [
+                Colors.white.withValues(alpha: 0.90),
+                activeColor,
+                Color.lerp(activeColor, Colors.black, 0.35)!,
+              ]
+            : [
+                Colors.grey.shade400,
+                Colors.grey.shade700,
+              ],
+      ).createShader(coreRect)
       ..style = PaintingStyle.fill
       ..isAntiAlias = true;
 
-    canvas.drawCircle(center, radius * 0.45, corePaint);
+    canvas.drawCircle(center, coreRadius, corePaint);
   }
 
   @override
@@ -173,183 +206,211 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
           onLongPress: widget.onLongPress,
           child: ScaleTransition(
             scale: _scaleAnimation,
-            child: AnimatedContainer(
-              duration: animDuration,
-              curve: Curves.easeOutCubic,
-              padding: const EdgeInsets.all(15.0),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isSelected
-                      ? [
-                          palette.primary.withValues(alpha: 0.22),
-                          palette.cardSurfaceBottom,
-                        ]
-                      : [
-                          palette.cardSurfaceTop,
-                          palette.cardSurfaceBottom,
-                        ],
-                ),
-                borderRadius: BorderRadius.circular(22.0),
-                border: Border.all(
-                  color: isSelected
-                      ? palette.primary.withValues(alpha: 0.78)
-                      : (isOnline
-                          ? Colors.white.withValues(alpha: 0.16)
-                          : palette.glassBorderIdle),
-                  width: isSelected ? 1.6 : 1.0,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: isSelected
-                        ? palette.primary.withValues(alpha: 0.22)
-                        : Colors.black.withValues(alpha: 0.38),
-                    blurRadius: isSelected ? 18 : 12,
-                    offset: const Offset(0, 5),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final isCompactCard =
+                    constraints.maxWidth.isFinite && constraints.maxWidth < 290;
+                final hPad = isCompactCard ? 11.0 : 15.0;
+                return AnimatedContainer(
+                  duration: animDuration,
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.fromLTRB(
+                    hPad,
+                    isCompactCard ? 8.0 : 10.0,
+                    hPad,
+                    isCompactCard ? 12.0 : 15.0,
                   ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
+                  decoration: BoxDecoration(
+                    gradient: palette.cardBevelGradient(isSelected: isSelected),
+                    borderRadius: BorderRadius.circular(22.0),
+                    border: Border.all(
+                      color: isSelected
+                          ? palette.primary.withValues(alpha: 0.82)
+                          : (isOnline
+                              ? Colors.white.withValues(alpha: 0.18)
+                              : palette.glassBorderIdle),
+                      width: isSelected ? 1.6 : 1.0,
+                    ),
+                    boxShadow: palette.elevationShadows(
+                      isSelected: isSelected,
+                      glowColor: isOnline ? palette.primary : Colors.black,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 38,
-                        height: 38,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          color: isOnline
-                              ? palette.primary.withValues(alpha: 0.14)
-                              : Colors.white.withValues(alpha: 0.04),
-                          border: Border.all(
-                            color: isOnline
-                                ? palette.primary.withValues(alpha: 0.38)
-                                : Colors.white.withValues(alpha: 0.08),
-                          ),
-                        ),
-                        child: Center(
-                          child: CustomPaint(
-                            size: const Size(20, 20),
-                            painter: CyberNodeBadgePainter(
-                              isOnline: isOnline,
-                              activeColor: palette.primary,
-                            ),
-                          ),
+                      FluidSpecularBar(
+                        isSelected: isSelected || isOnline,
+                        height: 1.0,
+                        margin: const EdgeInsets.only(
+                          left: 6,
+                          right: 6,
+                          bottom: 8,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              widget.name,
-                              style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: context.fluidFont(14),
-                                color: palette.textPrimary,
-                                letterSpacing: -0.2,
+                      Row(
+                        children: [
+                          Container(
+                            width: isCompactCard ? 34 : 40,
+                            height: isCompactCard ? 34 : 40,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(13),
+                              gradient: RadialGradient(
+                                center: const Alignment(-0.25, -0.25),
+                                radius: 1.0,
+                                colors: isOnline
+                                    ? [
+                                        palette.primary.withValues(alpha: 0.24),
+                                        palette.primary.withValues(alpha: 0.08),
+                                      ]
+                                    : [
+                                        Colors.white.withValues(alpha: 0.06),
+                                        Colors.white.withValues(alpha: 0.02),
+                                      ],
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              statusParts.join(' · '),
-                              style: TextStyle(
-                                fontSize: context.fluidFont(11),
+                              border: Border.all(
                                 color: isOnline
-                                    ? palette.primary.withValues(alpha: 0.90)
-                                    : palette.textSecondary,
-                                fontFamily: 'monospace',
+                                    ? palette.primary.withValues(alpha: 0.44)
+                                    : Colors.white.withValues(alpha: 0.09),
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              boxShadow: isOnline
+                                  ? [
+                                      BoxShadow(
+                                        color: palette.primary
+                                            .withValues(alpha: 0.22),
+                                        blurRadius: 10,
+                                      ),
+                                    ]
+                                  : null,
                             ),
-                          ],
-                        ),
-                      ),
-                      if (isOnline && widget.onOpenStream != null)
-                        _ActionOrbButton(
-                          tooltip: 'Open Live Stream',
-                          icon: Icons.videocam_rounded,
-                          color: palette.primary,
-                          onPressed: widget.onOpenStream!,
-                        )
-                      else if (!isOnline && widget.onWakeOnLan != null)
-                        _ActionOrbButton(
-                          tooltip: 'Send Wake-on-LAN Magic Packet',
-                          icon: Icons.bolt_rounded,
-                          color: palette.warning,
-                          onPressed: widget.onWakeOnLan!,
-                        ),
-                      if (widget.onMoreActions != null) ...[
-                        const SizedBox(width: 4),
-                        IconButton(
-                          tooltip: 'Workstation options',
-                          icon: Icon(
-                            Icons.more_vert_rounded,
-                            size: 18,
-                            color: palette.textSecondary,
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 32,
-                            minHeight: 36,
-                          ),
-                          padding: EdgeInsets.zero,
-                          onPressed: widget.onMoreActions,
-                        ),
-                      ],
-                    ],
-                  ),
-                  AnimatedSize(
-                    duration: animDuration,
-                    curve: Curves.easeOutCubic,
-                    child: isOnline
-                        ? Padding(
-                            padding: const EdgeInsets.only(top: 12.0),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: _buildMiniTelemetryBar(
-                                    context: context,
-                                    palette: palette,
-                                    label: 'CPU',
-                                    value: widget.cpuUsage,
-                                    color: widget.cpuUsage > 80
-                                        ? palette.accent
-                                        : palette.primary,
-                                    duration: disableAnim
-                                        ? Duration.zero
-                                        : const Duration(milliseconds: 420),
-                                  ),
+                            child: Center(
+                              child: CustomPaint(
+                                size: Size(
+                                  isCompactCard ? 17 : 20,
+                                  isCompactCard ? 17 : 20,
                                 ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: _buildMiniTelemetryBar(
-                                    context: context,
-                                    palette: palette,
-                                    label: 'RAM',
-                                    value: widget.ramUsage,
-                                    color: widget.ramUsage > 85
-                                        ? palette.warning
-                                        : palette.secondary,
-                                    duration: disableAnim
-                                        ? Duration.zero
-                                        : const Duration(milliseconds: 420),
+                                painter: CyberNodeBadgePainter(
+                                  isOnline: isOnline,
+                                  activeColor: palette.primary,
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: isCompactCard ? 8 : 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  widget.name,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: context.fluidFont(14),
+                                    color: palette.textPrimary,
+                                    letterSpacing: -0.2,
                                   ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  statusParts.join(' · '),
+                                  style: TextStyle(
+                                    fontSize: context.fluidFont(11),
+                                    color: isOnline
+                                        ? palette.primary
+                                            .withValues(alpha: 0.92)
+                                        : palette.textSecondary,
+                                    fontFamily: 'monospace',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ],
                             ),
-                          )
-                        : const SizedBox.shrink(),
+                          ),
+                          if (isOnline && widget.onOpenStream != null)
+                            _ActionOrbButton(
+                              tooltip: 'Open Live Stream',
+                              icon: Icons.videocam_rounded,
+                              color: palette.primary,
+                              onPressed: widget.onOpenStream!,
+                            )
+                          else if (!isOnline && widget.onWakeOnLan != null)
+                            _ActionOrbButton(
+                              tooltip: 'Send Wake-on-LAN Magic Packet',
+                              icon: Icons.bolt_rounded,
+                              color: palette.warning,
+                              onPressed: widget.onWakeOnLan!,
+                            ),
+                          if (widget.onMoreActions != null) ...[
+                            const SizedBox(width: 2),
+                            IconButton(
+                              tooltip: 'Workstation options',
+                              icon: Icon(
+                                Icons.more_vert_rounded,
+                                size: 18,
+                                color: palette.textSecondary,
+                              ),
+                              constraints: const BoxConstraints(
+                                minWidth: 28,
+                                minHeight: 34,
+                              ),
+                              padding: EdgeInsets.zero,
+                              onPressed: widget.onMoreActions,
+                            ),
+                          ],
+                        ],
+                      ),
+                      AnimatedSize(
+                        duration: animDuration,
+                        curve: Curves.easeOutCubic,
+                        child: isOnline
+                            ? Padding(
+                                padding: EdgeInsets.only(
+                                    top: isCompactCard ? 9.0 : 12.0),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: _buildMiniTelemetryBar(
+                                        context: context,
+                                        palette: palette,
+                                        label: 'CPU',
+                                        value: widget.cpuUsage,
+                                        color: widget.cpuUsage > 80
+                                            ? palette.accent
+                                            : palette.primary,
+                                        duration: disableAnim
+                                            ? Duration.zero
+                                            : const Duration(milliseconds: 420),
+                                      ),
+                                    ),
+                                    SizedBox(width: isCompactCard ? 8 : 14),
+                                    Expanded(
+                                      child: _buildMiniTelemetryBar(
+                                        context: context,
+                                        palette: palette,
+                                        label: 'RAM',
+                                        value: widget.ramUsage,
+                                        color: widget.ramUsage > 85
+                                            ? palette.warning
+                                            : palette.secondary,
+                                        duration: disableAnim
+                                            ? Duration.zero
+                                            : const Duration(milliseconds: 420),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                );
+              },
             ),
           ),
         ),
@@ -393,13 +454,16 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
             ),
           ],
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 5),
         ClipRRect(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(5),
           child: Container(
-            height: 4,
+            height: 5,
             width: double.infinity,
-            color: Colors.white.withValues(alpha: 0.08),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(5),
+            ),
             child: TweenAnimationBuilder<double>(
               tween: Tween<double>(begin: 0.0, end: clampedPercent),
               duration: duration,
@@ -410,11 +474,20 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                   widthFactor: animatedFactor,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: color,
+                      gradient: LinearGradient(
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                        colors: [
+                          color.withValues(alpha: 0.65),
+                          color,
+                          Color.lerp(color, Colors.white, 0.28)!,
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(5),
                       boxShadow: [
                         BoxShadow(
-                          color: color.withValues(alpha: 0.55),
-                          blurRadius: 5,
+                          color: color.withValues(alpha: 0.60),
+                          blurRadius: 6,
                         ),
                       ],
                     ),
@@ -444,20 +517,37 @@ class _ActionOrbButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: color.withValues(alpha: 0.14),
-        border: Border.all(color: color.withValues(alpha: 0.38)),
-      ),
-      child: IconButton(
-        tooltip: tooltip,
-        icon: Icon(icon, size: 19),
-        color: color,
-        padding: EdgeInsets.zero,
-        onPressed: onPressed,
+    return FluidPressScale(
+      pressedScale: 0.92,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            center: const Alignment(-0.25, -0.25),
+            radius: 0.95,
+            colors: [
+              color.withValues(alpha: 0.26),
+              color.withValues(alpha: 0.10),
+            ],
+          ),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.24),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: IconButton(
+          tooltip: tooltip,
+          icon: Icon(icon, size: 19),
+          color: color,
+          padding: EdgeInsets.zero,
+          onPressed: onPressed,
+        ),
       ),
     );
   }

@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
-import 'package:local_auth/error_codes.dart' as auth_error;
 
 /// Hardware-Backed Biometric Security Gate
 /// ---------------------------------------------------------------------
@@ -76,7 +75,7 @@ class BiometricSecurityGate {
       return BiometricAuthResult(
         isApproved: false,
         message: 'Biometric or device credential security is not configured on this device.',
-        errorCode: auth_error.notAvailable,
+        errorCode: LocalAuthExceptionCode.noBiometricHardware.name,
         timestamp: DateTime.now(),
       );
     }
@@ -85,12 +84,9 @@ class BiometricSecurityGate {
       final bool didAuthenticate = await _auth.authenticate(
         localizedReason:
             'Authorize sensitive action:\n"$shellCommand"\non $targetHostId [Risk: $riskLevel]',
-        options: const AuthenticationOptions(
-          useErrorDialogs: true,
-          stickyAuth: true,
-          biometricOnly: false,
-          sensitiveTransaction: true,
-        ),
+        biometricOnly: false,
+        sensitiveTransaction: true,
+        persistAcrossBackgrounding: true,
       );
 
       if (didAuthenticate) {
@@ -106,21 +102,35 @@ class BiometricSecurityGate {
           timestamp: DateTime.now(),
         );
       }
-    } on PlatformException catch (e) {
-      String errorMessage = 'Biometric verification error';
-      if (e.code == auth_error.notAvailable) {
-        errorMessage = 'Biometric hardware sensor is unavailable.';
-      } else if (e.code == auth_error.passcodeNotSet) {
-        errorMessage = 'Device PIN or passcode is not configured.';
-      } else if (e.code == auth_error.notEnrolled) {
-        errorMessage = 'No fingerprints or facial credentials are enrolled.';
-      } else if (e.code == auth_error.lockedOut || e.code == auth_error.permanentlyLockedOut) {
-        errorMessage = 'Biometric sensor temporarily locked after failed attempts.';
-      }
+    } on LocalAuthException catch (e) {
+      final String errorMessage = switch (e.code) {
+        LocalAuthExceptionCode.noBiometricHardware ||
+        LocalAuthExceptionCode.biometricHardwareTemporarilyUnavailable =>
+          'Biometric hardware sensor is unavailable.',
+        LocalAuthExceptionCode.noCredentialsSet =>
+          'Device PIN or passcode is not configured.',
+        LocalAuthExceptionCode.noBiometricsEnrolled =>
+          'No fingerprints or facial credentials are enrolled.',
+        LocalAuthExceptionCode.temporaryLockout ||
+        LocalAuthExceptionCode.biometricLockout =>
+          'Biometric sensor temporarily locked after failed attempts.',
+        LocalAuthExceptionCode.userCanceled ||
+        LocalAuthExceptionCode.systemCanceled ||
+        LocalAuthExceptionCode.timeout =>
+          'Biometric verification was cancelled or timed out.',
+        _ => e.description ?? 'Biometric verification error (${e.code.name}).',
+      };
 
       return BiometricAuthResult(
         isApproved: false,
         message: errorMessage,
+        errorCode: e.code.name,
+        timestamp: DateTime.now(),
+      );
+    } on PlatformException catch (e) {
+      return BiometricAuthResult(
+        isApproved: false,
+        message: e.message ?? 'Biometric verification error',
         errorCode: e.code,
         timestamp: DateTime.now(),
       );

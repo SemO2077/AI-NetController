@@ -24,9 +24,9 @@ def get_package_version() -> str:
     pkg_json = os.path.join(ROOT_DIR, "package.json")
     if os.path.exists(pkg_json):
         with open(pkg_json, "r", encoding="utf-8") as f:
-            v = json.load(f).get("version", "0.60.0")
+            v = json.load(f).get("version", "0.70.0")
             return f"v{v}" if not v.startswith("v") else v
-    return "v0.60.0"
+    return "v0.70.0"
 
 
 def _format_beta_label(tag: str) -> str:
@@ -63,7 +63,9 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> bool:
     print("[INFO] Compiling Windows Host Agent binaries with PyInstaller...")
     spec_path = os.path.join(agent_dir, "build_agent.spec")
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", spec_path]
-    subprocess.run(cmd, cwd=agent_dir, check=True)
+    pyinstaller_env = os.environ.copy()
+    pyinstaller_env["AI_BUILD_ONEFILE"] = "1"
+    subprocess.run(cmd, cwd=agent_dir, env=pyinstaller_env, check=True)
 
     # Sign EVERY .exe/.dll/.pyd inside --onedir (and standalone EXE if generated) + scan with Defender
     sign_script = os.path.join(agent_dir, "sign_binary.ps1")
@@ -256,6 +258,10 @@ def main() -> None:
     manifest_path = os.path.join(RELEASE_DIR, "RELEASE_MANIFEST.json")
     with open(manifest_path, "w", encoding="utf-8") as mf:
         json.dump(manifest_data, mf, indent=2)
+
+    patch_notes_src = os.path.join(ROOT_DIR, "PATCH_NOTES.md")
+    if os.path.isfile(patch_notes_src):
+        shutil.copy2(patch_notes_src, os.path.join(RELEASE_DIR, "PATCH_NOTES.md"))
 
     print(f"[SUCCESS] Built release artifacts in {RELEASE_DIR}:")
     for art in artifacts:

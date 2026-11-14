@@ -77,6 +77,102 @@ class CyberColors:
     GLASS_BORDER_CRITICAL = "#8F1843"
     GLASS_HIGHLIGHT = "#0D2B3E"
 
+    # 3D Bevel & Specular Depth Tokens (parity with mobile 3D glassmorphic refresh)
+    SPECULAR_TOP = "#3CF5FF"
+    SPECULAR_VIOLET = "#B366FF"
+    SHADOW_DEEP = "#02050B"
+    SURFACE_HEADER_STRIP = "#0E1E36"
+    SURFACE_HOVER = "#132642"
+
+
+class FluidDesktopScale:
+    """
+    Responsive viewport & aspect-ratio scaling calculator for the PC Host Control Center.
+    Mirrors `FluidScale` in `apps/mobile/lib/theme/fluid_theme.dart` to guarantee zero
+    clipping or overflow across compact (640x420), landscape (800x480), standard (1120x760),
+    and ultra-wide / 4K desktops.
+    """
+
+    def __init__(self, width: int = 1120, height: int = 760, dpi_scale: float = 1.0):
+        self.width = max(320, int(width))
+        self.height = max(240, int(height))
+        self.dpi_scale = max(0.75, min(2.5, float(dpi_scale)))
+        self.aspect_ratio = self.width / float(max(1, self.height))
+
+        self.is_ultra_compact_width = self.width < 740
+        self.is_compact_width = self.width < 920
+        self.is_ultra_short_height = self.height < 520
+        self.is_short_height = self.height < 650
+
+        # Switch 2-column grids to 1-column stacked flow when viewport is narrow
+        self.columns = 1 if self.width < 860 else 2
+
+        w_ratio = self.width / 1120.0
+        h_ratio = self.height / 760.0
+        raw_scale = min(w_ratio, h_ratio * 1.06)
+        self.scale = max(0.76, min(1.16, raw_scale))
+        self.font_scale = max(0.84, min(1.10, raw_scale))
+
+    @classmethod
+    def from_dimensions(cls, width: int, height: int, dpi_scale: float = 1.0) -> "FluidDesktopScale":
+        return cls(width=width, height=height, dpi_scale=dpi_scale)
+
+    def sp(self, base_pt: int, min_pt: int = 7) -> int:
+        """Scales typography point size proportionally with safe readability floor."""
+        return max(min_pt, int(round(base_pt * self.font_scale)))
+
+    def px(self, base_px: int, min_px: int = 2) -> int:
+        """Scales layout padding and spacing proportionally to window geometry."""
+        return max(min_px, int(round(base_px * self.scale)))
+
+    @property
+    def shell_padx(self) -> int:
+        if self.is_ultra_compact_width:
+            return 8
+        if self.is_compact_width:
+            return 12
+        return self.px(18, min_px=10)
+
+    @property
+    def shell_pady(self) -> int:
+        if self.is_ultra_short_height:
+            return 6
+        if self.is_short_height:
+            return 10
+        return self.px(14, min_px=8)
+
+    @property
+    def card_padx(self) -> int:
+        if self.is_ultra_compact_width:
+            return 10
+        if self.is_compact_width:
+            return 12
+        return self.px(16, min_px=10)
+
+    @property
+    def card_pady(self) -> int:
+        if self.is_ultra_short_height:
+            return 8
+        if self.is_short_height:
+            return 10
+        return self.px(14, min_px=8)
+
+    @property
+    def qr_size(self) -> int:
+        if self.is_ultra_compact_width or self.is_ultra_short_height:
+            return 128
+        if self.is_compact_width or self.is_short_height:
+            return 150
+        return 176
+
+    @property
+    def orb_size(self) -> int:
+        if self.is_ultra_compact_width or self.is_ultra_short_height:
+            return 36
+        if self.is_compact_width:
+            return 42
+        return 46
+
 
 def hex_to_rgba(hex_str: str, alpha: int = 255) -> Tuple[int, int, int, int]:
     """Converts '#RRGGBB' hex strings into an (R, G, B, A) tuple."""
@@ -183,15 +279,21 @@ def resolve_font_families(root: Optional["tk.Tk"] = None) -> Tuple[str, str]:
 # ==============================================================================
 # AMBIENT BACKDROP & GLASSMORPHIC ASSET COMPOSITOR
 # ==============================================================================
-def render_ambient_backdrop(width: int, height: int) -> Optional["Image.Image"]:
+def render_ambient_backdrop(
+    width: int,
+    height: int,
+    focal_shift: float = 0.0,
+) -> Optional["Image.Image"]:
     """
-    Renders the deep abyssal #040812 backdrop with top-right Cyan (#00F0FF)
-    and bottom-left Electric Violet (#8A2BE2) radial ambient glows.
+    Renders the deep abyssal #040812 backdrop with top-right Cyan (#00F0FF),
+    bottom-left Electric Violet (#8A2BE2), and top-center specular ice wash
+    radial ambient glows with subtle tab-aware focal parallax.
     """
     if not HAS_PIL:
         return None
     w = max(64, int(width))
     h = max(64, int(height))
+    shift = max(-1.0, min(1.0, float(focal_shift)))
 
     # Render smooth downscaled glow field then upsample bilinearly (<4ms total)
     sw = max(120, w // 4)
@@ -201,28 +303,44 @@ def render_ambient_backdrop(width: int, height: int) -> Optional["Image.Image"]:
     glow = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
     draw = ImageDraw.Draw(glow)
 
-    # Top-right cyan aura (mirrors AdaptiveScaffold radial accent #00F0FF @ 14%)
-    cx1, cy1, r1 = int(sw * 0.88), int(sh * 0.14), int(max(sw, sh) * 0.42)
-    for step in range(8, 0, -1):
-        frac = step / 8.0
-        alpha = int(34 * (1.0 - frac * 0.85))
+    # Top-right cyan aura (mirrors AdaptiveScaffold radial accent #00F0FF @ 16%)
+    cx1 = int(sw * (0.86 - 0.06 * shift))
+    cy1 = int(sh * (0.14 + 0.03 * shift))
+    r1 = int(max(sw, sh) * 0.44)
+    for step in range(9, 0, -1):
+        frac = step / 9.0
+        alpha = int(38 * (1.0 - frac * 0.85))
         rad = int(r1 * frac)
         draw.ellipse((cx1 - rad, cy1 - rad, cx1 + rad, cy1 + rad), fill=(0, 240, 255, alpha))
 
-    # Bottom-left electric violet aura (mirrors AdaptiveScaffold radial accent #8A2BE2 @ 12%)
-    cx2, cy2, r2 = int(sw * 0.12), int(sh * 0.88), int(max(sw, sh) * 0.44)
-    for step in range(8, 0, -1):
-        frac = step / 8.0
-        alpha = int(32 * (1.0 - frac * 0.85))
+    # Bottom-left electric violet aura (mirrors AdaptiveScaffold radial accent #8A2BE2 @ 14%)
+    cx2 = int(sw * (0.14 + 0.06 * shift))
+    cy2 = int(sh * (0.86 - 0.03 * shift))
+    r2 = int(max(sw, sh) * 0.46)
+    for step in range(9, 0, -1):
+        frac = step / 9.0
+        alpha = int(35 * (1.0 - frac * 0.85))
         rad = int(r2 * frac)
         draw.ellipse((cx2 - rad, cy2 - rad, cx2 + rad, cy2 + rad), fill=(138, 43, 226, alpha))
+
+    # Top-center subtle specular ice-cyan horizon wash for 3D atmospheric depth
+    cx3 = int(sw * (0.50 + 0.04 * shift))
+    cy3 = int(sh * 0.04)
+    r3x = int(sw * 0.48)
+    r3y = int(sh * 0.24)
+    for step in range(6, 0, -1):
+        frac = step / 6.0
+        alpha = int(22 * (1.0 - frac * 0.82))
+        rx = int(r3x * frac)
+        ry = int(r3y * frac)
+        draw.ellipse((cx3 - rx, cy3 - ry, cx3 + rx, cy3 + ry), fill=(60, 245, 255, alpha))
 
     glow = glow.filter(ImageFilter.GaussianBlur(radius=max(6, sw // 14)))
     composited = Image.alpha_composite(base, glow).resize((w, h), Image.Resampling.BILINEAR)
 
     # Subtle cyber dot grid (very low alpha so text contrast stays pristine)
     grid_draw = ImageDraw.Draw(composited)
-    dot_color = (26, 48, 76, 120)
+    dot_color = (28, 52, 82, 128)
     step_px = 36
     for gx in range(24, w, step_px):
         for gy in range(24, h, step_px):
@@ -237,11 +355,16 @@ def render_glass_card_image(
     radius: int = 18,
     fill_hex: str = CyberColors.SURFACE,
     border_hex: str = CyberColors.GLASS_BORDER,
-    fill_alpha: int = 232,
+    fill_alpha: int = 236,
     border_width: int = 1,
     highlight_top: bool = True,
 ) -> Optional["Image.Image"]:
-    """Renders a crisp anti-aliased rounded glassmorphic panel via 2x supersampling."""
+    """
+    Renders a crisp 3D beveled anti-aliased rounded glassmorphic panel via 2x supersampling:
+      - Outer recessed shadow rim at bottom edge
+      - Elevated inner surface body with subtle top-band luminosity
+      - Top-edge specular cyan/white rim highlight bar
+    """
     if not HAS_PIL:
         return None
     w = max(24, int(width))
@@ -253,30 +376,58 @@ def render_glass_card_image(
     rad = max(4, int(radius * s))
     bw = max(1, int(border_width * s))
     pad = bw
-    rect = (pad, pad, w * s - pad - 1, h * s - pad - 1)
+
+    # 1. Subtle 3D bottom drop bevel for depth separation
+    shadow_rect = (pad, pad + s, w * s - pad - 1, h * s - 1)
+    d.rounded_rectangle(
+        shadow_rect,
+        radius=rad,
+        fill=hex_to_rgba(CyberColors.SHADOW_DEEP, 180),
+    )
+
+    # 2. Main frosted glass surface body
+    rect = (pad, pad, w * s - pad - 1, h * s - pad - 1 - s)
     d.rounded_rectangle(
         rect,
         radius=rad,
         fill=hex_to_rgba(fill_hex, fill_alpha),
-        outline=hex_to_rgba(border_hex, 215),
+        outline=hex_to_rgba(border_hex, 225),
         width=bw,
     )
 
+    # 3. Inner 1px beveled rim highlight (lighter upper-left, deeper lower-right feel)
+    inner_rect = (pad + bw, pad + bw, w * s - pad - bw - 1, h * s - pad - bw - 1 - s)
+    if inner_rect[2] > inner_rect[0] + 8 and inner_rect[3] > inner_rect[1] + 8:
+        inner_rim_hex = mix_hex(fill_hex, border_hex, 0.38)
+        d.rounded_rectangle(
+            inner_rect,
+            radius=max(2, rad - bw),
+            outline=hex_to_rgba(inner_rim_hex, 95),
+            width=1,
+        )
+
+    # 4. Top-edge specular highlight bar + soft secondary glow line
     if highlight_top:
         sheen_pad = rad // 2 + 4
         y_line = pad + bw + 1
         if w * s - sheen_pad > sheen_pad:
+            spec_hex = mix_hex(border_hex, "#FFFFFF", 0.42)
             d.line(
                 [(sheen_pad, y_line), (w * s - sheen_pad, y_line)],
-                fill=hex_to_rgba(CyberColors.PRIMARY, 58),
-                width=max(1, s // 2),
+                fill=hex_to_rgba(spec_hex, 135),
+                width=max(1, s),
+            )
+            d.line(
+                [(sheen_pad + 6, y_line + s), (w * s - sheen_pad - 6, y_line + s)],
+                fill=hex_to_rgba(CyberColors.PRIMARY, 48),
+                width=1,
             )
 
     return img.resize((w, h), Image.Resampling.LANCZOS)
 
 
 def render_pill_dock_image(width: int, height: int, radius: Optional[int] = None) -> Optional["Image.Image"]:
-    """Renders the Samsung/OneUI-inspired floating cyber glass dock background."""
+    """Renders the Samsung/OneUI-inspired 3D floating cyber glass dock background."""
     rad = radius if radius is not None else max(16, height // 2)
     return render_glass_card_image(
         width=width,
@@ -284,7 +435,7 @@ def render_pill_dock_image(width: int, height: int, radius: Optional[int] = None
         radius=rad,
         fill_hex=CyberColors.SURFACE_DOCK,
         border_hex=CyberColors.GLASS_BORDER_BRIGHT,
-        fill_alpha=240,
+        fill_alpha=244,
         border_width=1,
         highlight_top=True,
     )
@@ -298,8 +449,11 @@ def render_node_orb_image(
     is_online: bool = True,
 ) -> Optional["Image.Image"]:
     """
-    Renders a vector orbital CyberNodeBadge matching `CyberNodeBadgePainter` in
-    `apps/mobile/lib/ui/responsive_device_card.dart`.
+    Renders a 3D vector orbital CyberNodeBadge matching `CyberNodeBadgePainter` in
+    `apps/mobile/lib/ui/responsive_device_card.dart`:
+      - Breathing outer neon halo + 4-quadrant instrument ticks
+      - Dual counter-rotating telemetry arcs (Cyan + Electric Violet)
+      - 3D radial-lit core sphere with off-center specular glint
     """
     if not HAS_PIL:
         return None
@@ -308,39 +462,73 @@ def render_node_orb_image(
     img = Image.new("RGBA", (s * ss, s * ss), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     cx = cy = (s * ss) / 2.0
-    r = (s * ss) * 0.42
+    r = (s * ss) * 0.43
 
-    ring_col = hex_to_rgba(primary_hex if is_online else CyberColors.TEXT_TERTIARY, 220)
-    sec_col = hex_to_rgba(secondary_hex if is_online else CyberColors.SURFACE_ELEVATED, 170)
+    ring_col = hex_to_rgba(primary_hex if is_online else CyberColors.TEXT_TERTIARY, 225)
+    sec_col = hex_to_rgba(secondary_hex if is_online else CyberColors.SURFACE_ELEVATED, 185)
 
-    # Outer glowing orbital halo
-    pulse_scale = 0.90 + 0.12 * math.sin(pulse_phase * 2.0 * math.pi)
+    # 1. Outer breathing orbital halo
+    pulse_scale = 0.90 + 0.11 * math.sin(pulse_phase * 2.0 * math.pi)
     halo_r = r * pulse_scale
     d.ellipse(
         (cx - halo_r, cy - halo_r, cx + halo_r, cy + halo_r),
-        fill=hex_to_rgba(primary_hex if is_online else CyberColors.SURFACE, 32),
+        fill=hex_to_rgba(primary_hex if is_online else CyberColors.SURFACE, 34),
         outline=ring_col,
         width=max(2, ss * 2),
     )
 
-    # Inner sweeping arc highlight
+    # 2. 4-Quadrant precision instrument ticks (0, 90, 180, 270 deg)
+    tick_inner = halo_r * 0.82
+    tick_outer = halo_r * 1.06
+    for deg in (0, 90, 180, 270):
+        rad_a = math.radians(deg + pulse_phase * 90.0)
+        x0 = cx + math.cos(rad_a) * tick_inner
+        y0 = cy + math.sin(rad_a) * tick_inner
+        x1 = cx + math.cos(rad_a) * tick_outer
+        y1 = cy + math.sin(rad_a) * tick_outer
+        d.line([(x0, y0), (x1, y1)], fill=ring_col, width=max(1, ss))
+
+    # 3. Primary & counter-rotating secondary sweeping telemetry arcs
     arc_r = r * 0.72
     start_deg = int((pulse_phase * 360.0) % 360)
     d.arc(
         (cx - arc_r, cy - arc_r, cx + arc_r, cy + arc_r),
         start=start_deg,
-        end=start_deg + 140,
+        end=start_deg + 135,
         fill=sec_col,
         width=max(2, ss * 2),
     )
+    opp_deg = int((360.0 - pulse_phase * 360.0 + 180.0) % 360)
+    inner_arc_r = r * 0.56
+    d.arc(
+        (cx - inner_arc_r, cy - inner_arc_r, cx + inner_arc_r, cy + inner_arc_r),
+        start=opp_deg,
+        end=opp_deg + 95,
+        fill=hex_to_rgba(primary_hex if is_online else CyberColors.TEXT_SECONDARY, 160),
+        width=max(1, ss),
+    )
 
-    # Core solid cyan/emerald node dot + ring
-    core_r = r * 0.34
+    # 4. 3D Core sphere with layered shading + top-left specular glint
+    core_r = r * 0.35
+    base_core_hex = primary_hex if is_online else CyberColors.WARNING
+    deep_core_hex = mix_hex(base_core_hex, CyberColors.BACKGROUND, 0.42)
     d.ellipse(
         (cx - core_r, cy - core_r, cx + core_r, cy + core_r),
-        fill=hex_to_rgba(primary_hex if is_online else CyberColors.WARNING, 245),
-        outline=hex_to_rgba(CyberColors.TEXT_PRIMARY, 200),
+        fill=hex_to_rgba(deep_core_hex, 250),
+        outline=hex_to_rgba(CyberColors.TEXT_PRIMARY, 210),
         width=ss,
+    )
+    mid_r = core_r * 0.76
+    d.ellipse(
+        (cx - mid_r, cy - mid_r, cx + mid_r, cy + mid_r),
+        fill=hex_to_rgba(base_core_hex, 248),
+    )
+    glint_r = max(1.5, core_r * 0.28)
+    gx = cx - core_r * 0.28
+    gy = cy - core_r * 0.28
+    d.ellipse(
+        (gx - glint_r, gy - glint_r, gx + glint_r, gy + glint_r),
+        fill=(255, 255, 255, 220),
     )
 
     return img.resize((s, s), Image.Resampling.LANCZOS)

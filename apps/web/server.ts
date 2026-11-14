@@ -17,8 +17,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const RELEASES_PUBLIC_DIR = path.resolve(ROOT_DIR, 'public/releases');
-const APP_VERSION = '0.60.0';
-const APP_VERSION_LABEL = '0.60.00-beta';
+const APP_VERSION = '0.70.0';
+const APP_VERSION_LABEL = '0.70.00-beta';
 const PROTOCOL_VERSION = 'AI-NET/3.0-SECURE';
 
 const app = express();
@@ -296,6 +296,8 @@ interface DaemonConfigData {
   pairing_token?: string;
   pairing_pin?: string;
   view_only_mode?: boolean;
+  paused?: boolean;
+  target_fps?: number;
   require_hitl_approval?: boolean;
   clipboard_sync_allowed?: boolean;
   auto_lock_on_disconnect?: boolean;
@@ -304,8 +306,14 @@ interface DaemonConfigData {
   security_profile?: 'zero_trust' | 'balanced' | 'view_only';
   mdns_enabled?: boolean;
   autostart_on_boot?: boolean;
+  start_minimized?: boolean;
+  close_to_tray?: boolean;
+  file_transfer_enabled?: boolean;
+  audio_control_enabled?: boolean;
+  ollama_bridge_enabled?: boolean;
   setup_completed?: boolean;
   port?: number;
+  paired_clients?: Array<any>;
   blacklisted_devices?: Array<any>;
   [key: string]: any;
 }
@@ -1043,7 +1051,7 @@ async function getRealDaemonSnapshot() {
     localIp,
     port,
     isRunning: probe.open,
-    isPaused: !probe.open,
+    isPaused: Boolean(cfg.paused) || !probe.open,
     agentReachable: probe.open,
     agentRttMs: probe.open ? probe.rttMs : null,
     mdnsEnabled: cfg.mdns_enabled !== false,
@@ -1053,7 +1061,12 @@ async function getRealDaemonSnapshot() {
     autoLockOnDisconnect: Boolean(cfg.auto_lock_on_disconnect),
     autoBanIntrusion: cfg.auto_ban_intrusion !== false,
     subnetGeofenceOnly: cfg.subnet_geofence_only !== false,
-    autoStartOnBoot: cfg.autostart_on_boot !== false,
+    autoStartOnBoot: Boolean(cfg.autostart_on_boot),
+    startMinimized: Boolean(cfg.start_minimized),
+    closeToTray: cfg.close_to_tray !== false,
+    fileTransferEnabled: cfg.file_transfer_enabled !== false,
+    audioControlEnabled: cfg.audio_control_enabled !== false,
+    ollamaBridgeEnabled: cfg.ollama_bridge_enabled !== false,
     targetFps: Number(cfg.target_fps || 60),
     setupCompleted: cfg.setup_completed !== false,
     securityProfile: (cfg.security_profile as 'zero_trust' | 'balanced' | 'view_only') || 'balanced',
@@ -1067,7 +1080,7 @@ async function getRealDaemonSnapshot() {
     ramTotalGb,
     diskPercent: sampleRealDiskPercent(),
     captureFps: 0,
-    connectedClients: [],
+    connectedClients: Array.isArray(cfg.paired_clients) ? cfg.paired_clients : [],
     blacklistedDevices,
     activeAdapters: sampleActiveAdapters(),
     avIntegrity: {
@@ -1112,7 +1125,7 @@ let cachedReleasesPayload: { data: any; timestamp: number } | null = null;
 const RELEASES_CACHE_TTL_MS = 30_000;
 
 function readFirstAvailableManifest(): any {
-  const candidates = ['v0.60.0', 'v0.51.0', 'v0.50.0', 'v0.35.0', 'v0.32.0', 'v0.31.3', 'v0.30.0'];
+  const candidates = ['v0.70.0', 'v0.60.0', 'v0.51.0', 'v0.50.0', 'v0.35.0', 'v0.32.0', 'v0.31.3', 'v0.30.0'];
   for (const ver of candidates) {
     const p = path.join(RELEASES_PUBLIC_DIR, ver, 'RELEASE_MANIFEST.json');
     if (fs.existsSync(p)) {
@@ -1325,7 +1338,7 @@ app.post('/api/ai/models', requireControlAuth, async (req: Request, res: Respons
 });
 
 app.delete('/api/ai/models/:id', requireControlAuth, (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(req.params.id || '');
   DYNAMIC_MODELS = DYNAMIC_MODELS.filter((m) => m.id !== id);
   return res.json({
     success: true,
@@ -1593,9 +1606,114 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         break;
       }
       case 'toggle_autostart': {
-        const nextVal = !(cfg.autostart_on_boot !== false);
+        const nextVal =
+          typeof req.body?.enabled === 'boolean'
+            ? req.body.enabled
+            : !Boolean(cfg.autostart_on_boot);
         await saveDaemonConfigPatch({ autostart_on_boot: nextVal });
-        addServerLog('INFO', `Autostart preference updated to ${nextVal}.`);
+        if (process.platform === 'win32') {
+          await new Promise<void>((resolve) => {
+            const pyScript =
+              'import sys; sys.path.insert(0,"agent"); import windows_integration; windows_integration.set_windows_autostart(sys.argv[1]=="1")';
+            execFile(
+              getPythonBin(),
+              ['-c', pyScript, nextVal ? '1' : '0'],
+              { cwd: ROOT_DIR, timeout: 5000, windowsHide: true },
+              () => resolve()
+            );
+          });
+        }
+        addServerLog('INFO', `Run on Windows Startup ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_pause': {
+        const nextPaused =
+          typeof req.body?.paused === 'boolean' ? req.body.paused : !Boolean(cfg.paused);
+        await saveDaemonConfigPatch({ paused: nextPaused });
+        addServerLog('WARN', `Daemon packet intake ${nextPaused ? 'PAUSED' : 'RESUMED'}.`);
+        break;
+      }
+      case 'toggle_file_transfer': {
+        const nextVal = !(cfg.file_transfer_enabled !== false);
+        await saveDaemonConfigPatch({ file_transfer_enabled: nextVal });
+        addServerLog('INFO', `Chunked File Transfer ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_audio_control': {
+        const nextVal = !(cfg.audio_control_enabled !== false);
+        await saveDaemonConfigPatch({ audio_control_enabled: nextVal });
+        addServerLog('INFO', `Remote System Audio Control ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_ollama_bridge': {
+        const nextVal = !(cfg.ollama_bridge_enabled !== false);
+        await saveDaemonConfigPatch({ ollama_bridge_enabled: nextVal });
+        addServerLog('INFO', `Local Ollama AI Bridge ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_start_minimized': {
+        const nextVal = !Boolean(cfg.start_minimized);
+        await saveDaemonConfigPatch({ start_minimized: nextVal });
+        addServerLog('INFO', `Start minimized to system tray ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_close_to_tray': {
+        const nextVal = !(cfg.close_to_tray !== false);
+        await saveDaemonConfigPatch({ close_to_tray: nextVal });
+        addServerLog('INFO', `Close window to system tray ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
+        break;
+      }
+      case 'toggle_client_trust': {
+        const targetId = String(clientId || ip || '').trim();
+        if (!targetId) {
+          return res.status(400).json({ error: 'clientId is required to toggle trust' });
+        }
+        const currentClients = Array.isArray(cfg.paired_clients) ? [...cfg.paired_clients] : [];
+        const idx = currentClients.findIndex((c: any) => c.id === targetId || c.ip === targetId);
+        if (idx >= 0) {
+          currentClients[idx] = { ...currentClients[idx], isTrusted: !Boolean(currentClients[idx].isTrusted) };
+        } else {
+          currentClients.push({ id: targetId, ip: String(ip || ''), device: targetId, isTrusted: true, inputAllowed: true });
+        }
+        await saveDaemonConfigPatch({ paired_clients: currentClients });
+        addServerLog('SECURITY', `Updated trusted policy for client ${targetId}.`);
+        break;
+      }
+      case 'toggle_client_input': {
+        const targetId = String(clientId || ip || '').trim();
+        if (!targetId) {
+          return res.status(400).json({ error: 'clientId is required to toggle client input' });
+        }
+        const currentClients = Array.isArray(cfg.paired_clients) ? [...cfg.paired_clients] : [];
+        const idx = currentClients.findIndex((c: any) => c.id === targetId || c.ip === targetId);
+        if (idx >= 0) {
+          const prevInput = currentClients[idx].inputAllowed !== false;
+          currentClients[idx] = { ...currentClients[idx], inputAllowed: !prevInput };
+        } else {
+          currentClients.push({ id: targetId, ip: String(ip || ''), device: targetId, isTrusted: false, inputAllowed: false });
+        }
+        await saveDaemonConfigPatch({ paired_clients: currentClients });
+        addServerLog('SECURITY', `Updated remote input lock for client ${targetId}.`);
+        break;
+      }
+      case 'disconnect_client': {
+        const targetId = String(clientId || ip || '').trim();
+        if (!targetId) {
+          return res.status(400).json({ error: 'clientId is required to disconnect client' });
+        }
+        const currentClients = Array.isArray(cfg.paired_clients) ? cfg.paired_clients : [];
+        const filtered = currentClients.filter((c: any) => c.id !== targetId && c.ip !== targetId);
+        await saveDaemonConfigPatch({ paired_clients: filtered });
+        const disRes = await dispatchLiveAgentCommand('127.0.0.1', daemonPort, {
+          action: 'DISCONNECT_CLIENT',
+          clientId: targetId,
+        });
+        addServerLog(
+          'SECURITY',
+          disRes.ok
+            ? `Disconnected peer session ${targetId}.`
+            : `Removed peer ${targetId} from paired session roster.`
+        );
         break;
       }
       case 'set_target_fps': {
@@ -2291,7 +2409,8 @@ app.post('/api/wol/schedules', requireControlAuth, (req: Request, res: Response)
 });
 
 app.delete('/api/wol/schedules/:id', requireControlAuth, (req: Request, res: Response) => {
-  const next = readPersistedWolSchedules().filter((s) => s.id !== req.params.id);
+  const id = String(req.params.id || '');
+  const next = readPersistedWolSchedules().filter((s) => s.id !== id);
   writePersistedWolSchedules(next);
   return res.json({ success: true, schedules: next });
 });
@@ -3129,7 +3248,7 @@ app.use('/api', (_req: Request, res: Response) => {
 async function startServer() {
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (_req: Request, res: Response) => {
+    app.get('/{*splat}', (_req: Request, res: Response) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {

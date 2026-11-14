@@ -86,8 +86,8 @@ class OsIntegrationsManager {
 
     // 2. Setup Home Screen Widget Background Communication
     try {
-      HomeWidget.setAppGroupId('group.com.cst.netcontroller');
-      HomeWidget.registerInteractivityCallback(widgetBackgroundCallback);
+      await HomeWidget.setAppGroupId('group.com.cst.netcontroller');
+      await HomeWidget.registerInteractivityCallback(widgetBackgroundCallback);
     } catch (e) {
       debugPrint('HomeWidget init error: $e');
     }

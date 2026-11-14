@@ -188,6 +188,8 @@ try:
         check_port_available,
         create_desktop_shortcut,
         create_start_menu_shortcut,
+        get_windows_autostart_enabled,
+        set_windows_autostart,
         show_uninstall_dialog,
         show_install_dialog,
         perform_full_uninstall,
@@ -200,6 +202,8 @@ except ImportError:
             check_port_available,
             create_desktop_shortcut,
             create_start_menu_shortcut,
+            get_windows_autostart_enabled,
+            set_windows_autostart,
             show_uninstall_dialog,
             show_install_dialog,
             perform_full_uninstall,
@@ -210,6 +214,8 @@ except ImportError:
         check_port_available = None
         create_desktop_shortcut = None
         create_start_menu_shortcut = None
+        get_windows_autostart_enabled = None
+        set_windows_autostart = None
         show_uninstall_dialog = None
         show_install_dialog = None
         perform_full_uninstall = None
@@ -831,6 +837,9 @@ class HostAgentDaemon:
         self.view_only_mode: bool = bool(self.config.get("view_only_mode", False))
         self.require_hitl_approval: bool = bool(self.config.get("require_hitl_approval", True))
         self.clipboard_sync_allowed: bool = bool(self.config.get("clipboard_sync_allowed", True))
+        self.file_transfer_enabled: bool = bool(self.config.get("file_transfer_enabled", True))
+        self.audio_control_enabled: bool = bool(self.config.get("audio_control_enabled", True))
+        self.ollama_bridge_enabled: bool = bool(self.config.get("ollama_bridge_enabled", True))
         self.auto_lock_on_disconnect: bool = bool(self.config.get("auto_lock_on_disconnect", False))
         self.auto_ban_intrusion: bool = bool(self.config.get("auto_ban_intrusion", True))
         self.subnet_geofence_only: bool = bool(self.config.get("subnet_geofence_only", True))
@@ -862,12 +871,17 @@ class HostAgentDaemon:
         self._tray_thread: Optional[threading.Thread] = None
         if enable_tray is None:
             self._enable_tray = (
-                os.environ.get("AI_DISABLE_TRAY") != "1" and _has_desktop_display()
+                os.environ.get("AI_DISABLE_TRAY") != "1"
+                and bool(self.config.get("enable_tray_icon", True))
+                and _has_desktop_display()
             )
         else:
             self._enable_tray = bool(enable_tray)
         if enable_mdns is None:
-            self._enable_mdns = os.environ.get("AI_DISABLE_MDNS") != "1"
+            self._enable_mdns = (
+                os.environ.get("AI_DISABLE_MDNS") != "1"
+                and bool(self.config.get("mdns_enabled", True))
+            )
         else:
             self._enable_mdns = bool(enable_mdns)
         self.file_writer = HostFileWriter() if HostFileWriter else None
@@ -1014,8 +1028,15 @@ class HostAgentDaemon:
                         self.pairing_pin = disk_pin
                         self.pin_issued_at = float(cfg.get("pin_issued_at") or time.time())
                     self.view_only_mode = bool(cfg.get("view_only_mode", self.view_only_mode))
+                    if "paused" in cfg:
+                        self.is_paused = bool(cfg.get("paused", self.is_paused))
+                        if self.gui_state is not None:
+                            self.gui_state.is_paused = self.is_paused
                     self.require_hitl_approval = bool(cfg.get("require_hitl_approval", self.require_hitl_approval))
                     self.clipboard_sync_allowed = bool(cfg.get("clipboard_sync_allowed", self.clipboard_sync_allowed))
+                    self.file_transfer_enabled = bool(cfg.get("file_transfer_enabled", self.file_transfer_enabled))
+                    self.audio_control_enabled = bool(cfg.get("audio_control_enabled", self.audio_control_enabled))
+                    self.ollama_bridge_enabled = bool(cfg.get("ollama_bridge_enabled", self.ollama_bridge_enabled))
                     self.auto_ban_intrusion = bool(cfg.get("auto_ban_intrusion", self.auto_ban_intrusion))
                     self.subnet_geofence_only = bool(cfg.get("subnet_geofence_only", self.subnet_geofence_only))
                     self.require_hmac_auth = bool(cfg.get("require_hmac_auth", self.require_hmac_auth))
@@ -1040,6 +1061,9 @@ class HostAgentDaemon:
             self.view_only_mode = bool(getattr(self.gui_state, "view_only_mode", self.view_only_mode))
             self.require_hitl_approval = bool(getattr(self.gui_state, "require_hitl_approval", self.require_hitl_approval))
             self.clipboard_sync_allowed = bool(getattr(self.gui_state, "clipboard_sync_allowed", self.clipboard_sync_allowed))
+            self.file_transfer_enabled = bool(getattr(self.gui_state, "file_transfer_enabled", self.file_transfer_enabled))
+            self.audio_control_enabled = bool(getattr(self.gui_state, "audio_control_enabled", self.audio_control_enabled))
+            self.ollama_bridge_enabled = bool(getattr(self.gui_state, "ollama_bridge_enabled", self.ollama_bridge_enabled))
             self.auto_ban_intrusion = bool(getattr(self.gui_state, "auto_ban_intrusion", self.auto_ban_intrusion))
             self.subnet_geofence_only = bool(getattr(self.gui_state, "subnet_geofence_only", self.subnet_geofence_only))
             self.require_hmac_auth = bool(getattr(self.gui_state, "require_hmac_auth", self.require_hmac_auth))
@@ -1178,7 +1202,7 @@ class HostAgentDaemon:
         self.loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
         self._stream_wake_event = asyncio.Event()
-        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.60.0)...")
+        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.70.0)...")
         await self._start_mdns()
         self._start_system_tray()
 
@@ -1407,7 +1431,7 @@ class HostAgentDaemon:
 
             desc = {
                 'os': platform.system(),
-                'version': '0.60.0',
+                'version': '0.70.0',
                 'ai': 'ollama-bridge',
                 'hostname': hostname,
                 'tls': '1' if self.tls_fingerprint else '0',
@@ -1517,6 +1541,16 @@ class HostAgentDaemon:
                     status = "PAUSED" if self.is_paused else "RESUMED"
                     self.gui_state.add_log("WARN" if self.is_paused else "INFO", f"Daemon {status} from System Tray.")
 
+            def _toggle_autostart_tray():
+                curr = bool(get_windows_autostart_enabled()) if callable(get_windows_autostart_enabled) else False
+                nxt = not curr
+                if callable(set_windows_autostart):
+                    set_windows_autostart(nxt)
+                if self.gui_state:
+                    self.gui_state.autostart_on_boot = nxt
+                    self.gui_state.save_policy_config()
+                    self.gui_state.add_log("SYSTEM", f"Run on Windows Startup {'ENABLED' if nxt else 'DISABLED'} via System Tray.")
+
             def _add_desktop_shortcut():
                 if create_desktop_shortcut:
                     ok1, msg1 = create_desktop_shortcut()
@@ -1540,14 +1574,20 @@ class HostAgentDaemon:
 
             menu = pystray.Menu(
                 pystray.MenuItem("Open Control Center", _show_gui, default=True),
-                pystray.MenuItem("Install AI NetController to PC...", _install),
+                pystray.MenuItem("Install / Customize PC Features...", _install),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("AI NetController Beta 0.60.00", lambda: None, enabled=False),
+                pystray.MenuItem("AI NetController Beta 0.70.00", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Port: {self.port} (WebSocket)", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem(lambda text: "Resume Daemon" if self.is_paused else "Pause Daemon", _toggle_pause),
                 pystray.MenuItem(lambda text: "Allow Remote Input" if self.view_only_mode else "Lock Input (View-Only)", _toggle_view_only),
+                pystray.MenuItem(
+                    lambda text: "Disable Run on Windows Startup"
+                    if (callable(get_windows_autostart_enabled) and get_windows_autostart_enabled())
+                    else "Enable Run on Windows Startup",
+                    _toggle_autostart_tray,
+                ),
                 pystray.MenuItem("Panic: Disconnect All", lambda: self.kill_all_tasks()),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Add Desktop Shortcut", _add_desktop_shortcut),
@@ -2039,6 +2079,16 @@ class HostAgentDaemon:
                                     "timestamp": time.time()
                                 }))
                                 continue
+                            elif action == "DISCONNECT_CLIENT":
+                                target_cid = str(text_data.get("clientId") or text_data.get("ip") or "").strip()
+                                if target_cid:
+                                    self.force_disconnect_client(target_cid)
+                                await self._ws_send(ws, json.dumps({
+                                    "event": "DISCONNECT_ACK",
+                                    "clientId": target_cid,
+                                    "timestamp": time.time()
+                                }))
+                                continue
                             elif action in ("INPUT_EVENT", "PC_CONTROL"):
                                 await self._process_virtual_input(message.encode('utf-8'), ws)
                                 continue
@@ -2172,16 +2222,24 @@ class HostAgentDaemon:
                     await self._process_virtual_input(payload, ws)
 
                 elif opcode == OP_AUDIO:
-                    await self._process_audio_control(payload, ws)
+                    if not self.audio_control_enabled:
+                        await self._send_error(ws, "Remote audio and media control is disabled by host policy")
+                    else:
+                        await self._process_audio_control(payload, ws)
 
                 elif opcode == OP_VIEWPORT_RESIZE:
                     await self._process_viewport_resize(payload)
 
                 elif opcode == OP_LLM_STREAM:
-                    self._track_task(self._process_ollama_query(ws, payload, seq))
+                    if not self.ollama_bridge_enabled:
+                        await self._send_error(ws, "Local Ollama AI Bridge is disabled by host policy")
+                    else:
+                        self._track_task(self._process_ollama_query(ws, payload, seq))
 
                 elif opcode == OP_FILE_TRANSFER:
-                    if not self._is_client_input_allowed(ws):
+                    if not self.file_transfer_enabled:
+                        await self._send_error(ws, "Remote file transfer is disabled by host policy")
+                    elif not self._is_client_input_allowed(ws):
                         await self._send_error(ws, "File upload blocked while View-Only Mode or input lock is active")
                     elif self.file_writer:
                         ack_packet = await self.file_writer.handle_packet_async(payload)
@@ -3178,7 +3236,7 @@ class HostAgentDaemon:
                     "disk_percent": disk_pct,
                     "capture_fps": self.capture_fps,
                     "os": self._os_name,
-                    "version": "0.60.0",
+                    "version": "0.70.0",
                     "protocol": "CST/3.0",
                     "local_ip": self._get_local_ip(),
                     "mac": self._get_primary_mac(),

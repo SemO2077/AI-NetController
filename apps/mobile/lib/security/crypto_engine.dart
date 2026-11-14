@@ -392,7 +392,9 @@ class ChaCha20Poly1305 {
   }
 
   static void _scrubScratch() {
-    for (int i = 0; i < 8; i++) _keyWords[i] = 0;
+    for (int i = 0; i < 8; i++) {
+      _keyWords[i] = 0;
+    }
     for (int i = 0; i < 16; i++) {
       _state[i] = 0;
       _working[i] = 0;
@@ -489,26 +491,44 @@ class ChaCha20Poly1305 {
   }
 }
 
-/// RFC 5869 HKDF-SHA256 Implementation
-Uint8List hkdfExpandAndExtract(Uint8List salt, Uint8List ikm, Uint8List info, int length) {
-  final crypto_pkg.Hmac hmacPrk = crypto_pkg.Hmac(crypto_pkg.sha256, salt.isEmpty ? Uint8List(32) : salt);
-  final List<int> prk = hmacPrk.convert(ikm).bytes;
+/// RFC 5869 HKDF-SHA256 Extract step.
+Uint8List hkdfExtract(Uint8List salt, Uint8List ikm) {
+  final Uint8List actualSalt = salt.isEmpty ? Uint8List(32) : salt;
+  final crypto_pkg.Hmac hmacPrk = crypto_pkg.Hmac(crypto_pkg.sha256, actualSalt);
+  return Uint8List.fromList(hmacPrk.convert(ikm).bytes);
+}
 
+/// RFC 5869 HKDF-SHA256 Expand step without per-iteration builder churn.
+Uint8List hkdfExpand(Uint8List prk, List<int> info, int length) {
   final crypto_pkg.Hmac hmacOkm = crypto_pkg.Hmac(crypto_pkg.sha256, prk);
-  final BytesBuilder okm = BytesBuilder();
-  List<int> t = [];
-  final int blocks = ((length + 31) ~/ 32);
-
-  for (int i = 1; i <= blocks; i++) {
-    final BytesBuilder input = BytesBuilder();
-    input.add(t);
-    input.add(info);
-    input.addByte(i);
-    t = hmacOkm.convert(input.toBytes()).bytes;
-    okm.add(t);
+  final int blocks = (length + 31) ~/ 32;
+  final Uint8List okm = Uint8List(blocks * 32);
+  final Uint8List stepBuf = Uint8List(32 + info.length + 1);
+  if (info.isNotEmpty) {
+    stepBuf.setRange(32, 32 + info.length, info);
   }
 
-  return Uint8List.fromList(okm.toBytes().sublist(0, length));
+  for (int i = 1; i <= blocks; i++) {
+    final int inputStart = (i == 1) ? 32 : 0;
+    stepBuf[32 + info.length] = i;
+    final List<int> digest =
+        hmacOkm.convert(Uint8List.sublistView(stepBuf, inputStart)).bytes;
+    stepBuf.setRange(0, 32, digest);
+    okm.setRange((i - 1) * 32, i * 32, digest);
+  }
+
+  return Uint8List.sublistView(okm, 0, length);
+}
+
+/// RFC 5869 HKDF-SHA256 Extract + Expand Implementation.
+Uint8List hkdfExpandAndExtract(
+    Uint8List salt, Uint8List ikm, Uint8List info, int length) {
+  final Uint8List prk = hkdfExtract(salt, ikm);
+  try {
+    return hkdfExpand(prk, info, length);
+  } finally {
+    zeroize(prk);
+  }
 }
 
 /// Client-Side Cryptographic Session Manager

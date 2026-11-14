@@ -1,6 +1,6 @@
 /// AI NetController — Mobile Core Library
 /// Unified export for binary protocol, security, services, theme, and UI.
-library ai_netcontroller;
+library;
 
 export 'protocol/binary_protocol.dart';
 export 'protocol/fragmentation_engine.dart' hide kFlagEncrypted;

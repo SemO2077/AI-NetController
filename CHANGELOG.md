@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [v0.70.0] (Beta 0.70.00) - 2026-11-14
+
+### Added & Rebuilt
+- **Rebuilt Flutter Mobile Companion (`apps/mobile/`)**: Rebuilt client architecture from the ground up, removed redundant code, added 3D beveled Cyber Glass surfaces with fluid micro-animations, and refined viewport/aspect-ratio scaling across `280x653` to `1440x900` displays.
+- **Host Daemon Setup Wizard & Feature Customizer (`agent/`)**: Upgraded desktop Control Center (`CyberUITheme`), added a 2-column feature customizer and 3-step Guided Setup Wizard, and added user toggles for Run on Startup, File Transfer, Audio Control, Ollama Bridge, Start Minimized, Close to Tray, Target FPS, and daemon Pause state.
+- **Professional Install/Uninstall & 3D Branding**: Added Win32 Add/Remove Programs lifecycle and `MoveFileExW` deferred self-delete cleanup (`windows_integration.py`), stamped 3D Cyber-Glass icons onto Windows EXEs and Android APKs (`build_android_app.py`), and enabled onefile SFX `.EXE` packaging (`build_agent.spec`, `build_release_binaries.py`).
+- **End-to-End Web & Android Bridge Parity**: Synchronized all `/api/daemon/action` operations (including autostart registry sync, client trust/input toggles, `DISCONNECT_CLIENT`, security profiles, and pause controls) across `apps/web/server.ts`, `agent/daemon_config.py`, `agent/agent.py`, `agent/agent_gui.py`, and `apps/mobile/android_webview_shell/src/com/cst/autonomouslan/MainActivity.java`.
+
+### Changed & Upgraded
+- **Full-Stack Dependency Upgrades**:
+  - Updated Python packages (`agent/requirements.txt`) to latest (`websockets>=17.4`, `zeroconf>=0.154.0`, `Pillow>=13.0.0`, `numpy>=2.5.4`, `PyTurboJPEG>=2.6.1`, `cryptography>=50.0.2`, `psutil>=7.2.2`, `pyinstaller>=6.22.3`).
+  - Updated Flutter dependencies (`apps/mobile/pubspec.yaml`) to `flutter_riverpod ^3.5.0`, `local_auth ^3.0.2`, `home_widget ^0.10.0`, `network_info_plus ^8.2.2`, `sensors_plus ^7.1.1`, `share_plus ^13.3.1`, `wakelock_plus ^1.8.2`, `flutter_lints ^6.0.0`, migrating `BiometricSecurityGate` and Riverpod legacy providers.
+  - Updated Web/Node dependencies (`package.json`) to `vite ^8.3.8`, `express ^5.3.0`, `typescript ^7.0.2`, `@google/genai ^3.3.0`, `@tailwindcss/vite ^4.3.5`, `lucide-react ^1.73.0`, `motion ^14.14.0`, `recharts ^3.10.1`, `zustand ^5.1.0`; updated `apps/web/vite.config.ts`, Express 5 wildcard routes in `apps/web/server.ts`, and `.github/workflows/ci.yml` to Node 22.
+- **Unified `v0.70.0` (`Beta 0.70.00`) Release**: Bumped all Node/Web (`0.70.0`), Python Host Agent (`0.70.0` / PE & MSIX `0.70.0.0`), Flutter/Android (`0.70.0+700` / `versionCode 700` / `0.70.00-beta`), documentation, and release workflows/scripts.
+
+---
+
 ## [v0.60.0] (Beta 0.60.00) - 2026-11-13
 
 ### Security & Hardening

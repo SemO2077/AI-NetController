@@ -109,8 +109,22 @@ public class MainActivity extends Activity {
     private volatile boolean daemonTlsActive = true;
     private volatile String daemonHitlMode = "strict";
     private volatile boolean daemonViewOnly = false;
+    private volatile boolean daemonMdnsEnabled = true;
+    private volatile boolean daemonHitlApproval = true;
+    private volatile boolean daemonClipboardSync = true;
+    private volatile boolean daemonAutoLock = false;
+    private volatile boolean daemonAutoBan = true;
+    private volatile boolean daemonSubnetGeofence = true;
+    private volatile boolean daemonAutoStart = false;
+    private volatile boolean daemonSetupCompleted = true;
+    private volatile String daemonSecurityProfile = "balanced";
+    private volatile int daemonPort = 8765;
+    private volatile int daemonTargetFps = 60;
     private volatile String daemonPin = "";
     private volatile String daemonToken = "";
+    private final List<JSONObject> daemonBlacklist = Collections.synchronizedList(new ArrayList<JSONObject>());
+    private final List<JSONObject> daemonPairedClients = Collections.synchronizedList(new ArrayList<JSONObject>());
+    private final List<JSONObject> daemonLogs = Collections.synchronizedList(new ArrayList<JSONObject>());
     private final String bridgeSessionToken = generateHexToken("bridge_", 24);
 
     private SharedPreferences getUiPrefs() {
@@ -131,6 +145,17 @@ public class MainActivity extends Activity {
                 daemonHitlMode = hitl;
             }
             daemonViewOnly = prefs.getBoolean("viewOnly", false);
+            daemonMdnsEnabled = prefs.getBoolean("mdnsEnabled", true);
+            daemonHitlApproval = prefs.getBoolean("hitlApproval", true);
+            daemonClipboardSync = prefs.getBoolean("clipboardSync", true);
+            daemonAutoLock = prefs.getBoolean("autoLock", false);
+            daemonAutoBan = prefs.getBoolean("autoBan", true);
+            daemonSubnetGeofence = prefs.getBoolean("subnetGeofence", true);
+            daemonAutoStart = prefs.getBoolean("autoStart", false);
+            daemonSetupCompleted = prefs.getBoolean("setupCompleted", true);
+            daemonSecurityProfile = prefs.getString("securityProfile", "balanced");
+            daemonPort = prefs.getInt("port", 8765);
+            daemonTargetFps = prefs.getInt("targetFps", 60);
             String savedPin = prefs.getString("pin", "");
             if (savedPin != null && savedPin.matches("^[0-9]{6}$")) {
                 daemonPin = savedPin;
@@ -157,6 +182,17 @@ public class MainActivity extends Activity {
                 .putBoolean("tlsActive", daemonTlsActive)
                 .putString("hitlMode", daemonHitlMode)
                 .putBoolean("viewOnly", daemonViewOnly)
+                .putBoolean("mdnsEnabled", daemonMdnsEnabled)
+                .putBoolean("hitlApproval", daemonHitlApproval)
+                .putBoolean("clipboardSync", daemonClipboardSync)
+                .putBoolean("autoLock", daemonAutoLock)
+                .putBoolean("autoBan", daemonAutoBan)
+                .putBoolean("subnetGeofence", daemonSubnetGeofence)
+                .putBoolean("autoStart", daemonAutoStart)
+                .putBoolean("setupCompleted", daemonSetupCompleted)
+                .putString("securityProfile", daemonSecurityProfile)
+                .putInt("port", daemonPort)
+                .putInt("targetFps", daemonTargetFps)
                 .putString("pin", daemonPin)
                 .putString("token", daemonToken)
                 .apply();
@@ -1055,13 +1091,21 @@ public class MainActivity extends Activity {
             obj.put("localIp", lanIp);
             obj.put("ip", lanIp);
             obj.put("mac", "");
-            obj.put("port", 8765);
-            obj.put("wsUri", "ws://" + lanIp + ":8765");
+            obj.put("port", daemonPort);
+            obj.put("wsUri", "ws://" + lanIp + ":" + daemonPort);
             obj.put("uptime", uptimeSec + "s");
             obj.put("uptimeSeconds", uptimeSec);
-            obj.put("mdnsEnabled", false);
+            obj.put("mdnsEnabled", daemonMdnsEnabled);
             obj.put("viewOnlyMode", daemonViewOnly);
-            obj.put("requireHitlApproval", true);
+            obj.put("requireHitlApproval", daemonHitlApproval);
+            obj.put("clipboardSyncAllowed", daemonClipboardSync);
+            obj.put("autoLockOnDisconnect", daemonAutoLock);
+            obj.put("autoBanIntrusion", daemonAutoBan);
+            obj.put("subnetGeofenceOnly", daemonSubnetGeofence);
+            obj.put("autoStartOnBoot", daemonAutoStart);
+            obj.put("setupCompleted", daemonSetupCompleted);
+            obj.put("securityProfile", daemonSecurityProfile);
+            obj.put("targetFps", daemonTargetFps);
             obj.put("cpuPercent", 0);
             obj.put("cpuCores", cpuCores);
             obj.put("ramPercent", ramPercent);
@@ -1069,8 +1113,12 @@ public class MainActivity extends Activity {
             obj.put("ramTotalGb", ramTotalGb);
             obj.put("diskPercent", diskPercent);
             obj.put("captureFps", 0);
-            obj.put("connectedClients", new JSONArray());
-            obj.put("blacklistedDevices", new JSONArray());
+            synchronized (daemonPairedClients) {
+                obj.put("connectedClients", new JSONArray(daemonPairedClients));
+            }
+            synchronized (daemonBlacklist) {
+                obj.put("blacklistedDevices", new JSONArray(daemonBlacklist));
+            }
             JSONArray adapters = new JSONArray();
             if (!"127.0.0.1".equals(lanIp)) {
                 JSONObject wlan = new JSONObject();
@@ -1087,7 +1135,9 @@ public class MainActivity extends Activity {
             obj.put("security", sec);
             obj.put("pairingPin", daemonPin);
             obj.put("pairingToken", daemonToken);
-            obj.put("logs", new JSONArray());
+            synchronized (daemonLogs) {
+                obj.put("logs", new JSONArray(daemonLogs));
+            }
             return obj.toString();
         } catch (Throwable e) {
             return "{\"status\":\"error\",\"error\":\"" + escapeJson(e.getMessage()) + "\"}";
@@ -1749,6 +1799,8 @@ public class MainActivity extends Activity {
                             daemonRunning = !daemonRunning;
                         } else if ("regenerate_pin".equals(act) || "rotate_pin".equals(act)) {
                             daemonPin = generatePin();
+                        } else if ("rotate_token".equals(act)) {
+                            daemonToken = generateHexToken("ai_sec_", 16);
                         } else if ("set_hitl_mode".equals(act)) {
                             String mode = actReq.optString("value", "").trim().toLowerCase(Locale.US);
                             if ("strict".equals(mode) || "balanced".equals(mode) || "permissive".equals(mode) || "manual".equals(mode)) {
@@ -1762,6 +1814,116 @@ public class MainActivity extends Activity {
                             daemonViewOnly = !daemonViewOnly;
                         } else if ("toggle_tls".equals(act)) {
                             daemonTlsActive = !daemonTlsActive;
+                        } else if ("toggle_mdns".equals(act)) {
+                            daemonMdnsEnabled = actReq.has("enabled") ? actReq.optBoolean("enabled") : !daemonMdnsEnabled;
+                        } else if ("toggle_hitl".equals(act)) {
+                            daemonHitlApproval = actReq.has("enabled") ? actReq.optBoolean("enabled") : !daemonHitlApproval;
+                        } else if ("toggle_clipboard_sync".equals(act)) {
+                            daemonClipboardSync = !daemonClipboardSync;
+                        } else if ("toggle_auto_lock".equals(act)) {
+                            daemonAutoLock = !daemonAutoLock;
+                        } else if ("toggle_auto_ban".equals(act)) {
+                            daemonAutoBan = !daemonAutoBan;
+                        } else if ("toggle_subnet_geofence".equals(act)) {
+                            daemonSubnetGeofence = !daemonSubnetGeofence;
+                        } else if ("toggle_autostart".equals(act)) {
+                            daemonAutoStart = actReq.has("enabled") ? actReq.optBoolean("enabled") : !daemonAutoStart;
+                        } else if ("set_target_fps".equals(act)) {
+                            int reqFps = actReq.optInt("fps", 60);
+                            if (reqFps == 60 || reqFps == 30 || reqFps == 15) {
+                                daemonTargetFps = reqFps;
+                            }
+                        } else if ("update_port".equals(act)) {
+                            int reqPort = actReq.optInt("port", daemonPort);
+                            if (reqPort >= 1024 && reqPort <= 65535) {
+                                daemonPort = reqPort;
+                            }
+                        } else if ("apply_security_profile".equals(act)) {
+                            String prof = actReq.optString("profile", "balanced").trim().toLowerCase(Locale.US);
+                            daemonSecurityProfile = prof;
+                            if ("zero_trust".equals(prof)) {
+                                daemonHitlApproval = true;
+                                daemonAutoBan = true;
+                                daemonSubnetGeofence = true;
+                                daemonClipboardSync = false;
+                                daemonViewOnly = false;
+                            } else if ("view_only".equals(prof)) {
+                                daemonViewOnly = true;
+                                daemonHitlApproval = true;
+                                daemonClipboardSync = false;
+                            } else {
+                                daemonViewOnly = false;
+                                daemonHitlApproval = true;
+                                daemonClipboardSync = true;
+                                daemonAutoBan = true;
+                            }
+                        } else if ("complete_setup".equals(act)) {
+                            daemonSetupCompleted = true;
+                        } else if ("blacklist_client".equals(act)) {
+                            String banIp = actReq.optString("ip", actReq.optString("clientId", "")).trim();
+                            if (!banIp.isEmpty()) {
+                                JSONObject ban = new JSONObject();
+                                ban.put("id", "BAN-" + generateHexToken("", 2).toUpperCase(Locale.US));
+                                ban.put("ip", banIp);
+                                ban.put("mac", actReq.optString("mac", "00:00:00:00:00:00"));
+                                ban.put("device", actReq.optString("device", "Blocked Peer (" + banIp + ")"));
+                                ban.put("reason", actReq.optString("reason", "Blacklisted via Android Console"));
+                                ban.put("bannedAt", "");
+                                daemonBlacklist.add(0, ban);
+                            }
+                        } else if ("unban_device".equals(act)) {
+                            String banId = actReq.optString("banId", "");
+                            String banIp = actReq.optString("ip", "");
+                            synchronized (daemonBlacklist) {
+                                for (int i = daemonBlacklist.size() - 1; i >= 0; i--) {
+                                    JSONObject b = daemonBlacklist.get(i);
+                                    if (banId.equals(b.optString("id")) || banIp.equals(b.optString("ip"))) {
+                                        daemonBlacklist.remove(i);
+                                    }
+                                }
+                            }
+                        } else if ("clear_blacklist".equals(act)) {
+                            daemonBlacklist.clear();
+                        } else if ("toggle_client_trust".equals(act)) {
+                            String cid = actReq.optString("clientId", "");
+                            synchronized (daemonPairedClients) {
+                                for (JSONObject c : daemonPairedClients) {
+                                    if (cid.equals(c.optString("id"))) {
+                                        c.put("isTrusted", !c.optBoolean("isTrusted", false));
+                                    }
+                                }
+                            }
+                        } else if ("toggle_client_input".equals(act)) {
+                            String cid = actReq.optString("clientId", "");
+                            synchronized (daemonPairedClients) {
+                                for (JSONObject c : daemonPairedClients) {
+                                    if (cid.equals(c.optString("id"))) {
+                                        c.put("inputAllowed", !c.optBoolean("inputAllowed", true));
+                                    }
+                                }
+                            }
+                        } else if ("disconnect_client".equals(act)) {
+                            String cid = actReq.optString("clientId", "");
+                            synchronized (daemonPairedClients) {
+                                for (int i = daemonPairedClients.size() - 1; i >= 0; i--) {
+                                    if (cid.equals(daemonPairedClients.get(i).optString("id"))) {
+                                        daemonPairedClients.remove(i);
+                                    }
+                                }
+                            }
+                        } else if ("run_diagnostics".equals(act) || "panic_disconnect".equals(act)) {
+                            if ("panic_disconnect".equals(act)) {
+                                daemonPairedClients.clear();
+                            }
+                            JSONObject logObj = new JSONObject();
+                            logObj.put("time", "");
+                            logObj.put("level", "panic_disconnect".equals(act) ? "ALERT" : "DIAG");
+                            logObj.put("message", "panic_disconnect".equals(act)
+                                    ? "Panic disconnect triggered from Android console."
+                                    : "Android bridge diagnostics OK (" + detectDeviceLanIp() + ":" + daemonPort + ").");
+                            daemonLogs.add(logObj);
+                        } else if ("clear_logs".equals(act)) {
+                            daemonLogs.clear();
                         } else {
                             sendJsonResponse(out, 400, "{\"success\":false,\"error\":\"UNKNOWN_DAEMON_ACTION\"}");
                             socket.close();

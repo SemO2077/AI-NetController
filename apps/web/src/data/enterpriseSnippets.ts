@@ -171,18 +171,19 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "filename": "PATCH_NOTES.md",
     "language": "markdown",
     "category": "docs",
-    "description": "Beta v0.60.00 Release Patch Notes — Unified Security Hardening, Persistent Preferences, Cyber Glass UI & Native Performance",
-    "code": `# Patch Notes — AI NetController v0.60.0 (Beta 0.60.00)
+    "description": "Beta v0.70.00 Release Patch Notes — Full Mobile Rebuild, Cyber Glass Daemon Wizard, Windows Installer/Uninstaller & Full-Stack Dependency Upgrades",
+    "code": `# Patch Notes — AI NetController v0.70.0 (Beta 0.70.00)
 
-**Version:** Beta 0.60.00 (v0.60.0)
+**Version:** Beta 0.70.00 (v0.70.0)
 **Protocol Version:** AI-NET/3.0-SECURE
 
-## 1. Mobile Security, Performance & Persistence (apps/mobile/)
-- Android Keystore AES-GCM secret storage (SecureSecretStore + MainActivity.kt), optional wss:// TLS fingerprint pinning, mutual 91B X25519+HMAC (INIT_ECDH_VAULT_M), and CST_ECDH_V2 AEAD frames.
-- Fixed OK_AUTHENTICATED 16B ACK collision, added sync NetworkFramer broadcast, lazy 64KB->4MB video ring buffer, 6B binary OP_INPUT coalescing, and persistent CyberPalette preferences (AppPreferencesNotifier).
+## 1. Mobile App Rebuild & Responsive Fluid UI (apps/mobile/)
+- Ground-up optimization of Flutter Mobile Client with 3D beveled Cyber Glass surfaces, smooth animations, and viewport scaling from 280x653 up to 1440x900 tablets/foldables.
+- Updated flutter_riverpod 3.5.0, local_auth 3.0.2, network_info_plus 8.2.2, sensors_plus 7.1.1, and 3D Cyber-Glass APK launcher icons.
 
-## 2. Host Daemon, Cyber Glass UI & Packaging (agent/, apps/web/)
-- SAN ECDSA TLS (tls_manager.py), NFKC/LOLBin AST firewall, DPAPI secret sealing, Cyber Glass desktop GUI (cyber_ui_theme.py + QR pairing), signed --onedir/MSIX packaging, and native WebView storage bridge (nativeStorage.ts).
+## 2. Host Daemon, Installer Wizard & Web Sync (agent/, apps/web/)
+- Upgraded Desktop Control Center (CyberUITheme), 2-column Feature Customizer, 3-step Guided Setup Wizard, startup & module toggles, and clean Windows Install/Uninstall with Add/Remove Programs & deferred cleanup.
+- Upgraded Python stack (Pillow 13.0, websockets 17.4, zeroconf 0.154, PyInstaller 6.22.3) and Node/Web stack (Vite 8.3.8, Express 5.3.0, TypeScript 7.0.2).
 `
   }
 ];

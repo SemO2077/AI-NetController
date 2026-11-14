@@ -153,8 +153,8 @@ coll = COLLECT(
     name='AI_NetController_HostAgent'
 )
 
-# Optional opt-in single-file SFX archive (disabled by default to avoid %TEMP%\_MEI* SFX AV heuristics)
-if os.environ.get('AI_BUILD_ONEFILE', '').strip() == '1':
+# Single-file SFX executable built alongside --onedir unless explicitly disabled via AI_BUILD_ONEFILE=0
+if os.environ.get('AI_BUILD_ONEFILE', '1').strip() != '0':
     exe_onefile = EXE(
         pyz,
         a.scripts,

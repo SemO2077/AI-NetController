@@ -162,7 +162,7 @@ console.log('================================================================\n'
 // Pillar 10: Unicast & Multicast Broadcast Addressing
 {
   const targets = ['TEST-HOST-01', '[Lab]', '[Windows]', 'ALL'];
-  const isUnicast = targets[0] && !targets[0].startsWith('[') && targets[0] !== 'ALL';
+  const isUnicast = Boolean(targets[0]) && !targets[0].startsWith('[') && targets[0] !== 'ALL';
   const isBroadcastGroup = targets[1].startsWith('[') && targets[1].endsWith(']');
   const isGlobal = targets[3] === 'ALL';
 

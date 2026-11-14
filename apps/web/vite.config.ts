@@ -9,7 +9,7 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, 'src'),
+        '@': path.resolve(import.meta.dirname, 'src'),
       },
     },
     build: {
@@ -19,8 +19,13 @@ export default defineConfig(() => {
       chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
-          manualChunks: {
-            'animation-vendor': ['motion'],
+          manualChunks(id) {
+            if (
+              id.includes('node_modules/motion') ||
+              id.includes('node_modules/framer-motion')
+            ) {
+              return 'animation-vendor';
+            }
           },
         },
       },

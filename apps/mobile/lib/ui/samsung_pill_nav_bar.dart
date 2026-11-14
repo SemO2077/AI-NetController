@@ -109,13 +109,18 @@ class _SamsungPillNavBarState extends State<SamsungPillNavBar>
 
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
+    final size = MediaQuery.sizeOf(context);
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final horizontalPad = size.width < 340 ? 10.0 : 20.0;
+    final barHeight = size.height < 440 ? 54.0 : 64.0;
 
     return Padding(
       padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        bottom: bottomInset > 0 ? bottomInset + 8 : 20,
+        left: horizontalPad,
+        right: horizontalPad,
+        bottom: bottomInset > 0
+            ? bottomInset + (size.height < 440 ? 4 : 8)
+            : (size.height < 440 ? 10 : 20),
       ),
       child: Transform(
         alignment: Alignment.center,
@@ -128,7 +133,7 @@ class _SamsungPillNavBarState extends State<SamsungPillNavBar>
             child: CustomPaint(
               painter: PillDockPainter(accentColor: widget.accentColor),
               child: Container(
-                height: 64,
+                height: barHeight,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -148,48 +153,57 @@ class _SamsungPillNavBarState extends State<SamsungPillNavBar>
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 220),
                             curve: Curves.easeOutCubic,
-                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 4,
+                              horizontal: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: isSelected
                                   ? widget.accentColor.withValues(alpha: 0.14)
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(24),
                             ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                AnimatedSwitcher(
-                                  duration: const Duration(milliseconds: 180),
-                                  transitionBuilder: (child, anim) =>
-                                      ScaleTransition(
-                                          scale: anim, child: child),
-                                  child: Icon(
-                                    isSelected ? item.activeIcon : item.icon,
-                                    key: ValueKey('${item.label}_$isSelected'),
-                                    size: 22,
-                                    color: isSelected
-                                        ? widget.accentColor
-                                        : Colors.white.withValues(alpha: 0.45),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 180),
+                                    transitionBuilder: (child, anim) =>
+                                        ScaleTransition(
+                                            scale: anim, child: child),
+                                    child: Icon(
+                                      isSelected ? item.activeIcon : item.icon,
+                                      key: ValueKey(
+                                          '${item.label}_$isSelected'),
+                                      size: 22,
+                                      color: isSelected
+                                          ? widget.accentColor
+                                          : Colors.white
+                                              .withValues(alpha: 0.45),
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  item.label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: isSelected
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
-                                    letterSpacing: 0.2,
-                                    color: isSelected
-                                        ? widget.accentColor
-                                        : Colors.white.withValues(alpha: 0.45),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    item.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: isSelected
+                                          ? FontWeight.w700
+                                          : FontWeight.w500,
+                                      letterSpacing: 0.2,
+                                      color: isSelected
+                                          ? widget.accentColor
+                                          : Colors.white
+                                              .withValues(alpha: 0.45),
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -214,6 +228,10 @@ class PillDockPainter extends CustomPainter {
   final Paint _bgPaint = Paint()..style = PaintingStyle.fill;
   final Paint _borderPaint = Paint()..style = PaintingStyle.stroke;
   final Paint _glowPaint = Paint()..style = PaintingStyle.stroke;
+  final Paint _specularPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = 1.4;
   final Path _cachedRRectPath = Path();
   RRect? _lastRRect;
 
@@ -233,20 +251,28 @@ class PillDockPainter extends CustomPainter {
     }
 
     // 1. Base Acrylic Fill
-    _bgPaint.color = const Color(0xDE070E1C);
+    _bgPaint.color = const Color(0xE3070E1C);
     canvas.drawPath(_cachedRRectPath, _bgPaint);
 
     // 2. Cyan Ambient Rim Glow
-    _glowPaint.color = accentColor.withValues(alpha: 0.12);
-    _glowPaint.strokeWidth = 3.0;
-    _glowPaint.maskFilter = const MaskFilter.blur(BlurStyle.outer, 8.0);
+    _glowPaint.color = accentColor.withValues(alpha: 0.16);
+    _glowPaint.strokeWidth = 3.2;
+    _glowPaint.maskFilter = const MaskFilter.blur(BlurStyle.outer, 9.0);
     canvas.drawPath(_cachedRRectPath, _glowPaint);
 
     // 3. Crisp Inner Vector Stroke
-    _borderPaint.color = accentColor.withValues(alpha: 0.28);
-    _borderPaint.strokeWidth = 1.2;
+    _borderPaint.color = accentColor.withValues(alpha: 0.34);
+    _borderPaint.strokeWidth = 1.25;
     _borderPaint.maskFilter = null;
     canvas.drawPath(_cachedRRectPath, _borderPaint);
+
+    // 4. Top-edge Specular Highlight Rim
+    _specularPaint.color = Colors.white.withValues(alpha: 0.26);
+    canvas.drawLine(
+      const Offset(28, 1.5),
+      Offset(size.width - 28, 1.5),
+      _specularPaint,
+    );
   }
 
   @override

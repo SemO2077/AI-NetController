@@ -2,7 +2,7 @@
 title AI NetController -- PC & Phone Setup Launcher
 color 0B
 echo ============================================================================
-echo   AI NetController v0.60.0 ^(Beta 0.60.00^) -- PC ^& Phone Setup Launcher
+echo   AI NetController v0.70.0 ^(Beta 0.70.00^) -- PC ^& Phone Setup Launcher
 echo ============================================================================
 echo.
 

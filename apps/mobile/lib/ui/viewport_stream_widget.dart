@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../protocol/binary_protocol.dart';
 import '../security/network_validators.dart';
@@ -14,10 +16,8 @@ import '../theme/fluid_theme.dart';
 // =====================================================================
 // BINARY PROTOCOL DEFINITION & OPCODES
 // =====================================================================
-const int magicByte0 = 0xC5;
-const int magicByte1 = 0x71;
-const int _streamHeaderSize = 12;
-const int _maxStreamPayloadBytes = 10 * 1024 * 1024;
+const int magicByte0 = kMagicByte0;
+const int magicByte1 = kMagicByte1;
 
 enum StreamOpcode {
   ping(0x01), // 1 (0x01)
@@ -56,42 +56,16 @@ class StreamBinaryPacket {
   StreamBinaryPacket(this.opcode, this.flags, this.seqId, this.payload);
 
   static StreamBinaryPacket? parse(Uint8List bytes) {
-    if (bytes.length < _streamHeaderSize) return null;
-    final view = ByteData.sublistView(bytes);
-    if (view.getUint8(0) != magicByte0 || view.getUint8(1) != magicByte1) {
-      return null;
-    }
-
-    final opCodeByte = view.getUint8(2);
-    final flags = view.getUint8(3);
-    final seqId = view.getUint32(4, Endian.big);
-    final length = view.getUint32(8, Endian.big);
-
-    final opcode = StreamOpcode.fromCode(opCodeByte);
+    final ProtocolPacket? parsed = parsePacket(bytes);
+    if (parsed == null) return null;
+    final opcode = StreamOpcode.fromCode(parsed.opcode);
     if (opcode == null) return null;
-    if (length > _maxStreamPayloadBytes ||
-        bytes.length != _streamHeaderSize + length) {
-      return null;
-    }
-
-    final payload = Uint8List.sublistView(
-        bytes, _streamHeaderSize, _streamHeaderSize + length);
-    return StreamBinaryPacket(opcode, flags, seqId, payload);
+    return StreamBinaryPacket(opcode, parsed.flags, parsed.seq, parsed.payload);
   }
 
   static Uint8List pack(StreamOpcode opcode, int seqId, Uint8List payload,
       {int flags = 0}) {
-    final bytes = Uint8List(_streamHeaderSize + payload.length);
-    final view = ByteData.sublistView(bytes);
-    view.setUint8(0, magicByte0);
-    view.setUint8(1, magicByte1);
-    view.setUint8(2, opcode.code);
-    view.setUint8(3, flags);
-    view.setUint32(4, seqId, Endian.big);
-    view.setUint32(8, payload.length, Endian.big);
-    bytes.setRange(
-        _streamHeaderSize, _streamHeaderSize + payload.length, payload);
-    return bytes;
+    return packPacket(opcode.code, payload, flags: flags, seq: seqId);
   }
 
   /// Packs 0x0A VIEWPORT_RESIZE control payload containing target width and height
@@ -116,6 +90,7 @@ class ViewportStreamWidget extends StatefulWidget {
   final String sharedSecret;
   final bool useTls;
   final String? certFingerprint;
+  final int targetFps;
   final void Function(Map<String, dynamic> telemetry)? onTelemetry;
 
   const ViewportStreamWidget({
@@ -128,6 +103,7 @@ class ViewportStreamWidget extends StatefulWidget {
     this.sharedSecret = '',
     this.useTls = false,
     this.certFingerprint,
+    this.targetFps = 30,
     this.onTelemetry,
   });
 
@@ -144,6 +120,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   StreamSubscription<Map<String, dynamic>>? _telemetrySub;
   StreamSubscription<HostConnectionSnapshot>? _stateSub;
   StreamSubscription<Map<String, dynamic>>? _hitlSub;
+  StreamSubscription<String>? _clipSub;
+  StreamSubscription<List<Map<String, dynamic>>>? _displaySub;
 
   final StreamController<Uint8List> _frameController =
       StreamController<Uint8List>.broadcast(sync: true);
@@ -153,6 +131,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   bool _isConnecting = true;
   bool _hasReceivedFrame = false;
   String? _errorMessage;
+  List<Map<String, dynamic>> _monitors = const [];
+  int _activeMonitorIdx = 1;
 
   // Viewport Resolution & Thermal Quality Tracking
   int _lastPhysicalWidth = 0;
@@ -169,10 +149,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   double _accumScrollDy = 0.0;
   Timer? _inputFlushTimer;
 
-  // Metrics
+  // Isolated HUD Metrics (never trigger parent video canvas rebuilds)
   int _fpsCount = 0;
-  int _fpsDisplay = 0;
-  int? _latencyMs;
+  final ValueNotifier<int> _fpsNotifier = ValueNotifier<int>(0);
+  final ValueNotifier<int?> _latencyNotifier = ValueNotifier<int?>(null);
   DateTime _lastUiFrameAt = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _fpsTimer;
 
@@ -186,10 +166,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
     _fpsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
-        setState(() {
-          _fpsDisplay = _fpsCount;
-          _fpsCount = 0;
-        });
+        _fpsNotifier.value = _fpsCount;
+        _fpsCount = 0;
       }
     });
   }
@@ -266,26 +244,32 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     _stateSub = client.stateStream.listen((snap) {
       if (!mounted) return;
       final wasAuthed = _isAuthenticated;
-      setState(() {
-        _isConnecting = snap.isConnecting;
-        _isConnected = snap.isConnected;
-        _isAuthenticated = snap.isVaultEstablished;
-        _latencyMs = snap.latencyMs;
-        if (snap.errorMessage != null && !snap.isVaultEstablished) {
-          _errorMessage = snap.errorMessage;
-        } else if (snap.isVaultEstablished) {
-          _errorMessage = null;
+      _latencyNotifier.value = snap.latencyMs;
+      final String? nextError =
+          (snap.errorMessage != null && !snap.isVaultEstablished)
+              ? snap.errorMessage
+              : (snap.isVaultEstablished ? null : _errorMessage);
+      final bool statusChanged = _isConnecting != snap.isConnecting ||
+          _isConnected != snap.isConnected ||
+          _isAuthenticated != snap.isVaultEstablished ||
+          _errorMessage != nextError;
+      if (statusChanged) {
+        setState(() {
+          _isConnecting = snap.isConnecting;
+          _isConnected = snap.isConnected;
+          _isAuthenticated = snap.isVaultEstablished;
+          _errorMessage = nextError;
+        });
+      }
+      if (!wasAuthed && snap.isVaultEstablished) {
+        if (_lastPhysicalWidth > 0 && _lastPhysicalHeight > 0) {
+          _sendViewportNegotiation(
+            _lastPhysicalWidth,
+            _lastPhysicalHeight,
+            _qualityForThermal(ThermalGovernor.instance.currentConfig),
+          );
         }
-      });
-      if (!wasAuthed &&
-          snap.isVaultEstablished &&
-          _lastPhysicalWidth > 0 &&
-          _lastPhysicalHeight > 0) {
-        _sendViewportNegotiation(
-          _lastPhysicalWidth,
-          _lastPhysicalHeight,
-          _qualityForThermal(ThermalGovernor.instance.currentConfig),
-        );
+        client.requestDisplayEnum();
       }
     });
 
@@ -297,14 +281,46 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       unawaited(client.respondToHitlChallenge(chal));
     });
 
+    _clipSub = client.clipboardStream.listen((text) {
+      if (text.isEmpty) return;
+      unawaited(
+        Clipboard.setData(ClipboardData(text: text)).catchError((_) {}),
+      );
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)
+          ?..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                'PC clipboard synced (${text.length} chars)',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      }
+    });
+
+    _displaySub = client.displayEnumStream.listen((mons) {
+      if (!mounted) return;
+      setState(() {
+        _monitors = mons;
+        _activeMonitorIdx = client.activeMonitorIndex;
+      });
+    });
+
     _frameSub = client.frameStream.listen((frameBytes) {
       if (!mounted || !_isAuthenticated) return;
       final cfg = ThermalGovernor.instance.currentConfig;
-      final int minIntervalMs = cfg.targetFps > 0 ? (1000 ~/ cfg.targetFps) : 33;
+      final int prefFps = widget.targetFps > 0 ? widget.targetFps : 30;
+      final int govFps = cfg.targetFps > 0 ? cfg.targetFps : 30;
+      final int effectiveFps = min(prefFps, govFps);
+      final int minIntervalMs = (1000 ~/ effectiveFps).clamp(1, 1000);
       final now = DateTime.now();
-      if (cfg.targetFps < 30 &&
+      if (effectiveFps < 60 &&
           now.difference(_lastUiFrameAt).inMilliseconds < minIntervalMs) {
-        return; // Shed thermal frame load without stalling decrypt sequence state
+        return; // Respect configured target FPS and thermal throttle ceiling
       }
       _lastUiFrameAt = now;
       _fpsCount++;
@@ -583,10 +599,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     unawaited(_telemetrySub?.cancel());
     unawaited(_stateSub?.cancel());
     unawaited(_hitlSub?.cancel());
+    unawaited(_clipSub?.cancel());
+    unawaited(_displaySub?.cancel());
     _frameSub = null;
     _telemetrySub = null;
     _stateSub = null;
     _hitlSub = null;
+    _clipSub = null;
+    _displaySub = null;
     _retainedClient?.release();
     _retainedClient = null;
     _client = null;
@@ -598,6 +618,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     _fpsTimer?.cancel();
     _fpsTimer = null;
     _cleanupSocket();
+    _fpsNotifier.dispose();
+    _latencyNotifier.dispose();
     unawaited(_frameController.close());
     if (_wakelockRefCount > 0) {
       _wakelockRefCount--;
@@ -675,18 +697,35 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
                   // Cyber HUD Overlay Bar (FPS, Resolution, Target, Latency)
                   Positioned(
-                    top: 10,
-                    left: 10,
-                    right: 10,
+                    top: (widget.isInline
+                            ? 0.0
+                            : MediaQuery.paddingOf(context).top) +
+                        10.0,
+                    left: (widget.isInline
+                            ? 10.0
+                            : MediaQuery.paddingOf(context).left + 62.0),
+                    right: (widget.isInline
+                            ? 0.0
+                            : MediaQuery.paddingOf(context).right) +
+                        10.0,
                     child: _buildHudHeader(context),
                   ),
 
                   // Bottom Interactive Remote Control Dock
                   if (_isConnected)
                     Positioned(
-                      bottom: 10,
-                      left: 10,
-                      right: widget.onToggleFullscreen != null ? 64 : 10,
+                      bottom: (widget.isInline
+                              ? 0.0
+                              : MediaQuery.paddingOf(context).bottom) +
+                          10.0,
+                      left: (widget.isInline
+                              ? 0.0
+                              : MediaQuery.paddingOf(context).left) +
+                          10.0,
+                      right: (widget.isInline
+                              ? 0.0
+                              : MediaQuery.paddingOf(context).right) +
+                          (widget.onToggleFullscreen != null ? 58.0 : 10.0),
                       child: Align(
                         alignment: Alignment.bottomLeft,
                         child: SingleChildScrollView(
@@ -699,8 +738,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                   // Bottom Quick Controls
                   if (widget.onToggleFullscreen != null)
                     Positioned(
-                      bottom: 10,
-                      right: 10,
+                      bottom: (widget.isInline
+                              ? 0.0
+                              : MediaQuery.paddingOf(context).bottom) +
+                          10.0,
+                      right: (widget.isInline
+                              ? 0.0
+                              : MediaQuery.paddingOf(context).right) +
+                          10.0,
                       child: Builder(
                         builder: (ctx) {
                           final palette = ctx.palette;
@@ -711,6 +756,11 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                               border: Border.all(color: Colors.white24),
                             ),
                             child: IconButton(
+                              constraints: const BoxConstraints(
+                                minWidth: 38,
+                                minHeight: 38,
+                              ),
+                              padding: const EdgeInsets.all(6),
                               icon: Icon(
                                 widget.isInline
                                     ? Icons.fullscreen_rounded
@@ -737,77 +787,93 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   Widget _buildHudHeader(BuildContext context) {
     final palette = context.palette;
     final sigma = palette.glass.blurSigma;
-    final hudBody = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: palette.surfaceElevated.withValues(alpha: sigma > 0 ? 0.75 : 0.94),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: palette.primary.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _isConnected ? palette.success : palette.accent,
-              boxShadow: [
-                BoxShadow(
-                  color: (_isConnected ? palette.success : palette.accent)
-                      .withValues(alpha: 0.8),
-                  blurRadius: 4,
+    final hudBody = LayoutBuilder(
+      builder: (context, constraints) {
+        final maxW = constraints.maxWidth;
+        final showResolution = _lastPhysicalWidth > 0 && maxW >= 300;
+        final showLatency = maxW >= 200;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: palette.surfaceElevated
+                .withValues(alpha: sigma > 0 ? 0.75 : 0.94),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: palette.primary.withValues(alpha: 0.3)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _isConnected ? palette.success : palette.accent,
+                  boxShadow: [
+                    BoxShadow(
+                      color: (_isConnected ? palette.success : palette.accent)
+                          .withValues(alpha: 0.8),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  widget.hostName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.bold,
+                    fontSize: context.fluidFont(11),
+                    color: palette.textPrimary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              ValueListenableBuilder<int>(
+                valueListenable: _fpsNotifier,
+                builder: (_, fps, _) => Text(
+                  '$fps FPS',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: context.fluidFont(10),
+                    color: palette.primary,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              if (showLatency) ...[
+                const SizedBox(width: 8),
+                ValueListenableBuilder<int?>(
+                  valueListenable: _latencyNotifier,
+                  builder: (_, latency, _) => Text(
+                    '${latency ?? '--'}ms',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: context.fluidFont(10),
+                      color: palette.textSecondary,
+                    ),
+                  ),
                 ),
               ],
-            ),
+              if (showResolution) ...[
+                const SizedBox(width: 8),
+                Text(
+                  '${_lastPhysicalWidth}x$_lastPhysicalHeight',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: context.fluidFont(9),
+                    color: palette.textTertiary,
+                  ),
+                ),
+              ],
+            ],
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              widget.hostName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.bold,
-                fontSize: context.fluidFont(11),
-                color: palette.textPrimary,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '$_fpsDisplay FPS',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: context.fluidFont(10),
-              color: palette.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            '${_latencyMs ?? '--'}ms',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: context.fluidFont(10),
-              color: palette.textSecondary,
-            ),
-          ),
-          if (_lastPhysicalWidth > 0) ...[
-            const SizedBox(width: 10),
-            Text(
-              '${_lastPhysicalWidth}x$_lastPhysicalHeight',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: context.fluidFont(9),
-                color: palette.textTertiary,
-              ),
-            ),
-          ],
-        ],
-      ),
+        );
+      },
     );
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
@@ -823,20 +889,20 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   Widget _buildStatusOverlay(BuildContext context) {
     final palette = context.palette;
     if (_isConnecting) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
-              width: 28,
-              height: 28,
+              width: 26,
+              height: 26,
               child: CircularProgressIndicator(
                 strokeWidth: 2.5,
                 color: palette.primary,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Text(
               'Connecting to ${widget.hostIp}:${widget.wsPort}...',
               textAlign: TextAlign.center,
@@ -852,14 +918,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     }
 
     if (_errorMessage != null) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.signal_wifi_off_rounded,
-                color: palette.accent, size: 36),
-            const SizedBox(height: 8),
+                color: palette.accent, size: 32),
+            const SizedBox(height: 6),
             Text(
               _errorMessage!,
               style: TextStyle(
@@ -868,7 +934,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
               ),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextButton.icon(
               onPressed: _connect,
               icon: Icon(Icons.refresh_rounded,
@@ -881,18 +947,146 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       );
     }
 
-    return Text(
-      'Awaiting incoming video frames...',
-      style: TextStyle(
-        color: palette.textSecondary,
-        fontSize: context.fluidFont(12),
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Text(
+        'Awaiting incoming video frames...',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: palette.textSecondary,
+          fontSize: context.fluidFont(12),
+        ),
       ),
+    );
+  }
+
+  void _cycleMonitor() {
+    final client = _client;
+    if (client == null || !client.isVaultEstablished) return;
+    if (_monitors.length <= 1) {
+      client.requestDisplayEnum();
+      return;
+    }
+    final currentPos =
+        _monitors.indexWhere((m) => (m['index'] as num?)?.toInt() == _activeMonitorIdx);
+    final nextPos = (currentPos + 1) % _monitors.length;
+    final nextIdx = (_monitors[nextPos]['index'] as num?)?.toInt() ?? (nextPos + 1);
+    setState(() => _activeMonitorIdx = nextIdx);
+    client.requestDisplayEnum(switchMonitorIndex: nextIdx);
+  }
+
+  Future<void> _showClipboardSheet() async {
+    final client = _client;
+    if (client == null || !client.isVaultEstablished || !mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: context.palette.surfaceElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(Icons.upload_rounded, color: context.palette.primary),
+                title: const Text('Push Phone Clipboard -> PC'),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  final data = await Clipboard.getData('text/plain');
+                  final txt = data?.text ?? '';
+                  if (txt.isEmpty) return;
+                  client.sendClipboard(txt);
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.download_rounded, color: context.palette.primary),
+                title: const Text('Pull PC Clipboard -> Phone'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  client.requestClipboard();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAudioControlSheet() async {
+    final client = _client;
+    if (client == null || !client.isVaultEstablished || !mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: context.palette.surfaceElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final palette = ctx.palette;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              alignment: WrapAlignment.center,
+              children: [
+                ActionChip(
+                  avatar: const Icon(Icons.skip_previous_rounded, size: 18),
+                  label: const Text('Prev'),
+                  onPressed: () => client.sendAudioCommand('prev'),
+                ),
+                ActionChip(
+                  avatar: Icon(Icons.play_arrow_rounded,
+                      size: 18, color: palette.primary),
+                  label: const Text('Play/Pause'),
+                  onPressed: () => client.sendAudioCommand('play_pause'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.skip_next_rounded, size: 18),
+                  label: const Text('Next'),
+                  onPressed: () => client.sendAudioCommand('next'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.volume_down_rounded, size: 18),
+                  label: const Text('Vol -'),
+                  onPressed: () => client.sendAudioCommand('volume_down'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.volume_off_rounded, size: 18),
+                  label: const Text('Mute'),
+                  onPressed: () => client.sendAudioCommand('mute'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.volume_up_rounded, size: 18),
+                  label: const Text('Vol +'),
+                  onPressed: () => client.sendAudioCommand('volume_up'),
+                ),
+                ActionChip(
+                  avatar: Icon(Icons.lock_rounded, size: 18, color: palette.accent),
+                  label: const Text('Lock PC'),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    client.sendAudioCommand('lock_pc');
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildInteractiveControllerDock(BuildContext context) {
     final palette = context.palette;
     final sigma = palette.glass.blurSigma;
+    final monLabel =
+        _monitors.length > 1 ? 'MON $_activeMonitorIdx' : 'MON';
     final dock = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -916,6 +1110,12 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
               context, 'ALT+TAB', () => _sendHotkey(['alt', 'tab'])),
           const SizedBox(width: 5),
           _buildDockButton(context, 'ESC', () => _sendKey('esc')),
+          const SizedBox(width: 5),
+          _buildDockButton(context, 'CLIP', _showClipboardSheet),
+          const SizedBox(width: 5),
+          _buildDockButton(context, 'AUDIO', _showAudioControlSheet),
+          const SizedBox(width: 5),
+          _buildDockButton(context, monLabel, _cycleMonitor),
         ],
       ),
     );

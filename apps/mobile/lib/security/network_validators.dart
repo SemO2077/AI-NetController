@@ -73,44 +73,49 @@ class NetworkValidators {
     return Uri(scheme: useTls ? 'wss' : 'ws', host: cleanHost, port: port);
   }
 
+  static final RegExp _encodedCmdRegex = RegExp(
+    r'-enc(?:odedcommand)?\s+([a-z0-9+/=]{8,})',
+    caseSensitive: false,
+  );
+
+  static final List<({RegExp pattern, String reason})> _riskRules = [
+    (
+      pattern: RegExp(r'\brm\s+(-[a-z]*[rf][a-z]*\s+)*(/|\\|\*|--no-preserve-root)'),
+      reason: 'Recursive filesystem deletion detected',
+    ),
+    (
+      pattern: RegExp(r'\b(del|erase|rd|rmdir)\s+.*(/s|/q|c:\\)'),
+      reason: 'Bulk Windows file or directory deletion detected',
+    ),
+    (
+      pattern: RegExp(r'\b(format|mkfs|diskpart|dd\s+if=|fdisk|bcdedit)\b'),
+      reason: 'Disk partitioning or formatting utility detected',
+    ),
+    (
+      pattern: RegExp(r'\b(shutdown|reboot|poweroff|halt|init\s+0)\b'),
+      reason: 'Host shutdown or reboot command detected',
+    ),
+    (
+      pattern: RegExp(r'\b(taskkill|kill\s+-9|killall|stop-process|pkill)\b'),
+      reason: 'Forced process termination command detected',
+    ),
+    (
+      pattern: RegExp(r'\b(reg\s+delete|net\s+user|netsh\s+advfirewall|iptables\s+-f|ufw\s+disable)\b'),
+      reason: 'Security policy or account modification detected',
+    ),
+    (
+      pattern: RegExp(r'(powershell.*-enc|iex\s*\(|invoke-expression|curl.*\|\s*(sh|bash))'),
+      reason: 'Encoded or piped remote code execution pattern detected',
+    ),
+  ];
+
   /// Returns a risk reason string if [command] matches destructive / elevated-risk
   /// patterns requiring explicit HITL confirmation (or biometric gate if enabled).
   static String? inspectCommandRisk(String command) {
     final normalized = _normalizeForInspection(command);
     if (normalized.isEmpty) return null;
 
-    final checks = <({RegExp pattern, String reason})>[
-      (
-        pattern: RegExp(r'\brm\s+(-[a-z]*[rf][a-z]*\s+)*(/|\\|\*|--no-preserve-root)'),
-        reason: 'Recursive filesystem deletion detected',
-      ),
-      (
-        pattern: RegExp(r'\b(del|erase|rd|rmdir)\s+.*(/s|/q|c:\\)'),
-        reason: 'Bulk Windows file or directory deletion detected',
-      ),
-      (
-        pattern: RegExp(r'\b(format|mkfs|diskpart|dd\s+if=|fdisk|bcdedit)\b'),
-        reason: 'Disk partitioning or formatting utility detected',
-      ),
-      (
-        pattern: RegExp(r'\b(shutdown|reboot|poweroff|halt|init\s+0)\b'),
-        reason: 'Host shutdown or reboot command detected',
-      ),
-      (
-        pattern: RegExp(r'\b(taskkill|kill\s+-9|killall|stop-process|pkill)\b'),
-        reason: 'Forced process termination command detected',
-      ),
-      (
-        pattern: RegExp(r'\b(reg\s+delete|net\s+user|netsh\s+advfirewall|iptables\s+-f|ufw\s+disable)\b'),
-        reason: 'Security policy or account modification detected',
-      ),
-      (
-        pattern: RegExp(r'(powershell.*-enc|iex\s*\(|invoke-expression|curl.*\|\s*(sh|bash))'),
-        reason: 'Encoded or piped remote code execution pattern detected',
-      ),
-    ];
-
-    for (final item in checks) {
+    for (final item in _riskRules) {
       if (item.pattern.hasMatch(normalized)) {
         return item.reason;
       }
@@ -123,8 +128,7 @@ class NetworkValidators {
     // Collapse common shell caret / quote obfuscation before matching
     lower = lower.replaceAll('^', '').replaceAll('"', '').replaceAll("'", '');
     // Decode standalone base64 fragments when prefixed cleanly
-    final b64Match = RegExp(r'-enc(?:odedcommand)?\s+([a-z0-9+/=]{8,})', caseSensitive: false)
-        .firstMatch(command);
+    final b64Match = _encodedCmdRegex.firstMatch(command);
     if (b64Match != null) {
       try {
         final decodedBytes = base64Decode(b64Match.group(1)!);

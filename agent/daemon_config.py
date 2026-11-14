@@ -219,7 +219,7 @@ def _generate_default_config() -> Dict[str, Any]:
     pairing_pin = _generate_strong_pin()
 
     return {
-        "version": "0.60.0",
+        "version": "0.70.0",
         "protocol": "AI-NET/3.0-SECURE",
         "bind_host": DEFAULT_HOST,
         "port": DEFAULT_PORT,
@@ -227,6 +227,8 @@ def _generate_default_config() -> Dict[str, Any]:
         "pairing_token": pairing_token,
         "pin_issued_at": int(time.time()),
         "view_only_mode": False,
+        "paused": False,
+        "target_fps": 60,
         "require_hitl_approval": True,
         "clipboard_sync_allowed": True,
         "auto_lock_on_disconnect": False,
@@ -240,7 +242,16 @@ def _generate_default_config() -> Dict[str, Any]:
         "allowed_origins": [],
         "security_profile": "balanced",
         "blacklisted_devices": [],
+        "paired_clients": [],
         "setup_completed": False,
+        "autostart_on_boot": False,
+        "start_minimized": False,
+        "close_to_tray": True,
+        "enable_tray_icon": True,
+        "mdns_enabled": True,
+        "file_transfer_enabled": True,
+        "audio_control_enabled": True,
+        "ollama_bridge_enabled": True,
     }
 
 
@@ -251,6 +262,7 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
     # Boolean policy fields
     for bool_key in (
         "view_only_mode",
+        "paused",
         "require_hitl_approval",
         "clipboard_sync_allowed",
         "auto_lock_on_disconnect",
@@ -261,6 +273,14 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
         "require_tls",
         "local_hitl_prompt",
         "setup_completed",
+        "autostart_on_boot",
+        "start_minimized",
+        "close_to_tray",
+        "enable_tray_icon",
+        "mdns_enabled",
+        "file_transfer_enabled",
+        "audio_control_enabled",
+        "ollama_bridge_enabled",
     ):
         val = raw.get(bool_key)
         if isinstance(val, bool):
@@ -269,15 +289,25 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
     # String metadata & bind settings
     if isinstance(raw.get("bind_host"), str) and raw["bind_host"].strip():
         merged["bind_host"] = raw["bind_host"].strip()
-    if isinstance(raw.get("security_profile"), str) and raw["security_profile"] in ("strict", "balanced", "relaxed"):
+    if isinstance(raw.get("security_profile"), str) and raw["security_profile"] in (
+        "strict",
+        "balanced",
+        "relaxed",
+        "zero_trust",
+        "view_only",
+    ):
         merged["security_profile"] = raw["security_profile"]
     if isinstance(raw.get("protocol"), str) and raw["protocol"].strip():
         merged["protocol"] = raw["protocol"].strip()
 
-    # Valid TCP port range
+    # Valid TCP port range & capture FPS
     raw_port = raw.get("port")
     if isinstance(raw_port, int) and not isinstance(raw_port, bool) and 1 <= raw_port <= 65535:
         merged["port"] = raw_port
+
+    raw_fps = raw.get("target_fps")
+    if isinstance(raw_fps, int) and not isinstance(raw_fps, bool) and raw_fps in (15, 30, 60):
+        merged["target_fps"] = raw_fps
 
     # PIN issued timestamp & TTL
     raw_ts = raw.get("pin_issued_at")
@@ -328,6 +358,25 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
                 sanitized_bl.append(entry)
         merged["blacklisted_devices"] = sanitized_bl
 
+    # Persisted paired client policies
+    raw_pc = raw.get("paired_clients")
+    if isinstance(raw_pc, list):
+        sanitized_pc = []
+        seen_cids = set()
+        for item in raw_pc:
+            if not isinstance(item, dict):
+                continue
+            cid = str(item.get("id", "")).strip()
+            if not cid or cid in seen_cids:
+                continue
+            seen_cids.add(cid)
+            entry = {}
+            for k, v in item.items():
+                if isinstance(k, str) and isinstance(v, (str, int, float, bool)):
+                    entry[k] = v.strip() if isinstance(v, str) else v
+            sanitized_pc.append(entry)
+        merged["paired_clients"] = sanitized_pc
+
     # Decrypt or migrate secrets
     env_secret = os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET")
     if env_secret and env_secret.strip():
@@ -343,7 +392,7 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
     if unprot_pin and len(unprot_pin.strip()) == 6 and unprot_pin.strip().isdigit():
         merged["pairing_pin"] = unprot_pin.strip()
 
-    merged["version"] = "0.60.0"
+    merged["version"] = "0.70.0"
     return merged
 
 
@@ -478,3 +527,15 @@ def build_pairing_uri(
     scheme = "wss" if tls else "ws"
     fp_part = f"&fp={tls_fingerprint[:16]}" if (tls and tls_fingerprint) else ""
     return f"ainet://pair?proto={scheme}&host={host_ip}&port={int(port)}&pin={pin}{fp_part}"
+
+
+def update_config(**kwargs: Any) -> Dict[str, Any]:
+    """Atomically updates one or more configuration keys and persists to disk."""
+    with _CONFIG_LOCK:
+        cfg = load_config()
+        cfg.update(kwargs)
+        save_config(cfg)
+        return load_config()
+
+
+load_or_create_config = load_config

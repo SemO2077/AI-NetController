@@ -1,17 +1,21 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'security/network_validators.dart';
 import 'security/secure_secret_store.dart';
 import 'services/app_preferences.dart';
+import 'services/file_transfer_engine.dart';
 import 'services/host_connection_client.dart';
+import 'services/os_integrations_manager.dart';
 import 'theme/fluid_theme.dart';
 import 'ui/adaptive_layout_builder.dart';
 import 'ui/onboarding_sheet.dart';
@@ -359,6 +363,7 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
   }
 
   final Box? _hostBoxOverride;
+  DateTime _lastHomeWidgetSync = DateTime.fromMillisecondsSinceEpoch(0);
 
   Box? get _hostBox {
     if (_hostBoxOverride != null && _hostBoxOverride.isOpen) {
@@ -666,6 +671,28 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
     if (persistentMetadataChanged) {
       _persistHosts();
     }
+
+    final now = DateTime.now();
+    if ((Platform.isAndroid || Platform.isIOS) &&
+        now.difference(_lastHomeWidgetSync).inSeconds >= 5) {
+      _lastHomeWidgetSync = now;
+      final displayHost = state.where((h) => h.ip == ip).firstOrNull;
+      try {
+        unawaited(
+          OsIntegrationsManager.instance
+              .updateHomeScreenWidget(
+                hostName: displayHost?.name ??
+                    (hostname.isNotEmpty ? hostname : 'Host PC'),
+                hostIp: ip,
+                hostMac: displayHost?.mac ?? '00:00:00:00:00:00',
+                isOnline: true,
+                cpuUsage: (cpuVal ?? 0).toDouble(),
+                ramUsage: (ramVal ?? 0).toDouble(),
+              )
+              .catchError((_) {}),
+        );
+      } catch (_) {}
+    }
   }
 }
 
@@ -758,6 +785,35 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   bool _isPinging = false;
 
   @override
+  void initState() {
+    super.initState();
+    if (Platform.isAndroid || Platform.isIOS) {
+      try {
+        unawaited(
+          OsIntegrationsManager.instance
+              .initialize(onAction: _handleQuickAction)
+              .catchError((_) {}),
+        );
+      } catch (_) {}
+    }
+  }
+
+  void _handleQuickAction(String action) {
+    if (!mounted) return;
+    switch (action) {
+      case 'action_wake_pc':
+        unawaited(_wakeAllOfflineHosts(ref.read(fleetProvider)));
+        break;
+      case 'action_scan_fleet':
+        unawaited(_scanForPcs());
+        break;
+      case 'action_open_terminal':
+        setState(() => _currentTabIndex = 1);
+        break;
+    }
+  }
+
+  @override
   void dispose() {
     HostConnectionPool.instance.disposeAll();
     _commandController.dispose();
@@ -766,6 +822,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   void _hapticTap() {
+    if (!ref.read(appPreferencesProvider).hapticsEnabled) return;
     unawaited(HapticFeedback.selectionClick().catchError((_) {}));
   }
 
@@ -813,9 +870,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     String? targetIp,
     bool silent = false,
   }) async {
-    final macBytes = NetworkValidators.parseMacBytes(mac);
     final normalizedMac = NetworkValidators.normalizeMac(mac);
-    if (macBytes == null || normalizedMac == null) {
+    if (NetworkValidators.parseMacBytes(mac) == null || normalizedMac == null) {
       if (!silent) {
         _showToast(
           'Cannot send Wake-on-LAN: set a valid non-zero MAC address on this workstation.',
@@ -828,30 +884,18 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
     try {
       _hapticTap();
-      final packet = Uint8List(6 + 16 * 6);
-      packet.fillRange(0, 6, 0xFF);
-      for (int i = 0; i < 16; i++) {
-        packet.setRange(6 + i * 6, 6 + (i + 1) * 6, macBytes);
-      }
-
-      final targets = <String>{'255.255.255.255'};
-      if (targetIp != null && targetIp.trim().isNotEmpty) {
-        targets.add(NetworkValidators.deriveBroadcastIp(targetIp));
-      }
-
-      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      try {
-        socket.broadcastEnabled = true;
-        for (final broadcastAddr in targets) {
-          socket.send(packet, InternetAddress(broadcastAddr), 9);
-        }
-      } finally {
-        socket.close();
-      }
+      await OsIntegrationsManager.instance.sendGratuitousArpAndWake(
+        targetMac: normalizedMac,
+        targetIp: targetIp?.trim() ?? '',
+        routerIp: '',
+      );
 
       if (!silent) {
+        final subnetHint = (targetIp != null && targetIp.trim().isNotEmpty)
+            ? ' & ${NetworkValidators.deriveBroadcastIp(targetIp)}'
+            : '';
         _showToast(
-          'WoL Magic Packet dispatched to $normalizedMac (${targets.join(', ')})',
+          'WoL Magic Packet dispatched to $normalizedMac (255.255.255.255$subnetHint)',
           accentColor: CyberColors.warning,
         );
       }
@@ -1001,6 +1045,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         final chunk = ipList.sublist(i, end);
         await Future.wait(
           chunk.map((ip) async {
+            if (ip != '127.0.0.1' && ip != '10.0.2.2') {
+              Socket? preflight;
+              try {
+                preflight = await Socket.connect(
+                  ip,
+                  scanPort,
+                  timeout: const Duration(milliseconds: 180),
+                );
+                preflight.destroy();
+              } catch (_) {
+                return; // Skip unreachable IPs before WebSocket handshake
+              }
+            }
+
             bool found = false;
             bool detectedTls = false;
             final sw = Stopwatch()..start();
@@ -1104,6 +1162,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           sharedSecret: effectiveSecret,
           useTls: host.useTls || prefs.preferTls,
           certFingerprint: effectiveFp.isNotEmpty ? effectiveFp : null,
+          targetFps: prefs.targetFps,
+          keepScreenAwake: prefs.keepScreenAwake,
           onTelemetry: (data) => ref
               .read(fleetProvider.notifier)
               .updateTelemetryByIp(host.ip, data),
@@ -1155,6 +1215,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           builder: (ctx, setDialogState) {
             final primary = Theme.of(ctx).colorScheme.primary;
             return AlertDialog(
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               backgroundColor: CyberColors.surfaceElevated,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
@@ -1436,6 +1498,344 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     });
   }
 
+  Future<HostConnectionClient?> _acquireConnectedClient(HostState host) async {
+    final prefs = ref.read(appPreferencesProvider);
+    final secret = _resolveSecretForHost(host);
+    if (secret.isEmpty) {
+      _showToast(
+        'Pairing secret required before connecting to ${host.name}.',
+        accentColor: CyberColors.warning,
+      );
+      return null;
+    }
+    final resolvedFp = host.certFingerprint.trim().isNotEmpty
+        ? host.certFingerprint.trim()
+        : loadHostCertFingerprint(host.ip);
+    final client = HostConnectionPool.instance.acquire(
+      hostIp: host.ip,
+      port: host.wsPort,
+      sharedSecret: secret,
+      useTls: host.useTls || prefs.preferTls,
+      certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
+    );
+    await client.ensureConnected(timeout: const Duration(seconds: 7));
+    return client;
+  }
+
+  Future<void> _showHostClipboardActions(HostState host) async {
+    final primary = Theme.of(context).colorScheme.primary;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: CyberColors.surfaceElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(Icons.upload_rounded, color: primary),
+                title: const Text('Push Phone Clipboard to PC'),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  try {
+                    final data = await Clipboard.getData('text/plain');
+                    final txt = data?.text ?? '';
+                    if (txt.isEmpty) {
+                      _showToast('Phone clipboard is empty.',
+                          accentColor: CyberColors.warning);
+                      return;
+                    }
+                    final client = await _acquireConnectedClient(host);
+                    if (client == null) return;
+                    client.sendClipboard(txt);
+                    _showToast(
+                      'Pushed ${txt.length} clipboard characters to ${host.name}.',
+                    );
+                  } catch (e) {
+                    _showToast('Clipboard push failed: $e',
+                        accentColor: _kDangerColor);
+                  }
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.download_rounded, color: primary),
+                title: const Text('Pull PC Clipboard to Phone'),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  try {
+                    final client = await _acquireConnectedClient(host);
+                    if (client == null) return;
+                    final nextClip = client.clipboardStream.first
+                        .timeout(const Duration(seconds: 5));
+                    client.requestClipboard();
+                    final text = await nextClip;
+                    await Clipboard.setData(ClipboardData(text: text));
+                    _showToast(
+                      text.isEmpty
+                          ? 'PC clipboard is empty.'
+                          : 'Copied ${text.length} chars from ${host.name}.',
+                    );
+                  } catch (e) {
+                    _showToast('Clipboard pull failed: $e',
+                        accentColor: _kDangerColor);
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showHostAudioActions(HostState host) async {
+    final primary = Theme.of(context).colorScheme.primary;
+    HostConnectionClient? client;
+    try {
+      client = await _acquireConnectedClient(host);
+    } catch (e) {
+      _showToast('Failed to connect to ${host.name}: $e',
+          accentColor: _kDangerColor);
+    }
+    if (client == null || !mounted) return;
+    final activeClient = client;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: CyberColors.surfaceElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            alignment: WrapAlignment.center,
+            children: [
+              ActionChip(
+                avatar: const Icon(Icons.skip_previous_rounded, size: 18),
+                label: const Text('Prev'),
+                onPressed: () => activeClient.sendAudioCommand('prev'),
+              ),
+              ActionChip(
+                avatar: Icon(Icons.play_arrow_rounded,
+                    size: 18, color: primary),
+                label: const Text('Play/Pause'),
+                onPressed: () => activeClient.sendAudioCommand('play_pause'),
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.skip_next_rounded, size: 18),
+                label: const Text('Next'),
+                onPressed: () => activeClient.sendAudioCommand('next'),
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.volume_down_rounded, size: 18),
+                label: const Text('Vol -'),
+                onPressed: () => activeClient.sendAudioCommand('volume_down'),
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.volume_off_rounded, size: 18),
+                label: const Text('Mute'),
+                onPressed: () => activeClient.sendAudioCommand('mute'),
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.volume_up_rounded, size: 18),
+                label: const Text('Vol +'),
+                onPressed: () => activeClient.sendAudioCommand('volume_up'),
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.lock_rounded,
+                    size: 18, color: _kDangerColor),
+                label: const Text('Lock PC'),
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  activeClient.sendAudioCommand('lock_pc');
+                  _showToast('Sent lock_pc command to ${host.name}.',
+                      accentColor: CyberColors.warning);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSendFileToHostDialog(HostState host) async {
+    final pathCtrl = TextEditingController();
+    final noteNameCtrl = TextEditingController(text: 'mobile_note.txt');
+    final noteBodyCtrl = TextEditingController();
+
+    final submitted = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: CyberColors.surfaceElevated,
+            title: Text('Send Encrypted File -> ${host.name}'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: pathCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Local File Path (optional)',
+                      hintText: '/storage/emulated/0/Download/file.bin',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Or send a text note payload directly:',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: CyberColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: noteNameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Target Filename',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: noteBodyCtrl,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'Quick Text Content',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Send AEAD'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    final filePath = pathCtrl.text.trim();
+    final noteName = noteNameCtrl.text.trim().isNotEmpty
+        ? noteNameCtrl.text.trim()
+        : 'mobile_note.txt';
+    final noteBody = noteBodyCtrl.text;
+    Future<void>.delayed(const Duration(milliseconds: 300), () {
+      pathCtrl.dispose();
+      noteNameCtrl.dispose();
+      noteBodyCtrl.dispose();
+    });
+
+    if (!submitted || !mounted) return;
+    if (filePath.isEmpty && noteBody.isEmpty) {
+      _showToast('Enter a file path or text content to transfer.',
+          accentColor: CyberColors.warning);
+      return;
+    }
+
+    File? tempFile;
+    File targetFile;
+    try {
+      if (filePath.isNotEmpty) {
+        targetFile = File(filePath);
+        if (!await targetFile.exists()) {
+          _showToast('File not found: $filePath', accentColor: _kDangerColor);
+          return;
+        }
+      } else {
+        final safeName = NetworkValidators.sanitizeLabel(noteName)
+            .replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+        tempFile = File(
+            '${Directory.systemTemp.path}${Platform.pathSeparator}$safeName');
+        await tempFile.writeAsString(noteBody, flush: true);
+        targetFile = tempFile;
+      }
+
+      final client = await _acquireConnectedClient(host);
+      if (client == null || !mounted) return;
+
+      final fileLen = await targetFile.length();
+      if (!mounted) return;
+      final engine = FileTransferEngine();
+      final progressNotifier = ValueNotifier<TransferProgress>(
+        TransferProgress(
+          transferId: 0,
+          filename: targetFile.uri.pathSegments.last,
+          totalBytes: fileLen,
+          bytesSent: 0,
+          speedBytesPerSec: 0,
+          eta: Duration.zero,
+          state: TransferState.hashing,
+        ),
+      );
+
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dlgCtx) => ValueListenableBuilder<TransferProgress>(
+            valueListenable: progressNotifier,
+            builder: (_, prog, _) {
+              return FileTransferProgressDialog(
+                progress: prog,
+                onCancel: () {
+                  if (prog.state == TransferState.completed ||
+                      prog.state == TransferState.failed ||
+                      prog.state == TransferState.cancelled) {
+                    Navigator.of(dlgCtx).pop();
+                  } else {
+                    engine.cancel();
+                    Navigator.of(dlgCtx).pop();
+                  }
+                },
+              );
+            },
+          ),
+        ).whenComplete(progressNotifier.dispose),
+      );
+
+      await for (final progress in engine.sendFile(
+        file: targetFile,
+        sendPacket: client.sendRawEncryptedPacket,
+        ackStream: client.fileAckStream,
+        packetBuilder: (opcode, payload) =>
+            client.encryptFrame(opcode, payload),
+      )) {
+        progressNotifier.value = progress;
+        if (progress.state == TransferState.completed) {
+          _showToast('Encrypted transfer complete: ${progress.filename}');
+          break;
+        }
+        if (progress.state == TransferState.failed) {
+          _showToast(
+            progress.errorMessage ?? 'Encrypted file transfer failed',
+            accentColor: _kDangerColor,
+          );
+          break;
+        }
+      }
+    } catch (e) {
+      _showToast('File transfer error: $e', accentColor: _kDangerColor);
+    } finally {
+      if (tempFile != null && await tempFile.exists()) {
+        unawaited(tempFile.delete().catchError((_) => tempFile!));
+      }
+    }
+  }
+
   Future<void> _showHostActionsSheet(HostState host) async {
     _hapticTap();
     final primary = Theme.of(context).colorScheme.primary;
@@ -1499,84 +1899,132 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   ],
                 ),
                 const Divider(height: 20, color: Colors.white12),
-                ListTile(
-                  leading: Icon(Icons.cast_connected_rounded, color: primary),
-                  title: const Text('Open Live Stream'),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    ref.read(selectedHostIdProvider.notifier).state = host.id;
-                    _openStreamScreen(host);
-                  },
-                ),
-                ListTile(
-                  leading: Icon(Icons.terminal_rounded, color: primary),
-                  title: const Text('Open Terminal Session'),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    ref.read(selectedHostIdProvider.notifier).state = host.id;
-                    setState(() => _currentTabIndex = 1);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(
-                    Icons.network_ping_rounded,
-                    color: CyberColors.success,
-                  ),
-                  title: const Text('Measure Latency (Ping)'),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _pingHost(host);
-                  },
-                ),
-                ListTile(
-                  leading: Icon(
-                    Icons.bolt_rounded,
-                    color: hasValidMac
-                        ? CyberColors.warning
-                        : CyberColors.textTertiary,
-                  ),
-                  title: const Text('Send Wake-on-LAN Packet'),
-                  subtitle: hasValidMac
-                      ? Text(host.mac, style: const TextStyle(fontSize: 11))
-                      : const Text(
-                          'Set a MAC address via Edit first',
-                          style: TextStyle(fontSize: 11),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ListTile(
+                          leading:
+                              Icon(Icons.cast_connected_rounded, color: primary),
+                          title: const Text('Open Live Stream'),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            ref.read(selectedHostIdProvider.notifier).state =
+                                host.id;
+                            _openStreamScreen(host);
+                          },
                         ),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _sendWakeOnLan(host.mac, targetIp: host.ip);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.copy_rounded, color: Colors.white70),
-                  title: const Text('Copy IP Address'),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    Clipboard.setData(ClipboardData(text: host.ip));
-                    _showToast('Copied ${host.ip} to clipboard');
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.edit_rounded, color: Colors.white70),
-                  title: const Text('Edit Workstation'),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _showHostEditorDialog(existing: host);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(
-                    Icons.delete_outline_rounded,
-                    color: _kDangerColor,
+                        ListTile(
+                          leading: Icon(Icons.terminal_rounded, color: primary),
+                          title: const Text('Open Terminal Session'),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            ref.read(selectedHostIdProvider.notifier).state =
+                                host.id;
+                            setState(() => _currentTabIndex = 1);
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(
+                            Icons.content_paste_go_rounded,
+                            color: Colors.white70,
+                          ),
+                          title: const Text('Sync Clipboard with PC'),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _showHostClipboardActions(host);
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(
+                            Icons.tune_rounded,
+                            color: Colors.white70,
+                          ),
+                          title: const Text('Remote Audio & Lock PC'),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _showHostAudioActions(host);
+                          },
+                        ),
+                        ListTile(
+                          leading: Icon(
+                            Icons.upload_file_rounded,
+                            color: primary,
+                          ),
+                          title: const Text('Send File to PC (AEAD 0x0C)'),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _showSendFileToHostDialog(host);
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(
+                            Icons.network_ping_rounded,
+                            color: CyberColors.success,
+                          ),
+                          title: const Text('Measure Latency (Ping)'),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _pingHost(host);
+                          },
+                        ),
+                        ListTile(
+                          leading: Icon(
+                            Icons.bolt_rounded,
+                            color: hasValidMac
+                                ? CyberColors.warning
+                                : CyberColors.textTertiary,
+                          ),
+                          title: const Text('Send Wake-on-LAN Packet'),
+                          subtitle: hasValidMac
+                              ? Text(host.mac,
+                                  style: const TextStyle(fontSize: 11))
+                              : const Text(
+                                  'Set a MAC address via Edit first',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _sendWakeOnLan(host.mac, targetIp: host.ip);
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.copy_rounded,
+                              color: Colors.white70),
+                          title: const Text('Copy IP Address'),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            Clipboard.setData(ClipboardData(text: host.ip));
+                            _showToast('Copied ${host.ip} to clipboard');
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.edit_rounded,
+                              color: Colors.white70),
+                          title: const Text('Edit Workstation'),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _showHostEditorDialog(existing: host);
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(
+                            Icons.delete_outline_rounded,
+                            color: _kDangerColor,
+                          ),
+                          title: const Text(
+                            'Remove Workstation',
+                            style: TextStyle(color: _kDangerColor),
+                          ),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _confirmRemoveHost(host);
+                          },
+                        ),
+                      ],
+                    ),
                   ),
-                  title: const Text(
-                    'Remove Workstation',
-                    style: TextStyle(color: _kDangerColor),
-                  ),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _confirmRemoveHost(host);
-                  },
                 ),
               ],
             ),
@@ -1590,6 +2038,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final confirmed = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            scrollable: true,
             backgroundColor: CyberColors.surfaceElevated,
             title: const Text('Remove Workstation?'),
             content: Text(
@@ -1632,6 +2083,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           context: context,
           builder: (ctx) {
             return AlertDialog(
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              scrollable: true,
               backgroundColor: CyberColors.surfaceElevated,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
@@ -1805,6 +2259,65 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         useTls: targetHost.useTls || prefs.preferTls,
         certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
       );
+
+      final lowerCmd = trimmed.toLowerCase();
+      if (lowerCmd.startsWith('ai:') || lowerCmd.startsWith('ollama:')) {
+        final prompt = trimmed.substring(trimmed.indexOf(':') + 1).trim();
+        if (prompt.isEmpty) {
+          updateLatestStatus('Provide a prompt after ai: or ollama:.',
+              isError: true);
+          return;
+        }
+        await client.ensureConnected(timeout: const Duration(seconds: 7));
+        final buf = StringBuffer();
+        final done = Completer<void>();
+        Timer? idleTimer;
+        void resetIdle(Duration wait) {
+          idleTimer?.cancel();
+          idleTimer = Timer(wait, () {
+            if (!done.isCompleted) done.complete();
+          });
+        }
+
+        final sub = client.llmTokenStream.listen((token) {
+          if (buf.isEmpty && token.trimLeft().startsWith('{')) {
+            try {
+              final err = jsonDecode(token);
+              if (err is Map && err['error'] != null) {
+                updateLatestStatus('Ollama Error: ${err['error']}',
+                    isError: true);
+                if (!done.isCompleted) done.complete();
+                return;
+              }
+            } catch (_) {}
+          }
+          buf.write(token);
+          updateLatestStatus('[Ollama Stream]\n${buf.toString()}');
+          resetIdle(const Duration(seconds: 3));
+        });
+
+        try {
+          if (!client.sendOllamaPrompt(prompt)) {
+            updateLatestStatus('Unable to dispatch encrypted Ollama prompt.',
+                isError: true);
+            return;
+          }
+          updateLatestStatus('[Ollama Stream] Awaiting host AI tokens...');
+          resetIdle(const Duration(seconds: 12));
+          await done.future;
+          if (buf.isEmpty) {
+            updateLatestStatus(
+              'No response from host Ollama bridge within 12s.',
+              isError: true,
+            );
+          }
+        } finally {
+          idleTimer?.cancel();
+          await sub.cancel();
+        }
+        return;
+      }
+
       final res = await client.executeCommand(
         trimmed,
         timeout: const Duration(seconds: 25),
@@ -1939,17 +2452,37 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final prefs = ref.watch(appPreferencesProvider);
     if (prefs.hasCompletedOnboarding) return const SizedBox.shrink();
     final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 10),
       decoration: BoxDecoration(
-        color: primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: primary.withValues(alpha: 0.30)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            primary.withValues(alpha: 0.16),
+            palette.surfaceElevated.withValues(alpha: 0.88),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: primary.withValues(alpha: 0.38)),
+        boxShadow: [
+          BoxShadow(
+            color: primary.withValues(alpha: 0.14),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const FluidSpecularBar(
+            isSelected: true,
+            height: 1.0,
+            margin: EdgeInsets.only(left: 6, right: 6, bottom: 6),
+          ),
           Row(
             children: [
               Icon(Icons.auto_awesome_rounded, color: primary, size: 18),
@@ -2121,24 +2654,42 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
   Widget _buildEmptyFleetState() {
     final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 16),
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.fromLTRB(24, 14, 24, 24),
       decoration: BoxDecoration(
-        color: CyberColors.surfaceElevated.withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        gradient: palette.cardBevelGradient(isSelected: false),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+        boxShadow: palette.elevationShadows(isSelected: false),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          const FluidSpecularBar(
+            isSelected: true,
+            height: 1.0,
+            margin: EdgeInsets.only(left: 12, right: 12, bottom: 14),
+          ),
           Container(
-            width: 52,
-            height: 52,
+            width: 56,
+            height: 56,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: primary.withValues(alpha: 0.12),
-              border: Border.all(color: primary.withValues(alpha: 0.3)),
+              gradient: RadialGradient(
+                colors: [
+                  primary.withValues(alpha: 0.24),
+                  primary.withValues(alpha: 0.06),
+                ],
+              ),
+              border: Border.all(color: primary.withValues(alpha: 0.38)),
+              boxShadow: [
+                BoxShadow(
+                  color: primary.withValues(alpha: 0.22),
+                  blurRadius: 16,
+                ),
+              ],
             ),
             child: Icon(Icons.devices_rounded, color: primary, size: 24),
           ),
@@ -2255,7 +2806,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         physics: const AlwaysScrollableScrollPhysics(
           parent: BouncingScrollPhysics(),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: FluidSize.pagePadding(context),
         children: [
           _buildOnboardingBanner(),
           _buildFleetToolbar(hosts),
@@ -2283,9 +2834,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // -------------------------------------------------------------------
   Widget _buildMediumGridFleet(List<HostState> hosts) {
     final filtered = _filteredHosts(hosts);
+    final pad = FluidSize.pagePadding(context);
     if (hosts.isEmpty) {
       return ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: pad,
         children: [
           _buildOnboardingBanner(),
           _buildFleetToolbar(hosts),
@@ -2295,45 +2847,53 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          SliverToBoxAdapter(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildOnboardingBanner(),
-                _buildFleetToolbar(hosts),
-              ],
-            ),
-          ),
-          if (filtered.isEmpty)
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 28),
-                child: Center(
-                  child: Text(
-                    'No workstations match the current filter.',
-                    style: TextStyle(color: CyberColors.textSecondary),
-                  ),
+      padding: pad,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cols = constraints.maxWidth < 460 ? 1 : 2;
+          final extent =
+              (166.0 * FluidSize.getScaleFactor(context).clamp(0.92, 1.18))
+                  .roundToDouble();
+          return CustomScrollView(
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildOnboardingBanner(),
+                    _buildFleetToolbar(hosts),
+                  ],
                 ),
               ),
-            )
-          else
-            SliverGrid(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                mainAxisExtent: 158,
-              ),
-              delegate: SliverChildBuilderDelegate(
-                (context, index) => _buildDeviceCardFor(filtered[index]),
-                childCount: filtered.length,
-              ),
-            ),
-        ],
+              if (filtered.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 28),
+                    child: Center(
+                      child: Text(
+                        'No workstations match the current filter.',
+                        style: TextStyle(color: CyberColors.textSecondary),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                SliverGrid(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cols,
+                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 12,
+                    mainAxisExtent: extent,
+                  ),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => _buildDeviceCardFor(filtered[index]),
+                    childCount: filtered.length,
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -2345,7 +2905,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final filtered = _filteredHosts(hosts);
     return ListView(
       physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       children: [
         _buildOnboardingBanner(),
         _buildFleetToolbar(hosts),
@@ -2382,7 +2942,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   Widget _buildDetailConsolePane(HostState? host) {
     if (host == null) {
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: _buildEmptyFleetState(),
         ),
@@ -2390,20 +2950,25 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     }
 
     final prefs = ref.watch(appPreferencesProvider);
-    return Padding(
+    return LayoutBuilder(
       key: ValueKey<String>(host.id),
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 240),
-            switchInCurve: Curves.easeOutCubic,
-            child: host.isOnline
-                ? AspectRatio(
-                    key: ValueKey('online-${host.id}'),
-                    aspectRatio: 16 / 9,
-                    child: ViewportStreamWidget(
+      builder: (context, constraints) {
+        final availH = constraints.maxHeight;
+        final isShortPane = availH.isFinite && availH < 480;
+        final maxPreviewH = availH.isFinite
+            ? (availH * (isShortPane ? 0.40 : 0.48)).clamp(96.0, 420.0)
+            : 360.0;
+        final pad = isShortPane ? 10.0 : 16.0;
+
+        final previewWidget = ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxPreviewH),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: host.isOnline
+                  ? ViewportStreamWidget(
+                      key: ValueKey('online-${host.id}'),
                       hostIp: host.ip,
                       hostName: host.name,
                       wsPort: host.wsPort,
@@ -2413,16 +2978,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       certFingerprint: host.certFingerprint.trim().isNotEmpty
                           ? host.certFingerprint.trim()
                           : loadHostCertFingerprint(host.ip),
+                      targetFps: prefs.targetFps,
                       onTelemetry: (data) => ref
                           .read(fleetProvider.notifier)
                           .updateTelemetryByIp(host.ip, data),
                       onToggleFullscreen: () => _openStreamScreen(host),
-                    ),
-                  )
-                : AspectRatio(
-                    key: ValueKey('offline-${host.id}'),
-                    aspectRatio: 16 / 9,
-                    child: Container(
+                    )
+                  : Container(
+                      key: ValueKey('offline-${host.id}'),
                       decoration: BoxDecoration(
                         color:
                             CyberColors.surfaceElevated.withValues(alpha: 0.92),
@@ -2432,47 +2995,65 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                         ),
                       ),
                       child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.power_settings_new_rounded,
-                              size: 40,
-                              color: CyberColors.textTertiary,
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              '${host.name} is currently in S3/S5 Sleep State',
-                              style: const TextStyle(
-                                color: CyberColors.textSecondary,
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.power_settings_new_rounded,
+                                size: isShortPane ? 28 : 40,
+                                color: CyberColors.textTertiary,
                               ),
-                            ),
-                            const SizedBox(height: 12),
-                            ElevatedButton.icon(
-                              icon: const Icon(
-                                Icons.bolt_rounded,
-                                color: Colors.black,
+                              SizedBox(height: isShortPane ? 6 : 12),
+                              Text(
+                                '${host.name} is currently in S3/S5 Sleep State',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: CyberColors.textSecondary,
+                                ),
                               ),
-                              label: const Text('WAKE ON LAN (WoL)'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: CyberColors.warning,
-                                foregroundColor: Colors.black,
+                              SizedBox(height: isShortPane ? 8 : 12),
+                              ElevatedButton.icon(
+                                icon: const Icon(
+                                  Icons.bolt_rounded,
+                                  color: Colors.black,
+                                ),
+                                label: const Text('WAKE ON LAN (WoL)'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: CyberColors.warning,
+                                  foregroundColor: Colors.black,
+                                ),
+                                onPressed: () =>
+                                    _sendWakeOnLan(host.mac, targetIp: host.ip),
                               ),
-                              onPressed: () =>
-                                  _sendWakeOnLan(host.mac, targetIp: host.ip),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
+            ),
           ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: _buildTerminalCommandsTab(host, isEmbedded: true),
+        );
+
+        return Padding(
+          padding: EdgeInsets.all(pad),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 240),
+                switchInCurve: Curves.easeOutCubic,
+                child: previewWidget,
+              ),
+              SizedBox(height: isShortPane ? 10 : 16),
+              Expanded(
+                child: _buildTerminalCommandsTab(host, isEmbedded: true),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -2500,34 +3081,48 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
     return ListView(
       physics: const BouncingScrollPhysics(),
-      padding: isEmbedded ? EdgeInsets.zero : const EdgeInsets.all(16),
+      padding: isEmbedded ? EdgeInsets.zero : FluidSize.pagePadding(context),
       children: [
-        Row(
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          runSpacing: 6,
           children: [
-            Expanded(child: _buildSectionHeader(targetHeader)),
+            _buildSectionHeader(targetHeader),
             if (!isEmbedded && hosts.length > 1 && host != null)
-              DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: host.id,
-                  dropdownColor: CyberColors.surfaceElevated,
-                  style: TextStyle(
-                    color: primary,
-                    fontFamily: 'monospace',
-                    fontSize: 11.5,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 180),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: host.id,
+                    isExpanded: true,
+                    isDense: true,
+                    dropdownColor: CyberColors.surfaceElevated,
+                    style: TextStyle(
+                      color: primary,
+                      fontFamily: 'monospace',
+                      fontSize: 11.5,
+                    ),
+                    items: hosts
+                        .map(
+                          (h) => DropdownMenuItem<String>(
+                            value: h.id,
+                            child: Text(
+                              h.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (nextId) {
+                      if (nextId != null) {
+                        ref.read(selectedHostIdProvider.notifier).state =
+                            nextId;
+                      }
+                    },
                   ),
-                  items: hosts
-                      .map(
-                        (h) => DropdownMenuItem<String>(
-                          value: h.id,
-                          child: Text(h.name),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (nextId) {
-                    if (nextId != null) {
-                      ref.read(selectedHostIdProvider.notifier).state = nextId;
-                    }
-                  },
                 ),
               ),
           ],
@@ -2578,22 +3173,28 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primary,
-                foregroundColor: Colors.black,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+            FluidPressScale(
+              pressedScale: 0.94,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primary,
+                  foregroundColor: Colors.black,
+                  elevation: 6,
+                  shadowColor: primary.withValues(alpha: 0.45),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 13,
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 13,
+                onPressed: () =>
+                    _dispatchCommand(_commandController.text, host),
+                child: const Text(
+                  'Run',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
                 ),
-              ),
-              onPressed: () => _dispatchCommand(_commandController.text, host),
-              child: const Text(
-                'Run',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
               ),
             ),
           ],
@@ -2603,22 +3204,25 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           spacing: 8,
           runSpacing: 8,
           children: commands.map((cmd) {
-            return ActionChip(
-              backgroundColor:
-                  CyberColors.surfaceElevated.withValues(alpha: 0.9),
-              side: BorderSide(color: primary.withValues(alpha: 0.35)),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-              label: Text(
-                cmd.split('|').first.trim(),
-                style: TextStyle(
-                  color: primary,
-                  fontSize: context.fluidFont(11),
-                  fontFamily: 'monospace',
+            return FluidPressScale(
+              pressedScale: 0.95,
+              child: ActionChip(
+                backgroundColor:
+                    CyberColors.surfaceElevated.withValues(alpha: 0.92),
+                side: BorderSide(color: primary.withValues(alpha: 0.40)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
                 ),
+                label: Text(
+                  cmd.split('|').first.trim(),
+                  style: TextStyle(
+                    color: primary,
+                    fontSize: context.fluidFont(11),
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                onPressed: () => _dispatchCommand(cmd, host),
               ),
-              onPressed: () => _dispatchCommand(cmd, host),
             );
           }).toList(),
         ),
@@ -2691,83 +3295,113 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ],
         ),
         const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF060B16),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: primary.withValues(alpha: 0.22)),
-          ),
-          child: _commandLogs.isEmpty
-              ? Text(
-                  host != null
-                      ? 'Ready on ${host.name} (${host.ip}:${host.wsPort}). Select a preset or type a command above to execute.'
-                      : 'No active command session. Add a workstation in the Fleet tab to execute remote commands.',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    color: CyberColors.textSecondary,
-                    fontSize: context.fluidFont(11),
-                  ),
-                )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: _commandLogs.map((entry) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: Column(
+        RepaintBoundary(
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFF0A1224),
+                  Color(0xFF050912),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: primary.withValues(alpha: 0.28)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.52),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
+                BoxShadow(
+                  color: primary.withValues(alpha: 0.08),
+                  blurRadius: 14,
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const FluidSpecularBar(
+                  isSelected: true,
+                  height: 1.0,
+                  margin: EdgeInsets.only(bottom: 10),
+                ),
+                _commandLogs.isEmpty
+                    ? Text(
+                        host != null
+                            ? 'Ready on ${host.name} (${host.ip}:${host.wsPort}). Select a preset or type a command above to execute.'
+                            : 'No active command session. Add a workstation in the Fleet tab to execute remote commands.',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          color: CyberColors.textSecondary,
+                          fontSize: context.fluidFont(11),
+                        ),
+                      )
+                    : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '[${entry.timestamp}] ${entry.hostName} > ${entry.command}',
+                        children: _commandLogs.map((entry) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '[${entry.timestamp}] ${entry.hostName} > ${entry.command}',
+                                        style: TextStyle(
+                                          fontFamily: 'monospace',
+                                          color: primary,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: context.fluidFont(10.5),
+                                        ),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                        minWidth: 28,
+                                        minHeight: 28,
+                                      ),
+                                      tooltip: 'Copy output',
+                                      icon: const Icon(
+                                        Icons.copy_rounded,
+                                        size: 14,
+                                        color: CyberColors.textTertiary,
+                                      ),
+                                      onPressed: () {
+                                        Clipboard.setData(
+                                          ClipboardData(text: entry.status),
+                                        );
+                                        _showToast('Output copied to clipboard');
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                SelectableText(
+                                  entry.status,
                                   style: TextStyle(
                                     fontFamily: 'monospace',
-                                    color: primary,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: context.fluidFont(10.5),
+                                    color: entry.isError
+                                        ? CyberColors.warning
+                                        : CyberColors.success,
+                                    fontSize: context.fluidFont(10),
                                   ),
                                 ),
-                              ),
-                              IconButton(
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(
-                                  minWidth: 28,
-                                  minHeight: 28,
-                                ),
-                                tooltip: 'Copy output',
-                                icon: const Icon(
-                                  Icons.copy_rounded,
-                                  size: 14,
-                                  color: CyberColors.textTertiary,
-                                ),
-                                onPressed: () {
-                                  Clipboard.setData(
-                                    ClipboardData(text: entry.status),
-                                  );
-                                  _showToast('Output copied to clipboard');
-                                },
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          SelectableText(
-                            entry.status,
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              color: entry.isError
-                                  ? CyberColors.warning
-                                  : CyberColors.success,
-                              fontSize: context.fluidFont(10),
+                              ],
                             ),
-                          ),
-                        ],
+                          );
+                        }).toList(),
                       ),
-                    );
-                  }).toList(),
-                ),
+              ],
+            ),
+          ),
         ),
       ],
     );
@@ -2794,6 +3428,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       builder: (ctx) {
         final primary = Theme.of(ctx).colorScheme.primary;
         return AlertDialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          scrollable: true,
           backgroundColor: CyberColors.surfaceElevated,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
@@ -3025,6 +3661,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
   Widget _buildTelemetrySummaryStrip(HostState host) {
     final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
+    final disableAnim = MediaQuery.disableAnimationsOf(context);
     final metrics = <String>[
       if (host.osName.isNotEmpty) 'OS: ${host.osName}',
       'CPU: ${host.cpuUsage}%${host.cpuCores > 0 ? ' (${host.cpuCores}c)' : ''}',
@@ -3041,12 +3679,30 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       spacing: 6,
       runSpacing: 6,
       children: metrics.map((label) {
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        return AnimatedContainer(
+          duration:
+              disableAnim ? Duration.zero : const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            color: CyberColors.surfaceElevated.withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: primary.withValues(alpha: 0.25)),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color.lerp(palette.surfaceElevated, primary, 0.12)!
+                    .withValues(alpha: 0.90),
+                palette.surface.withValues(alpha: 0.85),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(color: primary.withValues(alpha: 0.30)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.32),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
           child: Text(
             label,
@@ -3064,19 +3720,28 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   Widget _buildAppearanceStudioCard(AppPreferencesState prefs) {
     final prefsNotifier = ref.read(appPreferencesProvider.notifier);
     final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
+    final disableAnim = MediaQuery.disableAnimationsOf(context);
+    final dur = disableAnim ? Duration.zero : const Duration(milliseconds: 200);
 
-    return Material(
-      color: CyberColors.surfaceElevated.withValues(alpha: 0.94),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-        side: BorderSide(color: primary.withValues(alpha: 0.22)),
+    return Container(
+      decoration: BoxDecoration(
+        gradient: palette.cardBevelGradient(isSelected: false),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: primary.withValues(alpha: 0.28)),
+        boxShadow: palette.elevationShadows(isSelected: false),
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            const FluidSpecularBar(
+              isSelected: true,
+              height: 1.0,
+              margin: EdgeInsets.only(left: 8, right: 8, bottom: 10),
+            ),
             Row(
               children: [
                 Icon(Icons.palette_rounded, color: primary, size: 18),
@@ -3113,53 +3778,86 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       _hapticTap();
                       prefsNotifier.setAccent(preset);
                     },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? swatchColor.withValues(alpha: 0.18)
-                            : Colors.white.withValues(alpha: 0.04),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: isSelected
-                              ? swatchColor
-                              : Colors.white.withValues(alpha: 0.10),
-                          width: isSelected ? 1.5 : 1,
+                    child: AnimatedScale(
+                      scale: isSelected ? 1.04 : 1.0,
+                      duration: dur,
+                      curve: Curves.easeOutCubic,
+                      child: AnimatedContainer(
+                        duration: dur,
+                        curve: Curves.easeOutCubic,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
                         ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 14,
-                            height: 14,
-                            decoration: BoxDecoration(
-                              color: swatchColor,
-                              shape: BoxShape.circle,
-                            ),
-                            child: isSelected
-                                ? const Icon(
-                                    Icons.check_rounded,
-                                    size: 10,
-                                    color: Colors.black,
-                                  )
-                                : null,
+                        decoration: BoxDecoration(
+                          gradient: isSelected
+                              ? LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    swatchColor.withValues(alpha: 0.26),
+                                    swatchColor.withValues(alpha: 0.12),
+                                  ],
+                                )
+                              : null,
+                          color: isSelected
+                              ? null
+                              : Colors.white.withValues(alpha: 0.04),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isSelected
+                                ? swatchColor
+                                : Colors.white.withValues(alpha: 0.12),
+                            width: isSelected ? 1.5 : 1,
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _formatEnumLabel(preset),
-                            style: TextStyle(
-                              color: isSelected ? Colors.white : Colors.white70,
-                              fontWeight:
-                                  isSelected ? FontWeight.bold : FontWeight.w500,
-                              fontSize: 12,
+                          boxShadow: isSelected
+                              ? [
+                                  BoxShadow(
+                                    color: swatchColor.withValues(alpha: 0.24),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ]
+                              : null,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 14,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: swatchColor,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: swatchColor.withValues(alpha: 0.55),
+                                    blurRadius: 6,
+                                  ),
+                                ],
+                              ),
+                              child: isSelected
+                                  ? const Icon(
+                                      Icons.check_rounded,
+                                      size: 10,
+                                      color: Colors.black,
+                                    )
+                                  : null,
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 8),
+                            Text(
+                              _formatEnumLabel(preset),
+                              style: TextStyle(
+                                color:
+                                    isSelected ? Colors.white : Colors.white70,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.w500,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -3246,7 +3944,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
     return ListView(
       physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.all(16),
+      padding: FluidSize.pagePadding(context),
       children: [
         _buildSectionHeader('APPEARANCE STUDIO (PERSISTENT)'),
         const SizedBox(height: 8),
@@ -3385,6 +4083,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             ),
           ),
         ),
+        _buildSettingsToggleTile(
+          icon: Icons.vibration_rounded,
+          title: 'Haptic Touch Feedback',
+          subtitle: 'Subtle tactile vibration when interacting with controls.',
+          value: prefs.hapticsEnabled,
+          onChanged: prefsNotifier.setHapticsEnabled,
+        ),
+        _buildSettingsToggleTile(
+          icon: Icons.wb_sunny_rounded,
+          title: 'Keep Screen Awake During Stream',
+          subtitle: 'Prevents display sleep while viewing live PC stream.',
+          value: prefs.keepScreenAwake,
+          onChanged: prefsNotifier.setKeepScreenAwake,
+        ),
         const SizedBox(height: 14),
         _buildSectionHeader('MAINTENANCE & DIAGNOSTICS'),
         const SizedBox(height: 8),
@@ -3423,7 +4135,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           subtitle:
               'Impeller Hardware Engine • AI-NET/3.0-SECURE Protocol',
           trailing: const Text(
-            'v0.60.0',
+            'v0.70.0',
             style: TextStyle(
               color: CyberColors.success,
               fontFamily: 'monospace',
@@ -3463,52 +4175,77 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     required Widget trailing,
   }) {
     final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 11),
       child: Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
         decoration: BoxDecoration(
-          color: CyberColors.surfaceElevated.withValues(alpha: 0.94),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          gradient: palette.cardBevelGradient(isSelected: false),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.13)),
+          boxShadow: palette.elevationShadows(isSelected: false),
         ),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: primary.withValues(alpha: 0.12),
-                border: Border.all(color: primary.withValues(alpha: 0.25)),
-              ),
-              child: Icon(icon, color: primary, size: 20),
+            const FluidSpecularBar(
+              isSelected: false,
+              height: 1.0,
+              margin: EdgeInsets.only(left: 6, right: 6, bottom: 9),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: context.fluidFont(12),
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(13),
+                    gradient: RadialGradient(
+                      center: const Alignment(-0.25, -0.25),
+                      radius: 1.0,
+                      colors: [
+                        primary.withValues(alpha: 0.22),
+                        primary.withValues(alpha: 0.08),
+                      ],
                     ),
+                    border: Border.all(color: primary.withValues(alpha: 0.34)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: primary.withValues(alpha: 0.18),
+                        blurRadius: 10,
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: CyberColors.textSecondary,
-                      fontSize: context.fluidFont(10),
-                    ),
+                  child: Icon(icon, color: primary, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: context.fluidFont(12),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: CyberColors.textSecondary,
+                          fontSize: context.fluidFont(10),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                trailing,
+              ],
             ),
-            const SizedBox(width: 8),
-            trailing,
           ],
         ),
       ),
@@ -3516,14 +4253,37 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   Widget _buildSectionHeader(String title) {
-    return Text(
-      title,
-      style: TextStyle(
-        color: CyberColors.textSecondary,
-        fontSize: context.fluidFont(10),
-        fontWeight: FontWeight.bold,
-        letterSpacing: 1.5,
-      ),
+    final primary = Theme.of(context).colorScheme.primary;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 3,
+          height: 12,
+          margin: const EdgeInsets.only(right: 7),
+          decoration: BoxDecoration(
+            color: primary,
+            borderRadius: BorderRadius.circular(2),
+            boxShadow: [
+              BoxShadow(
+                color: primary.withValues(alpha: 0.55),
+                blurRadius: 6,
+              ),
+            ],
+          ),
+        ),
+        Flexible(
+          child: Text(
+            title,
+            style: TextStyle(
+              color: CyberColors.textSecondary,
+              fontSize: context.fluidFont(10),
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -3536,6 +4296,8 @@ class FullscreenStreamPage extends StatefulWidget {
   final String sharedSecret;
   final bool useTls;
   final String? certFingerprint;
+  final int targetFps;
+  final bool keepScreenAwake;
   final void Function(Map<String, dynamic> telemetry)? onTelemetry;
 
   const FullscreenStreamPage({
@@ -3544,6 +4306,8 @@ class FullscreenStreamPage extends StatefulWidget {
     this.sharedSecret = '',
     this.useTls = false,
     this.certFingerprint,
+    this.targetFps = 30,
+    this.keepScreenAwake = true,
     this.onTelemetry,
   });
 
@@ -3555,7 +4319,9 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
   @override
   void initState() {
     super.initState();
-    unawaited(WakelockPlus.enable().catchError((_) {}));
+    if (widget.keepScreenAwake) {
+      unawaited(WakelockPlus.enable().catchError((_) {}));
+    }
   }
 
   @override
@@ -3593,19 +4359,27 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
                 sharedSecret: effectiveSecret,
                 useTls: widget.useTls || widget.host.useTls,
                 certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
+                targetFps: widget.targetFps,
                 onTelemetry: widget.onTelemetry,
               ),
             ),
             Positioned(
-              top: MediaQuery.paddingOf(context).top + 10,
-              left: 14,
+              top: MediaQuery.paddingOf(context).top + 8,
+              left: MediaQuery.paddingOf(context).left + 12,
               child: Container(
+                width: 40,
+                height: 40,
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.6),
+                  color: Colors.black.withValues(alpha: 0.65),
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white24),
                 ),
                 child: IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 40,
+                    minHeight: 40,
+                  ),
                   icon: const Icon(
                     Icons.arrow_back_rounded,
                     color: Colors.white,

@@ -73,7 +73,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
         'subtitle': 'Local-First Workstation Orchestration',
         'icon': Icons.bolt_rounded,
         'color': palette.primary,
-        'badge': 'v0.60.0 Local-First',
+        'badge': 'v0.70.0 Local-First',
         'description':
             'Direct LAN fleet control, hardware-accelerated screen streaming, Wake-on-LAN, and diagnostics without external cloud dependencies.',
       },
@@ -106,11 +106,16 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
       },
     ];
 
+    final size = MediaQuery.sizeOf(context);
+    final isShort = size.height < 460;
+    final isUltraCompact = size.width < 340;
+    final iconOrbSize = isShort ? 52.0 : 76.0;
+
     final content = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Padding(
-          padding: const EdgeInsets.only(top: 12, bottom: 8),
+          padding: EdgeInsets.only(top: isShort ? 8 : 12, bottom: isShort ? 4 : 8),
           child: Container(
             width: 44,
             height: 4.5,
@@ -130,15 +135,17 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
               final Color stepColor = step['color'] as Color;
 
               return SingleChildScrollView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: EdgeInsets.symmetric(
+                  horizontal: isUltraCompact ? 14 : 24,
+                  vertical: isShort ? 6 : 12,
+                ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const SizedBox(height: 8),
+                    SizedBox(height: isShort ? 2 : 8),
                     Container(
-                      width: 76,
-                      height: 76,
+                      width: iconOrbSize,
+                      height: iconOrbSize,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: stepColor.withValues(alpha: 0.12),
@@ -155,11 +162,11 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                       ),
                       child: Icon(
                         step['icon'] as IconData,
-                        size: 38,
+                        size: isShort ? 26 : 38,
                         color: stepColor,
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    SizedBox(height: isShort ? 8 : 16),
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 4),
@@ -174,19 +181,19 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                         step['badge'] as String,
                         style: TextStyle(
                           color: stepColor,
-                          fontSize: 11,
+                          fontSize: context.fluidFont(11),
                           fontFamily: 'monospace',
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: isShort ? 6 : 12),
                     Text(
                       step['title'] as String,
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: palette.textPrimary,
-                        fontSize: 19,
+                        fontSize: context.fluidFont(isShort ? 16 : 19),
                         fontWeight: FontWeight.bold,
                         letterSpacing: 0.2,
                       ),
@@ -197,18 +204,18 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: stepColor.withValues(alpha: 0.85),
-                        fontSize: 12,
+                        fontSize: context.fluidFont(12),
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: isShort ? 6 : 12),
                     Text(
                       step['description'] as String,
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: palette.textSecondary,
-                        fontSize: 13,
-                        height: 1.45,
+                        fontSize: context.fluidFont(13),
+                        height: 1.4,
                       ),
                     ),
                   ],
@@ -218,12 +225,22 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          padding: EdgeInsets.fromLTRB(
+            isUltraCompact ? 12 : 20,
+            4,
+            isUltraCompact ? 12 : 20,
+            isShort ? 10 : 20,
+          ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               if (_currentPage > 0)
                 TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.symmetric(
+                        horizontal: isUltraCompact ? 6 : 12),
+                  ),
                   onPressed: _prevPage,
                   child: Text(
                     'Back',
@@ -235,6 +252,11 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                 )
               else
                 TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.symmetric(
+                        horizontal: isUltraCompact ? 6 : 12),
+                  ),
                   onPressed: _completeAndClose,
                   child: Text(
                     'Skip',
@@ -244,12 +266,13 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                   ),
                 ),
               Row(
+                mainAxisSize: MainAxisSize.min,
                 children: List.generate(_totalPages, (i) {
                   final active = i == _currentPage;
                   return AnimatedContainer(
                     duration: const Duration(milliseconds: 220),
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    width: active ? 22 : 6,
+                    margin: const EdgeInsets.symmetric(horizontal: 2.5),
+                    width: active ? (isUltraCompact ? 16 : 22) : 6,
                     height: 6,
                     decoration: BoxDecoration(
                       color: active
@@ -260,23 +283,30 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                   );
                 }),
               ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: palette.primary,
-                  foregroundColor: Colors.black,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+              Flexible(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: palette.primary,
+                    foregroundColor: Colors.black,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isUltraCompact ? 12 : 18,
+                      vertical: isShort ? 8 : 12,
+                    ),
                   ),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                ),
-                onPressed: _nextPage,
-                child: Text(
-                  _currentPage < _totalPages - 1 ? 'Next' : 'Get Started',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
+                  onPressed: _nextPage,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      _currentPage < _totalPages - 1 ? 'Next' : 'Get Started',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -286,35 +316,40 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
       ],
     );
 
-    return Container(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * 0.80,
-        maxWidth: 520,
-      ),
-      margin: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: palette.background.withValues(alpha: 0.96),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: palette.primary.withValues(alpha: 0.38),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: palette.primary.withValues(alpha: 0.16),
-            blurRadius: 32,
-            spreadRadius: 1,
+    return SafeArea(
+      child: Center(
+        heightFactor: 1.0,
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: (size.height * 0.86).clamp(180.0, 540.0),
+            maxWidth: 520,
           ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(28),
-        child: sigma > 0
-            ? BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-                child: content,
-              )
-            : content,
+          margin: EdgeInsets.all(isShort ? 8 : 12),
+          decoration: BoxDecoration(
+            color: palette.background.withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: palette.primary.withValues(alpha: 0.38),
+              width: 1.2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: palette.primary.withValues(alpha: 0.16),
+                blurRadius: 32,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(28),
+            child: sigma > 0
+                ? BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                    child: content,
+                  )
+                : content,
+          ),
+        ),
       ),
     );
   }

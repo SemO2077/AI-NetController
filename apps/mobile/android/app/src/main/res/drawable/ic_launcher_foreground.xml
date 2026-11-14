@@ -4,7 +4,44 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Outer Neon Cyan Telemetry Ring -->
+    <path
+        android:fillColor="#070E1A"
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="3.2"
+        android:pathData="M54,24A30,30 0 1,1 53.99,24Z" />
+    <!-- Secondary Electric Violet Orbital Ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#8A2BE2"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M30,54A24,24 0 0,1 78,54" />
+    <!-- Inner Cyber Cyan Power Arc -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="5.0"
+        android:strokeLineCap="round"
+        android:pathData="M65.5,38.5A18.5,18.5 0 1,1 42.5,38.5" />
+    <!-- Emerald Telemetry Power Stem -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00FF9D"
+        android:strokeWidth="5.4"
+        android:strokeLineCap="round"
+        android:pathData="M54,30L54,53" />
+    <!-- Specular White-Cyan Core Stem Highlight -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#D2FFF5"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round"
+        android:pathData="M54,31.5L54,51.5" />
+    <!-- Central Nexus Node -->
     <path
         android:fillColor="#00F0FF"
-        android:pathData="M28,28h20v12h-8v28h8v12h-20v-12h8v-28h-8zM60,28h20v12h-8v28h8v12h-20v-12h8v-28h-8z" />
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.2"
+        android:pathData="M54,49.5A4.5,4.5 0 1,1 53.99,49.5Z" />
 </vector>

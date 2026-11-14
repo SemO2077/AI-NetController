@@ -121,7 +121,7 @@ logger = logging.getLogger("AI-NetController-WindowsIntegration")
 
 APP_NAME = "AI NetController"
 APP_DESCRIPTION = "AI NetController — PC Host Agent & Desktop Control Center"
-APP_VERSION = "0.60.0"
+APP_VERSION = "0.70.0"
 APP_PUBLISHER = "AI NetController"
 MUTEX_NAME = "Global\\AI_NetController_HostAgent_Mutex"
 REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -604,6 +604,18 @@ def _format_launch_command(exe_path: str, extra_args: str = "") -> str:
     return f'"{abs_target}"{suffix}'
 
 
+def get_windows_autostart_enabled() -> bool:
+    """Checks whether AI NetController is currently registered in HKCU Run autostart."""
+    if not IS_WINDOWS or not winreg:
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_READ) as key:
+            val, _ = winreg.QueryValueEx(key, "AINetController")
+            return bool(val and str(val).strip())
+    except Exception:
+        return False
+
+
 def set_windows_autostart(enabled: bool = True, target_exe: Optional[str] = None) -> bool:
     """Configures AI NetController launch on user sign-in via HKCU Run key."""
     if not IS_WINDOWS or not winreg:
@@ -814,7 +826,27 @@ def perform_full_uninstall(
         install_dir = get_default_install_dir()
         if os.path.isdir(install_dir):
             shutil.rmtree(install_dir, ignore_errors=True)
-            results["removed_install_dir"] = not os.path.exists(install_dir)
+            if os.path.exists(install_dir) and IS_WINDOWS and kernel32 is not None and wintypes is not None:
+                # Self-running EXE inside install_dir cannot be unlinked immediately; schedule OS cleanup on reboot.
+                MOVEFILE_DELAY_UNTIL_REBOOT = 0x00000004
+                kernel32.MoveFileExW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+                kernel32.MoveFileExW.restype = wintypes.BOOL
+                scheduled_ok = True
+                for root_p, dirs_p, files_p in os.walk(install_dir, topdown=False):
+                    for fn in files_p:
+                        fp = os.path.join(root_p, fn)
+                        if not kernel32.MoveFileExW(fp, None, MOVEFILE_DELAY_UNTIL_REBOOT):
+                            scheduled_ok = False
+                    for dn in dirs_p:
+                        dp = os.path.join(root_p, dn)
+                        if not kernel32.MoveFileExW(dp, None, MOVEFILE_DELAY_UNTIL_REBOOT):
+                            scheduled_ok = False
+                if not kernel32.MoveFileExW(install_dir, None, MOVEFILE_DELAY_UNTIL_REBOOT):
+                    scheduled_ok = False
+                results["removed_install_dir"] = scheduled_ok
+                results["scheduled_reboot_cleanup"] = scheduled_ok
+            else:
+                results["removed_install_dir"] = not os.path.exists(install_dir)
     except Exception:
         results["removed_install_dir"] = False
 
@@ -922,6 +954,13 @@ def perform_full_install(
     autostart: bool = True,
     launch_after: bool = True,
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    start_minimized: Optional[bool] = None,
+    close_to_tray: Optional[bool] = None,
+    mdns_enabled: Optional[bool] = None,
+    clipboard_sync_allowed: Optional[bool] = None,
+    file_transfer_enabled: Optional[bool] = None,
+    audio_control_enabled: Optional[bool] = None,
+    ollama_bridge_enabled: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Executes secure installation into user-space `%LOCALAPPDATA%\\Programs\\AI NetController`:
@@ -1053,10 +1092,39 @@ def perform_full_install(
     if create_start_menu:
         create_start_menu_shortcut(dest_exe, icon_path=dest_ico if os.path.exists(dest_ico) else None)
 
-    _update(86, "Configuring Windows autostart & Installed Apps...")
+    _update(86, "Configuring Windows autostart, feature flags & Installed Apps...")
     if autostart:
         set_windows_autostart(True, dest_exe)
+    else:
+        set_windows_autostart(False)
     register_windows_uninstaller(dest_exe, icon_path=dest_ico if os.path.exists(dest_ico) else None)
+
+    # Persist selected startup & optional feature preferences into daemon_config
+    cfg_updates: Dict[str, Any] = {"autostart_on_boot": bool(autostart)}
+    if start_minimized is not None:
+        cfg_updates["start_minimized"] = bool(start_minimized)
+    if close_to_tray is not None:
+        cfg_updates["close_to_tray"] = bool(close_to_tray)
+    if mdns_enabled is not None:
+        cfg_updates["mdns_enabled"] = bool(mdns_enabled)
+    if clipboard_sync_allowed is not None:
+        cfg_updates["clipboard_sync_allowed"] = bool(clipboard_sync_allowed)
+    if file_transfer_enabled is not None:
+        cfg_updates["file_transfer_enabled"] = bool(file_transfer_enabled)
+    if audio_control_enabled is not None:
+        cfg_updates["audio_control_enabled"] = bool(audio_control_enabled)
+    if ollama_bridge_enabled is not None:
+        cfg_updates["ollama_bridge_enabled"] = bool(ollama_bridge_enabled)
+
+    if len(cfg_updates) > 1 or not autostart:
+        try:
+            try:
+                from daemon_config import update_config
+            except ImportError:
+                from agent.daemon_config import update_config
+            update_config(**cfg_updates)
+        except Exception as e:
+            logger.debug(f"Config preference persistence notice: {e}")
 
     _update(95, "Verifying port 8765 readiness...")
     check_port_available(8765)
@@ -1088,7 +1156,7 @@ def perform_full_install(
 # 7. CYBER GLASSMORPHIC INSTALL & UNINSTALL WIZARDS (MATCHING MOBILE DESIGN)
 # ==============================================================================
 def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
-    """Displays the Cyber Glassmorphic Setup Wizard matching the Mobile App UI."""
+    """Displays the Cyber Glassmorphic Setup, Feature Customizer & Maintenance Wizard."""
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -1096,11 +1164,32 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
         return None
 
     enable_hidpi_awareness()
+    already_installed = is_app_installed()
+
+    # Load persisted config so existing preferences are reflected accurately
+    persisted_cfg: Dict[str, Any] = {}
+    try:
+        try:
+            from daemon_config import load_or_create_config
+        except ImportError:
+            from agent.daemon_config import load_or_create_config
+        persisted_cfg = load_or_create_config()
+    except Exception:
+        pass
+
     win = tk.Toplevel(parent_root) if parent_root else tk.Tk()
-    win.title(f"{APP_NAME} v{APP_VERSION} — Setup Wizard")
-    win.geometry("580x500")
+    win.title(f"{APP_NAME} v{APP_VERSION} — Setup & Feature Customizer")
+    try:
+        scr_w = max(520, int(win.winfo_screenwidth()))
+        scr_h = max(440, int(win.winfo_screenheight()))
+    except Exception:
+        scr_w, scr_h = 1920, 1080
+    dlg_w = min(660, max(460, scr_w - 40))
+    dlg_h = min(650, max(420, scr_h - 60))
+    win.geometry(f"{dlg_w}x{dlg_h}+{max(10, (scr_w - dlg_w) // 2)}+{max(10, (scr_h - dlg_h) // 2)}")
+    win.minsize(min(460, dlg_w), min(400, dlg_h))
     win.configure(bg=CyberColors.BACKGROUND)
-    win.resizable(False, False)
+    win.resizable(True, True)
     apply_window_icon(win)
     apply_dark_titlebar(win, CyberColors.BACKGROUND)
 
@@ -1110,7 +1199,7 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
 
     try:
         from PIL import ImageTk
-        bg_im = render_ambient_backdrop(580, 500)
+        bg_im = render_ambient_backdrop(dlg_w, dlg_h)
         if bg_im:
             bg_photo = ImageTk.PhotoImage(bg_im)
             bg_refs.append(bg_photo)
@@ -1119,12 +1208,16 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
     except Exception:
         pass
 
+    # Bottom action bar packed first so buttons remain accessible on compact screens
+    btn_row = tk.Frame(win, bg=CyberColors.BACKGROUND)
+    btn_row.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(0, 14))
+
     header = tk.Frame(win, bg=CyberColors.SURFACE, highlightbackground=CyberColors.GLASS_BORDER, highlightthickness=1)
-    header.pack(fill=tk.X, padx=22, pady=(20, 12))
+    header.pack(fill=tk.X, padx=20, pady=(14, 8))
 
     # Top glowing cyan accent rule inside card
     tk.Frame(header, bg=CyberColors.PRIMARY, height=2).pack(fill=tk.X)
-    head_inner = tk.Frame(header, bg=CyberColors.SURFACE, padx=18, pady=14)
+    head_inner = tk.Frame(header, bg=CyberColors.SURFACE, padx=16, pady=10)
     head_inner.pack(fill=tk.X)
 
     try:
@@ -1133,50 +1226,67 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
         if orb:
             orb_ph = ImageTk.PhotoImage(orb)
             bg_refs.append(orb_ph)
-            tk.Label(head_inner, image=orb_ph, bg=CyberColors.SURFACE).pack(side=tk.LEFT, padx=(0, 14))
+            tk.Label(head_inner, image=orb_ph, bg=CyberColors.SURFACE).pack(side=tk.LEFT, padx=(0, 12))
     except Exception:
         pass
 
     title_col = tk.Frame(head_inner, bg=CyberColors.SURFACE)
     title_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    badge_row = tk.Frame(title_col, bg=CyberColors.SURFACE)
+    badge_row.pack(fill=tk.X)
     tk.Label(
-        title_col,
-        text="NODE SETUP WIZARD",
-        font=(mono_font, 9, "bold"),
+        badge_row,
+        text="NODE SETUP & FEATURE CUSTOMIZER",
+        font=(mono_font, 8, "bold"),
         fg=CyberColors.PRIMARY,
         bg=CyberColors.SURFACE,
-    ).pack(anchor=tk.W)
+    ).pack(side=tk.LEFT)
+
+    status_badge_text = "INSTALLED (MODIFY / REPAIR)" if already_installed else "NEW INSTALLATION"
+    status_badge_fg = CyberColors.SUCCESS if already_installed else CyberColors.PRIMARY
+    tk.Label(
+        badge_row,
+        text=status_badge_text,
+        font=(mono_font, 8, "bold"),
+        fg=status_badge_fg,
+        bg=CyberColors.TERMINAL_BG,
+        padx=8,
+        pady=2,
+    ).pack(side=tk.RIGHT)
+
     tk.Label(
         title_col,
         text=f"{APP_NAME} v{APP_VERSION}",
-        font=(ui_font, 15, "bold"),
+        font=(ui_font, 14, "bold"),
         fg=CyberColors.TEXT_PRIMARY,
         bg=CyberColors.SURFACE,
     ).pack(anchor=tk.W)
     tk.Label(
         title_col,
-        text="Per-user Zero-Trust Host Agent • Native Win32 COM • Zero Admin UAC",
+        text="Customize startup behavior, system shortcuts, and optional daemon modules.",
         font=(ui_font, 9),
         fg=CyberColors.TEXT_SECONDARY,
         bg=CyberColors.SURFACE,
     ).pack(anchor=tk.W)
 
-    # Glassmorphic configuration card
+    # Glassmorphic configuration card with 3D top specular sheen
     body = tk.Frame(win, bg=CyberColors.SURFACE, highlightbackground=CyberColors.GLASS_BORDER_IDLE, highlightthickness=1)
-    body.pack(fill=tk.BOTH, expand=True, padx=22, pady=(0, 14))
-    inner = tk.Frame(body, bg=CyberColors.SURFACE, padx=18, pady=16)
+    body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
+    tk.Frame(body, bg=CyberColors.GLASS_BORDER, height=1).pack(fill=tk.X)
+    inner = tk.Frame(body, bg=CyberColors.SURFACE, padx=16, pady=12)
     inner.pack(fill=tk.BOTH, expand=True)
 
     tk.Label(
         inner,
         text="DESTINATION DIRECTORY",
-        font=(mono_font, 9, "bold"),
+        font=(mono_font, 8, "bold"),
         fg=CyberColors.TEXT_SECONDARY,
         bg=CyberColors.SURFACE,
     ).pack(anchor=tk.W)
 
     dir_row = tk.Frame(inner, bg=CyberColors.SURFACE)
-    dir_row.pack(fill=tk.X, pady=(6, 14))
+    dir_row.pack(fill=tk.X, pady=(4, 10))
 
     path_var = tk.StringVar(value=get_default_install_dir())
     path_entry = tk.Entry(
@@ -1190,7 +1300,7 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
         highlightthickness=1,
         font=(mono_font, 9),
     )
-    path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=7)
+    path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
 
     def _browse() -> None:
         chosen = filedialog.askdirectory(initialdir=path_var.get(), title="Choose Install Directory")
@@ -1208,53 +1318,133 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
         activebackground=CyberColors.PRIMARY_SOFT,
         activeforeground=CyberColors.TEXT_PRIMARY,
         relief=tk.FLAT,
-        font=(mono_font, 9, "bold"),
-        padx=12,
-        pady=5,
+        font=(mono_font, 8, "bold"),
+        padx=10,
+        pady=4,
         cursor="hand2",
     ).pack(side=tk.LEFT, padx=(8, 0))
 
+    # Two-column options grid for Startup/Shortcuts and Optional Modules
+    cols_frame = tk.Frame(inner, bg=CyberColors.SURFACE)
+    cols_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+    cols_frame.columnconfigure(0, weight=1, uniform="optcol")
+    cols_frame.columnconfigure(1, weight=1, uniform="optcol")
+
+    left_col = tk.Frame(
+        cols_frame,
+        bg=CyberColors.TERMINAL_BG,
+        highlightbackground=CyberColors.GLASS_BORDER_IDLE,
+        highlightthickness=1,
+        padx=10,
+        pady=8,
+    )
+    left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+
+    right_col = tk.Frame(
+        cols_frame,
+        bg=CyberColors.TERMINAL_BG,
+        highlightbackground=CyberColors.GLASS_BORDER_IDLE,
+        highlightthickness=1,
+        padx=10,
+        pady=8,
+    )
+    right_col.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+
+    default_autostart = bool(
+        get_windows_autostart_enabled() or persisted_cfg.get("autostart_on_boot", False)
+    )
+    opt_autostart = tk.BooleanVar(value=default_autostart)
+    opt_start_min = tk.BooleanVar(value=bool(persisted_cfg.get("start_minimized", False)))
+    opt_close_tray = tk.BooleanVar(value=bool(persisted_cfg.get("close_to_tray", True)))
     opt_desktop = tk.BooleanVar(value=True)
     opt_startmenu = tk.BooleanVar(value=True)
-    opt_autostart = tk.BooleanVar(value=True)
-    opt_launch = tk.BooleanVar(value=True)
+    opt_launch = tk.BooleanVar(value=not bool(parent_root))
+
+    opt_mdns = tk.BooleanVar(value=bool(persisted_cfg.get("mdns_enabled", True)))
+    opt_clipboard = tk.BooleanVar(value=bool(persisted_cfg.get("clipboard_sync_allowed", True)))
+    opt_file_xfer = tk.BooleanVar(value=bool(persisted_cfg.get("file_transfer_enabled", True)))
+    opt_audio = tk.BooleanVar(value=bool(persisted_cfg.get("audio_control_enabled", True)))
+    opt_ollama = tk.BooleanVar(value=bool(persisted_cfg.get("ollama_bridge_enabled", True)))
 
     tk.Label(
-        inner,
-        text="INTEGRATION OPTIONS",
-        font=(mono_font, 9, "bold"),
-        fg=CyberColors.TEXT_SECONDARY,
-        bg=CyberColors.SURFACE,
-    ).pack(anchor=tk.W, pady=(0, 6))
+        left_col,
+        text="STARTUP & SYSTEM SHORTCUTS",
+        font=(mono_font, 8, "bold"),
+        fg=CyberColors.PRIMARY,
+        bg=CyberColors.TERMINAL_BG,
+    ).pack(anchor=tk.W, pady=(0, 4))
 
     for text, var in (
-        ("Create Desktop Shortcut (Win32 COM Link)", opt_desktop),
-        ("Create Start Menu Entry & Uninstaller Link", opt_startmenu),
-        ("Start Automatically When Windows Signs In", opt_autostart),
-        ("Launch Host Control Center Right After Install", opt_launch),
+        ("Run on Windows Startup (Sign-In)", opt_autostart),
+        ("Start Minimized in System Tray", opt_start_min),
+        ("Minimize to Tray on Window Close", opt_close_tray),
+        ("Create Desktop Shortcut", opt_desktop),
+        ("Create Start Menu & Uninstaller Link", opt_startmenu),
+        ("Launch Control Center After Setup", opt_launch),
     ):
         tk.Checkbutton(
-            inner,
+            left_col,
             text=text,
             variable=var,
-            bg=CyberColors.SURFACE,
+            bg=CyberColors.TERMINAL_BG,
             fg=CyberColors.TEXT_PRIMARY,
-            selectcolor=CyberColors.TERMINAL_BG,
-            activebackground=CyberColors.SURFACE,
+            selectcolor=CyberColors.SURFACE,
+            activebackground=CyberColors.TERMINAL_BG,
             activeforeground=CyberColors.PRIMARY,
-            font=(ui_font, 9),
-        ).pack(anchor=tk.W, pady=3)
+            font=(ui_font, 8),
+        ).pack(anchor=tk.W, pady=1)
 
-    status_var = tk.StringVar(value="Ready to deploy verified runtime files.")
+    tk.Label(
+        right_col,
+        text="OPTIONAL FEATURES & MODULES",
+        font=(mono_font, 8, "bold"),
+        fg=CyberColors.SECONDARY,
+        bg=CyberColors.TERMINAL_BG,
+    ).pack(anchor=tk.W, pady=(0, 4))
+
+    for text, var in (
+        ("mDNS / ZeroConf LAN Auto-Discovery", opt_mdns),
+        ("Bidirectional Clipboard Sync", opt_clipboard),
+        ("Remote File Transfer Receiver", opt_file_xfer),
+        ("Remote Audio & Media Control", opt_audio),
+        ("Local Ollama AI Bridge", opt_ollama),
+    ):
+        tk.Checkbutton(
+            right_col,
+            text=text,
+            variable=var,
+            bg=CyberColors.TERMINAL_BG,
+            fg=CyberColors.TEXT_PRIMARY,
+            selectcolor=CyberColors.SURFACE,
+            activebackground=CyberColors.TERMINAL_BG,
+            activeforeground=CyberColors.PRIMARY,
+            font=(ui_font, 8),
+        ).pack(anchor=tk.W, pady=1)
+
+    tk.Label(
+        right_col,
+        text="Tip: Any disabled module can be re-enabled anytime in the Host Control Center.",
+        font=(ui_font, 8),
+        fg=CyberColors.TEXT_MUTED,
+        bg=CyberColors.TERMINAL_BG,
+        wraplength=250,
+        justify=tk.LEFT,
+    ).pack(anchor=tk.W, pady=(4, 0))
+
+    status_var = tk.StringVar(
+        value="Ready to update existing installation & preferences."
+        if already_installed
+        else "Ready to deploy verified runtime files & preferences."
+    )
     status_lbl = tk.Label(
         inner,
         textvariable=status_var,
-        font=(mono_font, 9),
+        font=(mono_font, 8),
         fg=CyberColors.PRIMARY,
         bg=CyberColors.SURFACE,
         anchor=tk.W,
     )
-    status_lbl.pack(fill=tk.X, pady=(14, 6))
+    status_lbl.pack(fill=tk.X, pady=(6, 4))
 
     # Glowing canvas progress bar matching Cyber gauge
     prog_canvas = tk.Canvas(inner, height=8, bg=CyberColors.TERMINAL_BG, highlightthickness=0)
@@ -1262,13 +1452,10 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
     prog_fill = prog_canvas.create_rectangle(0, 0, 0, 8, fill=CyberColors.PRIMARY, width=0)
 
     def _set_progress(pct: int, msg: str) -> None:
-        w = max(1, prog_canvas.winfo_width() or 490)
+        w = max(1, prog_canvas.winfo_width() or 560)
         prog_canvas.coords(prog_fill, 0, 0, int(w * max(0, min(100, pct)) / 100.0), 8)
         status_var.set(f"[{pct:3d}%] {msg}")
         win.update()
-
-    btn_row = tk.Frame(win, bg=CyberColors.BACKGROUND)
-    btn_row.pack(fill=tk.X, padx=22, pady=(0, 20))
 
     tk.Button(
         btn_row,
@@ -1278,22 +1465,43 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
         fg=CyberColors.TEXT_SECONDARY,
         relief=tk.FLAT,
         font=(mono_font, 9, "bold"),
-        padx=16,
-        pady=9,
+        padx=14,
+        pady=8,
         cursor="hand2",
     ).pack(side=tk.LEFT)
 
+    def _open_uninstall_from_setup() -> None:
+        win.destroy()
+        show_uninstall_dialog(parent_root=parent_root)
+
+    if already_installed:
+        tk.Button(
+            btn_row,
+            text="UNINSTALL EXISTING...",
+            command=_open_uninstall_from_setup,
+            bg=CyberColors.SURFACE_ELEVATED,
+            fg=CyberColors.ACCENT,
+            activebackground=CyberColors.ACCENT_SOFT,
+            activeforeground=CyberColors.TEXT_PRIMARY,
+            relief=tk.FLAT,
+            font=(mono_font, 9, "bold"),
+            padx=14,
+            pady=8,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+    deploy_label = "UPDATE / REPAIR NODE" if already_installed else "DEPLOY NODE"
     install_btn = tk.Button(
         btn_row,
-        text="DEPLOY NODE",
+        text=deploy_label,
         bg=CyberColors.PRIMARY,
         fg=CyberColors.BACKGROUND,
         activebackground=CyberColors.SUCCESS,
         activeforeground=CyberColors.BACKGROUND,
         relief=tk.FLAT,
-        font=(mono_font, 10, "bold"),
-        padx=22,
-        pady=9,
+        font=(mono_font, 9, "bold"),
+        padx=20,
+        pady=8,
         cursor="hand2",
     )
 
@@ -1306,12 +1514,19 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
             autostart=opt_autostart.get(),
             launch_after=opt_launch.get(),
             progress_cb=_set_progress,
+            start_minimized=opt_start_min.get(),
+            close_to_tray=opt_close_tray.get(),
+            mdns_enabled=opt_mdns.get(),
+            clipboard_sync_allowed=opt_clipboard.get(),
+            file_transfer_enabled=opt_file_xfer.get(),
+            audio_control_enabled=opt_audio.get(),
+            ollama_bridge_enabled=opt_ollama.get(),
         )
         outcome["result"] = res
         outcome["installed"] = bool(res.get("success"))
         if res.get("success"):
             status_lbl.config(fg=CyberColors.SUCCESS)
-            status_var.set("Deployment verified cleanly. Closing wizard...")
+            status_var.set("Deployment & feature preferences verified cleanly. Closing wizard...")
             win.after(900, win.destroy)
         else:
             status_lbl.config(fg=CyberColors.ACCENT)
@@ -1328,20 +1543,33 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
     return outcome
 
 
-def show_uninstall_dialog(parent_root=None, on_uninstalled: Optional[Callable[[], None]] = None) -> None:
+def show_uninstall_dialog(
+    parent_root=None,
+    on_uninstalled: Optional[Callable[[], None]] = None,
+    on_exit: Optional[Callable[[], None]] = None,
+) -> None:
     """Displays the Cyber Glassmorphic Uninstall Modal matching Mobile Design Language."""
+    done_cb = on_uninstalled or on_exit
     try:
         import tkinter as tk
     except Exception:
-        perform_full_uninstall(interactive=False, remove_config=False, on_complete=on_uninstalled)
+        perform_full_uninstall(interactive=False, remove_config=False, on_complete=done_cb)
         return
 
     enable_hidpi_awareness()
     win = tk.Toplevel(parent_root) if parent_root else tk.Tk()
     win.title(f"Uninstall {APP_NAME}")
-    win.geometry("500x360")
+    try:
+        scr_w = max(460, int(win.winfo_screenwidth()))
+        scr_h = max(360, int(win.winfo_screenheight()))
+    except Exception:
+        scr_w, scr_h = 1920, 1080
+    dlg_w = min(540, max(400, scr_w - 40))
+    dlg_h = min(430, max(320, scr_h - 60))
+    win.geometry(f"{dlg_w}x{dlg_h}+{max(10, (scr_w - dlg_w) // 2)}+{max(10, (scr_h - dlg_h) // 2)}")
+    win.minsize(min(400, dlg_w), min(320, dlg_h))
     win.configure(bg=CyberColors.BACKGROUND)
-    win.resizable(False, False)
+    win.resizable(True, True)
     apply_window_icon(win)
     apply_dark_titlebar(win, CyberColors.BACKGROUND)
 
@@ -1353,15 +1581,18 @@ def show_uninstall_dialog(parent_root=None, on_uninstalled: Optional[Callable[[]
         highlightbackground=CyberColors.GLASS_BORDER_CRITICAL,
         highlightthickness=1,
     )
-    card.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+    card.pack(fill=tk.BOTH, expand=True, padx=18, pady=18)
     tk.Frame(card, bg=CyberColors.ACCENT, height=2).pack(fill=tk.X)
 
-    inner = tk.Frame(card, bg=CyberColors.SURFACE, padx=20, pady=18)
+    inner = tk.Frame(card, bg=CyberColors.SURFACE, padx=18, pady=14)
     inner.pack(fill=tk.BOTH, expand=True)
+
+    btn_row = tk.Frame(inner, bg=CyberColors.SURFACE)
+    btn_row.pack(fill=tk.X, side=tk.BOTTOM)
 
     tk.Label(
         inner,
-        text="NODE DECOMMISSION",
+        text="NODE DECOMMISSION & CLEANUP",
         font=(mono_font, 9, "bold"),
         fg=CyberColors.ACCENT,
         bg=CyberColors.SURFACE,
@@ -1372,24 +1603,52 @@ def show_uninstall_dialog(parent_root=None, on_uninstalled: Optional[Callable[[]
         font=(ui_font, 15, "bold"),
         fg=CyberColors.TEXT_PRIMARY,
         bg=CyberColors.SURFACE,
-    ).pack(anchor=tk.W, pady=(2, 8))
+    ).pack(anchor=tk.W, pady=(2, 6))
 
     tk.Label(
         inner,
         text=(
-            "This cleanly terminates background daemon services, removes Desktop and\n"
-            "Start Menu links, disables Windows startup auto-run, and unregisters the app."
+            "Select which components to remove from this PC. All changes are performed "
+            "cleanly in per-user space without requiring Administrator elevation."
         ),
         font=(ui_font, 9),
         fg=CyberColors.TEXT_SECONDARY,
         bg=CyberColors.SURFACE,
+        wraplength=max(300, dlg_w - 72),
         justify=tk.LEFT,
-    ).pack(anchor=tk.W, pady=(0, 12))
+    ).pack(anchor=tk.W, pady=(0, 8))
 
+    rm_app_var = tk.BooleanVar(value=True)
+    rm_links_var = tk.BooleanVar(value=True)
     remove_cfg_var = tk.BooleanVar(value=False)
+
     tk.Checkbutton(
         inner,
-        text="Also wipe encrypted pairing keys & DPAPI secret vault (%LOCALAPPDATA%)",
+        text="Stop active background daemon & remove installed application files",
+        variable=rm_app_var,
+        bg=CyberColors.SURFACE,
+        fg=CyberColors.TEXT_PRIMARY,
+        selectcolor=CyberColors.TERMINAL_BG,
+        activebackground=CyberColors.SURFACE,
+        activeforeground=CyberColors.PRIMARY,
+        font=(ui_font, 9),
+    ).pack(anchor=tk.W, pady=2)
+
+    tk.Checkbutton(
+        inner,
+        text="Remove Desktop & Start Menu shortcuts and Windows Startup auto-run",
+        variable=rm_links_var,
+        bg=CyberColors.SURFACE,
+        fg=CyberColors.TEXT_PRIMARY,
+        selectcolor=CyberColors.TERMINAL_BG,
+        activebackground=CyberColors.SURFACE,
+        activeforeground=CyberColors.PRIMARY,
+        font=(ui_font, 9),
+    ).pack(anchor=tk.W, pady=2)
+
+    tk.Checkbutton(
+        inner,
+        text="Also wipe encrypted pairing keys, preferences & DPAPI vault (%LOCALAPPDATA%)",
         variable=remove_cfg_var,
         bg=CyberColors.SURFACE,
         fg=CyberColors.WARNING,
@@ -1397,21 +1656,24 @@ def show_uninstall_dialog(parent_root=None, on_uninstalled: Optional[Callable[[]
         activebackground=CyberColors.SURFACE,
         activeforeground=CyberColors.ACCENT,
         font=(ui_font, 9),
-    ).pack(anchor=tk.W, pady=(4, 14))
+        wraplength=max(280, dlg_w - 84),
+        justify=tk.LEFT,
+    ).pack(anchor=tk.W, pady=(2, 8))
 
-    status_var = tk.StringVar(value="")
+    status_var = tk.StringVar(value="Ready to decommission node.")
     status_lbl = tk.Label(
         inner,
         textvariable=status_var,
         font=(mono_font, 9),
-        fg=CyberColors.SUCCESS,
+        fg=CyberColors.TEXT_SECONDARY,
         bg=CyberColors.SURFACE,
         anchor=tk.W,
     )
-    status_lbl.pack(fill=tk.X, pady=(0, 12))
+    status_lbl.pack(fill=tk.X, pady=(0, 4))
 
-    btn_row = tk.Frame(inner, bg=CyberColors.SURFACE)
-    btn_row.pack(fill=tk.X, side=tk.BOTTOM)
+    prog_canvas = tk.Canvas(inner, height=6, bg=CyberColors.TERMINAL_BG, highlightthickness=0)
+    prog_canvas.pack(fill=tk.X, pady=(0, 8))
+    prog_fill = prog_canvas.create_rectangle(0, 0, 0, 6, fill=CyberColors.ACCENT, width=0)
 
     tk.Button(
         btn_row,
@@ -1426,19 +1688,9 @@ def show_uninstall_dialog(parent_root=None, on_uninstalled: Optional[Callable[[]
         cursor="hand2",
     ).pack(side=tk.LEFT)
 
-    def _do_uninstall() -> None:
-        perform_full_uninstall(
-            interactive=False,
-            remove_config=remove_cfg_var.get(),
-            on_complete=on_uninstalled,
-        )
-        status_var.set("AI NetController removed cleanly.")
-        win.after(800, win.destroy)
-
-    tk.Button(
+    uninst_btn = tk.Button(
         btn_row,
         text="CONFIRM UNINSTALL",
-        command=_do_uninstall,
         bg=CyberColors.ACCENT,
         fg=CyberColors.TEXT_PRIMARY,
         activebackground=CyberColors.ACCENT_SOFT,
@@ -1447,7 +1699,47 @@ def show_uninstall_dialog(parent_root=None, on_uninstalled: Optional[Callable[[]
         padx=16,
         pady=8,
         cursor="hand2",
-    ).pack(side=tk.RIGHT)
+    )
+
+    def _do_uninstall() -> None:
+        uninst_btn.config(state=tk.DISABLED, text="UNINSTALLING...")
+        w = max(1, prog_canvas.winfo_width() or 460)
+        prog_canvas.coords(prog_fill, 0, 0, int(w * 0.4), 6)
+        status_var.set("Stopping daemon & removing artifacts...")
+        win.update()
+
+        if rm_app_var.get():
+            perform_full_uninstall(
+                interactive=False,
+                remove_config=remove_cfg_var.get(),
+                on_complete=done_cb,
+            )
+        else:
+            if rm_links_var.get():
+                remove_shortcuts()
+                set_windows_autostart(enabled=False)
+            if remove_cfg_var.get():
+                try:
+                    local_app = os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local"))
+                    shutil.rmtree(os.path.join(local_app, "AI NetController"), ignore_errors=True)
+                except Exception:
+                    pass
+
+        prog_canvas.coords(prog_fill, 0, 0, w, 6)
+        prog_canvas.itemconfig(prog_fill, fill=CyberColors.SUCCESS)
+        status_lbl.config(fg=CyberColors.SUCCESS)
+        status_var.set("AI NetController removed cleanly.")
+        win.after(800, win.destroy)
+
+    uninst_btn.config(command=_do_uninstall)
+    uninst_btn.pack(side=tk.RIGHT)
 
     if not parent_root:
         win.mainloop()
+
+
+# Clean aliases for GUI & CLI integration consumers
+is_autostart_enabled = get_windows_autostart_enabled
+set_autostart = set_windows_autostart
+install_to_system = perform_full_install
+uninstall_from_system = perform_full_uninstall

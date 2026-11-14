@@ -1,25 +1,25 @@
 # Core Network & Async WebSocket
-websockets>=13.0
+websockets>=17.4
 
 # ZeroConf mDNS Physical-NIC Discovery (RFC 6762)
-zeroconf>=0.132.0
+zeroconf>=0.154.0
 
 # Hardware Screen Capture & Image Compression
-mss>=9.0.1
-Pillow>=10.4.0
-numpy>=1.26.0
-PyTurboJPEG>=1.7.0
+mss>=10.2.0
+Pillow>=13.0.0
+numpy>=2.5.4
+PyTurboJPEG>=2.6.1
 
 # Cryptographic Engine Acceleration (RFC 7748 / RFC 8439)
-cryptography>=42.0.0
+cryptography>=50.0.2
 
 # System Tray & Hardware Telemetry
 pystray>=0.19.5
-psutil>=6.0.0
+psutil>=7.2.2
 
 # Remote Virtual Input & Clipboard Synchronization
 pyautogui>=0.9.54
-pyperclip>=1.9.0
+pyperclip>=1.11.0
 
 # Standalone Windows Executable Compiler
-pyinstaller>=6.10.0
+pyinstaller>=6.22.3

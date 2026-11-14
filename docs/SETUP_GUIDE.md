@@ -1,12 +1,12 @@
 # Setup Guide
 
-This guide covers configuring and running **AI NetController** (`v0.60.0` / Beta `0.60.00`) on Windows, Linux/macOS, and Android.
+This guide covers configuring and running **AI NetController** (`v0.70.0` / Beta `0.70.00`) on Windows, Linux/macOS, and Android.
 
 ## 1. System Requirements
 
 | Component | Minimum Version | Recommended | Notes |
 | :--- | :--- | :--- | :--- |
-| **Node.js** | v20.0.0+ | v20.x or v22.x LTS | Control server (`apps/web/server.ts`) and React dashboard |
+| **Node.js** | v22.0.0+ | v22.x or v24.x LTS | Control server (`apps/web/server.ts`) and React dashboard |
 | **Python** | v3.11+ | v3.12+ | Host Agent daemon (`agent/agent.py`) |
 | **Flutter** | v3.29+ (`Dart 3.7+`) | Latest stable | Optional: only required when building `apps/mobile/` from source |
 | **Operating System** | Windows 10/11 x64 | Windows 11 x64 | Linux/macOS supported; Windows required for Job Object sandboxing & DPAPI config |
@@ -67,7 +67,7 @@ The host daemon listens on WebSocket port `8765`, advertises via mDNS (`_cst-age
 
 ### Pre-Built Windows Binary
 
-1. Download `AI_NetController_HostAgent_v0.60.0_win64.exe` (or the portable `.zip` archive) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.60.0) or [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.60.0).
+1. Download `AI_NetController_HostAgent_v0.70.0_win64.exe` (or the portable `.zip` archive) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.70.0) or [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.70.0).
 2. Run the executable to open the desktop Control Center and tray service.
 
 ### Run from Source
@@ -97,8 +97,8 @@ Configuration is persisted to `%LOCALAPPDATA%\AI NetController\config.json` (Win
 
 ## 5. Android Companion App
 
-1. Download `AI_NetController_v0.60.0_arm64-v8a.apk` (or the universal APK) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.60.0) or [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.60.0).
-2. Install via ADB (`adb install -r AI_NetController_v0.60.0_arm64-v8a.apk`) or directly on device.
+1. Download `AI_NetController_v0.70.0_arm64-v8a.apk` (or the universal APK) from [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.70.0) or [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.70.0).
+2. Install via ADB (`adb install -r AI_NetController_v0.70.0_arm64-v8a.apk`) or directly on device.
 3. Connect the phone to the same LAN subnet to discover active hosts over mDNS (`_cst-agent._tcp.local.`).
 
 ## 6. Running Tests

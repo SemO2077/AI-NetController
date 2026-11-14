@@ -10,6 +10,7 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../protocol/binary_protocol.dart';
+import '../protocol/fragmentation_engine.dart';
 import '../security/biometric_security_gate.dart';
 import '../security/crypto_engine.dart';
 
@@ -79,6 +80,9 @@ class HostConnectionClient {
   int _retainCount = 0;
   final Map<int, Stopwatch> _pendingPings = <int, Stopwatch>{};
   final Random _rnd = Random.secure();
+  late final PacketReassembler _reassembler;
+  StreamSubscription<int>? _frameSyncSub;
+  int _activeMonitorIndex = 1;
 
   final StreamController<Uint8List> _frameCtrl =
       StreamController<Uint8List>.broadcast(sync: true);
@@ -89,6 +93,8 @@ class HostConnectionClient {
   final StreamController<ProtocolPacket> _fileAckCtrl =
       StreamController<ProtocolPacket>.broadcast();
   final StreamController<String> _clipCtrl =
+      StreamController<String>.broadcast();
+  final StreamController<String> _llmCtrl =
       StreamController<String>.broadcast();
   final StreamController<List<Map<String, dynamic>>> _displayEnumCtrl =
       StreamController<List<Map<String, dynamic>>>.broadcast();
@@ -103,7 +109,14 @@ class HostConnectionClient {
     required this.sharedSecret,
     this.useTls = false,
     this.certFingerprint,
-  });
+  }) {
+    _reassembler = PacketReassembler();
+    _frameSyncSub = _reassembler.onFrameSyncRequested.listen((syncOpcode) {
+      if (_isVaultEstablished) {
+        sendEncrypted(syncOpcode, Uint8List(0));
+      }
+    });
+  }
 
   bool get isConnecting => _isConnecting;
   bool get isConnected => _isConnected;
@@ -111,6 +124,7 @@ class HostConnectionClient {
   bool get isVaultEstablished => _isVaultEstablished;
   int? get latencyMs => _latencyMs;
   String? get errorMessage => _errorMessage;
+  int get activeMonitorIndex => _activeMonitorIndex;
 
   HostConnectionSnapshot get snapshot => HostConnectionSnapshot(
         isConnecting: _isConnecting,
@@ -126,6 +140,7 @@ class HostConnectionClient {
   Stream<ShellResult> get shellResultStream => _shellCtrl.stream;
   Stream<ProtocolPacket> get fileAckStream => _fileAckCtrl.stream;
   Stream<String> get clipboardStream => _clipCtrl.stream;
+  Stream<String> get llmTokenStream => _llmCtrl.stream;
   Stream<List<Map<String, dynamic>>> get displayEnumStream =>
       _displayEnumCtrl.stream;
   Stream<Map<String, dynamic>> get hitlChallengeStream => _hitlRawCtrl.stream;
@@ -197,7 +212,7 @@ class HostConnectionClient {
       final HttpClient client = HttpClient()..connectionTimeout = timeout;
       if (useTls) {
         // Discovery probe only verifies the canonical 0xC5 0x71 OP_AUTH banner.
-        client.badCertificateCallback = (_, __, ___) => true;
+        client.badCertificateCallback = (_, _, _) => true;
       }
       final uri = Uri(scheme: useTls ? 'wss' : 'ws', host: ip, port: port);
       ws = await WebSocket.connect(uri.toString(), customClient: client)
@@ -622,10 +637,31 @@ class HostConnectionClient {
     }
     _aeadDecryptErrors = 0;
 
+    // 2b. Reassemble fragmented payloads transparently before dispatching
+    int dispatchOpcode = packet.opcode;
+    int dispatchSeq = packet.seq;
+    int dispatchFlags = packet.flags;
+    Uint8List dispatchPayload = plaintext;
+    if ((packet.flags & ProtocolFlags.isFragmented) != 0) {
+      final ProtocolPacket? completed = _reassembler.ingestBytes(
+        packPacket(
+          packet.opcode,
+          plaintext,
+          flags: packet.flags & ~ProtocolFlags.encrypted,
+          seq: packet.seq,
+        ),
+      );
+      if (completed == null) return;
+      dispatchOpcode = completed.opcode;
+      dispatchSeq = completed.seq;
+      dispatchFlags = completed.flags;
+      dispatchPayload = completed.payload;
+    }
+
     // 3. Dispatch Authenticated & Decrypted Payload
-    switch (packet.opcode) {
+    switch (dispatchOpcode) {
       case BinaryOpcode.ping:
-        final sw = _pendingPings.remove(packet.seq);
+        final sw = _pendingPings.remove(dispatchSeq);
         if (sw != null) {
           sw.stop();
           _latencyMs = sw.elapsedMilliseconds;
@@ -633,11 +669,12 @@ class HostConnectionClient {
         }
         break;
       case BinaryOpcode.frame:
-        if (!_frameCtrl.isClosed) _frameCtrl.add(plaintext);
+        if (!_frameCtrl.isClosed) _frameCtrl.add(dispatchPayload);
         break;
       case BinaryOpcode.telemetry:
         try {
-          final decoded = jsonDecode(utf8.decode(plaintext, allowMalformed: true));
+          final decoded =
+              jsonDecode(utf8.decode(dispatchPayload, allowMalformed: true));
           if (decoded is Map<String, dynamic> && !_telemetryCtrl.isClosed) {
             _telemetryCtrl.add(decoded);
           }
@@ -645,7 +682,7 @@ class HostConnectionClient {
         break;
       case BinaryOpcode.shell:
         try {
-          final rawStr = utf8.decode(plaintext, allowMalformed: true);
+          final rawStr = utf8.decode(dispatchPayload, allowMalformed: true);
           final parsed = jsonDecode(rawStr);
           if (parsed is Map<String, dynamic> && !_shellCtrl.isClosed) {
             _shellCtrl.add(ShellResult.fromJson(parsed));
@@ -654,40 +691,52 @@ class HostConnectionClient {
         break;
       case BinaryOpcode.hitl:
         try {
-          final decoded = jsonDecode(utf8.decode(plaintext, allowMalformed: true));
+          final decoded =
+              jsonDecode(utf8.decode(dispatchPayload, allowMalformed: true));
           if (decoded is Map<String, dynamic> && !_hitlRawCtrl.isClosed) {
             _hitlRawCtrl.add(decoded);
           }
         } catch (_) {}
         break;
       case BinaryOpcode.clip:
-        final text = utf8.decode(plaintext, allowMalformed: true);
+        final text = utf8.decode(dispatchPayload, allowMalformed: true);
         if (!_clipCtrl.isClosed) _clipCtrl.add(text);
+        break;
+      case BinaryOpcode.llmStream:
+        final chunk = utf8.decode(dispatchPayload, allowMalformed: true);
+        if (!_llmCtrl.isClosed) _llmCtrl.add(chunk);
         break;
       case BinaryOpcode.displayEnum:
         try {
-          final decoded = jsonDecode(utf8.decode(plaintext, allowMalformed: true));
-          if (decoded is Map<String, dynamic> && decoded['monitors'] is List) {
-            final mons = (decoded['monitors'] as List)
-                .whereType<Map>()
-                .map((m) => Map<String, dynamic>.from(m))
-                .toList();
-            if (!_displayEnumCtrl.isClosed) _displayEnumCtrl.add(mons);
+          final decoded =
+              jsonDecode(utf8.decode(dispatchPayload, allowMalformed: true));
+          if (decoded is Map<String, dynamic>) {
+            final active = (decoded['active'] as num?)?.toInt();
+            if (active != null && active > 0) {
+              _activeMonitorIndex = active;
+            }
+            if (decoded['monitors'] is List) {
+              final mons = (decoded['monitors'] as List)
+                  .whereType<Map>()
+                  .map((m) => Map<String, dynamic>.from(m))
+                  .toList();
+              if (!_displayEnumCtrl.isClosed) _displayEnumCtrl.add(mons);
+            }
           }
         } catch (_) {}
         break;
       case BinaryOpcode.fileTransfer:
         if (!_fileAckCtrl.isClosed) {
           _fileAckCtrl.add(ProtocolPacket(
-            opcode: packet.opcode,
-            flags: packet.flags,
-            seq: packet.seq,
-            payload: plaintext,
+            opcode: dispatchOpcode,
+            flags: dispatchFlags,
+            seq: dispatchSeq,
+            payload: dispatchPayload,
           ));
         }
         break;
       case BinaryOpcode.error:
-        final err = utf8.decode(plaintext, allowMalformed: true).trim();
+        final err = utf8.decode(dispatchPayload, allowMalformed: true).trim();
         if (err.isNotEmpty) {
           _errorMessage = err;
           _emitState();
@@ -712,6 +761,24 @@ class HostConnectionClient {
     return _crypto!.encryptWirePacket(opcode, plaintext, forcedSeq: seq);
   }
 
+  /// Sends an already-encrypted canonical wire frame produced by [encryptFrame].
+  bool sendRawEncryptedPacket(Uint8List encryptedFrame) {
+    if (_disposed ||
+        _channel == null ||
+        !_isConnected ||
+        !_isVaultEstablished) {
+      return false;
+    }
+    try {
+      _channel!.sink.add(encryptedFrame);
+      return true;
+    } catch (e) {
+      _errorMessage = 'Encrypted transmit error: $e';
+      _emitState();
+      return false;
+    }
+  }
+
   /// Encrypts and dispatches a canonical 12-byte wire frame over the AEAD vault.
   bool sendEncrypted(int opcode, Uint8List plaintext, {int? seq}) {
     if (_disposed ||
@@ -734,6 +801,45 @@ class HostConnectionClient {
       _emitState();
       return false;
     }
+  }
+
+  /// Sends clipboard text (`0x07`) to overwrite the host PC clipboard.
+  bool sendClipboard(String text) =>
+      sendEncrypted(BinaryOpcode.clip, Uint8List.fromList(utf8.encode(text)));
+
+  /// Requests the host PC's current clipboard contents (`0x07` empty payload).
+  bool requestClipboard() => sendEncrypted(BinaryOpcode.clip, Uint8List(0));
+
+  /// Dispatches a remote audio/media/lock control command (`0x09`) to the host PC.
+  /// Supported actions: `volume_up`, `volume_down`, `mute`, `play_pause`, `next`, `prev`, `lock_pc`.
+  bool sendAudioCommand(String action, {int steps = 1}) {
+    return sendEncrypted(
+      BinaryOpcode.audio,
+      Uint8List.fromList(
+        utf8.encode(jsonEncode({'action': action, 'steps': steps})),
+      ),
+    );
+  }
+
+  /// Requests monitor list (`switchMonitorIndex == null`) or switches active host display (`0x0D`).
+  bool requestDisplayEnum({int? switchMonitorIndex}) {
+    final Uint8List payload = switchMonitorIndex == null
+        ? Uint8List(0)
+        : Uint8List.fromList(
+            utf8.encode(jsonEncode({'monitor': switchMonitorIndex})),
+          );
+    return sendEncrypted(BinaryOpcode.displayEnum, payload);
+  }
+
+  /// Sends a prompt to the host's local Ollama bridge (`0x0B`), streaming tokens on [llmTokenStream].
+  bool sendOllamaPrompt(String prompt,
+      {String model = 'qwen2.5-coder:latest'}) {
+    return sendEncrypted(
+      BinaryOpcode.llmStream,
+      Uint8List.fromList(
+        utf8.encode(jsonEncode({'model': model, 'prompt': prompt})),
+      ),
+    );
   }
 
   /// Signs a host HITL challenge with biometric approval + pairing secret HMAC-SHA256.
@@ -931,11 +1037,14 @@ class HostConnectionClient {
   void dispose() {
     _disposed = true;
     disconnect();
+    unawaited(_frameSyncSub?.cancel());
+    _reassembler.dispose();
     unawaited(_frameCtrl.close());
     unawaited(_telemetryCtrl.close());
     unawaited(_shellCtrl.close());
     unawaited(_fileAckCtrl.close());
     unawaited(_clipCtrl.close());
+    unawaited(_llmCtrl.close());
     unawaited(_displayEnumCtrl.close());
     unawaited(_hitlRawCtrl.close());
     unawaited(_stateCtrl.close());

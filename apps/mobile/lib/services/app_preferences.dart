@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../theme/fluid_theme.dart';
@@ -16,6 +17,8 @@ class AppPreferencesState {
   final bool biometricLockEnabled;
   final bool preferTls;
   final bool enableE2eVault;
+  final bool hapticsEnabled;
+  final bool keepScreenAwake;
   final bool hasCompletedOnboarding;
   final int customScanPort;
   final List<String> terminalHistory;
@@ -28,6 +31,8 @@ class AppPreferencesState {
     this.biometricLockEnabled = false,
     this.preferTls = false,
     this.enableE2eVault = true,
+    this.hapticsEnabled = true,
+    this.keepScreenAwake = true,
     this.hasCompletedOnboarding = false,
     this.customScanPort = 8765,
     this.terminalHistory = const [],
@@ -41,6 +46,8 @@ class AppPreferencesState {
     bool? biometricLockEnabled,
     bool? preferTls,
     bool? enableE2eVault,
+    bool? hapticsEnabled,
+    bool? keepScreenAwake,
     bool? hasCompletedOnboarding,
     int? customScanPort,
     List<String>? terminalHistory,
@@ -53,6 +60,8 @@ class AppPreferencesState {
       biometricLockEnabled: biometricLockEnabled ?? this.biometricLockEnabled,
       preferTls: preferTls ?? this.preferTls,
       enableE2eVault: enableE2eVault ?? this.enableE2eVault,
+      hapticsEnabled: hapticsEnabled ?? this.hapticsEnabled,
+      keepScreenAwake: keepScreenAwake ?? this.keepScreenAwake,
       hasCompletedOnboarding:
           hasCompletedOnboarding ?? this.hasCompletedOnboarding,
       customScanPort: customScanPort ?? this.customScanPort,
@@ -118,6 +127,8 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
       biometricLockEnabled: box.get('biometricLockEnabled') as bool? ?? false,
       preferTls: box.get('preferTls') as bool? ?? false,
       enableE2eVault: box.get('enableE2eVault') as bool? ?? true,
+      hapticsEnabled: box.get('hapticsEnabled') as bool? ?? true,
+      keepScreenAwake: box.get('keepScreenAwake') as bool? ?? true,
       hasCompletedOnboarding:
           box.get('hasCompletedOnboarding') as bool? ?? false,
       customScanPort: port,
@@ -168,6 +179,16 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
     await _write('enableE2eVault', enabled);
   }
 
+  Future<void> setHapticsEnabled(bool enabled) async {
+    state = state.copyWith(hapticsEnabled: enabled);
+    await _write('hapticsEnabled', enabled);
+  }
+
+  Future<void> setKeepScreenAwake(bool enabled) async {
+    state = state.copyWith(keepScreenAwake: enabled);
+    await _write('keepScreenAwake', enabled);
+  }
+
   Future<void> setOnboardingCompleted(bool completed) async {
     state = state.copyWith(hasCompletedOnboarding: completed);
     await _write('hasCompletedOnboarding', completed);
@@ -208,6 +229,8 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
         'biometricLockEnabled': defaults.biometricLockEnabled,
         'preferTls': defaults.preferTls,
         'enableE2eVault': defaults.enableE2eVault,
+        'hapticsEnabled': defaults.hapticsEnabled,
+        'keepScreenAwake': defaults.keepScreenAwake,
         'customScanPort': defaults.customScanPort,
       });
     }

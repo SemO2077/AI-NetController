@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'binary_protocol.dart' as bp;
+import 'fragmentation_engine.dart'
+    show FragmentAssemblySession, kFragmentHeaderSize;
+
 /// High-Performance Zero-Allocation Binary Wire Protocol Framer & Reassembler
 /// ============================================================================
 /// Protocol Framing Specification (Canonical AI NetController 12B Header):
@@ -18,19 +22,19 @@ import 'dart:typed_data';
 /// Total Sub-Hdr = 12 Bytes
 /// ============================================================================
 
-const int kSyncByte0 = 0xC5;
-const int kSyncByte1 = 0x71;
-const int kHeaderLength = 12;
-const int kFragSubHeaderLength = 12;
-const int kMaxPayloadSize = 10 * 1024 * 1024;
+const int kSyncByte0 = bp.kMagicByte0;
+const int kSyncByte1 = bp.kMagicByte1;
+const int kHeaderLength = bp.kHeaderSize;
+const int kFragSubHeaderLength = kFragmentHeaderSize;
+const int kMaxPayloadSize = bp.kMaxPayloadSize;
 
 // Protocol Flags
 class WireFlags {
-  static const int none = 0x00;
-  static const int compressed = 0x01;
-  static const int encrypted = 0x02;
-  static const int fragmented = 0x04;
-  static const int lastFragment = 0x08;
+  static const int none = bp.ProtocolFlags.none;
+  static const int compressed = bp.ProtocolFlags.compressed;
+  static const int encrypted = bp.ProtocolFlags.encrypted;
+  static const int fragmented = bp.ProtocolFlags.isFragmented;
+  static const int lastFragment = bp.ProtocolFlags.isLastFragment;
 }
 
 class WirePacket {
@@ -47,66 +51,6 @@ class WirePacket {
   });
 }
 
-class _FragmentAssemblySession {
-  final int messageId;
-  final int totalLength;
-  final int opcode;
-  final int flags;
-  final int seq;
-  final Uint8List buffer;
-  // Sorted disjoint covered intervals [start, end) to block overlapping-chunk byte inflation
-  final List<List<int>> _coveredIntervals = <List<int>>[];
-  int bytesReceived = 0;
-  DateTime lastActivity;
-
-  _FragmentAssemblySession({
-    required this.messageId,
-    required this.totalLength,
-    required this.opcode,
-    required this.flags,
-    required this.seq,
-  })  : buffer = Uint8List(totalLength),
-        lastActivity = DateTime.now();
-
-  /// Merges interval `[start, end)` and returns net newly covered unique bytes.
-  int recordCoveredRange(int start, int end) {
-    if (start >= end) return 0;
-    final int prev = bytesReceived;
-
-    int insertIdx = 0;
-    while (insertIdx < _coveredIntervals.length &&
-        _coveredIntervals[insertIdx][0] < start) {
-      insertIdx++;
-    }
-    _coveredIntervals.insert(insertIdx, <int>[start, end]);
-
-    final List<List<int>> merged = <List<int>>[];
-    for (final interval in _coveredIntervals) {
-      if (merged.isEmpty || interval[0] > merged.last[1]) {
-        merged.add(<int>[interval[0], interval[1]]);
-      } else if (interval[1] > merged.last[1]) {
-        merged.last[1] = interval[1];
-      }
-    }
-    _coveredIntervals
-      ..clear()
-      ..addAll(merged);
-
-    int total = 0;
-    for (final iv in _coveredIntervals) {
-      total += iv[1] - iv[0];
-    }
-    bytesReceived = total;
-    return total - prev;
-  }
-
-  bool get isComplete =>
-      bytesReceived == totalLength &&
-      _coveredIntervals.length == 1 &&
-      _coveredIntervals[0][0] == 0 &&
-      _coveredIntervals[0][1] == totalLength;
-}
-
 class NetworkFramer {
   // Pre-allocated ring accumulator to prevent GC thrashing during 60 FPS streaming
   static const int kInitialAccumulatorCapacity = 512 * 1024; // 512 KB
@@ -114,8 +58,8 @@ class NetworkFramer {
   int _writeIndex = 0;
   int _readIndex = 0;
 
-  // Reassembly Session Cache (Message ID -> Assembly Session)
-  final Map<int, _FragmentAssemblySession> _fragmentSessions = {};
+  // Reassembly Session Cache (Message ID -> Shared Assembly Session)
+  final Map<int, FragmentAssemblySession> _fragmentSessions = {};
   final Duration fragmentTimeout;
   Timer? _reaperTimer;
 
@@ -126,7 +70,8 @@ class NetworkFramer {
 
   NetworkFramer({this.fragmentTimeout = const Duration(seconds: 4)}) {
     // Background reaper for dropped / timed-out fragmented packets
-    _reaperTimer = Timer.periodic(const Duration(seconds: 2), (_) => _reapExpiredSessions());
+    _reaperTimer = Timer.periodic(
+        const Duration(seconds: 2), (_) => _reapExpiredSessions());
   }
 
   /// Pushes raw chunks received from the TCP or WebSocket stream
@@ -167,29 +112,16 @@ class NetworkFramer {
 
   void _processAccumulator() {
     while ((_writeIndex - _readIndex) >= kHeaderLength) {
-      // 1. Frame Resynchronization: Verify Canonical 0xC5, 0x71 Magic Header
-      final int b0 = _accumulator[_readIndex];
-      final int b1 = _accumulator[_readIndex + 1];
-      if (b0 != kSyncByte0 || b1 != kSyncByte1) {
-        // Discard 1 byte and resynchronize
+      // 1. Frame Resynchronization & Header Decode via Canonical Parser
+      final bp.ProtocolHeader? header =
+          bp.parseHeader(_accumulator, offset: _readIndex);
+      if (header == null) {
+        // Invalid magic or oversized corrupted length: discard 1 byte and resynchronize
         _readIndex++;
         continue;
       }
 
-      final ByteData bd = ByteData.sublistView(_accumulator, _readIndex, _readIndex + kHeaderLength);
-      final int opcode = bd.getUint8(2);
-      final int flags = bd.getUint8(3);
-      final int seq = bd.getUint32(4, Endian.big);
-      final int payloadLen = bd.getUint32(8, Endian.big);
-
-      // Sanity check length against canonical ceiling (10 MiB)
-      if (payloadLen > kMaxPayloadSize) {
-        // Desynchronized corrupted length header: advance 1 byte
-        _readIndex++;
-        continue;
-      }
-
-      final int totalFrameSize = kHeaderLength + payloadLen;
+      final int totalFrameSize = kHeaderLength + header.payloadLength;
       if ((_writeIndex - _readIndex) < totalFrameSize) {
         // Incomplete frame; wait for subsequent TCP chunks
         break;
@@ -197,20 +129,20 @@ class NetworkFramer {
 
       // Complete frame available
       final int payloadStart = _readIndex + kHeaderLength;
-      final int payloadEnd = payloadStart + payloadLen;
+      final int payloadEnd = payloadStart + header.payloadLength;
       final Uint8List rawPayload = _accumulator.sublist(payloadStart, payloadEnd);
 
       _readIndex += totalFrameSize;
 
       // Check if sub-MTU fragment reassembly is required
-      if ((flags & WireFlags.fragmented) != 0) {
-        _handleFragment(opcode, flags, seq, rawPayload);
-      } else {
+      if ((header.flags & WireFlags.fragmented) != 0) {
+        _handleFragment(header.opcode, header.flags, header.seq, rawPayload);
+      } else if (!_packetStreamController.isClosed) {
         // Direct unfragmented packet
         _packetStreamController.add(WirePacket(
-          opcode: opcode,
-          flags: flags,
-          seq: seq,
+          opcode: header.opcode,
+          flags: header.flags,
+          seq: header.seq,
           payload: rawPayload,
         ));
       }
@@ -223,17 +155,20 @@ class NetworkFramer {
     }
   }
 
-  void _handleFragment(int opcode, int flags, int seq, Uint8List fragmentPayload) {
+  void _handleFragment(
+      int opcode, int flags, int seq, Uint8List fragmentPayload) {
     if (fragmentPayload.length < kFragSubHeaderLength) return;
 
-    final ByteData bd = ByteData.sublistView(fragmentPayload, 0, kFragSubHeaderLength);
+    final ByteData bd =
+        ByteData.sublistView(fragmentPayload, 0, kFragSubHeaderLength);
     final int messageId = bd.getUint32(0, Endian.big);
     final int offset = bd.getUint32(4, Endian.big);
     final int totalLength = bd.getUint32(8, Endian.big);
 
     // Guard against forged/malicious fragment totalLength causing OOM (max 10 MiB, max 32 active sessions)
     if (totalLength <= 0 || totalLength > kMaxPayloadSize) return;
-    if (!_fragmentSessions.containsKey(messageId) && _fragmentSessions.length >= 32) {
+    if (!_fragmentSessions.containsKey(messageId) &&
+        _fragmentSessions.length >= 32) {
       _reapExpiredSessions();
       if (_fragmentSessions.length >= 32) {
         _fragmentSessions.remove(_fragmentSessions.keys.first);
@@ -246,14 +181,14 @@ class NetworkFramer {
     final Uint8List slice =
         Uint8List.sublistView(fragmentPayload, kFragSubHeaderLength);
 
-    _FragmentAssemblySession session = _fragmentSessions.putIfAbsent(
+    final FragmentAssemblySession session = _fragmentSessions.putIfAbsent(
       messageId,
-      () => _FragmentAssemblySession(
+      () => FragmentAssemblySession(
         messageId: messageId,
         totalLength: totalLength,
         opcode: opcode,
-        flags: flags & ~(WireFlags.fragmented | WireFlags.lastFragment),
-        seq: seq,
+        baseFlags: flags & ~(WireFlags.fragmented | WireFlags.lastFragment),
+        baseSeq: seq,
       ),
     );
 
@@ -261,32 +196,26 @@ class NetworkFramer {
       return;
     }
 
-    if (offset + slice.length <= session.totalLength) {
-      session.buffer.setRange(offset, offset + slice.length, slice);
-      final int netNew = session.recordCoveredRange(offset, offset + slice.length);
-      if (netNew > 0) {
-        session.lastActivity = DateTime.now();
-      }
-    }
+    session.addChunk(offset, slice);
 
     // Check completion condition across contiguous interval [0, totalLength)
     if (session.isComplete) {
       _fragmentSessions.remove(messageId);
-      _packetStreamController.add(WirePacket(
-        opcode: session.opcode,
-        flags: session.flags,
-        seq: session.seq,
-        payload: session.buffer,
-      ));
+      if (!_packetStreamController.isClosed) {
+        _packetStreamController.add(WirePacket(
+          opcode: session.opcode,
+          flags: session.baseFlags,
+          seq: session.baseSeq,
+          payload: session.buffer,
+        ));
+      }
     }
   }
 
   void _reapExpiredSessions() {
     final now = DateTime.now();
-    _fragmentSessions.removeWhere((id, session) {
-      final expired = now.difference(session.lastActivity) > fragmentTimeout;
-      return expired;
-    });
+    _fragmentSessions.removeWhere((id, session) =>
+        now.difference(session.lastActivity) > fragmentTimeout);
   }
 
   void dispose() {

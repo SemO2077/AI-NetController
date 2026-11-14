@@ -61,20 +61,78 @@ class ProtocolPacket {
   String get payloadAsString => utf8.decode(payload, allowMalformed: true);
 }
 
-/// Packs an opcode and payload into the standard 12-byte framed binary packet.
-Uint8List packPacket(int opcode, List<int> payload,
-    {int flags = 0, int seq = 0}) {
-  final int payloadLength = payload.length;
-  final Uint8List buffer = Uint8List(kHeaderSize + payloadLength);
-  final ByteData byteData = ByteData.sublistView(buffer);
+/// Parsed 12-byte canonical protocol header.
+typedef ProtocolHeader = ({
+  int opcode,
+  int flags,
+  int seq,
+  int payloadLength,
+});
 
-  // 12-byte Network Endian (Big Endian) Header
+/// Parses only the 12-byte CST header starting at [offset].
+///
+/// Returns `null` if fewer than [kHeaderSize] bytes remain, the magic signature
+/// does not match `0xC5 0x71`, or `payloadLength` exceeds [kMaxPayloadSize].
+ProtocolHeader? parseHeader(Uint8List rawBytes, {int offset = 0}) {
+  if (offset < 0 || rawBytes.length - offset < kHeaderSize) {
+    return null;
+  }
+  if (rawBytes[offset] != kMagicByte0 || rawBytes[offset + 1] != kMagicByte1) {
+    return null;
+  }
+
+  final ByteData byteData = ByteData.sublistView(
+    rawBytes,
+    offset,
+    offset + kHeaderSize,
+  );
+  final int payloadLength = byteData.getUint32(8, Endian.big);
+  if (payloadLength > kMaxPayloadSize) {
+    return null;
+  }
+
+  return (
+    opcode: byteData.getUint8(2),
+    flags: byteData.getUint8(3),
+    seq: byteData.getUint32(4, Endian.big),
+    payloadLength: payloadLength,
+  );
+}
+
+/// Writes the 12-byte big-endian CST header into [buffer] starting at [offset].
+void writeHeader(
+  Uint8List buffer, {
+  required int opcode,
+  required int payloadLength,
+  int flags = 0,
+  int seq = 0,
+  int offset = 0,
+}) {
+  final ByteData byteData = ByteData.sublistView(
+    buffer,
+    offset,
+    offset + kHeaderSize,
+  );
   byteData.setUint8(0, kMagicByte0);
   byteData.setUint8(1, kMagicByte1);
   byteData.setUint8(2, opcode);
   byteData.setUint8(3, flags);
   byteData.setUint32(4, seq, Endian.big);
   byteData.setUint32(8, payloadLength, Endian.big);
+}
+
+/// Packs an opcode and payload into the standard 12-byte framed binary packet.
+Uint8List packPacket(int opcode, List<int> payload,
+    {int flags = 0, int seq = 0}) {
+  final int payloadLength = payload.length;
+  final Uint8List buffer = Uint8List(kHeaderSize + payloadLength);
+  writeHeader(
+    buffer,
+    opcode: opcode,
+    payloadLength: payloadLength,
+    flags: flags,
+    seq: seq,
+  );
 
   if (payloadLength > 0) {
     buffer.setRange(kHeaderSize, kHeaderSize + payloadLength, payload);
@@ -85,35 +143,21 @@ Uint8List packPacket(int opcode, List<int> payload,
 
 /// Parses raw incoming binary bytes into a [ProtocolPacket].
 ProtocolPacket? parsePacket(Uint8List rawBytes) {
-  if (rawBytes.length < kHeaderSize) {
-    return null;
+  final ProtocolHeader? header = parseHeader(rawBytes);
+  if (header == null || rawBytes.length != kHeaderSize + header.payloadLength) {
+    return null; // Invalid magic, oversized, truncated, or trailing-byte packet
   }
 
-  final ByteData byteData = ByteData.sublistView(rawBytes);
-  final int m0 = byteData.getUint8(0);
-  final int m1 = byteData.getUint8(1);
-
-  if (m0 != kMagicByte0 || m1 != kMagicByte1) {
-    return null; // Invalid magic header bytes
-  }
-
-  final int opcode = byteData.getUint8(2);
-  final int flags = byteData.getUint8(3);
-  final int seq = byteData.getUint32(4, Endian.big);
-  final int payloadLength = byteData.getUint32(8, Endian.big);
-
-  if (payloadLength > kMaxPayloadSize ||
-      rawBytes.length != kHeaderSize + payloadLength) {
-    return null; // Oversized, truncated, or trailing-byte packet
-  }
-
-  final Uint8List payload =
-      Uint8List.sublistView(rawBytes, kHeaderSize, kHeaderSize + payloadLength);
+  final Uint8List payload = Uint8List.sublistView(
+    rawBytes,
+    kHeaderSize,
+    kHeaderSize + header.payloadLength,
+  );
 
   return ProtocolPacket(
-    opcode: opcode,
-    flags: flags,
-    seq: seq,
+    opcode: header.opcode,
+    flags: header.flags,
+    seq: header.seq,
     payload: payload,
   );
 }
@@ -123,6 +167,8 @@ class TelemetryData {
   final String hostname;
   final double cpuPercent;
   final double ramPercent;
+  final double? ramUsedGb;
+  final double? ramTotalGb;
   final String os;
   final String status;
   final DateTime timestamp;
@@ -131,6 +177,8 @@ class TelemetryData {
     required this.hostname,
     required this.cpuPercent,
     required this.ramPercent,
+    this.ramUsedGb,
+    this.ramTotalGb,
     required this.os,
     required this.status,
     DateTime? timestamp,
@@ -141,6 +189,8 @@ class TelemetryData {
       hostname: json['hostname'] as String? ?? 'Host PC',
       cpuPercent: (json['cpu_percent'] as num?)?.toDouble() ?? 0.0,
       ramPercent: (json['ram_percent'] as num?)?.toDouble() ?? 0.0,
+      ramUsedGb: (json['ram_used_gb'] as num?)?.toDouble(),
+      ramTotalGb: (json['ram_total_gb'] as num?)?.toDouble(),
       os: json['os'] as String? ?? 'Windows',
       status: json['status'] as String? ?? 'ready',
     );

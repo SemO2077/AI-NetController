@@ -167,12 +167,65 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
     return Theme.of(context).extension<CyberPalette>() ?? defaultPalette;
   }
 
-  Color get glassBorderActive => primary.withValues(alpha: 0.42);
-  Color get glassBorderIdle => Colors.white.withValues(alpha: 0.11);
+  Color get glassBorderActive => primary.withValues(alpha: 0.48);
+  Color get glassBorderIdle => Colors.white.withValues(alpha: 0.13);
   Color get cardSurfaceTop =>
-      Color.lerp(surfaceElevated, primary, 0.08)!.withValues(alpha: glass.fillAlpha);
+      Color.lerp(surfaceElevated, primary, 0.11)!.withValues(alpha: glass.fillAlpha);
   Color get cardSurfaceBottom =>
-      surface.withValues(alpha: (glass.fillAlpha + 0.10).clamp(0.0, 0.96));
+      Color.lerp(surface, Colors.black, 0.22)!
+          .withValues(alpha: (glass.fillAlpha + 0.12).clamp(0.0, 0.96));
+
+  LinearGradient cardBevelGradient({bool isSelected = false}) {
+    final topColor = Color.lerp(
+      surfaceElevated,
+      primary,
+      isSelected ? 0.22 : 0.10,
+    )!.withValues(alpha: (glass.fillAlpha + 0.05).clamp(0.0, 0.96));
+    final midColor = Color.lerp(
+      surfaceElevated,
+      secondary,
+      isSelected ? 0.10 : 0.04,
+    )!.withValues(alpha: glass.fillAlpha);
+    return LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      stops: const [0.0, 0.45, 1.0],
+      colors: [topColor, midColor, cardSurfaceBottom],
+    );
+  }
+
+  LinearGradient specularBorderGradient({bool isSelected = false}) {
+    return LinearGradient(
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+      colors: [
+        Colors.white.withValues(alpha: isSelected ? 0.34 : 0.22),
+        primary.withValues(alpha: isSelected ? 0.62 : 0.24),
+        Colors.transparent,
+      ],
+    );
+  }
+
+  List<BoxShadow> elevationShadows({
+    bool isSelected = false,
+    Color? glowColor,
+  }) {
+    final glow = glowColor ?? primary;
+    return [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: isSelected ? 0.56 : 0.44),
+        blurRadius: isSelected ? 26 : 18,
+        spreadRadius: isSelected ? 1 : 0,
+        offset: const Offset(0, 10),
+      ),
+      BoxShadow(
+        color: glow.withValues(alpha: isSelected ? 0.25 : 0.08),
+        blurRadius: isSelected ? 22 : 14,
+        spreadRadius: isSelected ? 1 : -2,
+        offset: const Offset(0, 2),
+      ),
+    ];
+  }
 
   @override
   CyberPalette copyWith({
@@ -233,17 +286,40 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
 // =====================================================================
 class FluidSize {
   static const double baselineWidth = 390.0;
+  static const double baselineHeight = 780.0;
 
-  /// Dynamic scale factor clamped between 0.80 and 1.50 to prevent
-  /// microscopic text on compact viewports or blowups on wide displays.
+  /// Aspect-ratio & resolution-aware scale factor that adapts smoothly from
+  /// 260dp foldable cover screens and 320dp landscape phones up to 4K desktops
+  /// without ever blowing up typography on short landscape viewports.
   static double getScaleFactor(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final ratio = width / baselineWidth;
-    return ratio.clamp(0.80, 1.50);
+    final size = MediaQuery.sizeOf(context);
+    final shortest = size.shortestSide;
+    final widthRatio = size.width / baselineWidth;
+    final shortRatio = shortest / baselineWidth;
+    final heightCap = (size.height / baselineHeight).clamp(0.76, 1.25);
+
+    // Blend shortest-side and width ratios so landscape phones don't inflate
+    // text to 1.5x while tablets/desktops still get a clean proportional step-up.
+    final blended = (shortRatio * 0.72) + (widthRatio * 0.28);
+    final raw = blended < heightCap ? blended : (blended * 0.55 + heightCap * 0.45);
+    return raw.clamp(0.75, 1.22);
+  }
+
+  static bool isUltraCompact(BuildContext context) =>
+      MediaQuery.sizeOf(context).width < 340;
+
+  static bool isShortViewport(BuildContext context) =>
+      MediaQuery.sizeOf(context).height < 480;
+
+  static EdgeInsets pagePadding(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final h = size.width < 340 ? 10.0 : (size.width < 600 ? 14.0 : 16.0);
+    final v = size.height < 460 ? 8.0 : 12.0;
+    return EdgeInsets.symmetric(horizontal: h, vertical: v);
   }
 
   static double font(BuildContext context, double baseSize) {
-    return (baseSize * getScaleFactor(context)).roundToDouble();
+    return (baseSize * getScaleFactor(context) * 2.0).roundToDouble() / 2.0;
   }
 
   static double space(BuildContext context, double baseSpace) {
@@ -251,11 +327,14 @@ class FluidSize {
   }
 
   /// Clamped TextScaler restricting system OS-level accessibility font scaling
-  /// between 0.85x and 1.25x to guarantee zero-overflow layout rendering.
+  /// between 0.85x and 1.20x (or 1.08x on ultra-narrow/short viewports)
+  /// to guarantee zero-overflow layout rendering.
   static TextScaler clampedTextScaler(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final maxScale = (size.width < 340 || size.height < 440) ? 1.08 : 1.20;
     return MediaQuery.textScalerOf(context).clamp(
       minScaleFactor: 0.85,
-      maxScaleFactor: 1.25,
+      maxScaleFactor: maxScale,
     );
   }
 }
@@ -275,6 +354,8 @@ extension FluidContext on BuildContext {
   bool get isCompact => screenWidth < 600;
   bool get isMedium => screenWidth >= 600 && screenWidth <= 840;
   bool get isExpanded => screenWidth > 840;
+  bool get isUltraCompact => FluidSize.isUltraCompact(this);
+  bool get isShortViewport => FluidSize.isShortViewport(this);
 }
 
 // =====================================================================
@@ -327,3 +408,82 @@ class CyberTheme {
     );
   }
 }
+
+/// Reusable tactile micro-interaction wrapper that gives cards, pills, and
+/// buttons a subtle spring scale-down on press while respecting reduced-motion.
+class FluidPressScale extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  final double pressedScale;
+  final Duration duration;
+
+  const FluidPressScale({
+    super.key,
+    required this.child,
+    this.onTap,
+    this.pressedScale = 0.968,
+    this.duration = const Duration(milliseconds: 140),
+  });
+
+  @override
+  State<FluidPressScale> createState() => _FluidPressScaleState();
+}
+
+class _FluidPressScaleState extends State<FluidPressScale> {
+  bool _isPressed = false;
+
+  void _setPressed(bool value) {
+    if (_isPressed == value) return;
+    setState(() => _isPressed = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final effectiveDuration = disableAnimations ? Duration.zero : widget.duration;
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => _setPressed(true),
+      onPointerUp: (_) => _setPressed(false),
+      onPointerCancel: (_) => _setPressed(false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _isPressed ? widget.pressedScale : 1.0,
+          duration: effectiveDuration,
+          curve: Curves.easeOutCubic,
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+/// Top-edge specular highlight bar that gives glassmorphic surfaces a 3D bevel rim.
+class FluidSpecularBar extends StatelessWidget {
+  final bool isSelected;
+  final double height;
+  final EdgeInsetsGeometry margin;
+
+  const FluidSpecularBar({
+    super.key,
+    this.isSelected = false,
+    this.height = 1.0,
+    this.margin = const EdgeInsets.symmetric(horizontal: 10),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = CyberPalette.of(context);
+    return Container(
+      height: height,
+      margin: margin,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(height),
+        gradient: palette.specularBorderGradient(isSelected: isSelected),
+      ),
+    );
+  }
+}
+

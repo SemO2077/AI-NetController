@@ -437,5 +437,119 @@ void main() {
 
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets(
+      'scales cleanly across extreme aspect ratios, ultra-narrow foldables, short landscape, and 1.35x font scale without overflow',
+      (tester) async {
+        final tempDir = Directory.systemTemp.createTempSync('ai_net_widget_3_');
+        await tester.runAsync(() async {
+          Hive.init(tempDir.path);
+          await Hive.openBox('ghost_devices');
+          await Hive.openBox(kAppPrefsBoxName);
+          await Hive.openBox(kVaultSecretsBoxName);
+        });
+        addTearDown(() async {
+          await tester.runAsync(() async {
+            await Hive.close();
+            if (tempDir.existsSync()) {
+              tempDir.deleteSync(recursive: true);
+            }
+          });
+        });
+
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+          tester.platformDispatcher.clearTextScaleFactorTestValue();
+        });
+
+        tester.view.devicePixelRatio = 1.0;
+        tester.platformDispatcher.textScaleFactorTestValue = 1.35;
+
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        await tester.runAsync(() async {
+          container.read(app.fleetProvider.notifier).addHost(
+                app.HostState(
+                  id: 'PC-SLEEP',
+                  name: 'Render-Workstation-UltraWide-01',
+                  ip: '192.168.1.50',
+                  mac: 'AA:BB:CC:DD:EE:11',
+                  isOnline: false,
+                  cpuUsage: 74,
+                  ramUsage: 82,
+                  latencyMs: 12,
+                ),
+              );
+          container.read(app.fleetProvider.notifier).addHost(
+                app.HostState(
+                  id: 'PC-BACKUP',
+                  name: 'Backup-Hypervisor-Node-02',
+                  ip: '192.168.1.51',
+                  mac: 'AA:BB:CC:DD:EE:22',
+                  isOnline: false,
+                ),
+              );
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        });
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const app.AINetControllerApp(),
+          ),
+        );
+
+        const viewports = <Size>[
+          Size(280, 653), // Ultra-narrow foldable cover display
+          Size(320, 480), // Small 3.5" phone portrait
+          Size(640, 320), // Ultra-short phone landscape
+          Size(720, 380), // Medium rail short landscape
+          Size(900, 380), // Expanded master-detail short landscape
+          Size(1440, 900), // High-res desktop 16:10
+        ];
+
+        for (final size in viewports) {
+          tester.view.physicalSize = size;
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 320));
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: 'Fleet tab overflowed at viewport $size',
+          );
+
+          // Switch to Terminal tab
+          await tester.tap(find.byIcon(Icons.terminal_rounded).first);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 320));
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: 'Terminal tab overflowed at viewport $size',
+          );
+
+          // Switch to Settings tab
+          await tester.tap(find.byIcon(Icons.tune_rounded).first);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 320));
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: 'Settings tab overflowed at viewport $size',
+          );
+
+          // Return to Fleet tab
+          await tester.tap(find.byIcon(Icons.devices_rounded).first);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 320));
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: 'Return to Fleet tab overflowed at viewport $size',
+          );
+        }
+      },
+    );
   });
 }

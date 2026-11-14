@@ -423,7 +423,8 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                     .slice()
                     .reverse()
                     .map((item) => {
-                      const cmdText = item.commandPrompt || item.output.split('\n')[0];
+                      const cmdText =
+                        item.commandPrompt || (item.output ?? '').split('\n')[0];
                       const isPinned = pinnedCommands.includes(cmdText);
                       return (
                         <div
@@ -557,7 +558,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                     <span className="text-emerald-400 flex items-center gap-1.5 font-semibold truncate">
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                       <span>
-                        {t('term_exec_success', { time: entry.execution_time_ms })} • Exit{' '}
+                        {t('term_exec_success', { time: entry.execution_time_ms ?? 0 })} • Exit{' '}
                         {entry.exitCode ?? 0}
                       </span>
                     </span>
@@ -595,7 +596,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                     )}
                     <button
                       type="button"
-                      onClick={() => handleCopyOutput(entry.id, entry.output)}
+                      onClick={() => handleCopyOutput(entry.id, entry.output ?? '')}
                       className="text-slate-400 hover:text-cyan-300 transition flex items-center gap-1"
                       title={language === 'bg' ? 'Копирай изхода' : 'Copy output'}
                     >

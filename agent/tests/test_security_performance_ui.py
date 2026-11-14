@@ -412,6 +412,71 @@ class TestCyberGlassUIAndWindowsAVHygiene(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_responsive_scaling_across_all_aspect_ratios_and_resolutions(self):
+        """
+        Verifies FluidDesktopScale and HostDaemonDesktopGUI responsive reflow across
+        ultra-compact (640x420), landscape (800x480), medium (900x540), standard (1120x760),
+        and wide (1600x900) viewports without clipping or geometry errors.
+        """
+        s_compact = ui_mod.FluidDesktopScale.from_dimensions(640, 420)
+        self.assertEqual(s_compact.columns, 1)
+        self.assertTrue(s_compact.is_ultra_compact_width)
+        self.assertTrue(s_compact.is_ultra_short_height)
+        self.assertEqual(s_compact.qr_size, 128)
+
+        s_landscape = ui_mod.FluidDesktopScale.from_dimensions(800, 480)
+        self.assertEqual(s_landscape.columns, 1)
+        self.assertTrue(s_landscape.is_compact_width)
+        self.assertEqual(s_landscape.qr_size, 128)
+
+        s_standard = ui_mod.FluidDesktopScale.from_dimensions(1120, 760)
+        self.assertEqual(s_standard.columns, 2)
+        self.assertFalse(s_standard.is_compact_width)
+        self.assertEqual(s_standard.qr_size, 176)
+
+        if not gui_mod.HAS_TKINTER:
+            self.skipTest("Tkinter unavailable")
+        state = gui_mod.HostDaemonState(host="127.0.0.1", port=8765)
+        state.setup_completed = True
+        try:
+            gui = gui_mod.HostDaemonDesktopGUI(state=state)
+        except Exception as exc:
+            self.skipTest(f"Tkinter display unavailable: {exc}")
+        try:
+            gui.root.withdraw()
+            viewports = [
+                (640, 420, 1, 128),
+                (800, 480, 1, 128),
+                (900, 560, 2, 150),
+                (1120, 760, 2, 176),
+                (1600, 900, 2, 176),
+            ]
+            for vw, vh, expected_cols, expected_qr in viewports:
+                gui._apply_responsive_scaling(vw, vh)
+                gui._apply_ambient_backdrop(vw, vh)
+                self.assertEqual(gui._scale.columns, expected_cols)
+                self.assertEqual(gui._scale.qr_size, expected_qr)
+                self.assertEqual(gui._qr_cache_px, expected_qr)
+                for tab in ("overview", "security", "console", "system"):
+                    gui._select_tab(tab)
+                    gui._sync_stage_scrollregion()
+                    gui.root.update_idletasks()
+                ov_left_info = gui._ov_left_col.grid_info()
+                ov_right_info = gui._ov_right_col.grid_info()
+                if expected_cols == 1:
+                    self.assertEqual(int(ov_left_info["row"]), 0)
+                    self.assertEqual(int(ov_right_info["row"]), 1)
+                    self.assertEqual(int(ov_right_info["column"]), 0)
+                else:
+                    self.assertEqual(int(ov_left_info["row"]), 0)
+                    self.assertEqual(int(ov_right_info["row"]), 0)
+                    self.assertEqual(int(ov_right_info["column"]), 1)
+        finally:
+            try:
+                gui.root.destroy()
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()

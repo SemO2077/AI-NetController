@@ -47,58 +47,76 @@ class PacketFragment {
   });
 }
 
-/// In-memory reassembly session for a multi-chunk binary message
-class _AssemblySession {
+/// Shared interval-verified reassembly buffer used by [PacketReassembler] and `NetworkFramer`.
+class FragmentAssemblySession {
   final int messageId;
   final int opcode;
   final int totalLength;
   final int baseFlags;
   final int baseSeq;
   final Uint8List buffer;
-  // Sorted disjoint covered intervals [start, end) to block overlapping-chunk byte inflation
-  final List<List<int>> _coveredIntervals = <List<int>>[];
-  int bytesAccumulated;
+
+  // Sorted disjoint covered intervals `[start, end)` to prevent overlapping-chunk byte inflation.
+  final List<({int start, int end})> _coveredIntervals = [];
+  int bytesAccumulated = 0;
   DateTime lastActivity;
 
-  _AssemblySession({
+  FragmentAssemblySession({
     required this.messageId,
     required this.opcode,
     required this.totalLength,
     required this.baseFlags,
     required this.baseSeq,
   })  : buffer = Uint8List(totalLength),
-        bytesAccumulated = 0,
         lastActivity = DateTime.now();
+
+  /// Copies [chunk] at [offset] if within bounds and records newly covered bytes.
+  ///
+  /// Returns `true` when any previously uncovered byte range was filled.
+  bool addChunk(int offset, Uint8List chunk) {
+    final int end = offset + chunk.length;
+    if (offset < 0 || chunk.isEmpty || end > totalLength) return false;
+    buffer.setRange(offset, end, chunk);
+    final int netNew = recordCoveredRange(offset, end);
+    if (netNew > 0) {
+      lastActivity = DateTime.now();
+      return true;
+    }
+    return false;
+  }
 
   /// Merges interval `[start, end)` and returns net newly covered bytes.
   int recordCoveredRange(int start, int end) {
     if (start >= end) return 0;
-    int prevCovered = bytesAccumulated;
+    final int prevCovered = bytesAccumulated;
 
-    // Insert sorted by start
+    // Insert sorted by start, then coalesce overlapping/adjacent intervals in-place.
     int insertIdx = 0;
     while (insertIdx < _coveredIntervals.length &&
-        _coveredIntervals[insertIdx][0] < start) {
+        _coveredIntervals[insertIdx].start < start) {
       insertIdx++;
     }
-    _coveredIntervals.insert(insertIdx, <int>[start, end]);
+    _coveredIntervals.insert(insertIdx, (start: start, end: end));
 
-    // Merge overlapping/adjacent intervals
-    final List<List<int>> merged = <List<int>>[];
+    int writeIdx = 0;
     int total = 0;
-    for (final interval in _coveredIntervals) {
-      if (merged.isEmpty || interval[0] > merged.last[1]) {
-        merged.add(<int>[interval[0], interval[1]]);
-      } else if (interval[1] > merged.last[1]) {
-        merged.last[1] = interval[1];
+    ({int start, int end}) current = _coveredIntervals[0];
+    for (int i = 1; i < _coveredIntervals.length; i++) {
+      final next = _coveredIntervals[i];
+      if (next.start <= current.end) {
+        if (next.end > current.end) {
+          current = (start: current.start, end: next.end);
+        }
+      } else {
+        _coveredIntervals[writeIdx++] = current;
+        total += current.end - current.start;
+        current = next;
       }
     }
-    _coveredIntervals
-      ..clear()
-      ..addAll(merged);
-    for (final iv in _coveredIntervals) {
-      total += iv[1] - iv[0];
-    }
+    _coveredIntervals[writeIdx++] = current;
+    total += current.end - current.start;
+    _coveredIntervals.length = writeIdx;
+
     bytesAccumulated = total;
     return total - prevCovered;
   }
@@ -106,8 +124,8 @@ class _AssemblySession {
   bool get isComplete =>
       bytesAccumulated == totalLength &&
       _coveredIntervals.length == 1 &&
-      _coveredIntervals[0][0] == 0 &&
-      _coveredIntervals[0][1] == totalLength;
+      _coveredIntervals[0].start == 0 &&
+      _coveredIntervals[0].end == totalLength;
 }
 
 /// Slices oversized binary frames (e.g. 2MB JPEG frames) into sub-64KB chunks
@@ -133,10 +151,13 @@ class PacketFragmenter {
 
     final int messageId;
     if (opcode == BinaryOpcode.frame) {
-      _nextVideoMessageId = (_nextVideoMessageId >= 0x7FFFFFFE) ? 1 : (_nextVideoMessageId + 1);
+      _nextVideoMessageId =
+          (_nextVideoMessageId >= 0x7FFFFFFE) ? 1 : (_nextVideoMessageId + 1);
       messageId = _nextVideoMessageId;
     } else {
-      _nextControlMessageId = (_nextControlMessageId >= 0x7FFFFFFE) ? 1000 : (_nextControlMessageId + 1);
+      _nextControlMessageId = (_nextControlMessageId >= 0x7FFFFFFE)
+          ? 1000
+          : (_nextControlMessageId + 1);
       messageId = _nextControlMessageId;
     }
     final int totalLength = payload.length;
@@ -155,22 +176,21 @@ class PacketFragmenter {
 
       final Uint8List framedPacket =
           Uint8List(kHeaderSize + packetPayloadLength);
-      final ByteData bd = ByteData.sublistView(framedPacket);
-
-      // Base 12-byte header
-      bd.setUint8(0, kMagicByte0);
-      bd.setUint8(1, kMagicByte1);
-      bd.setUint8(2, opcode);
-      bd.setUint8(3, fragmentFlags);
-      bd.setUint32(4, seq, Endian.big);
-      bd.setUint32(8, packetPayloadLength, Endian.big);
+      writeHeader(
+        framedPacket,
+        opcode: opcode,
+        payloadLength: packetPayloadLength,
+        flags: fragmentFlags,
+        seq: seq,
+      );
 
       // 12-byte Fragmentation Sub-Header
+      final ByteData bd = ByteData.sublistView(framedPacket);
       bd.setUint32(kHeaderSize + 0, messageId, Endian.big);
       bd.setUint32(kHeaderSize + 4, offset, Endian.big);
       bd.setUint32(kHeaderSize + 8, totalLength, Endian.big);
 
-      // Chunk Payload (Zero-allocation view copy)
+      // Chunk Payload (Zero-allocation range copy)
       framedPacket.setRange(
         kHeaderSize + kFragmentHeaderSize,
         kHeaderSize + packetPayloadLength,
@@ -188,7 +208,7 @@ class PacketFragmenter {
 
 /// Reassembles streaming fragmented chunks into complete ProtocolPackets
 class PacketReassembler {
-  final Map<String, _AssemblySession> _sessions = {};
+  final Map<String, FragmentAssemblySession> _sessions = {};
   final StreamController<ProtocolPacket> _completePacketStream =
       StreamController<ProtocolPacket>.broadcast();
   final StreamController<int> _frameSyncRequestStream =
@@ -209,23 +229,16 @@ class PacketReassembler {
   /// Ingests a raw network buffer. Returns the reassembled [ProtocolPacket]
   /// if this chunk completed a message, or if it was an unfragmented packet.
   ProtocolPacket? ingestBytes(Uint8List rawBytes) {
-    if (rawBytes.length < kHeaderSize) return null;
-
-    final ByteData bd = ByteData.sublistView(rawBytes);
-    final int m0 = bd.getUint8(0);
-    final int m1 = bd.getUint8(1);
-    if (m0 != kMagicByte0 || m1 != kMagicByte1) return null;
-
-    final int opcode = bd.getUint8(2);
-    final int flags = bd.getUint8(3);
-    final int seq = bd.getUint32(4, Endian.big);
-    final int payloadLength = bd.getUint32(8, Endian.big);
-
-    if (payloadLength > 10 * 1024 * 1024 ||
-        rawBytes.length != kHeaderSize + payloadLength) {
+    final ProtocolHeader? header = parseHeader(rawBytes);
+    if (header == null ||
+        rawBytes.length != kHeaderSize + header.payloadLength) {
       return null;
     }
 
+    final int opcode = header.opcode;
+    final int flags = header.flags;
+    final int seq = header.seq;
+    final int payloadLength = header.payloadLength;
     final bool isFragmented = (flags & kFlagIsFragmented) != 0;
 
     // Fast-path: Unfragmented packet
@@ -241,6 +254,7 @@ class PacketReassembler {
     // Fragmented packet: Extract fragmentation sub-header
     if (payloadLength < kFragmentHeaderSize) return null;
 
+    final ByteData bd = ByteData.sublistView(rawBytes);
     final int messageId = bd.getUint32(kHeaderSize + 0, Endian.big);
     final int offset = bd.getUint32(kHeaderSize + 4, Endian.big);
     final int totalLength = bd.getUint32(kHeaderSize + 8, Endian.big);
@@ -248,7 +262,7 @@ class PacketReassembler {
 
     // Guard against forged/corrupted fragment headers causing OOM
     if (totalLength <= 0 ||
-        totalLength > 10 * 1024 * 1024 ||
+        totalLength > kMaxPayloadSize ||
         offset < 0 ||
         chunkBytesLength <= 0 ||
         offset + chunkBytesLength > totalLength) {
@@ -279,9 +293,9 @@ class PacketReassembler {
     );
 
     // Get or initialize assembly session scoped by opcode + messageId
-    _AssemblySession session = _sessions.putIfAbsent(
+    final FragmentAssemblySession session = _sessions.putIfAbsent(
       sessionKey,
-      () => _AssemblySession(
+      () => FragmentAssemblySession(
         messageId: messageId,
         opcode: opcode,
         totalLength: totalLength,
@@ -294,14 +308,7 @@ class PacketReassembler {
       return null;
     }
 
-    if (offset + chunkBytesLength <= session.totalLength) {
-      session.buffer.setRange(offset, offset + chunkBytesLength, chunkData);
-      final int netNew =
-          session.recordCoveredRange(offset, offset + chunkBytesLength);
-      if (netNew > 0) {
-        session.lastActivity = DateTime.now();
-      }
-    }
+    session.addChunk(offset, chunkData);
 
     // Check completion
     if (session.isComplete) {
@@ -312,7 +319,9 @@ class PacketReassembler {
         seq: session.baseSeq,
         payload: session.buffer,
       );
-      _completePacketStream.add(reassembled);
+      if (!_completePacketStream.isClosed) {
+        _completePacketStream.add(reassembled);
+      }
       return reassembled;
     }
 

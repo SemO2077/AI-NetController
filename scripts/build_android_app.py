@@ -169,11 +169,30 @@ def setup_staging():
 
     # Copy web dist into assets/dist
     shutil.copytree(WEB_DIST, os.path.join(STAGE_DIR, "assets", "dist"), dirs_exist_ok=True)
+    # Copy 3D Cyber-Glass adaptive & raster launcher icons from Flutter res directory
+    flutter_res = os.path.join(ROOT_DIR, "apps", "mobile", "android", "app", "src", "main", "res")
+    for icon_subdir in (
+        "mipmap-mdpi",
+        "mipmap-hdpi",
+        "mipmap-xhdpi",
+        "mipmap-xxhdpi",
+        "mipmap-xxxhdpi",
+        "mipmap-anydpi",
+        "mipmap-anydpi-v26",
+    ):
+        src_dir = os.path.join(flutter_res, icon_subdir)
+        if os.path.isdir(src_dir):
+            shutil.copytree(src_dir, os.path.join(STAGE_DIR, "res", icon_subdir), dirs_exist_ok=True)
+    for xml_name in ("ic_launcher_background.xml", "ic_launcher_foreground.xml"):
+        src_xml = os.path.join(flutter_res, "drawable", xml_name)
+        if os.path.isfile(src_xml):
+            shutil.copy2(src_xml, os.path.join(STAGE_DIR, "res", "drawable", xml_name))
+
     # Also copy release metadata (manifest, checksums, patch notes) into assets/dist/releases/<tag>
     rel_tag = _get_release_tag()
     rel_src = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
     if not os.path.exists(rel_src):
-        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.60.0")
+        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.70.0")
     rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", rel_tag)
     os.makedirs(rel_dst, exist_ok=True)
     for meta_file in ("RELEASE_MANIFEST.json", "SHA256SUMS.txt", "PATCH_NOTES.md"):
@@ -188,11 +207,11 @@ def _get_release_tag():
     if os.path.exists(pkg_json):
         try:
             with open(pkg_json, "r", encoding="utf-8") as f:
-                v = str(json.load(f).get("version", "0.60.0")).strip()
+                v = str(json.load(f).get("version", "0.70.0")).strip()
                 return f"v{v}" if not v.startswith("v") else v
         except Exception:
             pass
-    return "v0.60.0"
+    return "v0.70.0"
 
 
 def _get_version_name():
@@ -206,7 +225,7 @@ def _get_version_name():
 def create_android_manifest():
     ver_name = _get_version_name()
     parts = [int(p) for p in _get_release_tag().lstrip("v").split(".")[:3] if p.isdigit()]
-    ver_code = str(parts[0] * 1000 + parts[1] * 10 + parts[2]) if len(parts) == 3 else "600"
+    ver_code = str(parts[0] * 1000 + parts[1] * 10 + parts[2]) if len(parts) == 3 else "700"
     manifest_content = f"""<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cst.autonomouslan"
@@ -224,8 +243,8 @@ def create_android_manifest():
 
     <application
         android:label="@string/app_name"
-        android:icon="@drawable/ic_launcher"
-        android:roundIcon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/AppTheme"
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
