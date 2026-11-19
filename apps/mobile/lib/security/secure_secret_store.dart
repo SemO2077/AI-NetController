@@ -29,8 +29,7 @@ class SecureSecretStore {
   }) : _customKeyProvider = keyProvider;
 
   Future<void> init() async {
-    if (_initialized && (_vaultBox == null || _vaultBox!.isOpen)) return;
-    _initialized = true;
+    if (_initialized && _vaultBox != null && _vaultBox!.isOpen) return;
 
     Uint8List? masterKey;
     try {
@@ -55,12 +54,25 @@ class SecureSecretStore {
 
     if (masterKey != null && masterKey.length == 32) {
       try {
-        _vaultBox = await Hive.openBox<dynamic>(
-          vaultBoxName,
-          encryptionCipher: HiveAesCipher(masterKey),
-        );
+        try {
+          _vaultBox = await Hive.openBox<dynamic>(
+            vaultBoxName,
+            encryptionCipher: HiveAesCipher(masterKey),
+          );
+        } catch (_) {
+          // Box key mismatch or corruption (e.g. keystore rotated after restore): recreate cleanly.
+          try {
+            await Hive.deleteBoxFromDisk(vaultBoxName);
+          } catch (_) {}
+          _vaultBox = await Hive.openBox<dynamic>(
+            vaultBoxName,
+            encryptionCipher: HiveAesCipher(masterKey),
+          );
+        }
+        _initialized = _vaultBox != null && _vaultBox!.isOpen;
       } catch (_) {
         _vaultBox = null;
+        _initialized = false;
       } finally {
         for (int i = 0; i < masterKey.length; i++) {
           masterKey[i] = 0;
@@ -198,7 +210,7 @@ class SecureSecretStore {
       result.add(hydrated);
     }
 
-    if (scrubbedLegacy) {
+    if (scrubbedLegacy && hasOpenVault) {
       final List<Map<String, dynamic>> redacted = result.map((m) {
         final copy = Map<String, dynamic>.from(m);
         if ((copy['token']?.toString() ?? '').isNotEmpty) {
@@ -225,7 +237,9 @@ class SecureSecretStore {
       final trimmed = globalRaw.trim();
       if (trimmed.isNotEmpty && trimmed != legacySentinel) {
         await saveToken(globalHostKey, trimmed);
-        await legacyBox.put('__global_pairing_secret__', legacySentinel);
+        if (hasOpenVault) {
+          await legacyBox.put('__global_pairing_secret__', legacySentinel);
+        }
       }
     }
 
@@ -238,7 +252,9 @@ class SecureSecretStore {
           final String trimmed = v.trim();
           if (trimmed.isNotEmpty && trimmed != legacySentinel && ip.isNotEmpty) {
             await saveToken(ip, trimmed);
-            await legacyBox.put(k, legacySentinel);
+            if (hasOpenVault) {
+              await legacyBox.put(k, legacySentinel);
+            }
           }
         }
       }

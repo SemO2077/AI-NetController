@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/SemO2077/AI-NetController/actions/workflows/ci.yml/badge.svg)](https://github.com/SemO2077/AI-NetController/actions/workflows/ci.yml)
 [![GitLab Pipeline](https://gitlab.com/ryu-group7483245/ai-netcontroller/badges/main/pipeline.svg)](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/pipelines)
-[![Release v0.70.0](https://img.shields.io/badge/release-v0.70.0--beta-00f0ff)](https://github.com/SemO2077/AI-NetController/releases/tag/v0.70.0)
-[![GitLab Release v0.70.0](https://img.shields.io/badge/gitlab_release-v0.70.0--beta-fc6d26)](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.70.0)
+[![Release v0.80.0](https://img.shields.io/badge/release-v0.80.0--beta-00f0ff)](https://github.com/SemO2077/AI-NetController/releases/tag/v0.80.0)
+[![GitLab Release v0.80.0](https://img.shields.io/badge/gitlab_release-v0.80.0--beta-fc6d26)](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.80.0)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Low-latency workstation fleet manager, Wake-on-LAN orchestrator, and authenticated remote desktop bridge built across a Python host daemon (`agent/`), an Android/Flutter companion (`apps/mobile/`), and a local React + Express web console (`apps/web/`).
@@ -71,7 +71,7 @@ By default, the Express server binds `127.0.0.1:3000` (`ALLOW_LAN_WEB=true` expo
 
 ### 3. Mobile Companion (`apps/mobile/`)
 
-Requires Flutter 3.29+ / Dart 3.7+ to develop or test from source. Pre-built signed APKs and Windows binaries are published under [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.70.0) and [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.70.0).
+Requires Flutter 3.29+ / Dart 3.7+ to develop or test from source. Pre-built signed APKs and Windows binaries are published under [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.80.0) and [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.80.0).
 
 ```bash
 cd apps/mobile
@@ -84,11 +84,11 @@ flutter build apk --release --split-per-abi
 All three subsystems ship automated verification suites:
 
 ```bash
-# Web TypeScript check, architecture verification (40 checks), and stress benchmarks (23 checks)
+# Web TypeScript check, architecture verification (40 checks), stress benchmarks (23 checks), and crypto/security tests (8 checks)
 npm run lint
 npm test
 
-# Python Host Agent unit, crypto, firewall, loopback, and integration tests (116 tests)
+# Python Host Agent unit, crypto, firewall, loopback, and integration tests (128 tests)
 python -m unittest discover -s agent/tests -v
 
 # Flutter static analysis and mobile unit/E2E daemon tests (41 tests; invokes Python host agent)
@@ -123,7 +123,7 @@ AI-NetController/
 ├── .github/                    # GitHub Actions CI & issue/PR templates
 ├── .gitlab/                    # GitLab issue/MR templates
 ├── .gitlab-ci.yml              # GitLab CI/CD pipeline
-├── PATCH_NOTES.md              # v0.70.0 (Beta 0.70.00) changelog
+├── PATCH_NOTES.md              # v0.80.0 (Beta 0.80.00) changelog
 └── package.json                # Node scripts & version metadata
 ```
 
@@ -134,7 +134,7 @@ AI-NetController/
 - [Setup & Pairing Guide](docs/SETUP_GUIDE.md)
 - [Compilation & Release Packaging Guide](docs/COMPILATION_GUIDE.md)
 - [Contributing Guide](CONTRIBUTING.md)
-- [v0.70.0 Release Notes](PATCH_NOTES.md)
+- [v0.80.0 Release Notes](PATCH_NOTES.md)
 
 ## License
 

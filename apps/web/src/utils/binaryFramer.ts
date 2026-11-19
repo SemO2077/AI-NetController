@@ -109,7 +109,7 @@ export function packControlFrameFast(opcode: Opcode, sequenceId: number, payload
   return new DataView(packFrame(opcode, sequenceId >>> 0, payload));
 }
 
-export function packFrame(opcode: Opcode, sequenceId: number, payload?: Uint8Array): ArrayBuffer {
+export function packFrame(opcode: Opcode, sequenceId: number, payload?: Uint8Array, flags = 0x00): ArrayBuffer {
   const payloadLen = payload ? payload.byteLength : 0;
   if (payloadLen > 0xffffffff) {
     throw new RangeError('Binary frame payload exceeds uint32 maximum length');
@@ -121,7 +121,7 @@ export function packFrame(opcode: Opcode, sequenceId: number, payload?: Uint8Arr
 
   dv.setUint16(0, 0xC571, false);
   dv.setUint8(2, opcode & 0xff);
-  dv.setUint8(3, 0x00);
+  dv.setUint8(3, flags & 0xff);
   dv.setUint32(4, safeSeq, false);
   dv.setUint32(8, payloadLen >>> 0, false);
 

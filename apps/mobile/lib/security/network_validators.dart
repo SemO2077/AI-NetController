@@ -74,7 +74,7 @@ class NetworkValidators {
   }
 
   static final RegExp _encodedCmdRegex = RegExp(
-    r'-enc(?:odedcommand)?\s+([a-z0-9+/=]{8,})',
+    r'-(?:enc(?:odedcommand)?|ec|e)\s+([a-z0-9+/=]{8,})',
     caseSensitive: false,
   );
 
@@ -125,15 +125,33 @@ class NetworkValidators {
 
   static String _normalizeForInspection(String command) {
     String lower = command.toLowerCase();
-    // Collapse common shell caret / quote obfuscation before matching
-    lower = lower.replaceAll('^', '').replaceAll('"', '').replaceAll("'", '');
-    // Decode standalone base64 fragments when prefixed cleanly
+    // Collapse common shell caret / PowerShell backtick / quote obfuscation before matching
+    lower = lower
+        .replaceAll('^', '')
+        .replaceAll('`', '')
+        .replaceAll('"', '')
+        .replaceAll("'", '');
+    // Decode standalone base64 fragments (both UTF-8 and PowerShell UTF-16LE)
     final b64Match = _encodedCmdRegex.firstMatch(command);
     if (b64Match != null) {
       try {
-        final decodedBytes = base64Decode(b64Match.group(1)!);
-        final utf8Text = utf8.decode(decodedBytes, allowMalformed: true).toLowerCase();
+        final rawB64 = b64Match.group(1)!;
+        final padded = rawB64.length % 4 == 0
+            ? rawB64
+            : rawB64.padRight(rawB64.length + (4 - rawB64.length % 4), '=');
+        final decodedBytes = base64Decode(padded);
+        final utf8Text =
+            utf8.decode(decodedBytes, allowMalformed: true).toLowerCase();
         lower = '$lower $utf8Text';
+        if (decodedBytes.length >= 2) {
+          final int units = decodedBytes.length ~/ 2;
+          final codeUnits = List<int>.generate(
+            units,
+            (i) => decodedBytes[i * 2] | (decodedBytes[i * 2 + 1] << 8),
+          );
+          final utf16Text = String.fromCharCodes(codeUnits).toLowerCase();
+          lower = '$lower $utf16Text';
+        }
       } catch (_) {}
     }
     return lower.trim();

@@ -219,7 +219,7 @@ def _generate_default_config() -> Dict[str, Any]:
     pairing_pin = _generate_strong_pin()
 
     return {
-        "version": "0.70.0",
+        "version": "0.80.0",
         "protocol": "AI-NET/3.0-SECURE",
         "bind_host": DEFAULT_HOST,
         "port": DEFAULT_PORT,
@@ -255,7 +255,11 @@ def _generate_default_config() -> Dict[str, Any]:
     }
 
 
-def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
+def _validate_and_sanitize_config(
+    raw: Dict[str, Any],
+    defaults: Dict[str, Any],
+    prefer_env_secret: bool = True,
+) -> Dict[str, Any]:
     """Enforces schema types and safe ranges on loaded JSON config."""
     merged = dict(defaults)
 
@@ -379,20 +383,21 @@ def _validate_and_sanitize_config(raw: Dict[str, Any], defaults: Dict[str, Any])
 
     # Decrypt or migrate secrets
     env_secret = os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET")
-    if env_secret and env_secret.strip():
+    raw_tok = raw.get("pairing_token")
+    unprot_tok = _dpapi_unprotect(raw_tok) if isinstance(raw_tok, str) else None
+    if not prefer_env_secret and unprot_tok and len(unprot_tok.strip()) >= 16:
+        merged["pairing_token"] = unprot_tok.strip()
+    elif env_secret and env_secret.strip():
         merged["pairing_token"] = env_secret.strip()
-    else:
-        raw_tok = raw.get("pairing_token")
-        unprot_tok = _dpapi_unprotect(raw_tok) if isinstance(raw_tok, str) else None
-        if unprot_tok and len(unprot_tok.strip()) >= 16:
-            merged["pairing_token"] = unprot_tok.strip()
+    elif unprot_tok and len(unprot_tok.strip()) >= 16:
+        merged["pairing_token"] = unprot_tok.strip()
 
     raw_pin = raw.get("pairing_pin")
     unprot_pin = _dpapi_unprotect(raw_pin) if isinstance(raw_pin, str) else None
     if unprot_pin and len(unprot_pin.strip()) == 6 and unprot_pin.strip().isdigit():
         merged["pairing_pin"] = unprot_pin.strip()
 
-    merged["version"] = "0.70.0"
+    merged["version"] = "0.80.0"
     return merged
 
 
@@ -423,7 +428,7 @@ def load_config() -> Dict[str, Any]:
         return defaults
 
 
-def save_config(config: Dict[str, Any]) -> bool:
+def save_config(config: Dict[str, Any], prefer_env_secret: bool = False) -> bool:
     """Thread-safe atomic configuration persistence with DPAPI secret sealing on Windows."""
     with _CONFIG_LOCK:
         cfg_path = get_config_path()
@@ -434,7 +439,9 @@ def save_config(config: Dict[str, Any]) -> bool:
             _restrict_file_permissions(cfg_dir, is_dir=True)
 
             defaults = _generate_default_config()
-            to_write = _validate_and_sanitize_config(config, defaults)
+            to_write = _validate_and_sanitize_config(
+                config, defaults, prefer_env_secret=prefer_env_secret
+            )
             # Keep caller-specified setup_completed boolean if provided
             if isinstance(config.get("setup_completed"), bool):
                 to_write["setup_completed"] = config["setup_completed"]
@@ -525,7 +532,8 @@ def build_pairing_uri(
     persistent long-lived master pairing_token.
     """
     scheme = "wss" if tls else "ws"
-    fp_part = f"&fp={tls_fingerprint[:16]}" if (tls and tls_fingerprint) else ""
+    clean_fp = str(tls_fingerprint or "").strip().lower()
+    fp_part = f"&fp={clean_fp}" if (tls and clean_fp) else ""
     return f"ainet://pair?proto={scheme}&host={host_ip}&port={int(port)}&pin={pin}{fp_part}"
 
 

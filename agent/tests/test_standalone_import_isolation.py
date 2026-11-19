@@ -55,7 +55,7 @@ class TestStandaloneImportIsolation(unittest.TestCase):
         if os.environ.get("AI_ALLOW_HOST_MUTATION_TESTS") != "1":
             self.skipTest("Skipping host-mutating --create-shortcut EXE test unless AI_ALLOW_HOST_MUTATION_TESTS=1")
         exe_path = os.path.join(
-            REPO_ROOT, "public", "releases", "v0.70.0", "AI_NetController_HostAgent_v0.70.0_win64.exe"
+            REPO_ROOT, "public", "releases", "v0.80.0", "AI_NetController_HostAgent_v0.80.0_win64.exe"
         )
         if os.path.exists(exe_path):
             with tempfile.TemporaryDirectory() as td:

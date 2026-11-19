@@ -862,9 +862,9 @@ async def _run_agent_services(ws_daemon: Any, daemon: Optional["DaemonServer"] =
             await asyncio.gather(ipc_task, return_exceptions=True)
 
 
-def _parse_cli_host_port(argv: List[str]) -> Tuple[str, int]:
-    bind_host = "0.0.0.0"
-    bind_port = 8765
+def _parse_cli_host_port(argv: List[str]) -> Tuple[Optional[str], Optional[int]]:
+    bind_host: Optional[str] = None
+    bind_port: Optional[int] = None
     for idx, arg in enumerate(argv):
         if arg == "--host" and idx + 1 < len(argv):
             bind_host = str(argv[idx + 1]).strip() or bind_host
@@ -929,10 +929,11 @@ def main():
         logger.warning(f"WebSocket daemon fallback notice: {e}")
 
     # Default to lean single-process HostAgentDaemon (eliminates duplicate port 8766 + 34MB SHM spawn)
+    effective_port = getattr(ws_daemon, "port", None) or bind_port or 8765
     enable_legacy_ipc = ("--legacy-ipc" in sys.argv) or (os.environ.get("AI_ENABLE_LEGACY_IPC") == "1") or (ws_daemon is None)
     daemon = (
         DaemonServer(
-            port=(bind_port + 1) if ws_daemon else bind_port,
+            port=(effective_port + 1) if ws_daemon else effective_port,
             psk=getattr(ws_daemon, "pairing_token", None) if ws_daemon else None,
         )
         if enable_legacy_ipc

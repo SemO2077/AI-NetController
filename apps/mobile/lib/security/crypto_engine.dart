@@ -210,7 +210,6 @@ class X25519 {
 class ChaCha20Poly1305 {
   static final Uint32List _keyWords = Uint32List(8);
   static final Uint32List _state = Uint32List(16);
-  static final Uint32List _working = Uint32List(16);
   static final Uint8List _blockBytes = Uint8List(64);
   static final Uint8List _polyKey = Uint8List(32);
   static final Uint8List _polyPad = Uint8List(16);
@@ -224,20 +223,6 @@ class ChaCha20Poly1305 {
     b[off + 1] = (v >> 8) & 0xFF;
     b[off + 2] = (v >> 16) & 0xFF;
     b[off + 3] = (v >> 24) & 0xFF;
-  }
-
-  static int _rotl32(int v, int c) =>
-      ((v << c) & 0xFFFFFFFF) | ((v & 0xFFFFFFFF) >> (32 - c));
-
-  static void _quarterRound(Uint32List x, int a, int b, int c, int d) {
-    x[a] = x[a] + x[b];
-    x[d] = _rotl32(x[d] ^ x[a], 16);
-    x[c] = x[c] + x[d];
-    x[b] = _rotl32(x[b] ^ x[c], 12);
-    x[a] = x[a] + x[b];
-    x[d] = _rotl32(x[d] ^ x[a], 8);
-    x[c] = x[c] + x[d];
-    x[b] = _rotl32(x[b] ^ x[c], 7);
   }
 
   static void _prepareKeyState(Uint8List key, Uint8List nonce) {
@@ -256,22 +241,114 @@ class ChaCha20Poly1305 {
   }
 
   static void _chachaBlockToScratch(int counter) {
-    _state[12] = counter & 0xFFFFFFFF;
-    for (int i = 0; i < 16; i++) {
-      _working[i] = _state[i];
-    }
+    const int m32 = 0xFFFFFFFF;
+    final int s0 = _state[0];
+    final int s1 = _state[1];
+    final int s2 = _state[2];
+    final int s3 = _state[3];
+    final int s4 = _state[4];
+    final int s5 = _state[5];
+    final int s6 = _state[6];
+    final int s7 = _state[7];
+    final int s8 = _state[8];
+    final int s9 = _state[9];
+    final int s10 = _state[10];
+    final int s11 = _state[11];
+    final int s12 = counter & m32;
+    final int s13 = _state[13];
+    final int s14 = _state[14];
+    final int s15 = _state[15];
+    _state[12] = s12;
+
+    int x0 = s0, x1 = s1, x2 = s2, x3 = s3;
+    int x4 = s4, x5 = s5, x6 = s6, x7 = s7;
+    int x8 = s8, x9 = s9, x10 = s10, x11 = s11;
+    int x12 = s12, x13 = s13, x14 = s14, x15 = s15;
+
     for (int i = 0; i < 10; i++) {
-      _quarterRound(_working, 0, 4, 8, 12);
-      _quarterRound(_working, 1, 5, 9, 13);
-      _quarterRound(_working, 2, 6, 10, 14);
-      _quarterRound(_working, 3, 7, 11, 15);
-      _quarterRound(_working, 0, 5, 10, 15);
-      _quarterRound(_working, 1, 6, 11, 12);
-      _quarterRound(_working, 2, 7, 8, 13);
-      _quarterRound(_working, 3, 4, 9, 14);
+      // Column round
+      x0 = (x0 + x4) & m32; x12 ^= x0; x12 = ((x12 << 16) | (x12 >> 16)) & m32;
+      x8 = (x8 + x12) & m32; x4 ^= x8; x4 = ((x4 << 12) | (x4 >> 20)) & m32;
+      x0 = (x0 + x4) & m32; x12 ^= x0; x12 = ((x12 << 8) | (x12 >> 24)) & m32;
+      x8 = (x8 + x12) & m32; x4 ^= x8; x4 = ((x4 << 7) | (x4 >> 25)) & m32;
+
+      x1 = (x1 + x5) & m32; x13 ^= x1; x13 = ((x13 << 16) | (x13 >> 16)) & m32;
+      x9 = (x9 + x13) & m32; x5 ^= x9; x5 = ((x5 << 12) | (x5 >> 20)) & m32;
+      x1 = (x1 + x5) & m32; x13 ^= x1; x13 = ((x13 << 8) | (x13 >> 24)) & m32;
+      x9 = (x9 + x13) & m32; x5 ^= x9; x5 = ((x5 << 7) | (x5 >> 25)) & m32;
+
+      x2 = (x2 + x6) & m32; x14 ^= x2; x14 = ((x14 << 16) | (x14 >> 16)) & m32;
+      x10 = (x10 + x14) & m32; x6 ^= x10; x6 = ((x6 << 12) | (x6 >> 20)) & m32;
+      x2 = (x2 + x6) & m32; x14 ^= x2; x14 = ((x14 << 8) | (x14 >> 24)) & m32;
+      x10 = (x10 + x14) & m32; x6 ^= x10; x6 = ((x6 << 7) | (x6 >> 25)) & m32;
+
+      x3 = (x3 + x7) & m32; x15 ^= x3; x15 = ((x15 << 16) | (x15 >> 16)) & m32;
+      x11 = (x11 + x15) & m32; x7 ^= x11; x7 = ((x7 << 12) | (x7 >> 20)) & m32;
+      x3 = (x3 + x7) & m32; x15 ^= x3; x15 = ((x15 << 8) | (x15 >> 24)) & m32;
+      x11 = (x11 + x15) & m32; x7 ^= x11; x7 = ((x7 << 7) | (x7 >> 25)) & m32;
+
+      // Diagonal round
+      x0 = (x0 + x5) & m32; x15 ^= x0; x15 = ((x15 << 16) | (x15 >> 16)) & m32;
+      x10 = (x10 + x15) & m32; x5 ^= x10; x5 = ((x5 << 12) | (x5 >> 20)) & m32;
+      x0 = (x0 + x5) & m32; x15 ^= x0; x15 = ((x15 << 8) | (x15 >> 24)) & m32;
+      x10 = (x10 + x15) & m32; x5 ^= x10; x5 = ((x5 << 7) | (x5 >> 25)) & m32;
+
+      x1 = (x1 + x6) & m32; x12 ^= x1; x12 = ((x12 << 16) | (x12 >> 16)) & m32;
+      x11 = (x11 + x12) & m32; x6 ^= x11; x6 = ((x6 << 12) | (x6 >> 20)) & m32;
+      x1 = (x1 + x6) & m32; x12 ^= x1; x12 = ((x12 << 8) | (x12 >> 24)) & m32;
+      x11 = (x11 + x12) & m32; x6 ^= x11; x6 = ((x6 << 7) | (x6 >> 25)) & m32;
+
+      x2 = (x2 + x7) & m32; x13 ^= x2; x13 = ((x13 << 16) | (x13 >> 16)) & m32;
+      x8 = (x8 + x13) & m32; x7 ^= x8; x7 = ((x7 << 12) | (x7 >> 20)) & m32;
+      x2 = (x2 + x7) & m32; x13 ^= x2; x13 = ((x13 << 8) | (x13 >> 24)) & m32;
+      x8 = (x8 + x13) & m32; x7 ^= x8; x7 = ((x7 << 7) | (x7 >> 25)) & m32;
+
+      x3 = (x3 + x4) & m32; x14 ^= x3; x14 = ((x14 << 16) | (x14 >> 16)) & m32;
+      x9 = (x9 + x14) & m32; x4 ^= x9; x4 = ((x4 << 12) | (x4 >> 20)) & m32;
+      x3 = (x3 + x4) & m32; x14 ^= x3; x14 = ((x14 << 8) | (x14 >> 24)) & m32;
+      x9 = (x9 + x14) & m32; x4 ^= x9; x4 = ((x4 << 7) | (x4 >> 25)) & m32;
     }
-    for (int i = 0; i < 16; i++) {
-      _storeLe32(_blockBytes, i * 4, (_working[i] + _state[i]) & 0xFFFFFFFF);
+
+    _storeLe32(_blockBytes, 0, (x0 + s0) & m32);
+    _storeLe32(_blockBytes, 4, (x1 + s1) & m32);
+    _storeLe32(_blockBytes, 8, (x2 + s2) & m32);
+    _storeLe32(_blockBytes, 12, (x3 + s3) & m32);
+    _storeLe32(_blockBytes, 16, (x4 + s4) & m32);
+    _storeLe32(_blockBytes, 20, (x5 + s5) & m32);
+    _storeLe32(_blockBytes, 24, (x6 + s6) & m32);
+    _storeLe32(_blockBytes, 28, (x7 + s7) & m32);
+    _storeLe32(_blockBytes, 32, (x8 + s8) & m32);
+    _storeLe32(_blockBytes, 36, (x9 + s9) & m32);
+    _storeLe32(_blockBytes, 40, (x10 + s10) & m32);
+    _storeLe32(_blockBytes, 44, (x11 + s11) & m32);
+    _storeLe32(_blockBytes, 48, (x12 + s12) & m32);
+    _storeLe32(_blockBytes, 52, (x13 + s13) & m32);
+    _storeLe32(_blockBytes, 56, (x14 + s14) & m32);
+    _storeLe32(_blockBytes, 60, (x15 + s15) & m32);
+  }
+
+  static void _xorChunk(
+    Uint8List src,
+    int srcOffset,
+    Uint8List dst,
+    int dstOffset,
+    Uint8List keystream,
+    int count,
+  ) {
+    int i = 0;
+    final int fastLimit = count & ~3;
+    while (i < fastLimit) {
+      final int sOff = srcOffset + i;
+      final int dOff = dstOffset + i;
+      dst[dOff] = src[sOff] ^ keystream[i];
+      dst[dOff + 1] = src[sOff + 1] ^ keystream[i + 1];
+      dst[dOff + 2] = src[sOff + 2] ^ keystream[i + 2];
+      dst[dOff + 3] = src[sOff + 3] ^ keystream[i + 3];
+      i += 4;
+    }
+    while (i < count) {
+      dst[dstOffset + i] = src[srcOffset + i] ^ keystream[i];
+      i++;
     }
   }
 
@@ -397,7 +474,6 @@ class ChaCha20Poly1305 {
     }
     for (int i = 0; i < 16; i++) {
       _state[i] = 0;
-      _working[i] = 0;
     }
     zeroize(_blockBytes);
     zeroize(_polyKey);
@@ -430,9 +506,7 @@ class ChaCha20Poly1305 {
       while (offset < ptLen) {
         _chachaBlockToScratch(ctr);
         final int take = min(64, ptLen - offset);
-        for (int i = 0; i < take; i++) {
-          out[outOffset + offset + i] = plaintext[offset + i] ^ _blockBytes[i];
-        }
+        _xorChunk(plaintext, offset, out, outOffset + offset, _blockBytes, take);
         offset += take;
         ctr++;
       }
@@ -477,9 +551,7 @@ class ChaCha20Poly1305 {
       while (offset < ctLen) {
         _chachaBlockToScratch(ctr);
         final int take = min(64, ctLen - offset);
-        for (int i = 0; i < take; i++) {
-          plaintext[offset + i] = ciphertextAndTag[offset + i] ^ _blockBytes[i];
-        }
+        _xorChunk(ciphertextAndTag, offset, plaintext, offset, _blockBytes, take);
         offset += take;
         ctr++;
       }

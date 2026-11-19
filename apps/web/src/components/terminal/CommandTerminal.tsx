@@ -23,6 +23,7 @@ import { GlassContainer } from '../ui/GlassContainer';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useTranslation } from '../../i18n/useTranslation';
+import { useScreenStore } from '../../store/screenStore';
 
 interface CommandTerminalProps {
   hosts: HostDevice[];
@@ -32,7 +33,7 @@ interface CommandTerminalProps {
   isExecuting: boolean;
   lastExecutionResult?: AgentExecutionResponse | null;
   onViewScreen: (device: HostDevice) => void;
-  screenBase64: string | null;
+  screenBase64?: string | null;
   onRefreshScreen: (hostId: string) => void;
   isCapturingScreen: boolean;
 }
@@ -53,10 +54,12 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
   isExecuting,
   lastExecutionResult,
   onViewScreen,
-  screenBase64,
+  screenBase64: propScreenBase64,
   onRefreshScreen,
   isCapturingScreen,
 }) => {
+  const storeScreenBase64 = useScreenStore((s) => s.screenBase64);
+  const screenBase64 = propScreenBase64 ?? storeScreenBase64;
   const { t, language } = useTranslation();
   const [prompt, setPrompt] = useState('');
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
@@ -146,11 +149,11 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
         icon: RefreshCw,
         colorClass: 'border-emerald-400/35 hover:border-emerald-400/60 text-emerald-200',
         iconColor: 'text-emerald-400',
-        commandType: 'natural_language' as const,
+        commandType: 'system_command' as const,
         prompt:
-          language === 'bg'
-            ? 'Провери за системни обновления и инсталирани пакети'
-            : 'Check for pending OS system updates and installed packages',
+          selectedHost?.os === 'linux'
+            ? 'apt list --upgradable'
+            : 'winget upgrade --include-unknown',
       },
       {
         id: 'sysinfo',

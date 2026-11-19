@@ -158,14 +158,23 @@ export const WolModal: React.FC<WolModalProps> = ({
       const generated = generateMagicPacket(mac, broadcastIp, port, secureOnPassword);
       setPacket(generated);
       setError(null);
-    } catch {
+    } catch (err: any) {
       setPacket(null);
-      if (macTouched) {
-        setError(
-          isBg
-            ? 'Невалиден MAC адрес (трябва да съдържа 12 шестнадесетични символа).'
-            : 'Invalid MAC address (must contain 12 hexadecimal characters).'
-        );
+      if (macTouched || secureOnPassword.trim()) {
+        const rawErr = String(err?.message || '');
+        if (/secureon|password/i.test(rawErr)) {
+          setError(
+            isBg
+              ? 'Невалидна SecureOn парола (оставете празно или въведете точно 12 шестнадесетични символа).'
+              : 'Invalid SecureOn password (leave empty or enter exactly 12 hexadecimal characters).'
+          );
+        } else {
+          setError(
+            isBg
+              ? 'Невалиден MAC адрес (трябва да съдържа 12 шестнадесетични символа).'
+              : 'Invalid MAC address (must contain 12 hexadecimal characters).'
+          );
+        }
       } else {
         setError(null);
       }
@@ -981,7 +990,7 @@ export const WolModal: React.FC<WolModalProps> = ({
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div className="sm:col-span-12 grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                           <div>
                             <label className="text-[11px] font-mono text-slate-400 block mb-1">
                               {isBg ? 'Broadcast IP адрес' : 'Broadcast IP'}
@@ -1016,7 +1025,7 @@ export const WolModal: React.FC<WolModalProps> = ({
                           </div>
                         </div>
 
-                        <div>
+                        <div className="sm:col-span-12">
                           <label className="text-[11px] font-mono text-slate-400 block mb-1">
                             {isBg ? 'Бележки (по избор)' : 'Notes (Optional)'}
                           </label>

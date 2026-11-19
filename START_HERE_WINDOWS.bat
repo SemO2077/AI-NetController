@@ -2,18 +2,27 @@
 title AI NetController -- PC & Phone Setup Launcher
 color 0B
 echo ============================================================================
-echo   AI NetController v0.70.0 ^(Beta 0.70.00^) -- PC ^& Phone Setup Launcher
+echo   AI NetController v0.80.0 ^(Beta 0.80.00^) -- PC ^& Phone Setup Launcher
 echo ============================================================================
 echo.
 
 cd /d "%~dp0"
 
-echo [1/4] Checking Python environment for PC Host Daemon...
+echo [1/4] Checking Python ^& Node.js environment...
+where node >nul 2>nul
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Node.js not found in PATH. Please install Node.js LTS from https://nodejs.org/
+    pause
+    exit /b 1
+)
 where python >nul 2>nul
 if %ERRORLEVEL% EQU 0 (
     if exist "agent\requirements.txt" (
-        echo       Installing Python packages ^(websockets, psutil, mss, Pillow, pyautogui, pystray^)...
-        python -m pip install -r agent\requirements.txt --quiet 2>nul
+        python -c "import websockets, psutil, mss, PIL" >nul 2>nul
+        if %ERRORLEVEL% NEQ 0 (
+            echo       Installing Python packages ^(websockets, psutil, mss, Pillow, pyautogui, pystray^)...
+            python -m pip install -r agent\requirements.txt --quiet
+        )
     )
 ) else (
     echo [!] Python not found in PATH. Will use standalone AI_NetController_HostAgent.exe if available.
@@ -43,6 +52,6 @@ if not exist "node_modules" (
 )
 
 echo.
-echo [READY] Opening Quick Setup ^& Phone QR Pairing Wizard in your browser...
-start "" "http://localhost:3000/?setup=1"
+echo [READY] Waiting for Web Server on http://localhost:3000 before opening browser...
+start "" /B powershell -NoProfile -WindowStyle Hidden -Command "for($i=0;$i -lt 40;$i++){try{$c=New-Object System.Net.Sockets.TcpClient('127.0.0.1',3000);$c.Close();Start-Process 'http://localhost:3000/?setup=1';break}catch{Start-Sleep -Milliseconds 500}}"
 call npm run dev

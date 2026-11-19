@@ -1,6 +1,7 @@
 package com.cst.autonomouslan
 
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.security.keystore.KeyGenParameterSpec
@@ -20,6 +21,7 @@ import javax.crypto.spec.GCMParameterSpec
 class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val KEYSTORE_CHANNEL = "com.cst.autonomouslan/keystore"
+        private const val DEEPLINK_CHANNEL = "com.cst.autonomouslan/deeplink"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val MASTER_KEY_ALIAS = "ai_netcontroller_master_aes_v1"
         private const val PREFS_NAME = "ai_net_keystore_prefs"
@@ -30,9 +32,31 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private val keystoreLock = Any()
+    private var deeplinkChannel: MethodChannel? = null
+    private var pendingInitialUri: String? = null
+
+    private fun extractPairingUri(intent: Intent?): String? {
+        val data = intent?.data ?: return null
+        if ("ainet".equals(data.scheme, ignoreCase = true) && "pair".equals(data.host, ignoreCase = true)) {
+            return data.toString()
+        }
+        return null
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        deeplinkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEEPLINK_CHANNEL).also { ch ->
+            ch.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getInitialUri" -> {
+                        val uri = pendingInitialUri
+                        pendingInitialUri = null
+                        result.success(uri)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, KEYSTORE_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -106,7 +130,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     private fun unsealWithKeystore(blob: ByteArray): ByteArray {
         val ivLen = blob[0].toInt() and 0xFF
-        if (ivLen < 12 || blob.size <= 1 + ivLen + 16) {
+        if (ivLen < 12 || blob.size < 1 + ivLen + 16) {
             throw IllegalArgumentException("Malformed keystore sealed payload")
         }
         val iv = blob.copyOfRange(1, 1 + ivLen)
@@ -137,13 +161,25 @@ class MainActivity : FlutterFragmentActivity() {
             val sealed = sealWithKeystore(freshKey)
             prefs.edit()
                 .putString(WRAPPED_KEY_PREF, Base64.encodeToString(sealed, Base64.NO_WRAP))
-                .apply()
+                .commit()
             return freshKey
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val uri = extractPairingUri(intent) ?: return
+        if (deeplinkChannel != null) {
+            deeplinkChannel?.invokeMethod("onUri", uri)
+        } else {
+            pendingInitialUri = uri
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        extractPairingUri(intent)?.let { pendingInitialUri = it }
 
         // Enable hardware accelerated smooth rendering pipeline
         window.setFlags(

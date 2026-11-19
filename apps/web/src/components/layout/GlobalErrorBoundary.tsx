@@ -31,6 +31,13 @@ export class GlobalErrorBoundary extends Component<Props, State> {
 
   private isBulgarian(): boolean {
     try {
+      const storedLang = window.localStorage.getItem('wakeflow_language');
+      if (storedLang === 'en') {
+        return false;
+      }
+      if (storedLang === 'bg') {
+        return true;
+      }
       const stored = window.localStorage.getItem('ai_net_ui_store_v1');
       if (stored && stored.includes('"language":"en"')) {
         return false;

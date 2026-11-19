@@ -91,6 +91,7 @@ class ViewportStreamWidget extends StatefulWidget {
   final bool useTls;
   final String? certFingerprint;
   final int targetFps;
+  final bool keepScreenAwake;
   final void Function(Map<String, dynamic> telemetry)? onTelemetry;
 
   const ViewportStreamWidget({
@@ -104,6 +105,7 @@ class ViewportStreamWidget extends StatefulWidget {
     this.useTls = false,
     this.certFingerprint,
     this.targetFps = 30,
+    this.keepScreenAwake = true,
     this.onTelemetry,
   });
 
@@ -144,6 +146,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
   // Touch & 16ms Delta Coalescing (6-byte binary OP_INPUT !BhhB)
   Offset? _lastTouchPosition;
+  Offset? _lastTapLocalPos;
+  int _lastPointerCount = 0;
+  bool _directTouchMode = false;
+  bool _hostViewOnly = false;
   double _accumDx = 0.0;
   double _accumDy = 0.0;
   double _accumScrollDy = 0.0;
@@ -155,12 +161,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   final ValueNotifier<int?> _latencyNotifier = ValueNotifier<int?>(null);
   DateTime _lastUiFrameAt = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _fpsTimer;
+  Timer? _frameRecoveryTimer;
 
   @override
   void initState() {
     super.initState();
-    _wakelockRefCount++;
-    unawaited(WakelockPlus.enable().catchError((_) {}));
+    if (widget.keepScreenAwake) {
+      _wakelockRefCount++;
+      unawaited(WakelockPlus.enable().catchError((_) {}));
+    }
     ThermalGovernor.instance.addListener(_onThermalConfigChanged);
     _connect();
 
@@ -184,6 +193,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       _lastSentPhysicalWidth = 0;
       _lastSentPhysicalHeight = 0;
       _connect();
+    } else if (oldWidget.targetFps != widget.targetFps &&
+        _isAuthenticated &&
+        _lastPhysicalWidth > 0 &&
+        _lastPhysicalHeight > 0) {
+      _sendViewportNegotiation(
+        _lastPhysicalWidth,
+        _lastPhysicalHeight,
+        _qualityForThermal(ThermalGovernor.instance.currentConfig),
+      );
     }
   }
 
@@ -191,6 +209,24 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     if (cfg.isSnapshotOnlyMode || cfg.targetFps <= 10) return 42;
     if (cfg.targetFps <= 20) return 60;
     return 78;
+  }
+
+  int _effectiveTargetFps(ThermalConfig cfg) {
+    final int prefFps = widget.targetFps > 0 ? widget.targetFps : 30;
+    final int govFps = cfg.targetFps > 0 ? cfg.targetFps : 30;
+    return min(prefFps, govFps);
+  }
+
+  void _armFrameRecoveryTimer() {
+    _frameRecoveryTimer?.cancel();
+    if (_hasReceivedFrame) return;
+    _frameRecoveryTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (!mounted || _hasReceivedFrame) return;
+      final client = _client;
+      if (client != null && client.isVaultEstablished) {
+        client.requestKeyframe();
+      }
+    });
   }
 
   void _onThermalConfigChanged() {
@@ -224,12 +260,6 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       return;
     }
 
-    setState(() {
-      _isConnecting = true;
-      _isAuthenticated = false;
-      _errorMessage = null;
-    });
-
     final client = HostConnectionPool.instance.acquire(
       hostIp: widget.hostIp,
       port: widget.wsPort,
@@ -240,6 +270,36 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     client.retain();
     _client = client;
     _retainedClient = client;
+
+    // Hydrate immediately from pooled connection state so fullscreen / re-mounted viewports never stall
+    final HostConnectionSnapshot initialSnap = client.snapshot;
+    final Uint8List? cachedFrame = client.lastFrame;
+    final bool hasCachedFrame = cachedFrame != null && cachedFrame.isNotEmpty;
+    _latencyNotifier.value = initialSnap.latencyMs;
+    setState(() {
+      _isConnecting = initialSnap.isConnecting || !initialSnap.isVaultEstablished;
+      _isConnected = initialSnap.isConnected;
+      _isAuthenticated = initialSnap.isVaultEstablished;
+      _hasReceivedFrame = hasCachedFrame;
+      _errorMessage = (initialSnap.errorMessage != null && !initialSnap.isVaultEstablished)
+          ? initialSnap.errorMessage
+          : null;
+    });
+
+    if (initialSnap.isVaultEstablished) {
+      if (_lastPhysicalWidth > 0 && _lastPhysicalHeight > 0) {
+        _sendViewportNegotiation(
+          _lastPhysicalWidth,
+          _lastPhysicalHeight,
+          _qualityForThermal(ThermalGovernor.instance.currentConfig),
+        );
+      }
+      client.requestDisplayEnum();
+      client.requestKeyframe();
+      if (!hasCachedFrame) {
+        _armFrameRecoveryTimer();
+      }
+    }
 
     _stateSub = client.stateStream.listen((snap) {
       if (!mounted) return;
@@ -270,11 +330,18 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
           );
         }
         client.requestDisplayEnum();
+        client.requestKeyframe();
+        _armFrameRecoveryTimer();
       }
     });
 
     _telemetrySub = client.telemetryStream.listen((decoded) {
-      if (mounted) widget.onTelemetry?.call(decoded);
+      if (!mounted) return;
+      final bool nextViewOnly = decoded['view_only_mode'] == true;
+      if (nextViewOnly != _hostViewOnly) {
+        setState(() => _hostViewOnly = nextViewOnly);
+      }
+      widget.onTelemetry?.call(decoded);
     });
 
     _hitlSub = client.hitlChallengeStream.listen((chal) {
@@ -312,10 +379,9 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
     _frameSub = client.frameStream.listen((frameBytes) {
       if (!mounted || !_isAuthenticated) return;
+      _frameRecoveryTimer?.cancel();
       final cfg = ThermalGovernor.instance.currentConfig;
-      final int prefFps = widget.targetFps > 0 ? widget.targetFps : 30;
-      final int govFps = cfg.targetFps > 0 ? cfg.targetFps : 30;
-      final int effectiveFps = min(prefFps, govFps);
+      final int effectiveFps = _effectiveTargetFps(cfg);
       final int minIntervalMs = (1000 ~/ effectiveFps).clamp(1, 1000);
       final now = DateTime.now();
       if (effectiveFps < 60 &&
@@ -336,16 +402,20 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       }
     });
 
-    unawaited(client.ensureConnected().catchError((_) {}));
+    if (!initialSnap.isVaultEstablished) {
+      unawaited(client.ensureConnected().catchError((_) {}));
+    }
   }
 
   void _sendViewportNegotiation(int width, int height, int quality) {
     final client = _client;
     if (client == null || !client.isVaultEstablished) return;
+    final int fps = _effectiveTargetFps(ThermalGovernor.instance.currentConfig);
     final payload = Uint8List.fromList(utf8.encode(jsonEncode({
       'width': width,
       'height': height,
       'quality': quality,
+      'fps': fps,
     })));
     if (client.sendEncrypted(BinaryOpcode.viewportResize, payload)) {
       _lastSentPhysicalWidth = width;
@@ -410,15 +480,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     if (_accumDx.abs() >= 1.0 || _accumDy.abs() >= 1.0) {
       final int dx = _accumDx.round().clamp(-5000, 5000);
       final int dy = _accumDy.round().clamp(-5000, 5000);
-      _accumDx = 0.0;
-      _accumDy = 0.0;
+      _accumDx -= dx;
+      _accumDy -= dy;
       if (dx != 0 || dy != 0) {
         _sendBinaryInputPacket(1, dx, dy, 0);
       }
     }
     if (_accumScrollDy.abs() >= 1.0) {
       final int sdy = _accumScrollDy.round().clamp(-5000, 5000);
-      _accumScrollDy = 0.0;
+      _accumScrollDy -= sdy;
       if (sdy != 0) {
         _sendBinaryInputPacket(3, 0, sdy, 0);
       }
@@ -474,6 +544,38 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
   void _sendKey(String key) {
     _sendVirtualInput({'action': 'key', 'key': key});
+  }
+
+  void _sendDirectTouchAction(String action, Offset localPos, Size containerSize) {
+    if (containerSize.width <= 0 || containerSize.height <= 0) {
+      _sendMouseClick(action == 'right_click_at'
+          ? 'right'
+          : action == 'double_click_at'
+              ? 'double'
+              : 'left');
+      return;
+    }
+    final int streamW = _lastPhysicalWidth > 0 ? _lastPhysicalWidth : 1280;
+    final int streamH = _lastPhysicalHeight > 0 ? _lastPhysicalHeight : 720;
+    final double scale = min(
+      containerSize.width / streamW,
+      containerSize.height / streamH,
+    );
+    final double fittedW = streamW * scale;
+    final double fittedH = streamH * scale;
+    final double leftPad = (containerSize.width - fittedW) / 2.0;
+    final double topPad = (containerSize.height - fittedH) / 2.0;
+    final int targetX = (((localPos.dx - leftPad) / max(1.0, fittedW)) * streamW)
+        .round()
+        .clamp(0, streamW - 1);
+    final int targetY = (((localPos.dy - topPad) / max(1.0, fittedH)) * streamH)
+        .round()
+        .clamp(0, streamH - 1);
+    _sendVirtualInput({
+      'action': action,
+      'x': targetX,
+      'y': targetY,
+    });
   }
 
   void _showKeyboardDialog() {
@@ -544,6 +646,16 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
               child: Text('Cancel',
                   style: TextStyle(color: palette.textSecondary)),
             ),
+            TextButton(
+              onPressed: () {
+                final val = textCtrl.text;
+                if (val.isNotEmpty) {
+                  _sendKeyboardText(val, pressEnter: false);
+                }
+                Navigator.of(ctx).pop();
+              },
+              child: Text('Send', style: TextStyle(color: palette.primary)),
+            ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: palette.primary,
@@ -591,6 +703,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   }
 
   void _cleanupSocket() {
+    _frameRecoveryTimer?.cancel();
+    _frameRecoveryTimer = null;
     _inputFlushTimer?.cancel();
     _inputFlushTimer = null;
     _isConnected = false;
@@ -621,11 +735,13 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     _fpsNotifier.dispose();
     _latencyNotifier.dispose();
     unawaited(_frameController.close());
-    if (_wakelockRefCount > 0) {
-      _wakelockRefCount--;
-    }
-    if (_wakelockRefCount == 0) {
-      unawaited(WakelockPlus.disable().catchError((_) {}));
+    if (widget.keepScreenAwake) {
+      if (_wakelockRefCount > 0) {
+        _wakelockRefCount--;
+      }
+      if (_wakelockRefCount == 0) {
+        unawaited(WakelockPlus.disable().catchError((_) {}));
+      }
     }
     super.dispose();
   }
@@ -647,10 +763,20 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                   Positioned.fill(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
+                      onTapDown: (details) {
+                        _lastTapLocalPos = details.localPosition;
+                      },
                       onScaleStart: (details) {
                         _lastTouchPosition = details.localFocalPoint;
+                        _lastTapLocalPos = details.localFocalPoint;
+                        _lastPointerCount = details.pointerCount;
                       },
                       onScaleUpdate: (details) {
+                        if (details.pointerCount != _lastPointerCount) {
+                          _lastPointerCount = details.pointerCount;
+                          _lastTouchPosition = details.localFocalPoint;
+                          return;
+                        }
                         if (details.pointerCount == 1) {
                           if (_lastTouchPosition != null) {
                             final dx = details.localFocalPoint.dx -
@@ -671,12 +797,44 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                       },
                       onScaleEnd: (_) {
                         _lastTouchPosition = null;
+                        _lastPointerCount = 0;
                       },
-                      onTap: () => _sendMouseClick('left'),
-                      onDoubleTap: () => _sendMouseClick('double'),
-                      onLongPress: () => _sendMouseClick('right'),
+                      onTap: () {
+                        if (_directTouchMode && _lastTapLocalPos != null) {
+                          _sendDirectTouchAction(
+                            'click_at',
+                            _lastTapLocalPos!,
+                            Size(constraints.maxWidth, constraints.maxHeight),
+                          );
+                        } else {
+                          _sendMouseClick('left');
+                        }
+                      },
+                      onDoubleTap: () {
+                        if (_directTouchMode && _lastTapLocalPos != null) {
+                          _sendDirectTouchAction(
+                            'double_click_at',
+                            _lastTapLocalPos!,
+                            Size(constraints.maxWidth, constraints.maxHeight),
+                          );
+                        } else {
+                          _sendMouseClick('double');
+                        }
+                      },
+                      onLongPress: () {
+                        if (_directTouchMode && _lastTapLocalPos != null) {
+                          _sendDirectTouchAction(
+                            'right_click_at',
+                            _lastTapLocalPos!,
+                            Size(constraints.maxWidth, constraints.maxHeight),
+                          );
+                        } else {
+                          _sendMouseClick('right');
+                        }
+                      },
                       child: ZeroGcVideoRenderer(
                         frameStream: _frameController.stream,
+                        initialFrame: _client?.lastFrame,
                         fit: BoxFit.contain,
                         onRequestKeyframe: (opcode) {
                           final client = _client;
@@ -867,6 +1025,26 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                     fontFamily: 'monospace',
                     fontSize: context.fluidFont(9),
                     color: palette.textTertiary,
+                  ),
+                ),
+              ],
+              if (_hostViewOnly) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: palette.accent.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: palette.accent.withValues(alpha: 0.6)),
+                  ),
+                  child: Text(
+                    'VIEW-ONLY',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: context.fluidFont(8),
+                      fontWeight: FontWeight.bold,
+                      color: palette.accent,
+                    ),
                   ),
                 ),
               ],
@@ -1097,8 +1275,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          _buildDockButton(
+            context,
+            _directTouchMode ? 'TOUCH' : 'PAD',
+            () => setState(() => _directTouchMode = !_directTouchMode),
+            isAccent: _directTouchMode,
+          ),
+          const SizedBox(width: 5),
           _buildDockButton(context, 'L-CLICK', () => _sendMouseClick('left'),
-              isAccent: true),
+              isAccent: !_directTouchMode),
           const SizedBox(width: 5),
           _buildDockButton(context, 'R-CLICK', () => _sendMouseClick('right')),
           const SizedBox(width: 5),

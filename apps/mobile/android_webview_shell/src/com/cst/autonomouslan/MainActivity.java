@@ -204,6 +204,13 @@ public class MainActivity extends Activity {
             return false;
         }
         String lower = key.toLowerCase(Locale.US);
+        boolean allowedPrefix = lower.startsWith("ai_net")
+            || lower.startsWith("ai_pinned_")
+            || lower.startsWith("wakeflow_")
+            || lower.startsWith("cst_");
+        if (!allowedPrefix) {
+            return false;
+        }
         // Never persist bearer auth tokens, secrets, or PINs in UI preference mirror
         return !lower.contains("auth_token")
             && !lower.contains("pairing_token")
@@ -290,9 +297,15 @@ public class MainActivity extends Activity {
                 }
                 if (display != null) {
                     android.view.Display.Mode[] modes = display.getSupportedModes();
+                    android.view.Display.Mode activeMode = display.getMode();
                     float maxRate = 60.0f;
                     int targetModeId = 0;
                     for (android.view.Display.Mode m : modes) {
+                        if (activeMode != null &&
+                            (m.getPhysicalWidth() != activeMode.getPhysicalWidth() ||
+                             m.getPhysicalHeight() != activeMode.getPhysicalHeight())) {
+                            continue;
+                        }
                         if (m.getRefreshRate() > maxRate) {
                             maxRate = m.getRefreshRate();
                             targetModeId = m.getModeId();
@@ -564,8 +577,19 @@ public class MainActivity extends Activity {
                     Uri origin = request.getOrigin();
                     if (origin != null && "http".equalsIgnoreCase(origin.getScheme())
                         && "127.0.0.1".equals(origin.getHost()) && origin.getPort() == localPort) {
-                        request.grant(request.getResources());
-                        return;
+                        String[] requested = request.getResources();
+                        List<String> granted = new ArrayList<String>();
+                        if (requested != null) {
+                            for (String res : requested) {
+                                if (PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID.equals(res)) {
+                                    granted.add(res);
+                                }
+                            }
+                        }
+                        if (!granted.isEmpty()) {
+                            request.grant(granted.toArray(new String[0]));
+                            return;
+                        }
                     }
                 } catch (Throwable ignored) {}
                 request.deny();
@@ -634,6 +658,16 @@ public class MainActivity extends Activity {
         });
 
         registerModernBackHandler();
+        try {
+            String localOrigin = "http://127.0.0.1:" + localPort;
+            CookieManager cm = CookieManager.getInstance();
+            cm.setAcceptCookie(true);
+            cm.setCookie(
+                localOrigin,
+                "ai_net_bridge=" + bridgeSessionToken + "; HttpOnly; SameSite=Strict; Path=/"
+            );
+            cm.flush();
+        } catch (Throwable ignored) {}
         webView.loadUrl("http://127.0.0.1:" + localPort + "/index.html");
     }
 
@@ -1166,7 +1200,7 @@ public class MainActivity extends Activity {
         }
 
         String model = req.optString("model", "gemini-2.5-flash").trim();
-        if (model.isEmpty() || !model.matches("[a-zA-Z0-9._-]+")) {
+        if (model.isEmpty() || model.contains("..") || !model.matches("[a-zA-Z0-9._-]+")) {
             sendJsonResponse(out, 400, "{\"error\":\"INVALID_MODEL\",\"message\":\"Invalid Gemini model identifier.\"}");
             return;
         }
@@ -1279,7 +1313,7 @@ public class MainActivity extends Activity {
             return;
         }
         String model = req.optString("model", "gemini-2.5-flash").trim();
-        if (model.isEmpty() || !model.matches("[a-zA-Z0-9._-]+")) {
+        if (model.isEmpty() || model.contains("..") || !model.matches("[a-zA-Z0-9._-]+")) {
             sendJsonResponse(out, 400, "{\"success\":false,\"error\":\"INVALID_MODEL\",\"message\":\"Invalid model identifier.\"}");
             return;
         }
@@ -2021,9 +2055,6 @@ public class MainActivity extends Activity {
                     headersSb.append("Content-Length: ").append(data.length).append("\r\n");
                     headersSb.append("X-Content-Type-Options: nosniff\r\n");
                     headersSb.append("Cache-Control: ").append(isImmutableBundle ? "public, max-age=31536000, immutable" : "no-store").append("\r\n");
-                    if ("dist/index.html".equals(assetPath)) {
-                        headersSb.append("Set-Cookie: ai_net_bridge=").append(bridgeSessionToken).append("; HttpOnly; SameSite=Strict; Path=/\r\n");
-                    }
                     headersSb.append("\r\n");
 
                     out.write(headersSb.toString().getBytes(StandardCharsets.UTF_8));

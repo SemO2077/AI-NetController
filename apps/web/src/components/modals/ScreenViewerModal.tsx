@@ -27,14 +27,18 @@ import {
   XCircle,
   CheckCircle2,
   Loader2,
-  Hand
+  Hand,
+  Clipboard,
+  KeyRound
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HostDevice } from '../../types';
 import { ScreenAspectPreset, computeContainedScreenRect } from '../../utils/viewportScale';
-import { useScreenStore } from '../../store/screenStore';
+import { subscribeScreenFrames, getLatestScreenFrame } from '../../store/screenStore';
 import { useUIStore } from '../../store/uiStore';
 import { triggerHapticFeedback } from '../../services/hapticService';
+import { buildHostWsUri, getStoredAuthToken, pairHostWithPin } from '../../services/securityService';
+import { copyToClipboard } from '../../utils/clipboard';
 import { useTranslation } from '../../i18n/useTranslation';
 
 export interface ScreenViewerModalProps {
@@ -44,8 +48,13 @@ export interface ScreenViewerModalProps {
   isCapturing?: boolean;
   isConnected?: boolean;
   wsUrl?: string;
+  availableDisplays?: Array<{ id?: number; index?: number; label?: string; name?: string; width: number; height: number; primary?: boolean }>;
+  activeDisplayIndex?: number;
+  lastHostClipboard?: { text: string; updatedAt: number } | null;
+  isVaultEncrypted?: boolean;
+  onConnectWs?: (url?: string) => void;
   onOpenConnection?: () => void;
-  onRefreshFrame?: () => void;
+  onRefreshFrame?: (dimensions?: { width: number; height: number }, silent?: boolean) => void;
   onSendInputOpcode?: (opcode: number, payload: Record<string, any> | string) => boolean;
 }
 
@@ -71,6 +80,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   isCapturing: externalCapturing = false,
   isConnected,
   wsUrl,
+  availableDisplays = [],
+  activeDisplayIndex = 1,
+  lastHostClipboard = null,
+  isVaultEncrypted = false,
+  onConnectWs,
   onOpenConnection,
   onRefreshFrame,
   onSendInputOpcode
@@ -87,12 +101,21 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const [isPaused, setIsPaused] = useState(false);
   const [stageSize, setStageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [streamTimedOut, setStreamTimedOut] = useState(false);
-  const liveScreenFrame = useScreenStore((s) => s.screenBase64);
-  const displayFrameUrl = liveScreenFrame || '';
+  const [hasFrame, setHasFrame] = useState(false);
+  const [liveFps, setLiveFps] = useState(0);
+  const [inlinePin, setInlinePin] = useState('');
+  const [isPairingInline, setIsPairingInline] = useState(false);
+  const [inlinePairError, setInlinePairError] = useState<string | null>(null);
+  const [pendingAiActions, setPendingAiActions] = useState<Array<Record<string, any>>>([]);
 
   const isCapturing = localCapturing || externalCapturing;
   const isWsReady = isConnected !== false;
-  const isDeviceOnline = Boolean(device && (device.isOnline || (device as any).status === 'Online'));
+  const isDeviceOnline = Boolean(
+    device &&
+      (device.isOnline ||
+        (device as any).status === 'Online' ||
+        (isWsReady && hasFrame))
+  );
 
   // Remote Input State
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number }>({ x: 50, y: 50 });
@@ -112,13 +135,27 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   const screenStageRef = useRef<HTMLDivElement>(null);
-  const screenImgRef = useRef<HTMLImageElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasNatSizeRef = useRef<{ width: number; height: number }>({ width: 1920, height: 1080 });
+  const hasFrameRef = useRef(false);
+  const isPausedRef = useRef(isPaused);
+  const pendingFrameRef = useRef<ArrayBuffer | null>(null);
+  const decodingRef = useRef(false);
+  const rafIdRef = useRef<number | null>(null);
+  const frameCountRef = useRef(0);
+  const onRefreshFrameRef = useRef(onRefreshFrame);
+  const onSendInputOpcodeRef = useRef(onSendInputOpcode);
+  onRefreshFrameRef.current = onRefreshFrame;
+  onSendInputOpcodeRef.current = onSendInputOpcode;
+  isPausedRef.current = isPaused;
   const aiInputRef = useRef<HTMLInputElement>(null);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
   const lastMouseMoveSentRef = useRef<number>(0);
 
   const holdTimerRef = useRef<number | null>(null);
+  const holdIndicatorTimerRef = useRef<number | null>(null);
   const timersRef = useRef<Set<number>>(new Set());
+  const lastClipboardSeenRef = useRef<number>(0);
   const pointerDownInfoRef = useRef<{
     startX: number;
     startY: number;
@@ -166,6 +203,23 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     [scheduleTimer]
   );
 
+  useEffect(() => {
+    if (!isOpen || !lastHostClipboard || lastHostClipboard.updatedAt === lastClipboardSeenRef.current) {
+      return;
+    }
+    lastClipboardSeenRef.current = lastHostClipboard.updatedAt;
+    if (lastHostClipboard.text) {
+      copyToClipboard(lastHostClipboard.text);
+      showFeedback(
+        isBg
+          ? `Клипбордът от PC е копиран (${lastHostClipboard.text.length} знака)`
+          : `Copied PC clipboard (${lastHostClipboard.text.length} chars)`
+      );
+    } else {
+      showFeedback(isBg ? 'Клипбордът на PC е празен' : 'Remote PC clipboard is empty');
+    }
+  }, [isOpen, lastHostClipboard, isBg, showFeedback]);
+
   // Execute a real PC control action via authenticated binary WebSocket (no dual WS+HTTP dispatch)
   const dispatchPcAction = useCallback(
     async (payload: Record<string, any>, feedbackLabel?: string) => {
@@ -181,14 +235,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         return;
       }
 
-      if (feedbackLabel) {
-        showFeedback(feedbackLabel);
-      }
-
       if (onSendInputOpcode && isWsReady && !isShellAction) {
         const isAudioOrLock = payload.type === 'media_control' || payload.type === 'lock_pc';
         const sentViaWs = onSendInputOpcode(isAudioOrLock ? 0x09 : 0x08, payload);
         if (sentViaWs) {
+          if (feedbackLabel) showFeedback(feedbackLabel);
           return;
         }
       }
@@ -200,6 +251,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             target: device.id,
+            hostIp: device.ip,
             ...payload
           })
         });
@@ -211,7 +263,9 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           );
           return;
         }
-        if (data.summary && !feedbackLabel) {
+        if (feedbackLabel) {
+          showFeedback(feedbackLabel);
+        } else if (data.summary) {
           showFeedback(data.summary);
         }
       } catch {
@@ -221,6 +275,47 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     [device, isBg, isDeviceOnline, isWsReady, onSendInputOpcode, showFeedback]
   );
 
+  const handleInlinePairOrConnect = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!device || isPairingInline) return;
+    const targetWs = buildHostWsUri(device.ip, device.port || 8765);
+    setInlinePairError(null);
+    const cleanPin = inlinePin.trim();
+    if (!cleanPin) {
+      if (getStoredAuthToken(targetWs)) {
+        onConnectWs?.(targetWs);
+        showFeedback(isBg ? 'Свързване с хоста...' : 'Connecting to host...');
+        return;
+      }
+      setInlinePairError(
+        isBg ? 'Въведете 6-цифрения PIN от PC агента.' : 'Enter the 6-digit PIN shown in the PC Agent.'
+      );
+      return;
+    }
+    if (!/^\d{6}$/.test(cleanPin)) {
+      setInlinePairError(isBg ? 'PIN кодът трябва да е 6 цифри.' : 'PIN must be 6 digits.');
+      return;
+    }
+    setIsPairingInline(true);
+    try {
+      const tok = await pairHostWithPin(targetWs, cleanPin);
+      if (tok) {
+        setInlinePin('');
+        onConnectWs?.(targetWs);
+        triggerHapticFeedback('heavy');
+        showFeedback(isBg ? '✓ Успешно сдвоен! Свързване...' : '✓ Paired! Connecting stream...');
+      } else {
+        setInlinePairError(
+          isBg
+            ? 'Невалиден PIN или агентът не отговаря.'
+            : 'Invalid PIN or host agent is unreachable.'
+        );
+      }
+    } finally {
+      setIsPairingInline(false);
+    }
+  };
+
   // Apply visual updates when AI returns actions
   const showRemoteActionRipple = useCallback(
     (act: Record<string, any>) => {
@@ -228,8 +323,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       if (type !== 'mouse_click' && type !== 'mouse_double_click' && type !== 'mouse_move') {
         return;
       }
-      const natW = screenImgRef.current?.naturalWidth || 1920;
-      const natH = screenImgRef.current?.naturalHeight || 1080;
+      const natW = canvasNatSizeRef.current.width || 1920;
+      const natH = canvasNatSizeRef.current.height || 1080;
       const rawX = typeof act.x === 'number' ? act.x : natW / 2;
       const rawY = typeof act.y === 'number' ? act.y : natH / 2;
       const xPct = Math.max(1, Math.min(99, (rawX / natW) * 100));
@@ -280,7 +375,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           messages: [{ role: 'user', content: promptText }],
           model: selectedModel || 'gemini-2.5-flash',
           role: 'commander',
-          autoExecute: true,
+          autoExecute: false,
           fleetContext: {
             selectedTarget: device.id,
             hosts: [
@@ -305,26 +400,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       }
 
       const actions: Array<Record<string, any>> = Array.isArray(data.actions) ? data.actions : [];
-
-      actions.forEach((act) => {
-        showRemoteActionRipple(act);
-        const alreadyExecutedOnServer = Boolean(
-          data.executionResults && act.id && data.executionResults[act.id]?.success
-        );
-        if (
-          !alreadyExecutedOnServer &&
-          onSendInputOpcode &&
-          isWsReady &&
-          act.type &&
-          act.type !== 'terminal_command' &&
-          act.type !== 'shell_exec' &&
-          act.type !== 'wol' &&
-          act.type !== 'rescan'
-        ) {
-          const isAudio = act.type === 'media_control' || act.type === 'lock_pc';
-          onSendInputOpcode(isAudio ? 0x09 : 0x08, act);
-        }
-      });
+      setPendingAiActions(actions);
 
       const cleanReply = String(data.reply || '')
         .replace(/```pc_action[\s\S]*?```/gi, '')
@@ -333,13 +409,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
       setAiStatusReply(
         cleanReply ||
-          (isBg ? `Изпълнено: "${promptText}"` : `Executed command: "${promptText}"`)
+          (isBg ? `ИИ предложи ${actions.length} действие(я) за "${promptText}"` : `AI proposed ${actions.length} action(s) for "${promptText}"`)
       );
       showFeedback(
         actions.length > 0
           ? isBg
-            ? `ИИ изпълни ${actions.length} действие на ${device.name}`
-            : `AI executed ${actions.length} action(s) on ${device.name}`
+            ? `ИИ предложи ${actions.length} действие(я) — потвърдете за изпълнение`
+            : `AI proposed ${actions.length} action(s) — tap Approve to run`
           : isBg
             ? 'ИИ обработи заявката'
             : 'AI processed instruction'
@@ -383,28 +459,32 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       window.clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
     }
+    if (holdIndicatorTimerRef.current !== null) {
+      window.clearTimeout(holdIndicatorTimerRef.current);
+      holdIndicatorTimerRef.current = null;
+    }
     setHoldIndicator(null);
   };
 
   const getNativeScreenDimensions = useCallback(() => {
-    const img = screenImgRef.current;
+    const nat = canvasNatSizeRef.current;
     return {
-      width: img && img.naturalWidth > 0 ? img.naturalWidth : 1920,
-      height: img && img.naturalHeight > 0 ? img.naturalHeight : 1080,
+      width: nat.width > 0 ? nat.width : 1920,
+      height: nat.height > 0 ? nat.height : 1080,
     };
   }, []);
 
   const getRenderedScreenRect = useCallback(() => {
-    const img = screenImgRef.current;
-    if (!img) {
+    const canvas = canvasRef.current;
+    if (!canvas) {
       return screenStageRef.current?.getBoundingClientRect() ?? null;
     }
-    const rect = img.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0 || aspectPreset === 'fill') {
       return rect;
     }
-    const natW = img.naturalWidth > 0 ? img.naturalWidth : 1920;
-    const natH = img.naturalHeight > 0 ? img.naturalHeight : 1080;
+    const natW = canvasNatSizeRef.current.width > 0 ? canvasNatSizeRef.current.width : 1920;
+    const natH = canvasNatSizeRef.current.height > 0 ? canvasNatSizeRef.current.height : 1080;
     const scale = Math.min(rect.width / natW, rect.height / natH);
     const renderedW = natW * scale;
     const renderedH = natH * scale;
@@ -511,7 +591,15 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     };
 
     clearHoldTimer();
-    setHoldIndicator({ xPct, yPct });
+    // Delay hold indicator by 200ms so normal taps/clicks never flash purple
+    holdIndicatorTimerRef.current = window.setTimeout(() => {
+      if (pointerDownInfoRef.current && !pointerDownInfoRef.current.holdTriggered) {
+        setHoldIndicator({
+          xPct: pointerDownInfoRef.current.xPct,
+          yPct: pointerDownInfoRef.current.yPct,
+        });
+      }
+    }, 200);
 
     // Hold for 1.0 second (1000ms) -> Right Click
     holdTimerRef.current = window.setTimeout(() => {
@@ -521,6 +609,22 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         triggerRightClickAt(pointerDownInfoRef.current.xPct, pointerDownInfoRef.current.yPct);
       }
     }, 1000);
+  };
+
+  const handleViewportDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!device || !isDeviceOnline || !isWsReady) return;
+    if ((e.target as HTMLElement).closest('[data-context-menu="true"]')) return;
+    const { xPct, yPct } = computePointerPercentages(e.clientX, e.clientY);
+    const { width: natW, height: natH } = getNativeScreenDimensions();
+    const pxX = Math.round((xPct / 100) * natW);
+    const pxY = Math.round((yPct / 100) * natH);
+    triggerHapticFeedback('medium');
+    setCursorPos({ x: xPct, y: yPct });
+    addRipple(xPct, yPct, 'double', isBg ? `Двоен клик (${pxX}, ${pxY})` : `Double Click (${pxX}, ${pxY})`);
+    dispatchPcAction(
+      { type: 'mouse_click', button: 'double', x: pxX, y: pxY },
+      isBg ? `Двоен клик @ ${pxX}, ${pxY}` : `Double Click @ ${pxX}, ${pxY}`
+    );
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -603,32 +707,236 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     return () => observer.disconnect();
   }, [isOpen, isFullscreen]);
 
-  // Request live screen frames from the connected host agent when WebSocket is authenticated
+  // Zero-bufferbloat 60 FPS hardware canvas decoder (createImageBitmap + requestAnimationFrame)
   useEffect(() => {
-    if (!isOpen || !device || !isDeviceOnline || !isWsReady || isPaused) return;
-
-    if (onRefreshFrame) {
-      onRefreshFrame();
+    if (!isOpen || !device || !isDeviceOnline || !isWsReady) {
+      hasFrameRef.current = false;
+      setHasFrame(false);
+      setLiveFps(0);
+      setStreamTimedOut(false);
+      return;
     }
 
-    const interval = setInterval(() => {
-      if (onRefreshFrame) {
-        onRefreshFrame();
-      }
-    }, 500);
+    let cancelled = false;
+    let activeBitmap: ImageBitmap | null = null;
+    hasFrameRef.current = false;
+    setHasFrame(false);
+    setLiveFps(0);
+    setStreamTimedOut(false);
+    frameCountRef.current = 0;
+    pendingFrameRef.current = null;
+    decodingRef.current = false;
 
-    return () => clearInterval(interval);
-  }, [isOpen, device, isDeviceOnline, isWsReady, isPaused, onRefreshFrame]);
+    const paintBitmapToCanvas = (bitmap: ImageBitmap) => {
+      activeBitmap = bitmap;
+      rafIdRef.current = window.requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        const bmp = activeBitmap;
+        activeBitmap = null;
+        try {
+          if (cancelled || isPausedRef.current || !bmp) return;
+          const canvas = canvasRef.current;
+          if (canvas) {
+            if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+              canvas.width = bmp.width;
+              canvas.height = bmp.height;
+            }
+            canvasNatSizeRef.current = { width: bmp.width, height: bmp.height };
+            const ctx = canvas.getContext('2d', { alpha: false });
+            if (ctx) {
+              ctx.drawImage(bmp, 0, 0);
+            }
+          }
+          frameCountRef.current += 1;
+          if (!hasFrameRef.current) {
+            hasFrameRef.current = true;
+            setHasFrame(true);
+            setStreamTimedOut(false);
+          }
+        } finally {
+          if (bmp) {
+            try {
+              bmp.close();
+            } catch {
+              // ignore
+            }
+          }
+          decodingRef.current = false;
+          if (!cancelled && !isPausedRef.current && pendingFrameRef.current) {
+            void pumpNextFrame();
+          }
+        }
+      });
+    };
+
+    const pumpNextFrame = async () => {
+      if (cancelled || decodingRef.current || isPausedRef.current) return;
+      const buf = pendingFrameRef.current;
+      if (!buf) return;
+      pendingFrameRef.current = null;
+      decodingRef.current = true;
+
+      try {
+        const blob = new Blob([buf], { type: 'image/jpeg' });
+        if (typeof createImageBitmap === 'function') {
+          const bitmap = await createImageBitmap(blob);
+          if (cancelled || isPausedRef.current) {
+            try {
+              bitmap.close();
+            } catch {
+              // ignore
+            }
+            decodingRef.current = false;
+            return;
+          }
+          paintBitmapToCanvas(bitmap);
+          return;
+        }
+
+        // Fallback decoder if createImageBitmap is unavailable
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          if (cancelled || isPausedRef.current) {
+            decodingRef.current = false;
+            return;
+          }
+          rafIdRef.current = window.requestAnimationFrame(() => {
+            rafIdRef.current = null;
+            try {
+              const canvas = canvasRef.current;
+              if (canvas) {
+                const nw = img.naturalWidth || 1920;
+                const nh = img.naturalHeight || 1080;
+                if (canvas.width !== nw || canvas.height !== nh) {
+                  canvas.width = nw;
+                  canvas.height = nh;
+                }
+                canvasNatSizeRef.current = { width: nw, height: nh };
+                const ctx = canvas.getContext('2d', { alpha: false });
+                ctx?.drawImage(img, 0, 0);
+              }
+              frameCountRef.current += 1;
+              if (!hasFrameRef.current) {
+                hasFrameRef.current = true;
+                setHasFrame(true);
+                setStreamTimedOut(false);
+              }
+            } finally {
+              decodingRef.current = false;
+              if (!cancelled && !isPausedRef.current && pendingFrameRef.current) {
+                void pumpNextFrame();
+              }
+            }
+          });
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          decodingRef.current = false;
+          if (!cancelled && !isPausedRef.current && pendingFrameRef.current) {
+            void pumpNextFrame();
+          }
+        };
+        img.src = url;
+      } catch {
+        decodingRef.current = false;
+        if (!cancelled && !isPausedRef.current && pendingFrameRef.current) {
+          void pumpNextFrame();
+        }
+      }
+    };
+
+    const unsubscribe = subscribeScreenFrames((bytes) => {
+      if (cancelled || isPausedRef.current) return;
+      pendingFrameRef.current = bytes;
+      void pumpNextFrame();
+    });
+
+    const initialBuf = getLatestScreenFrame();
+    if (initialBuf && !isPausedRef.current) {
+      pendingFrameRef.current = initialBuf;
+      void pumpNextFrame();
+    }
+
+    const fpsTimer = window.setInterval(() => {
+      setLiveFps(frameCountRef.current);
+      frameCountRef.current = 0;
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      window.clearInterval(fpsTimer);
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      if (activeBitmap) {
+        try {
+          activeBitmap.close();
+        } catch {
+          // ignore
+        }
+        activeBitmap = null;
+      }
+      pendingFrameRef.current = null;
+      decodingRef.current = false;
+    };
+  }, [isOpen, device?.id, isDeviceOnline, isWsReady]);
+
+  // Trigger initial push-stream sync, display enumeration, and single 2.5s recovery keyframe request
+  useEffect(() => {
+    if (!isOpen || !device || !isDeviceOnline || !isWsReady) return;
+    onSendInputOpcodeRef.current?.(0x0a, { stream_enabled: !isPaused });
+    if (!isPaused) {
+      onRefreshFrameRef.current?.(undefined, true);
+    }
+    onSendInputOpcodeRef.current?.(0x0d, {});
+    const recoveryTimer = window.setTimeout(() => {
+      if (!hasFrameRef.current && !isPausedRef.current) {
+        onRefreshFrameRef.current?.(undefined, true);
+      }
+    }, 2500);
+    return () => window.clearTimeout(recoveryTimer);
+  }, [isOpen, device?.id, isDeviceOnline, isWsReady, isPaused]);
+
+  // Negotiate optimal viewport dimensions, quality & FPS with 180ms debounce
+  useEffect(() => {
+    if (!isOpen || !device || !isDeviceOnline || !isWsReady) return;
+    if (stageSize.width <= 0 || stageSize.height <= 0) return;
+
+    const qualityMap: Record<'High' | 'Medium' | 'Low', { maxW: number; maxH: number; q: number; fps: number }> = {
+      High: { maxW: 1920, maxH: 1080, q: 82, fps: 60 },
+      Medium: { maxW: 1280, maxH: 720, q: 65, fps: 45 },
+      Low: { maxW: 854, maxH: 480, q: 45, fps: 30 },
+    };
+    const preset = qualityMap[quality];
+    const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2);
+    const width = Math.max(320, Math.min(preset.maxW, Math.round(stageSize.width * dpr)));
+    const height = Math.max(180, Math.min(preset.maxH, Math.round(stageSize.height * dpr)));
+
+    const timer = window.setTimeout(() => {
+      onSendInputOpcodeRef.current?.(0x0a, {
+        width,
+        height,
+        quality: preset.q,
+        fps: preset.fps,
+      });
+    }, 180);
+
+    return () => window.clearTimeout(timer);
+  }, [isOpen, device?.id, isDeviceOnline, isWsReady, stageSize.width, stageSize.height, quality]);
 
   // Avoid infinite spinner if WebSocket is connected but no JPEG frame arrives within 10s
   useEffect(() => {
-    if (!isOpen || !device || !isDeviceOnline || !isWsReady || displayFrameUrl) {
+    if (!isOpen || !device || !isDeviceOnline || !isWsReady || hasFrame) {
       setStreamTimedOut(false);
       return;
     }
     const timeoutId = window.setTimeout(() => setStreamTimedOut(true), 10000);
     return () => window.clearTimeout(timeoutId);
-  }, [isOpen, device, isDeviceOnline, isWsReady, displayFrameUrl]);
+  }, [isOpen, device?.id, isDeviceOnline, isWsReady, hasFrame]);
 
   // Clean up long-press hold timer on unmount
   useEffect(() => {
@@ -681,36 +989,25 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   }, [isOpen, isFullscreen, inputMode, onClose]);
 
   const handleCapture = () => {
-    if (!device || !displayFrameUrl) return;
+    const canvas = canvasRef.current;
+    if (!device || !hasFrame || !canvas || canvas.width <= 0 || canvas.height <= 0) return;
     const safeName = (device.name || device.id || 'host').replace(/\s+/g, '_');
     const filename = `capture_${safeName}_${Date.now()}.jpg`;
     triggerHapticFeedback('medium');
     setLocalCapturing(true);
 
-    // Clone bitmap pixels synchronously before the 500ms stream worker revokes the active blob: URL
-    let snapshotHref = displayFrameUrl;
-    const img = screenImgRef.current;
-    if (img && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          snapshotHref = canvas.toDataURL('image/jpeg', 0.95);
-        }
-      } catch {
-        // Fallback to direct href if canvas export is unavailable
-      }
+    try {
+      const snapshotHref = canvas.toDataURL('image/jpeg', 0.92);
+      const a = document.createElement('a');
+      a.href = snapshotHref;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch {
+      // Ignore canvas export errors
     }
 
-    const a = document.createElement('a');
-    a.href = snapshotHref;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
     scheduleTimer(() => {
       setLocalCapturing(false);
       triggerHapticFeedback('medium');
@@ -727,15 +1024,21 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     {
       id: 'taskmgr',
       label: isBg ? 'Диспечер на задачи' : 'Task Manager',
-      shortcut: 'Ctrl+Shift+Esc',
+      shortcut: device?.os === 'linux' ? 'SysMon' : 'taskmgr',
       icon: Activity,
       color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20',
       onClick: () => {
         triggerHapticFeedback('medium');
         setContextMenu(null);
         dispatchPcAction(
-          { type: 'key_combo', keys: 'ctrl,shift,esc' },
-          isBg ? 'Отворен Диспечер на задачите (Task Manager)' : 'Opened Task Manager (Ctrl+Shift+Esc)'
+          {
+            type: 'terminal_command',
+            command:
+              device?.os === 'linux'
+                ? 'gnome-system-monitor || xfce4-taskmanager || ksysguard'
+                : 'start taskmgr',
+          },
+          isBg ? 'Стартиран Диспечер на задачите' : 'Launched Task Manager'
         );
       }
     },
@@ -794,7 +1097,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         triggerHapticFeedback('light');
         setContextMenu(null);
         dispatchPcAction(
-          { type: 'terminal_command', command: 'start https://google.com' },
+          {
+            type: 'terminal_command',
+            command:
+              device?.os === 'linux'
+                ? 'xdg-open https://google.com'
+                : 'start https://google.com',
+          },
           isBg ? 'Стартиран уеб браузър' : 'Launched Web Browser'
         );
       }
@@ -965,9 +1274,9 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                       {device.ping}ms
                     </span>
                   )}
-                  {liveScreenFrame ? (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-                      LIVE
+                  {hasFrame ? (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 tabular-nums">
+                      LIVE · {liveFps} FPS
                     </span>
                   ) : (
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/20 hidden lg:inline">
@@ -979,6 +1288,67 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
+              {availableDisplays.length > 1 && onSendInputOpcode && isWsReady && (
+                <div className="hidden sm:flex items-center gap-1 bg-black/40 border border-white/10 rounded-lg p-0.5">
+                  {availableDisplays.map((disp, idx) => {
+                    const dispIdx = disp.index ?? disp.id ?? idx + 1;
+                    const active = activeDisplayIndex === dispIdx;
+                    return (
+                      <button
+                        key={dispIdx}
+                        type="button"
+                        onClick={() => {
+                          triggerHapticFeedback('light');
+                          onSendInputOpcode(0x0d, { monitor: dispIdx });
+                          showFeedback(
+                            isBg ? `Монитор ${dispIdx}` : `Switched to Display ${dispIdx}`
+                          );
+                        }}
+                        className={`px-2 py-1 rounded text-[11px] font-mono font-bold transition cursor-pointer ${
+                          active
+                            ? 'bg-cyan-500/25 text-cyan-200 border border-cyan-400/40'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                        title={disp.label || disp.name || `Display ${dispIdx}`}
+                      >
+                        M{dispIdx}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {onSendInputOpcode && isWsReady && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    triggerHapticFeedback('light');
+                    let textToPush = '';
+                    try {
+                      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                        textToPush = await navigator.clipboard.readText();
+                      }
+                    } catch {
+                      // Pull-only if browser blocks clipboard read
+                    }
+                    onSendInputOpcode(0x07, textToPush);
+                    showFeedback(
+                      textToPush
+                        ? isBg
+                          ? 'Клипбордът е синхронизиран с PC'
+                          : 'Synced clipboard with PC'
+                        : isBg
+                        ? 'Извличане на клипборда от PC...'
+                        : 'Pulling PC clipboard...'
+                    );
+                  }}
+                  className="p-2 rounded-lg bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+                  title={isBg ? 'Синхронизирай клипборд (Pull/Push)' : 'Sync Clipboard (Pull/Push)'}
+                >
+                  <Clipboard className="w-4 h-4 text-cyan-300" />
+                </button>
+              )}
+
               <button
                 onClick={() => setShowQuickActions(!showQuickActions)}
                 className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-colors ${
@@ -1030,15 +1400,9 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 onChange={(e) => {
                   const nextQuality = e.target.value as 'High' | 'Medium' | 'Low';
                   setQuality(nextQuality);
-                  if (onSendInputOpcode && isDeviceOnline) {
-                    const presets: Record<'High' | 'Medium' | 'Low', { width: number; height: number; quality: number }> = {
-                      High: { width: 1920, height: 1080, quality: 85 },
-                      Medium: { width: 1280, height: 720, quality: 65 },
-                      Low: { width: 854, height: 480, quality: 45 },
-                    };
-                    const sent = onSendInputOpcode(0x0a, presets[nextQuality]);
+                  if (isDeviceOnline) {
                     showFeedback(
-                      sent
+                      isWsReady
                         ? isBg
                           ? `Качество: ${nextQuality}`
                           : `Stream quality: ${nextQuality}`
@@ -1057,8 +1421,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
               <button
                 onClick={() => {
-                  if (onRefreshFrame) onRefreshFrame();
-                  setIsPaused(!isPaused);
+                  const nextPaused = !isPaused;
+                  setIsPaused(nextPaused);
+                  if (!nextPaused) {
+                    onRefreshFrame?.(undefined, true);
+                  }
                 }}
                 className={`p-2 rounded-lg border transition-colors ${
                   isPaused
@@ -1075,7 +1442,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
               <button
                 onClick={handleCapture}
-                disabled={isCapturing || !isDeviceOnline || !displayFrameUrl}
+                disabled={isCapturing || !isDeviceOnline || !hasFrame}
                 className="p-2 rounded-lg bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors disabled:opacity-50 hidden sm:flex"
                 title={isBg ? 'Снимка на екрана' : 'Take Screenshot'}
               >
@@ -1107,6 +1474,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerCancel}
+            onDoubleClick={handleViewportDoubleClick}
             onContextMenu={(e) => {
               // Prevent mobile browser native long-press menu
               e.preventDefault();
@@ -1116,29 +1484,67 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             {isDeviceOnline ? (
               <>
                 {!isWsReady ? (
-                  <div className="flex flex-col items-center gap-3 text-slate-300 px-6 text-center max-w-md">
-                    <XCircle className="w-10 h-10 text-amber-400" />
+                  <div className="flex flex-col items-center gap-3 text-slate-300 px-6 text-center max-w-md z-10">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-400/35 flex items-center justify-center text-amber-300">
+                      <KeyRound className="w-6 h-6" />
+                    </div>
                     <p className="text-sm font-semibold text-white">
                       {isBg
-                        ? 'WebSocket агентът не е свързан или автентикиран'
-                        : 'Host Agent WebSocket Not Connected / Authenticated'}
+                        ? 'Свържете се с PC агента за жива картина'
+                        : 'Connect to PC Agent for Live Screen'}
                     </p>
                     <p className="text-xs text-slate-400">
                       {isBg
-                        ? 'Отворете настройките за връзка, за да установите автентикиран поток.'
-                        : 'Open the connection manager to establish an authenticated binary stream before streaming or sending input.'}
+                        ? `Въведете 6-цифрения PIN от ${device.name} (${device.ip}) или натиснете Свържи, ако вече сте сдвоени.`
+                        : `Enter the 6-digit PIN shown on ${device.name} (${device.ip}), or click Connect if already paired.`}
                     </p>
+                    <form
+                      onSubmit={handleInlinePairOrConnect}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="w-full flex items-center gap-2 pt-1"
+                    >
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={inlinePin}
+                        onChange={(e) => setInlinePin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder={isBg ? '6-цифрен PIN (по избор)' : '6-digit PIN (optional)'}
+                        className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-950 border border-white/15 focus:border-cyan-400 text-xs font-mono text-amber-200 tracking-widest outline-none"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isPairingInline}
+                        className="min-h-[40px] px-4 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 text-slate-950 text-xs font-mono font-bold transition cursor-pointer shrink-0"
+                      >
+                        {isPairingInline
+                          ? isBg
+                            ? 'Сдвояване...'
+                            : 'Pairing...'
+                          : inlinePin.trim()
+                          ? isBg
+                            ? 'Сдвои & Свържи'
+                            : 'Pair & Connect'
+                          : isBg
+                          ? 'Свържи'
+                          : 'Connect'}
+                      </button>
+                    </form>
+                    {inlinePairError && (
+                      <p className="text-[11px] text-rose-300 font-mono">{inlinePairError}</p>
+                    )}
                     {onOpenConnection && (
                       <button
                         type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
                         onClick={onOpenConnection}
-                        className="px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-mono font-bold transition cursor-pointer"
+                        className="text-[11px] text-cyan-300 hover:text-cyan-200 underline cursor-pointer"
                       >
-                        {isBg ? 'Свържи / Настрой Агента' : 'Connect / Configure Agent'}
+                        {isBg ? 'Разширени WebSocket настройки' : 'Advanced WebSocket Settings'}
                       </button>
                     )}
                   </div>
-                ) : displayFrameUrl ? (
+                ) : (
                   (() => {
                     const fittedRect =
                       stageSize.width > 0 && stageSize.height > 0 && aspectPreset !== 'fit'
@@ -1146,73 +1552,82 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                         : null;
                     return (
                       <div
-                        className="relative w-full h-full flex items-center justify-center overflow-hidden"
-                        style={{
-                          transform: zoomFactor > 1 ? `scale(${zoomFactor})` : undefined,
-                          transformOrigin: '50% 50%',
-                          transition: 'transform 0.15s ease-out',
-                        }}
+                        className={`relative w-full h-full flex items-center justify-center ${
+                          zoomFactor > 1 ? 'overflow-auto' : 'overflow-hidden'
+                        }`}
                       >
-                        <img
-                          ref={screenImgRef}
-                          src={displayFrameUrl}
-                          alt="Remote Screen"
-                          draggable={false}
-                          className={`max-w-full max-h-full pointer-events-none transition-opacity duration-200 ${
-                            aspectPreset === 'fill' ? 'w-full h-full object-fill' : 'object-contain'
-                          } ${isCapturing ? 'opacity-50 scale-[0.99]' : 'opacity-100'}`}
+                        <div
+                          className="relative w-full h-full flex items-center justify-center overflow-hidden"
                           style={{
-                            width: fittedRect ? `${fittedRect.width}px` : undefined,
-                            height: fittedRect ? `${fittedRect.height}px` : undefined,
-                            aspectRatio:
-                              aspectPreset === '16:9'
-                                ? '16 / 9'
-                                : aspectPreset === '16:10'
-                                ? '16 / 10'
-                                : aspectPreset === '21:9'
-                                ? '21 / 9'
-                                : aspectPreset === '4:3'
-                                ? '4 / 3'
-                                : undefined,
+                            transform: zoomFactor > 1 ? `scale(${zoomFactor})` : undefined,
+                            transformOrigin: '50% 50%',
+                            transition: 'transform 0.15s ease-out',
                           }}
-                        />
+                        >
+                          <canvas
+                            ref={canvasRef}
+                            className={`pointer-events-none transition-opacity duration-150 ${
+                              aspectPreset === 'fill'
+                                ? 'w-full h-full object-fill'
+                                : fittedRect
+                                ? 'max-w-full max-h-full object-contain'
+                                : 'w-full h-full object-contain'
+                            } ${hasFrame ? (localCapturing ? 'opacity-75 scale-[0.99]' : 'opacity-100') : 'opacity-0'}`}
+                            style={{
+                              width: fittedRect ? `${fittedRect.width}px` : undefined,
+                              height: fittedRect ? `${fittedRect.height}px` : undefined,
+                              aspectRatio:
+                                aspectPreset === '16:9'
+                                  ? '16 / 9'
+                                  : aspectPreset === '16:10'
+                                  ? '16 / 10'
+                                  : aspectPreset === '21:9'
+                                  ? '21 / 9'
+                                  : aspectPreset === '4:3'
+                                  ? '4 / 3'
+                                  : undefined,
+                            }}
+                          />
+                        </div>
+
+                        {!hasFrame && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400 px-6 text-center pointer-events-auto">
+                            {streamTimedOut ? (
+                              <>
+                                <XCircle className="w-8 h-8 text-amber-400" />
+                                <p className="text-sm font-mono text-amber-200 max-w-md">
+                                  {isBg
+                                    ? 'Няма получен видео кадър от хост агента.'
+                                    : 'No video frame received yet from host agent.'}
+                                </p>
+                                {onRefreshFrame && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setStreamTimedOut(false);
+                                      onRefreshFrame(undefined, true);
+                                    }}
+                                    className="px-3.5 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-mono font-bold transition cursor-pointer"
+                                  >
+                                    {isBg ? 'Поискай кадър отново' : 'Request Screen Frame'}
+                                  </button>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw className="w-8 h-8 animate-spin text-cyan-500" />
+                                <p className="text-sm font-mono">
+                                  {isBg
+                                    ? 'Установяване на автентикиран видео поток...'
+                                    : 'Establishing authenticated screen stream...'}
+                                </p>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })()
-                ) : (
-                  <div className="flex flex-col items-center gap-3 text-slate-400 px-6 text-center max-w-md">
-                    {streamTimedOut ? (
-                      <>
-                        <XCircle className="w-8 h-8 text-amber-400" />
-                        <p className="text-sm font-mono text-amber-200">
-                          {isBg
-                            ? 'Няма получен видео кадър от хост агента.'
-                            : 'No video frame received yet from host agent.'}
-                        </p>
-                        {onRefreshFrame && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setStreamTimedOut(false);
-                              onRefreshFrame();
-                            }}
-                            className="px-3.5 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-mono font-bold transition cursor-pointer"
-                          >
-                            {isBg ? 'Поискай кадър отново' : 'Request Screen Frame'}
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="w-8 h-8 animate-spin text-cyan-500" />
-                        <p className="text-sm font-mono">
-                          {isBg
-                            ? 'Установяване на автентикиран видео поток...'
-                            : 'Establishing authenticated screen stream...'}
-                        </p>
-                      </>
-                    )}
-                  </div>
                 )}
 
                 {/* Touch Gesture Helper Pill (Top Left) */}
@@ -1318,8 +1733,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 >
                   <div className="w-full h-full rounded-full border-2 border-cyan-400 bg-cyan-400/30 shadow-[0_0_12px_rgba(34,211,238,0.9)]" />
                   <span className="absolute left-6 top-0 px-2 py-0.5 rounded bg-black/85 border border-cyan-400/30 text-[10.5px] font-mono font-semibold text-cyan-300 whitespace-nowrap shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
-                    {Math.round((cursorPos.x / 100) * (screenImgRef.current?.naturalWidth || 1920))},
-                    {Math.round((cursorPos.y / 100) * (screenImgRef.current?.naturalHeight || 1080))}
+                    {Math.round((cursorPos.x / 100) * (canvasNatSizeRef.current.width || 1920))},
+                    {Math.round((cursorPos.y / 100) * (canvasNatSizeRef.current.height || 1080))}
                   </span>
                 </div>
 
@@ -1371,14 +1786,22 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                           onClick={() => {
                             setContextMenu(null);
                             dispatchPcAction(
-                              { type: 'key_combo', keys: 'ctrl,shift,esc' },
-                              isBg ? 'Отворен Диспечер на задачите' : 'Opened Task Manager'
+                              {
+                                type: 'terminal_command',
+                                command:
+                                  device?.os === 'linux'
+                                    ? 'gnome-system-monitor || xfce4-taskmanager || ksysguard'
+                                    : 'start taskmgr',
+                              },
+                              isBg ? 'Стартиран Диспечер на задачите' : 'Launched Task Manager'
                             );
                           }}
                           className="w-full px-2.5 py-1.5 rounded-lg hover:bg-white/10 flex items-center justify-between text-left transition-colors text-emerald-300"
                         >
                           <span>{isBg ? 'Диспечер на задачите' : 'Open Task Manager'}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">Ctrl+Shift+Esc</span>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {device?.os === 'linux' ? 'SysMon' : 'taskmgr'}
+                          </span>
                         </button>
                         <button
                           onClick={() => {
@@ -1431,7 +1854,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                         {isBg ? 'Потокът е на пауза' : 'Stream Paused'}
                       </span>
                       <button
-                        onClick={() => setIsPaused(false)}
+                        onClick={() => {
+                          setIsPaused(false);
+                          onRefreshFrame?.(undefined, true);
+                        }}
                         className="mt-2 px-4 py-1.5 bg-cyan-500 text-black font-semibold text-xs rounded-lg hover:bg-cyan-400 transition-colors"
                       >
                         {isBg ? 'Продължи' : 'Resume'}
@@ -1528,25 +1954,54 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           {/* Built-in AI PC Command Text Box & Direct Keyboard Bar */}
           {isDeviceOnline && (
             <div className="bg-[#12192b] border-t border-white/10 px-3 sm:px-4 py-3 shrink-0 space-y-2">
-              {/* AI Status Reply Banner */}
+              {/* AI Status Reply Banner + Explicit 1-Tap Approval for Proposed Actions */}
               <AnimatePresence>
-                {aiStatusReply && (
+                {(aiStatusReply || pendingAiActions.length > 0) && (
                   <motion.div
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 6 }}
-                    className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-xs text-cyan-200"
+                    className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-xs text-cyan-200"
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
                       <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                       <span className="truncate">{aiStatusReply}</span>
                     </div>
-                    <button
-                      onClick={() => setAiStatusReply(null)}
-                      className="text-slate-400 hover:text-white shrink-0"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {pendingAiActions.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const toRun = pendingAiActions;
+                            setPendingAiActions([]);
+                            for (const act of toRun) {
+                              showRemoteActionRipple(act);
+                              await dispatchPcAction(
+                                act,
+                                isBg
+                                  ? `Изпълнено ИИ действие: ${act.type || 'action'}`
+                                  : `Executed AI action: ${act.type || 'action'}`
+                              );
+                            }
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold cursor-pointer"
+                        >
+                          {isBg
+                            ? `Потвърди (${pendingAiActions.length})`
+                            : `Approve & Run (${pendingAiActions.length})`}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiStatusReply(null);
+                          setPendingAiActions([]);
+                        }}
+                        className="text-slate-400 hover:text-white shrink-0 p-0.5 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1674,16 +2129,24 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 const isEncryptedWs = wsUrl
                   ? wsUrl.startsWith('wss://')
                   : typeof window !== 'undefined' && window.location.protocol === 'https:';
+                const secureShield = isVaultEncrypted || isEncryptedWs;
+                const badgeText = isVaultEncrypted
+                  ? isEncryptedWs
+                    ? 'WSS + ChaCha20-Poly1305 AEAD'
+                    : isBg
+                    ? 'E2E ChaCha20-Poly1305 AEAD'
+                    : 'ChaCha20-Poly1305 AEAD'
+                  : isEncryptedWs
+                  ? isBg
+                    ? 'Криптиран WSS (TLS) Поток'
+                    : 'Encrypted WSS (TLS) Stream'
+                  : isBg
+                  ? 'HMAC-SHA256 Локален Поток (LAN)'
+                  : 'HMAC-Authenticated LAN Stream';
                 return (
-                  <span className="flex items-center gap-1.5">
-                    <Shield className={`w-3.5 h-3.5 ${isEncryptedWs ? 'text-emerald-500' : 'text-cyan-400'}`} />
-                    {isEncryptedWs
-                      ? isBg
-                        ? 'Криптиран WSS (TLS) Поток'
-                        : 'Encrypted WSS (TLS) Stream'
-                      : isBg
-                      ? 'HMAC-SHA256 Локален Поток (LAN)'
-                      : 'HMAC-Authenticated LAN Stream'}
+                  <span className={`flex items-center gap-1.5 ${isVaultEncrypted ? 'text-emerald-300' : ''}`}>
+                    <Shield className={`w-3.5 h-3.5 ${secureShield ? 'text-emerald-400' : 'text-cyan-400'}`} />
+                    {badgeText}
                   </span>
                 );
               })()}
@@ -1695,8 +2158,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             <div className="flex items-center gap-3 font-mono">
               <span className="text-cyan-400">
                 {isBg ? 'Курсор' : 'Cursor'}:{' '}
-                {Math.round((cursorPos.x / 100) * (screenImgRef.current?.naturalWidth || 1920))}x
-                {Math.round((cursorPos.y / 100) * (screenImgRef.current?.naturalHeight || 1080))}
+                {Math.round((cursorPos.x / 100) * (canvasNatSizeRef.current.width || 1920))}x
+                {Math.round((cursorPos.y / 100) * (canvasNatSizeRef.current.height || 1080))}
               </span>
               <span>{device.ip}:{device.port || 8765}</span>
             </div>

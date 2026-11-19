@@ -7,10 +7,11 @@ import {
   RiskLevel,
 } from '../types';
 import { logStore } from '../store/logStore';
-import { useScreenStore } from '../store/screenStore';
+import { publishScreenFrame, clearScreenFrames, useScreenStore } from '../store/screenStore';
 import { useUIStore } from '../store/uiStore';
 import { triggerHapticFeedback } from '../services/hapticService';
 import {
+  buildHostWsUri,
   inspectCommandSecurity,
   commandRateLimiter,
   hostCircuitBreaker,
@@ -39,10 +40,10 @@ export function useWorkerEngine({
       if (saved) return saved;
       const host = window.location.hostname;
       if (host && host !== 'localhost' && host !== '127.0.0.1') {
-        return `ws://${host}:8765`;
+        return buildHostWsUri(host, 8765);
       }
     }
-    return 'ws://localhost:8765';
+    return buildHostWsUri('localhost', 8765);
   });
   const [latency, setLatency] = useState<number | null>(null);
   const [heartbeatMetrics, setHeartbeatMetrics] = useState<HeartbeatMetrics | undefined>(undefined);
@@ -55,10 +56,14 @@ export function useWorkerEngine({
   const [circuitTrippedHosts, setCircuitTrippedHosts] = useState<string[]>([]);
   const [quarantinedHosts, setQuarantinedHostsList] = useState<string[]>(getQuarantinedHosts);
   const [securityAlert, setSecurityAlert] = useState<{ title: string; reason: string } | null>(null);
-  const [availableDisplays, setAvailableDisplays] = useState<Array<{ id: number; name?: string; width: number; height: number; primary?: boolean }>>([]);
+  const [availableDisplays, setAvailableDisplays] = useState<Array<{ id: number; index?: number; label?: string; name?: string; width: number; height: number; primary?: boolean }>>([]);
+  const [activeDisplayIndex, setActiveDisplayIndex] = useState<number>(1);
+  const [lastHostClipboard, setLastHostClipboard] = useState<{ text: string; updatedAt: number } | null>(null);
+  const [isVaultEncrypted, setIsVaultEncrypted] = useState(false);
 
   const workerRef = useRef<Worker | null>(null);
   const currentBlobUrlRef = useRef<string | null>(null);
+  const lastThumbnailSyncRef = useRef<number>(0);
   const targetIdRef = useRef(targetId);
   const wsUrlRef = useRef(wsUrl);
   const latencyRef = useRef<number | null>(null);
@@ -96,7 +101,7 @@ export function useWorkerEngine({
     workerRef.current = worker;
 
     worker.onmessage = (e: MessageEvent) => {
-      const { type, data, status, latency: rtt, jitter, history, buffer, attempt, message } = e.data;
+      const { type, data, status, latency: rtt, jitter, history, buffer, attempt, message, encrypted } = e.data;
 
       switch (type) {
         case 'STATUS': {
@@ -105,6 +110,7 @@ export function useWorkerEngine({
             setIsConnecting(false);
             setIsReconnecting(false);
             setIsSendingCommand(false);
+            setIsVaultEncrypted(Boolean(encrypted));
             setHeartbeatStatus('healthy');
             setUnreachableAlert(null);
             triggerHapticFeedback('medium');
@@ -112,16 +118,19 @@ export function useWorkerEngine({
           } else if (status === 'connecting') {
             setIsConnecting(true);
             setIsReconnecting(false);
+            setIsVaultEncrypted(false);
           } else if (status === 'reconnecting') {
             setIsConnected(false);
             setIsConnecting(false);
             setIsReconnecting(true);
+            setIsVaultEncrypted(false);
             setHeartbeatStatus('warning');
             logStore.addLog('SYSTEM_MDNS', targetIdRef.current, 'warn', `Повторно свързване (опит #${attempt || 1})...`);
           } else if (status === 'circuit_open') {
             setIsConnected(false);
             setIsConnecting(false);
             setIsReconnecting(false);
+            setIsVaultEncrypted(false);
             setHeartbeatStatus('idle');
             logStore.addLog('SYSTEM_MDNS', 'GATEWAY', 'info', message || 'WebSocket сървърът е в режим на готовност (Lab mode).');
           } else if (status === 'auth_required') {
@@ -129,6 +138,7 @@ export function useWorkerEngine({
             setIsConnecting(false);
             setIsReconnecting(false);
             setIsSendingCommand(false);
+            setIsVaultEncrypted(false);
             setHeartbeatStatus('idle');
             const authMsg = message || 'PSK authentication token required before connecting.';
             setSecurityAlert({
@@ -145,6 +155,7 @@ export function useWorkerEngine({
             setIsReconnecting(false);
             setIsSendingCommand(false);
             setIsCapturingScreen(false);
+            setIsVaultEncrypted(false);
             setHeartbeatStatus('idle');
             const alertMsg = message || 'WebSocket хостът не отговори в рамките на 3.5s.';
             setUnreachableAlert({ message: alertMsg });
@@ -158,6 +169,7 @@ export function useWorkerEngine({
             setIsReconnecting(false);
             setIsSendingCommand(false);
             setIsCapturingScreen(false);
+            setIsVaultEncrypted(false);
             setHeartbeatStatus('idle');
             setLatency(null);
           } else if (status === 'error') {
@@ -166,6 +178,7 @@ export function useWorkerEngine({
             setIsReconnecting(false);
             setIsSendingCommand(false);
             setIsCapturingScreen(false);
+            setIsVaultEncrypted(false);
             setHeartbeatStatus('idle');
           }
           break;
@@ -215,14 +228,22 @@ export function useWorkerEngine({
 
         case 'SCREEN_FRAME': {
           if (buffer) {
-            if (currentBlobUrlRef.current) {
-              URL.revokeObjectURL(currentBlobUrlRef.current);
+            // Deliver zero-overhead raw JPEG bytes directly to active canvas renderers at full FPS
+            publishScreenFrame(buffer);
+            // Update 1 FPS thumbnail store for secondary widgets (CommandTerminal) without 60Hz React churn
+            const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            if (now - lastThumbnailSyncRef.current >= 1000 || !useScreenStore.getState().screenBase64) {
+              lastThumbnailSyncRef.current = now;
+              const prevUrl = currentBlobUrlRef.current;
+              const blob = new Blob([buffer], { type: 'image/jpeg' });
+              const url = URL.createObjectURL(blob);
+              currentBlobUrlRef.current = url;
+              useScreenStore.getState().setScreenBase64(url);
+              if (prevUrl) {
+                window.setTimeout(() => URL.revokeObjectURL(prevUrl), 120);
+              }
             }
-            const blob = new Blob([buffer], { type: 'image/jpeg' });
-            const url = URL.createObjectURL(blob);
-            currentBlobUrlRef.current = url;
-            useScreenStore.getState().setScreenBase64(url);
-            setIsCapturingScreen(false);
+            setIsCapturingScreen((prev) => (prev ? false : prev));
           }
           break;
         }
@@ -233,7 +254,12 @@ export function useWorkerEngine({
             setIsConnected(true);
             setIsConnecting(false);
             setIsReconnecting(false);
+            if (typeof data.encrypted === 'boolean') {
+              setIsVaultEncrypted(data.encrypted);
+            }
             setHeartbeatStatus('healthy');
+            // Auto-enumerate connected host displays for multi-monitor switching
+            worker.postMessage({ type: 'SEND_OPCODE', payload: { opcode: 0x0d, data: '' } });
           } else if (data.event === 'APPROVAL_REQUIRED' || data.event === 'HITL_REQUIRED') {
             triggerHapticFeedback('warning');
             setActiveHitlEvent({
@@ -253,8 +279,22 @@ export function useWorkerEngine({
             });
             setIsSendingCommand(false);
           } else if (data.event === 'DISPLAY_ENUM' && Array.isArray(data.monitors)) {
-            setAvailableDisplays(data.monitors);
+            setAvailableDisplays(
+              data.monitors.map((m: any, i: number) => ({
+                id: Number(m.index ?? m.id ?? i + 1),
+                index: Number(m.index ?? m.id ?? i + 1),
+                label: m.label || m.name || `Display ${m.index ?? i + 1}`,
+                name: m.label || m.name || `Display ${m.index ?? i + 1}`,
+                width: Number(m.width || 1920),
+                height: Number(m.height || 1080),
+                primary: Boolean(m.primary ?? i === 0),
+              }))
+            );
+            if (typeof data.active === 'number') {
+              setActiveDisplayIndex(data.active);
+            }
           } else if (data.event === 'CLIPBOARD_SYNC' && typeof data.text === 'string') {
+            setLastHostClipboard({ text: data.text, updatedAt: Date.now() });
             logStore.addLog('HOST_AGENT', data.target_id || targetIdRef.current, 'info', 'Clipboard synchronized from remote host.');
           } else if (data.event === 'LLM_STREAM' && typeof data.chunk === 'string') {
             if (typeof window !== 'undefined') {
@@ -314,13 +354,17 @@ export function useWorkerEngine({
         URL.revokeObjectURL(currentBlobUrlRef.current);
         currentBlobUrlRef.current = null;
       }
-      useScreenStore.getState().setScreenBase64(null);
+      clearScreenFrames();
       worker.terminate();
     };
   }, []);
 
   const connect = useCallback((url?: string) => {
     const targetUrl = url || wsUrl;
+    if (wsUrlRef.current !== targetUrl) {
+      clearScreenFrames();
+      lastThumbnailSyncRef.current = 0;
+    }
     wsUrlRef.current = targetUrl;
     setWsUrl(targetUrl);
     try {
@@ -329,7 +373,7 @@ export function useWorkerEngine({
       // ignore
     }
     setIsConnecting(true);
-    const token = getStoredAuthToken();
+    const token = getStoredAuthToken(targetUrl);
     workerRef.current?.postMessage({
       type: 'CONNECT',
       payload: { url: targetUrl, token },
@@ -343,11 +387,14 @@ export function useWorkerEngine({
 
   const disconnect = useCallback(() => {
     workerRef.current?.postMessage({ type: 'DISCONNECT' });
+    clearScreenFrames();
+    lastThumbnailSyncRef.current = 0;
     setIsConnected(false);
     setIsConnecting(false);
     setIsReconnecting(false);
     setIsSendingCommand(false);
     setIsCapturingScreen(false);
+    setIsVaultEncrypted(false);
     setHeartbeatStatus('idle');
     setActiveHitlEvent(null);
     pendingHitlCommandRef.current = null;
@@ -478,14 +525,16 @@ export function useWorkerEngine({
         isBg ? `Команда: "${cmd.prompt}" [Риск: ${verdict.riskLevel}]` : `Command: "${cmd.prompt}" [Risk: ${verdict.riskLevel}]`
       );
 
-      // 5. Critical Destructive commands ALWAYS enforce interactive HITL confirmation (fail-closed).
-      // Non-critical HIGH_RISK commands additionally trigger HITL confirmation when isHitlEnabled is on.
-      const requiresHitlGate =
-        verdict.requiresHoldConfirmation ||
-        verdict.category === 'CRITICAL_DESTRUCTIVE' ||
-        (verdict.category === 'HIGH_RISK' && useUIStore.getState().isHitlEnabled);
+      // 5. When disconnected or for non-live pre-flight critical commands, prompt locally;
+      // when connected to a live Host Agent, let the Host Agent's signed APPROVAL_REQUIRED
+      // challenge act as the single authoritative HITL prompt (prevents duplicate HITL popups).
+      const requiresLocalPreHitlGate =
+        !isConnected &&
+        (verdict.requiresHoldConfirmation ||
+          verdict.category === 'CRITICAL_DESTRUCTIVE' ||
+          (verdict.category === 'HIGH_RISK' && useUIStore.getState().isHitlEnabled));
 
-      if (requiresHitlGate) {
+      if (requiresLocalPreHitlGate) {
         const hitlCmdId = cmd.command_id || `cmd_sec_${Date.now()}`;
         pendingHitlCommandRef.current = {
           commandId: hitlCmdId,
@@ -598,6 +647,9 @@ export function useWorkerEngine({
       }
 
       if (isConnected) {
+        if (decision === 'APPROVED') {
+          setIsSendingCommand(true);
+        }
         workerRef.current?.postMessage({
           type: 'SEND_JSON',
           payload: {
@@ -630,9 +682,11 @@ export function useWorkerEngine({
   );
 
   const requestScreenRefresh = useCallback(
-    (_deviceId: string, dimensions?: { width: number; height: number }) => {
+    (_deviceId: string, dimensions?: { width: number; height: number }, silent = false) => {
       if (isConnected) {
-        setIsCapturingScreen(true);
+        if (!silent && !useScreenStore.getState().screenBase64) {
+          setIsCapturingScreen(true);
+        }
         if (dimensions && dimensions.width > 0 && dimensions.height > 0) {
           workerRef.current?.postMessage({
             type: 'SEND_OPCODE',
@@ -664,6 +718,7 @@ export function useWorkerEngine({
       isConnected,
       isConnecting,
       isReconnecting,
+      isVaultEncrypted,
       wsUrl,
       setWsUrl,
       latency,
@@ -683,6 +738,8 @@ export function useWorkerEngine({
       securityAlert,
       clearSecurityAlert,
       availableDisplays,
+      activeDisplayIndex,
+      lastHostClipboard,
       connect,
       reconnectNow,
       disconnect,
@@ -695,6 +752,7 @@ export function useWorkerEngine({
       isConnected,
       isConnecting,
       isReconnecting,
+      isVaultEncrypted,
       wsUrl,
       latency,
       heartbeatMetrics,
@@ -713,6 +771,8 @@ export function useWorkerEngine({
       securityAlert,
       clearSecurityAlert,
       availableDisplays,
+      activeDisplayIndex,
+      lastHostClipboard,
       connect,
       reconnectNow,
       disconnect,

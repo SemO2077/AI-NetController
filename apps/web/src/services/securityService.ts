@@ -9,6 +9,27 @@
  */
 
 import { RiskLevel } from '../types';
+import {
+  base64ToBytes,
+  bytesToBase64,
+  chacha20Poly1305Decrypt,
+  chacha20Poly1305Encrypt,
+  concatBytes,
+  hkdfSha256,
+  randomBytes,
+  x25519GenerateKeypair,
+  x25519ScalarMult,
+  zeroize,
+} from './pairCrypto';
+
+export function buildHostWsUri(ip: string, port: number = 8765, preferTls?: boolean): string {
+  const isHttps = typeof window !== 'undefined' && window.location?.protocol === 'https:';
+  const proto = (preferTls ?? isHttps) ? 'wss' : 'ws';
+  const cleanIp = String(ip || '127.0.0.1').trim();
+  const hostPart = cleanIp.includes(':') && !cleanIp.startsWith('[') ? `[${cleanIp}]` : cleanIp;
+  const safePort = Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 8765;
+  return `${proto}://${hostPart}:${safePort}`;
+}
 
 export interface CommandSecurityVerdict {
   isAllowed: boolean;
@@ -108,6 +129,16 @@ function inspectCommandSecurityUncached(command: string): CommandSecurityVerdict
       category: 'SAFE',
       reason: 'Empty command string',
       requiresHoldConfirmation: false,
+    };
+  }
+
+  if (trimmed.length > 4096) {
+    return {
+      isAllowed: false,
+      riskLevel: 'CRITICAL',
+      category: 'BLOCKED_MALICIOUS',
+      reason: 'Command exceeds maximum safe inspection length (4096 chars)',
+      requiresHoldConfirmation: true,
     };
   }
 
@@ -319,9 +350,29 @@ export function setHostQuarantined(hostId: string, quarantined: boolean): string
 const STORAGE_KEY_AUTH_TOKEN = 'ai_netcontroller_auth_token_v1';
 const LEGACY_STORAGE_KEY_AUTH_TOKEN = 'cst_auth_token_v1';
 
-export function getStoredAuthToken(): string {
+function normalizeHostTokenKey(hostKey?: string): string {
+  if (!hostKey) return '';
+  try {
+    const trimmed = hostKey.trim();
+    if (!trimmed) return '';
+    if (trimmed.includes('://')) {
+      const u = new URL(trimmed);
+      return `${STORAGE_KEY_AUTH_TOKEN}::${u.hostname.toLowerCase()}:${u.port || '8765'}`;
+    }
+    return `${STORAGE_KEY_AUTH_TOKEN}::${trimmed.toLowerCase()}`;
+  } catch {
+    return `${STORAGE_KEY_AUTH_TOKEN}::${hostKey.trim().toLowerCase()}`;
+  }
+}
+
+export function getStoredAuthToken(hostKey?: string): string {
   if (typeof window === 'undefined') return '';
   try {
+    const scopedKey = normalizeHostTokenKey(hostKey);
+    if (scopedKey) {
+      const hostToken = window.sessionStorage.getItem(scopedKey) || '';
+      if (hostToken.trim()) return hostToken.trim();
+    }
     const sessionToken = window.sessionStorage.getItem(STORAGE_KEY_AUTH_TOKEN) || '';
     // One-time cleanup of any legacy localStorage plaintext keys
     const legacyToken =
@@ -346,16 +397,17 @@ export function getStoredAuthToken(): string {
   }
 }
 
-export function saveAuthToken(token: string) {
+export function saveAuthToken(token: string, hostKey?: string) {
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
       window.localStorage.removeItem(LEGACY_STORAGE_KEY_AUTH_TOKEN);
       const clean = token.trim();
+      const targetKey = normalizeHostTokenKey(hostKey) || STORAGE_KEY_AUTH_TOKEN;
       if (clean) {
-        window.sessionStorage.setItem(STORAGE_KEY_AUTH_TOKEN, clean);
+        window.sessionStorage.setItem(targetKey, clean);
       } else {
-        window.sessionStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
+        window.sessionStorage.removeItem(targetKey);
       }
     } catch {
       // Ignore storage failures in restricted contexts
@@ -387,8 +439,9 @@ export function generatePacketNonce(): { nonce: string; timestamp: number; seque
 }
 
 /**
- * Exchanges a 6-digit ephemeral pairing PIN over WebSocket (`action: 'PAIR'`)
- * for the host agent's persistent cryptographic pairing token.
+ * Exchanges a 6-digit ephemeral pairing PIN over WebSocket using encrypted
+ * X25519 + HKDF-SHA256 + ChaCha20-Poly1305 (`PAIR_INIT` -> `PAIR_FINISH`)
+ * so neither the PIN nor the master pairingToken travels in cleartext JSON.
  */
 export function pairHostWithPin(
   wsUri: string,
@@ -403,10 +456,26 @@ export function pairHostWithPin(
     }
     let settled = false;
     let ws: WebSocket | null = null;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    let cliPriv: Uint8Array | null = null;
+    let cliPub: Uint8Array | null = null;
+    let cliN1: Uint8Array | null = null;
+    let pairKey: Uint8Array | null = null;
+    let pairAad: Uint8Array | null = null;
+    let sentEncryptedInit = false;
+
+    const cleanupSecrets = () => {
+      if (cliPriv) { zeroize(cliPriv); cliPriv = null; }
+      if (pairKey) { zeroize(pairKey); pairKey = null; }
+    };
+
     const finish = (token: string | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupSecrets();
       try {
         ws?.close(1000, 'PAIR complete');
       } catch {
@@ -414,15 +483,22 @@ export function pairHostWithPin(
       }
       resolve(token);
     };
-    const timer = setTimeout(() => finish(null), 3500);
+
+    const timer = setTimeout(() => finish(null), 5000);
     try {
       ws = new WebSocket(wsUri);
       ws.onopen = () => {
         try {
+          const kp = x25519GenerateKeypair();
+          cliPriv = kp.privateKey;
+          cliPub = kp.publicKey;
+          cliN1 = randomBytes(16);
+          sentEncryptedInit = true;
           ws?.send(
             JSON.stringify({
-              action: 'PAIR',
-              pin: cleanPin,
+              action: 'PAIR_INIT',
+              client_pub: bytesToBase64(cliPub),
+              client_nonce: bytesToBase64(cliN1),
               device: deviceLabel,
             })
           );
@@ -434,14 +510,84 @@ export function pairHostWithPin(
         if (typeof evt.data !== 'string') return;
         try {
           const msg = JSON.parse(evt.data);
-          if (msg.event === 'AUTHENTICATED' && typeof msg.pairingToken === 'string' && msg.pairingToken) {
+          if (msg.event === 'PAIR_CHALLENGE' && cliPriv && cliPub && cliN1) {
+            const hostPub = base64ToBytes(String(msg.host_pub || ''));
+            const hostN2 = base64ToBytes(String(msg.host_nonce || ''));
+            if (hostPub.length !== 32 || hostN2.length !== 16) {
+              finish(null);
+              return;
+            }
+            const shared = x25519ScalarMult(cliPriv, hostPub);
+            zeroize(cliPriv);
+            cliPriv = null;
+            let nonZero = 0;
+            for (let i = 0; i < shared.length; i++) nonZero |= shared[i];
+            if (nonZero === 0) {
+              zeroize(shared);
+              finish(null);
+              return;
+            }
+            pairKey = hkdfSha256(
+              concatBytes(cliN1, hostN2),
+              shared,
+              encoder.encode('CST_PAIR_WRAP_V1'),
+              32
+            );
+            zeroize(shared);
+            pairAad = concatBytes(
+              encoder.encode('CST_PAIR_V1'),
+              cliPub,
+              hostPub,
+              cliN1,
+              hostN2
+            );
+            const nonceZero = new Uint8Array(12);
+            const innerPt = encoder.encode(JSON.stringify({ pin: cleanPin, device: deviceLabel }));
+            const ctAndTag = chacha20Poly1305Encrypt(pairKey, nonceZero, innerPt, pairAad);
+            zeroize(innerPt);
+            ws?.send(
+              JSON.stringify({
+                action: 'PAIR_FINISH',
+                ciphertext: bytesToBase64(concatBytes(nonceZero, ctAndTag)),
+                device: deviceLabel,
+              })
+            );
+          } else if (msg.event === 'PAIR_RESULT' && pairKey && pairAad) {
+            const rawCt = base64ToBytes(String(msg.ciphertext || ''));
+            if (rawCt.length < 28) {
+              finish(null);
+              return;
+            }
+            const respNonce = rawCt.subarray(0, 12);
+            const pt = chacha20Poly1305Decrypt(pairKey, respNonce, rawCt.subarray(12), pairAad);
+            if (!pt) {
+              finish(null);
+              return;
+            }
+            const decoded = JSON.parse(decoder.decode(pt));
+            zeroize(pt);
+            if (typeof decoded.pairingToken === 'string' && decoded.pairingToken) {
+              saveAuthToken(decoded.pairingToken, wsUri);
+              saveAuthToken(decoded.pairingToken);
+              finish(decoded.pairingToken);
+            } else {
+              finish(null);
+            }
+          } else if (msg.event === 'AUTHENTICATED' && typeof msg.pairingToken === 'string' && msg.pairingToken) {
+            saveAuthToken(msg.pairingToken, wsUri);
             saveAuthToken(msg.pairingToken);
             finish(msg.pairingToken);
           } else if (msg.event === 'ERROR') {
+            // Only fall back to legacy plaintext PAIR if host specifically lacks PAIR_INIT support
+            if (sentEncryptedInit && /unavailable|binary protocol|unknown/i.test(String(msg.error || ''))) {
+              sentEncryptedInit = false;
+              ws?.send(JSON.stringify({ action: 'PAIR', pin: cleanPin, device: deviceLabel }));
+              return;
+            }
             finish(null);
           }
         } catch {
-          // ignore
+          finish(null);
         }
       };
       ws.onerror = () => finish(null);

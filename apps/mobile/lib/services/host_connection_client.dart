@@ -65,6 +65,7 @@ class HostConnectionClient {
 
   bool _disposed = false;
   bool _manualDisconnect = false;
+  bool _authRejected = false;
   bool _isConnecting = false;
   bool _isConnected = false;
   bool _isAuthenticated = false;
@@ -75,10 +76,12 @@ class HostConnectionClient {
   int _reconnectAttempt = 0;
   int? _latencyMs;
   String? _errorMessage;
+  Uint8List? _lastFrame;
   DateTime _lastInboundAt = DateTime.fromMillisecondsSinceEpoch(0);
   int _aeadDecryptErrors = 0;
   int _retainCount = 0;
   final Map<int, Stopwatch> _pendingPings = <int, Stopwatch>{};
+  final Set<String> _inFlightHitlIds = <String>{};
   final Random _rnd = Random.secure();
   late final PacketReassembler _reassembler;
   StreamSubscription<int>? _frameSyncSub;
@@ -125,6 +128,7 @@ class HostConnectionClient {
   int? get latencyMs => _latencyMs;
   String? get errorMessage => _errorMessage;
   int get activeMonitorIndex => _activeMonitorIndex;
+  Uint8List? get lastFrame => _lastFrame;
 
   HostConnectionSnapshot get snapshot => HostConnectionSnapshot(
         isConnecting: _isConnecting,
@@ -185,7 +189,7 @@ class HostConnectionClient {
           (X509Certificate cert, String host, int port) {
         final String actualFp = _certSha256(cert);
         onObservedCertSha256?.call(actualFp);
-        if (expectedFp.isNotEmpty) {
+        if (expectedFp.length == 64) {
           return _constantTimeHexEq(actualFp, expectedFp);
         }
         return false;
@@ -208,8 +212,8 @@ class HostConnectionClient {
     Duration timeout = const Duration(milliseconds: 550),
   }) async {
     WebSocket? ws;
+    final HttpClient client = HttpClient()..connectionTimeout = timeout;
     try {
-      final HttpClient client = HttpClient()..connectionTimeout = timeout;
       if (useTls) {
         // Discovery probe only verifies the canonical 0xC5 0x71 OP_AUTH banner.
         client.badCertificateCallback = (_, _, _) => true;
@@ -217,7 +221,6 @@ class HostConnectionClient {
       final uri = Uri(scheme: useTls ? 'wss' : 'ws', host: ip, port: port);
       ws = await WebSocket.connect(uri.toString(), customClient: client)
           .timeout(timeout);
-      client.close();
       final dynamic firstMsg = await ws.first.timeout(timeout);
       if (firstMsg is Uint8List || firstMsg is List<int>) {
         final bytes = firstMsg is Uint8List
@@ -235,6 +238,7 @@ class HostConnectionClient {
       try {
         await ws?.close();
       } catch (_) {}
+      client.close(force: true);
     }
   }
 
@@ -347,6 +351,7 @@ class HostConnectionClient {
                 plain,
                 aad: aad,
               );
+              zeroize(plain);
               final Uint8List wrapped = Uint8List(kNonceSize + ctAndTag.length);
               wrapped.setRange(0, kNonceSize, clientNonce);
               wrapped.setRange(kNonceSize, wrapped.length, ctAndTag);
@@ -449,6 +454,7 @@ class HostConnectionClient {
     }
 
     _manualDisconnect = false;
+    _authRejected = false;
     final Completer<void> completer = Completer<void>();
     _connectCompleter = completer;
 
@@ -578,6 +584,7 @@ class HostConnectionClient {
               ? _crypto?.processMutualHostChallenge(packet.payload)
               : _crypto?.processHostChallenge(packet.payload);
           if (hsResp == null) {
+            _authRejected = true;
             _handleDisconnect(
               'Host mutual cryptographic proof verification failed!',
               connectCompleter,
@@ -596,15 +603,19 @@ class HostConnectionClient {
           _aeadDecryptErrors = 0;
           _errorMessage = null;
           _startTimers();
+          requestKeyframe();
+          requestDisplayEnum();
           _emitState();
           if (connectCompleter != null && !connectCompleter.isCompleted) {
             connectCompleter.complete();
           }
         } else if (statusStr.isNotEmpty) {
+          _authRejected = true;
           _handleDisconnect('Auth rejected: $statusStr', connectCompleter);
         }
       } else if (packet.opcode == BinaryOpcode.error) {
         final err = utf8.decode(packet.payload, allowMalformed: true).trim();
+        _authRejected = true;
         _handleDisconnect(
           err.isNotEmpty ? err : 'Host authentication failed',
           connectCompleter,
@@ -669,6 +680,7 @@ class HostConnectionClient {
         }
         break;
       case BinaryOpcode.frame:
+        _lastFrame = dispatchPayload;
         if (!_frameCtrl.isClosed) _frameCtrl.add(dispatchPayload);
         break;
       case BinaryOpcode.telemetry:
@@ -740,14 +752,6 @@ class HostConnectionClient {
         if (err.isNotEmpty) {
           _errorMessage = err;
           _emitState();
-          if (!_shellCtrl.isClosed) {
-            _shellCtrl.add(ShellResult(
-              status: 'error',
-              exitCode: -1,
-              output: err,
-              command: '',
-            ));
-          }
         }
         break;
     }
@@ -821,6 +825,22 @@ class HostConnectionClient {
     );
   }
 
+  /// Requests an immediate keyframe sync (`0xED`) over the encrypted channel.
+  bool requestKeyframe() =>
+      sendEncrypted(BinaryOpcode.frameSync, Uint8List.fromList(utf8.encode('{}')));
+
+  /// Pauses or resumes video stream frames for this client session (`0x0A`).
+  bool setStreamEnabled(bool enabled) => sendEncrypted(
+        BinaryOpcode.viewportResize,
+        Uint8List.fromList(utf8.encode(jsonEncode({'stream_enabled': enabled}))),
+      );
+
+  /// Sends an encrypted Emergency Panic Kill command (`0x05`) to the host daemon.
+  bool sendPanicKill() => sendEncrypted(
+        BinaryOpcode.hitl,
+        Uint8List.fromList(utf8.encode(jsonEncode({'action': 'PANIC_KILL_ALL'}))),
+      );
+
   /// Requests monitor list (`switchMonitorIndex == null`) or switches active host display (`0x0D`).
   bool requestDisplayEnum({int? switchMonitorIndex}) {
     final Uint8List payload = switchMonitorIndex == null
@@ -849,47 +869,51 @@ class HostConnectionClient {
         (challenge['challenge_nonce'] ?? challenge['nonce'] ?? '').toString();
     final String command =
         (challenge['command'] ?? challenge['proposed_command'] ?? '').toString();
-    if (approvalId.isEmpty) return false;
+    if (approvalId.isEmpty || _inFlightHitlIds.contains(approvalId)) return false;
+    _inFlightHitlIds.add(approvalId);
+    try {
+      final gateRes = await BiometricSecurityGate.instance.verifyApproval(
+        commandId: approvalId,
+        shellCommand: command,
+        targetHostId: hostIp,
+        riskLevel: 'CRITICAL',
+      );
 
-    final gateRes = await BiometricSecurityGate.instance.verifyApproval(
-      commandId: approvalId,
-      shellCommand: command,
-      targetHostId: hostIp,
-      riskLevel: 'CRITICAL',
-    );
+      if (!gateRes.isApproved) {
+        return sendEncrypted(
+          BinaryOpcode.hitl,
+          Uint8List.fromList(utf8.encode(jsonEncode({
+            'approval_id': approvalId,
+            'approved': false,
+          }))),
+        );
+      }
 
-    if (!gateRes.isApproved) {
+      final hmac = crypto_pkg.Hmac(
+        crypto_pkg.sha256,
+        utf8.encode(sharedSecret.trim()),
+      );
+      final String sig =
+          hmac.convert(utf8.encode('$approvalId:$nonce:$command')).toString();
+
       return sendEncrypted(
         BinaryOpcode.hitl,
         Uint8List.fromList(utf8.encode(jsonEncode({
           'approval_id': approvalId,
-          'approved': false,
+          'approved': true,
+          'signature': sig,
         }))),
       );
+    } finally {
+      _inFlightHitlIds.remove(approvalId);
     }
-
-    final hmac = crypto_pkg.Hmac(
-      crypto_pkg.sha256,
-      utf8.encode(sharedSecret.trim()),
-    );
-    final String sig =
-        hmac.convert(utf8.encode('$approvalId:$nonce:$command')).toString();
-
-    return sendEncrypted(
-      BinaryOpcode.hitl,
-      Uint8List.fromList(utf8.encode(jsonEncode({
-        'approval_id': approvalId,
-        'approved': true,
-        'signature': sig,
-      }))),
-    );
   }
 
   /// Executes a shell command over the encrypted AEAD vault channel,
   /// automatically driving interactive biometric HITL approval if requested.
   Future<ShellResult> executeCommand(
     String command, {
-    Duration timeout = const Duration(seconds: 25),
+    Duration timeout = const Duration(seconds: 45),
   }) {
     final Future<ShellResult> next = _shellQueue.then((_) async {
       await ensureConnected(timeout: const Duration(seconds: 7));
@@ -964,13 +988,23 @@ class HostConnectionClient {
 
   void _handleDisconnect(String reason, Completer<void>? connectCompleter) {
     final bool wasConnecting = _isConnecting;
+    final String lower = reason.toLowerCase();
+    final bool permanentAuthOrPolicyFailure = _authRejected ||
+        lower.contains('auth') ||
+        lower.contains('blacklisted') ||
+        lower.contains('geofence') ||
+        lower.contains('pairing secret required') ||
+        lower.contains('origin not permitted');
     _cleanupTransportOnly();
     _errorMessage = reason;
     _emitState();
     if (connectCompleter != null && !connectCompleter.isCompleted) {
       connectCompleter.completeError(StateError(reason));
     }
-    if (!_disposed && !_manualDisconnect && !wasConnecting) {
+    if (!_disposed &&
+        !_manualDisconnect &&
+        !wasConnecting &&
+        !permanentAuthOrPolicyFailure) {
       _scheduleReconnect();
     }
   }
@@ -1003,6 +1037,7 @@ class HostConnectionClient {
     _authChallengeResponded = false;
     _isConnecting = false;
     _mutualInFlight = false;
+    _lastFrame = null;
     _subscription?.cancel();
     _subscription = null;
     try {
@@ -1030,6 +1065,11 @@ class HostConnectionClient {
     _manualDisconnect = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    final pendingCompleter = _connectCompleter;
+    _connectCompleter = null;
+    if (pendingCompleter != null && !pendingCompleter.isCompleted) {
+      pendingCompleter.completeError(StateError('Connection closed by client.'));
+    }
     _cleanupTransportOnly();
     _emitState();
   }

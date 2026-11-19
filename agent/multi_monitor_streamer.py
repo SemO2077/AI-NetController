@@ -69,7 +69,7 @@ class MultiMonitorStreamer:
         self._sct = None
         if mss:
             try:
-                self._sct = mss.MSS() if hasattr(mss, "MSS") else mss.mss()
+                self._sct = mss.MSS()
                 self._all_scts.append(self._sct)
             except Exception as exc:
                 logger.warning("MSS screen capture initialization deferred (%s)", exc)
@@ -87,7 +87,7 @@ class MultiMonitorStreamer:
         sct = getattr(self._tls, "sct", None)
         if sct is None:
             try:
-                sct = mss.MSS() if hasattr(mss, "MSS") else mss.mss()
+                sct = mss.MSS()
                 self._tls.sct = sct
                 with self._lock:
                     self._all_scts.append(sct)
@@ -95,6 +95,17 @@ class MultiMonitorStreamer:
                 logger.debug("Thread-local MSS creation failed: %s", exc)
                 return None
         return sct
+
+    def _reset_thread_sct(self) -> None:
+        sct = getattr(self._tls, "sct", None)
+        self._tls.sct = None
+        if sct is not None:
+            with self._lock:
+                self._all_scts = [s for s in self._all_scts if s is not sct]
+            try:
+                sct.close()
+            except Exception:
+                pass
 
     def close(self) -> None:
         """Closes all GDI / X11 MSS handles allocated by this streamer."""
@@ -226,6 +237,7 @@ class MultiMonitorStreamer:
             return None
         except Exception as e:
             logger.error(f"Screen capture frame error: {e}")
+            self._reset_thread_sct()
             return None
 
     def _extract_dominant_color_fast(self, raw_bgra: bytes, width: int, height: int):

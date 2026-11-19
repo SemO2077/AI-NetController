@@ -329,6 +329,9 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
       .attr('filter', 'url(#neon-glow)');
 
     const pulseTimer = d3.timer((elapsed) => {
+      if (isPausedRef.current || (typeof document !== 'undefined' && document.hidden)) {
+        return;
+      }
       // 144Hz Framerate-Independent animation (constant speed across 60Hz, 120Hz & 144Hz displays)
       const pulseProgress = (elapsed * 0.00048) % 1;
       pulses.each(function (d: any) {

@@ -16,7 +16,7 @@ import { useTranslation } from '../../i18n/useTranslation';
 export interface AddHostModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAddHost: (newHost: HostDevice) => void;
+  onAddHost: (newHost: HostDevice, pairingPin?: string) => void;
   editingHost?: HostDevice | null;
   onEditHost?: (updatedHost: HostDevice, previousId?: string) => void;
 }
@@ -39,6 +39,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
   const [initialStatus, setInitialStatus] = useState<'ready' | 'sleeping'>('ready');
   const [tagsInput, setTagsInput] = useState('');
   const [port, setPort] = useState('8765');
+  const [pairingPin, setPairingPin] = useState('');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
   useEffect(() => {
@@ -64,6 +65,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
       setInitialStatus(editingHost.isOnline ? 'ready' : 'sleeping');
       setTagsInput(Array.isArray(editingHost.tags) ? editingHost.tags.join(', ') : '');
       setPort(String(editingHost.port || 8765));
+      setPairingPin('');
       setErrors({});
     } else {
       setName('');
@@ -74,6 +76,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
       setInitialStatus('ready');
       setTagsInput('');
       setPort('8765');
+      setPairingPin('');
       setErrors({});
     }
   }, [isOpen, editingHost]);
@@ -92,12 +95,19 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
         : 'Invalid IPv4 address (e.g. 192.168.1.120)';
     }
 
-    // Support colons, hyphens, and Cisco dots (001A.2B3C.4D5E)
+    // Support colons, hyphens, and Cisco dots (001A.2B3C.4D5E) — optional for quick LAN control
     const macClean = mac.trim().replace(/[:.-]/g, '');
-    if (!macClean || macClean.length !== 12 || !/^[0-9A-Fa-f]{12}$/.test(macClean)) {
+    if (macClean && (macClean.length !== 12 || !/^[0-9A-Fa-f]{12}$/.test(macClean))) {
       newErrors.mac = isBg
         ? 'Невалиден MAC адрес (12 шестнайсетични знака, напр. 00:1A:2B:3C:4D:5E)'
         : 'Invalid MAC address (12 hex digits, e.g. 00:1A:2B:3C:4D:5E)';
+    }
+
+    const cleanPin = pairingPin.trim();
+    if (cleanPin && !/^\d{6}$/.test(cleanPin)) {
+      newErrors.pairingPin = isBg
+        ? 'PIN кодът трябва да е точно 6 цифри'
+        : 'Pairing PIN must be exactly 6 digits';
     }
 
     const parsedPort = Number(port.trim());
@@ -118,9 +128,9 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
 
     triggerHapticFeedback('medium');
 
-    // Format MAC with colons
+    // Format MAC with colons when supplied
     const cleanMac = mac.trim().replace(/[:.-]/g, '').toUpperCase();
-    const formattedMac = cleanMac.match(/.{1,2}/g)?.join(':') || mac.toUpperCase();
+    const formattedMac = cleanMac ? cleanMac.match(/.{1,2}/g)?.join(':') || mac.toUpperCase() : '';
 
     // Clean tags
     const tags = tagsInput
@@ -174,7 +184,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
     if (editingHost && onEditHost) {
       onEditHost(newHost, editingHost.id);
     } else {
-      onAddHost(newHost);
+      onAddHost(newHost, pairingPin.trim() || undefined);
     }
     onClose();
 
@@ -182,6 +192,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
     setName('');
     setIp('');
     setMac('');
+    setPairingPin('');
     setErrors({});
   };
 
@@ -301,23 +312,49 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
               </div>
             </div>
 
-            {/* MAC Address Field */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-mono font-medium text-slate-300">
-                  {isBg ? 'MAC АДРЕС (За Wake-on-LAN)' : 'MAC ADDRESS (For Wake-on-LAN)'} <span className="text-cyan-400">*</span>
-                </label>
+            {/* MAC Address & Optional 6-Digit Pairing PIN Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-mono font-medium text-slate-300">
+                    {isBg ? 'MAC АДРЕС (По избор — за WoL)' : 'MAC ADDRESS (Optional — for WoL)'}
+                  </label>
+                </div>
+                <input
+                  type="text"
+                  value={mac}
+                  onChange={e => setMac(e.target.value.toUpperCase())}
+                  placeholder="00:1A:2B:3C:4D:5E"
+                  className={`w-full px-3.5 py-2 rounded-xl bg-slate-950 border ${
+                    errors.mac ? 'border-rose-500/70' : 'border-slate-700/80 focus:border-cyan-400'
+                  } text-slate-100 font-mono text-xs focus:outline-none transition`}
+                />
+                {errors.mac && <p className="text-[11px] text-rose-400 font-mono mt-1">{errors.mac}</p>}
               </div>
-              <input
-                type="text"
-                value={mac}
-                onChange={e => setMac(e.target.value.toUpperCase())}
-                placeholder="00:1A:2B:3C:4D:5E"
-                className={`w-full px-3.5 py-2 rounded-xl bg-slate-950 border ${
-                  errors.mac ? 'border-rose-500/70' : 'border-slate-700/80 focus:border-cyan-400'
-                } text-slate-100 font-mono text-xs focus:outline-none transition`}
-              />
-              {errors.mac && <p className="text-[11px] text-rose-400 font-mono mt-1">{errors.mac}</p>}
+
+              {!editingHost && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-mono font-medium text-amber-300">
+                      {isBg ? '6-ЦИФРЕН PIN (За мигновено сдвояване)' : '6-DIGIT PIN (Instant Pair)'}
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={pairingPin}
+                    onChange={e => setPairingPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="482910"
+                    className={`w-full px-3.5 py-2 rounded-xl bg-slate-950 border ${
+                      errors.pairingPin ? 'border-rose-500/70' : 'border-amber-400/35 focus:border-amber-400'
+                    } text-amber-200 font-mono text-xs tracking-widest focus:outline-none transition`}
+                  />
+                  {errors.pairingPin && (
+                    <p className="text-[11px] text-rose-400 font-mono mt-1">{errors.pairingPin}</p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Device Type Selector */}

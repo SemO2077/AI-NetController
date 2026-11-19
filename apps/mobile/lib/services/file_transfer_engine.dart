@@ -176,6 +176,9 @@ class FileTransferEngine {
           final int remaining = totalBytes - bytesSent;
           final int chunkSize = min(remaining, kFileTransferChunkSize);
           final Uint8List chunkBytes = await raf.read(chunkSize);
+          if (chunkBytes.isEmpty) {
+            break;
+          }
 
           // Chunk Payload: [1 cmd][4 id][8 offset][chunk_bytes...]
           final Uint8List chunkPayload = Uint8List(1 + 4 + 8 + chunkBytes.length);

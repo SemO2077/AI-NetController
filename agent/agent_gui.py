@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI NetController - Cyber Glassmorphic Desktop Control Center (v0.70.0 Beta)
+AI NetController - Cyber Glassmorphic Desktop Control Center (v0.80.0 Beta)
 ================================================================================
 Ground-up rebuild mirroring the Mobile Companion design language:
   - Deep Abyssal Void (#040812) backdrop with top-right Cyan (#00F0FF) &
@@ -136,7 +136,7 @@ except (ImportError, ModuleNotFoundError):
             uninstall_from_system,
         )
     except (ImportError, ModuleNotFoundError):
-        APP_VERSION = "0.70.0"
+        APP_VERSION = "0.80.0"
         create_desktop_shortcut = None
         create_native_shortcut = None
         install_to_system = None
@@ -198,7 +198,7 @@ class HostDaemonState:
         self.clipboard_sync_allowed = bool(self.config.get("clipboard_sync_allowed", True))
         self.auto_lock_on_disconnect = bool(self.config.get("auto_lock_on_disconnect", False))
         self.auto_ban_intrusion = bool(self.config.get("auto_ban_intrusion", True))
-        self.subnet_geofence_only = bool(self.config.get("subnet_geofence_only", False))
+        self.subnet_geofence_only = bool(self.config.get("subnet_geofence_only", True))
         self.autostart_on_boot = (
             bool(is_autostart_enabled())
             if callable(is_autostart_enabled)
@@ -228,7 +228,7 @@ class HostDaemonState:
             if (len(env_pin) == 6 and env_pin.isdigit())
             else (cfg_pin if (len(cfg_pin) == 6 and cfg_pin.isdigit()) else f"{secrets.randbelow(900000) + 100000}")
         )
-        self.pin_ttl_seconds = int(self.config.get("pin_ttl_seconds") or 600)
+        self.pin_ttl_seconds = int(self.config.get("pin_ttl_seconds") or 900)
         self.pin_issued_at = int(self.config.get("pin_issued_at") or int(time.time()))
 
         env_tok = os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET")
@@ -245,7 +245,22 @@ class HostDaemonState:
         self.frames_broadcast = 0
 
         self.connected_clients: List[Dict[str, Any]] = []
-        self.blacklisted_devices: List[Dict[str, Any]] = []
+        raw_bl = self.config.get("blacklisted_devices")
+        loaded_bl: List[Dict[str, Any]] = []
+        if isinstance(raw_bl, list):
+            for item in raw_bl:
+                if isinstance(item, str) and item.strip():
+                    loaded_bl.append({
+                        "id": item.strip(),
+                        "ip": item.strip(),
+                        "device": f"Banned ({item.strip()})",
+                        "reason": "Persisted host blacklist",
+                        "bannedAt": "",
+                    })
+                elif isinstance(item, dict) and str(item.get("ip", "")).strip():
+                    loaded_bl.append(dict(item))
+        self.blacklisted_devices: List[Dict[str, Any]] = loaded_bl
+        self._saving_config = False
         self._unbanned_ips: set[str] = set()
         self.av_integrity: Dict[str, Any] = _detect_av_integrity()
 
@@ -381,11 +396,16 @@ class HostDaemonState:
                     "pin_issued_at": int(self.pin_issued_at),
                     "pairing_pin": self.pairing_pin,
                     "pairing_token": self.pairing_token,
+                    "blacklisted_devices": list(self.blacklisted_devices),
                 }
             )
             snapshot_cfg = dict(self.config)
-        if callable(save_config):
-            save_config(snapshot_cfg)
+            self._saving_config = True
+        try:
+            if callable(save_config):
+                save_config(snapshot_cfg)
+        finally:
+            self._saving_config = False
 
     def get_pairing_uri(self) -> str:
         """Returns safe transient QR pairing URI omitting the master pairing_token."""
@@ -399,7 +419,7 @@ class HostDaemonState:
                     tls_fingerprint=self.tls_fingerprint,
                 )
             scheme = "wss" if self.tls_enabled else "ws"
-            fp = f"&fp={self.tls_fingerprint[:16]}" if (self.tls_enabled and self.tls_fingerprint) else ""
+            fp = f"&fp={self.tls_fingerprint.strip().lower()}" if (self.tls_enabled and self.tls_fingerprint) else ""
             return f"ainet://pair?proto={scheme}&host={self.local_ip}&port={self.port}&pin={self.pairing_pin}{fp}"
 
     def check_and_refresh_pin_ttl(self) -> bool:
@@ -473,6 +493,7 @@ class HostDaemonState:
                 if (resolved_cid and c.get("id") == resolved_cid) or c.get("ip") == resolved_ip:
                     removed_ids.append(c.get("id", ""))
                     self.connected_clients.remove(c)
+        self.save_policy_config()
         self.add_log("SECURITY", f"Blacklisted device {device_name} [{resolved_ip}] ({reason})")
         cb = getattr(self, "on_disconnect_callback", None)
         if callable(cb):
@@ -488,6 +509,7 @@ class HostDaemonState:
             self.blacklisted_devices = [d for d in self.blacklisted_devices if d.get("ip") != ip]
             if ip:
                 self._unbanned_ips.add(ip)
+        self.save_policy_config()
         self.add_log("INFO", f"Removed IP {ip} from local blacklist.")
 
     def toggle_client_input(self, client_id: str) -> None:
@@ -636,7 +658,7 @@ class HostDaemonState:
         os.environ["AI_AGENT_SECRET"] = new_token
         os.environ["CST_AGENT_SECRET"] = new_token
         self.save_policy_config()
-        self.add_log("SECURITY", f"Pairing token & 6-digit PIN ({self.pairing_pin}) rotated by operator.")
+        self.add_log("SECURITY", "Pairing token & 6-digit PIN rotated by operator.")
         return new_token
 
     def get_uptime_formatted(self) -> str:
@@ -937,10 +959,28 @@ class HostDaemonDesktopGUI:
             pady=pad_y,
             cursor="hand2",
         )
-        btn.bind("<Enter>", lambda _e: btn.configure(bg=hover_bg, highlightbackground=hover_border))
-        btn.bind("<Leave>", lambda _e: btn.configure(bg=bg, highlightbackground=border))
-        btn.bind("<ButtonPress-1>", lambda _e: btn.configure(bg=press_bg))
-        btn.bind("<ButtonRelease-1>", lambda _e: btn.configure(bg=hover_bg))
+        btn._base_fg = fg  # type: ignore[attr-defined]
+        btn._base_bg = bg  # type: ignore[attr-defined]
+        btn._base_border = border  # type: ignore[attr-defined]
+
+        def _on_enter(_e: Any) -> None:
+            bfg = getattr(btn, "_base_fg", fg)
+            bbg = getattr(btn, "_base_bg", bg)
+            bbr = getattr(btn, "_base_border", border)
+            btn.configure(bg=mix_hex(bbg, bfg, 0.24), highlightbackground=mix_hex(bbr, bfg, 0.50))
+
+        def _on_leave(_e: Any) -> None:
+            btn.configure(bg=getattr(btn, "_base_bg", bg), highlightbackground=getattr(btn, "_base_border", border))
+
+        def _on_press(_e: Any) -> None:
+            bfg = getattr(btn, "_base_fg", fg)
+            bbg = getattr(btn, "_base_bg", bg)
+            btn.configure(bg=mix_hex(bbg, bfg, 0.42))
+
+        btn.bind("<Enter>", _on_enter)
+        btn.bind("<Leave>", _on_leave)
+        btn.bind("<ButtonPress-1>", _on_press)
+        btn.bind("<ButtonRelease-1>", _on_enter)
         return btn
 
     def _build_layout(self) -> None:
@@ -980,6 +1020,8 @@ class HostDaemonDesktopGUI:
         self._stage.bind("<Configure>", self._on_stage_inner_configure)
         self._stage_canvas.bind("<Configure>", self._on_stage_canvas_configure)
         self.root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
 
         self._views: Dict[str, tk.Frame] = {}
         self._build_overview_view()
@@ -1021,7 +1063,13 @@ class HostDaemonDesktopGUI:
         try:
             if not self._stage_vscroll.winfo_ismapped():
                 return
-            delta = int(-1 * (event.delta / 120)) if getattr(event, "delta", 0) else 0
+            num = getattr(event, "num", None)
+            if num == 4:
+                delta = -1
+            elif num == 5:
+                delta = 1
+            else:
+                delta = int(-1 * (event.delta / 120)) if getattr(event, "delta", 0) else 0
             if delta != 0:
                 self._stage_canvas.yview_scroll(delta, "units")
         except Exception:
@@ -1038,11 +1086,23 @@ class HostDaemonDesktopGUI:
             and abs(h - self._backdrop_size[1]) < 24
         ):
             return
-        img = render_ambient_backdrop(w, h, focal_shift=self._backdrop_focal)
-        if img is not None:
-            self._backdrop_photo = ImageTk.PhotoImage(img)
-            self._bg_label.configure(image=self._backdrop_photo)
-            self._backdrop_size = (w, h)
+        cache = getattr(self, "_backdrop_cache", None)
+        if cache is None:
+            cache = {}
+            self._backdrop_cache = cache
+        cache_key = (w // 16, h // 16, round(self._backdrop_focal, 2))
+        photo = cache.get(cache_key)
+        if photo is None:
+            img = render_ambient_backdrop(w, h, focal_shift=self._backdrop_focal)
+            if img is None:
+                return
+            photo = ImageTk.PhotoImage(img)
+            if len(cache) >= 8:
+                cache.clear()
+            cache[cache_key] = photo
+        self._backdrop_photo = photo
+        self._bg_label.configure(image=self._backdrop_photo)
+        self._backdrop_size = (w, h)
 
     def _on_root_configure(self, event: Any) -> None:
         if event.widget is not self.root:
@@ -1582,15 +1642,15 @@ class HostDaemonDesktopGUI:
         ).pack(anchor="w")
         uri_row = tk.Frame(creds, bg=CyberColors.TERMINAL_BG, padx=10, pady=7, highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE)
         uri_row.pack(fill="x", pady=(3, 10))
-        self._lbl_ws_uri = tk.Label(
-            uri_row, text=f"ws://{self.state.local_ip}:{self.state.port}",
-            font=(self.mono_font, 10, "bold"), fg=CyberColors.PRIMARY, bg=CyberColors.TERMINAL_BG,
-        )
-        self._lbl_ws_uri.pack(side="left")
         self._make_cyber_button(
             uri_row, "COPY", self._copy_ws_uri,
             fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, pad_x=8, pad_y=2, font_size=8,
-        ).pack(side="right")
+        ).pack(side="right", padx=(6, 0))
+        self._lbl_ws_uri = tk.Label(
+            uri_row, text=f"ws://{self.state.local_ip}:{self.state.port}",
+            font=(self.mono_font, 10, "bold"), fg=CyberColors.PRIMARY, bg=CyberColors.TERMINAL_BG, anchor="w",
+        )
+        self._lbl_ws_uri.pack(side="left", fill="x", expand=True)
 
         tk.Label(
             creds, text="ONE-TIME 6-DIGIT PIN", font=(self.ui_font, 8, "bold"),
@@ -1598,16 +1658,20 @@ class HostDaemonDesktopGUI:
         ).pack(anchor="w")
         pin_row = tk.Frame(creds, bg=CyberColors.TERMINAL_BG, padx=10, pady=7, highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE)
         pin_row.pack(fill="x", pady=(3, 10))
-        self._lbl_pin = tk.Label(
-            pin_row, text=self.state.pairing_pin,
-            font=(self.mono_font, 18, "bold"), fg=CyberColors.SUCCESS, bg=CyberColors.TERMINAL_BG,
-        )
-        self._lbl_pin.pack(side="left")
+        self._make_cyber_button(
+            pin_row, "COPY PIN", self._copy_pin,
+            fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT, border=CyberColors.SUCCESS, pad_x=8, pad_y=3, font_size=8,
+        ).pack(side="right", padx=(6, 0))
         self._lbl_pin_ttl = tk.Label(
             pin_row, text="TTL --:--", font=(self.mono_font, 8),
             fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.TERMINAL_BG,
         )
         self._lbl_pin_ttl.pack(side="right", padx=(6, 0))
+        self._lbl_pin = tk.Label(
+            pin_row, text=self.state.pairing_pin,
+            font=(self.mono_font, 18, "bold"), fg=CyberColors.SUCCESS, bg=CyberColors.TERMINAL_BG, anchor="w",
+        )
+        self._lbl_pin.pack(side="left")
 
         tk.Label(
             creds, text="HOST HMAC MASTER SECRET", font=(self.ui_font, 8, "bold"),
@@ -1615,11 +1679,6 @@ class HostDaemonDesktopGUI:
         ).pack(anchor="w")
         tok_row = tk.Frame(creds, bg=CyberColors.TERMINAL_BG, padx=10, pady=7, highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE)
         tok_row.pack(fill="x", pady=(3, 12))
-        self._lbl_token = tk.Label(
-            tok_row, text="ainet_••••••••••••••••••••••••",
-            font=(self.mono_font, 9), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG,
-        )
-        self._lbl_token.pack(side="left")
         self._btn_tok_vis = self._make_cyber_button(
             tok_row, "SHOW", self._toggle_token_visibility,
             fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE_ELEVATED, border=CyberColors.GLASS_BORDER_IDLE, pad_x=7, pad_y=2, font_size=8,
@@ -1628,17 +1687,26 @@ class HostDaemonDesktopGUI:
         self._make_cyber_button(
             tok_row, "COPY", self._copy_token,
             fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, pad_x=7, pad_y=2, font_size=8,
-        ).pack(side="right")
+        ).pack(side="right", padx=(6, 0))
+        self._lbl_token = tk.Label(
+            tok_row, text="ainet_••••••••••••••••••••••••",
+            font=(self.mono_font, 9), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG, anchor="w",
+        )
+        self._lbl_token.pack(side="left", fill="x", expand=True)
 
         act_row = tk.Frame(creds, bg=CyberColors.SURFACE)
         act_row.pack(fill="x")
         self._make_cyber_button(
-            act_row, "ROTATE PIN & TOKEN", self._rotate_token,
-            fg=CyberColors.WARNING, bg=CyberColors.WARNING_SOFT, border=CyberColors.WARNING,
-        ).pack(side="left", padx=(0, 8), pady=2)
+            act_row, "COPY PAIR LINK", self._copy_pairing_uri,
+            fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT, border=CyberColors.SUCCESS,
+        ).pack(side="left", padx=(0, 6), pady=2)
         self._make_cyber_button(
-            act_row, "REFRESH PIN ONLY", self._refresh_pin_only,
+            act_row, "REFRESH PIN", self._refresh_pin_only,
             fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT,
+        ).pack(side="left", padx=(0, 6), pady=2)
+        self._make_cyber_button(
+            act_row, "ROTATE TOKEN", self._rotate_token,
+            fg=CyberColors.WARNING, bg=CyberColors.WARNING_SOFT, border=CyberColors.WARNING,
         ).pack(side="left", pady=2)
 
     # ------------------------------------------------------------------
@@ -1979,14 +2047,20 @@ class HostDaemonDesktopGUI:
         if inst_req and callable(show_install_dialog):
             self.root.after(20, lambda: show_install_dialog(self.root))
         if uninst_req and callable(show_uninstall_dialog):
-            self.root.after(20, lambda: show_uninstall_dialog(self.root))
+            self.root.after(20, lambda: show_uninstall_dialog(self.root, on_uninstalled=self._full_shutdown))
         if exit_req:
             self._full_shutdown()
             return
 
-        pending_hitl = self.state.pop_pending_hitl_requests()
-        if pending_hitl and not self._hitl_dialog_active:
+        if not self._hitl_dialog_active:
+            pending_hitl = self.state.pop_pending_hitl_requests()
             for req in pending_hitl:
+                created_at = float(req.get("created_at") or time.time())
+                if (time.time() - created_at) >= 29.0:
+                    cb = req.get("resolve_cb")
+                    if callable(cb):
+                        cb(False)
+                    continue
                 self._hitl_dialog_active = True
                 try:
                     approved = self._show_hitl_approval_modal(
@@ -2043,10 +2117,17 @@ class HostDaemonDesktopGUI:
         peer_count = len(snap["connectedClients"])
         self._pill_peers.configure(text=f" {peer_count} PEER{'S' if peer_count != 1 else ''} ")
         self._lbl_uptime.configure(text=f"UP {snap['uptime']}")
+        vo_fg = CyberColors.WARNING if snap["viewOnlyMode"] else CyberColors.PRIMARY
+        vo_bg = CyberColors.WARNING_SOFT if snap["viewOnlyMode"] else CyberColors.PRIMARY_SOFT
+        vo_br = CyberColors.WARNING if snap["viewOnlyMode"] else CyberColors.GLASS_BORDER
+        self._btn_viewonly._base_fg = vo_fg  # type: ignore[attr-defined]
+        self._btn_viewonly._base_bg = vo_bg  # type: ignore[attr-defined]
+        self._btn_viewonly._base_border = vo_br  # type: ignore[attr-defined]
         self._btn_viewonly.configure(
             text="INPUT LOCKED" if snap["viewOnlyMode"] else "LOCK INPUT",
-            fg=CyberColors.WARNING if snap["viewOnlyMode"] else CyberColors.PRIMARY,
-            bg=CyberColors.WARNING_SOFT if snap["viewOnlyMode"] else CyberColors.PRIMARY_SOFT,
+            fg=vo_fg,
+            bg=vo_bg,
+            highlightbackground=vo_br,
         )
 
         # Overview gauges & credentials (only refresh QR bitmap when URI changes)
@@ -2201,11 +2282,6 @@ class HostDaemonDesktopGUI:
                 highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE,
             )
             row.pack(fill="x", pady=3)
-            tk.Label(
-                row, text=f"{dev} ({ip})",
-                font=(self.ui_font, 9, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG,
-            ).pack(side="left")
-
             self._make_cyber_button(
                 row, "BAN", lambda i=cid, p=ip, d=dev: self.state.blacklist_client(i, p, d),
                 fg=CyberColors.ACCENT, bg=CyberColors.ACCENT_SOFT, border=CyberColors.ACCENT, pad_x=6, pad_y=2, font_size=8,
@@ -2226,6 +2302,10 @@ class HostDaemonDesktopGUI:
                 bg=CyberColors.PRIMARY_SOFT if inp else CyberColors.WARNING_SOFT,
                 pad_x=6, pad_y=2, font_size=8,
             ).pack(side="right")
+            tk.Label(
+                row, text=f"{dev} ({ip})",
+                font=(self.ui_font, 9, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG, anchor="w",
+            ).pack(side="left", fill="x", expand=True)
 
     def _flush_logs_to_console(self) -> None:
         with self.state.lock:
@@ -2647,6 +2727,7 @@ class HostDaemonDesktopGUI:
         with self.state.lock:
             self.state.is_paused = not self.state.is_paused
             paused = self.state.is_paused
+        self.state.save_policy_config()
         self.state.add_log("WARN" if paused else "INFO", f"Host Daemon {'PAUSED' if paused else 'RESUMED'} via UI.")
         self._refresh_ui()
 
@@ -2672,22 +2753,62 @@ class HostDaemonDesktopGUI:
         self.root.clipboard_append(uri)
         self.state.add_log("INFO", f"Copied endpoint URI: {uri}")
 
+    def _copy_pin(self) -> None:
+        pin = str(self.state.pairing_pin or "").strip()
+        if not pin:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(pin)
+        self.state.add_log("SECURITY", "6-digit pairing PIN copied to local clipboard.")
+
+    def _copy_pairing_uri(self) -> None:
+        uri = self.state.get_pairing_uri()
+        self.root.clipboard_clear()
+        self.root.clipboard_append(uri)
+        self.state.add_log("SECURITY", "One-tap pairing link (ainet://pair) copied to local clipboard.")
+
     def _toggle_token_visibility(self) -> None:
         self._token_visible = not self._token_visible
         self._refresh_ui()
 
     def _copy_token(self) -> None:
+        copied = self.state.pairing_token
         self.root.clipboard_clear()
-        self.root.clipboard_append(self.state.pairing_token)
-        self.state.add_log("SECURITY", "Master pairing token copied to local clipboard.")
+        self.root.clipboard_append(copied)
+        self.state.add_log("SECURITY", "Master pairing token copied to local clipboard (auto-clears in 30s).")
+
+        def _auto_clear() -> None:
+            try:
+                if self.root.clipboard_get() == copied:
+                    self.root.clipboard_clear()
+            except Exception:
+                pass
+
+        try:
+            self.root.after(30000, _auto_clear)
+        except Exception:
+            pass
 
     def _rotate_token(self) -> None:
+        if messagebox is not None:
+            ok = messagebox.askyesno(
+                "Rotate Master Token",
+                "Rotating the master token will require all currently paired phones/browsers to re-pair with the new 6-digit PIN.\n\nContinue?",
+                parent=self.root,
+            )
+            if not ok:
+                return
         self.state.rotate_pairing_token()
+        if callable(self.on_disconnect_all):
+            try:
+                self.on_disconnect_all()
+            except Exception:
+                pass
         self._refresh_ui()
 
     def _refresh_pin_only(self) -> None:
-        pin = self.state.regenerate_pairing_pin()
-        self.state.add_log("SECURITY", f"Ephemeral 6-digit PIN refreshed: {pin}")
+        self.state.regenerate_pairing_pin()
+        self.state.add_log("SECURITY", "Ephemeral 6-digit PIN refreshed by operator.")
         self._refresh_ui()
 
     def _apply_profile(self, profile: str) -> None:

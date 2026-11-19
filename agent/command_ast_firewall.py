@@ -61,6 +61,9 @@ CRITICAL_COMMANDS = {
     "installutil", "cmstp", "hh", "odbcconf", "mavinject", "control",
     "ftp", "tftp", "nc", "ncat", "socat", "ssh", "scp", "rsync",
     "start-bitstransfer", "add-type", "new-object",
+    "set-mppreference", "invoke-wmimethod", "invoke-cimmethod",
+    "new-service", "set-service", "add-content",
+    "clear-eventlog", "remove-eventlog", "export-pfxcertificate",
     "sudo", "su", "pkexec", "arp", "route",
 }
 
@@ -70,9 +73,11 @@ INLINE_EXEC_INTERPRETERS = {
 }
 
 INLINE_EXEC_FLAGS = {
-    "-c", "-e", "/c", "/k", "/e", "/enc", "-m",
+    "-c", "-e", "/c", "/k", "/r", "/e", "/enc", "-m",
     "-command", "-encodedcommand", "-enc", "-f", "-file",
 }
+
+_SAFE_INTERPRETER_INFO_FLAGS = {"-v", "-vv", "--version", "-h", "--help", "/?"}
 
 # Pre-compiled high-performance regular expressions
 _RE_CARET = re.compile(r"\^")
@@ -260,10 +265,31 @@ class CommandASTFirewall:
                 exe_name = os.path.basename(clean_tok.replace("\\", "/")).lower()
                 base_name = exe_name.split(".")[0]
                 if base_name in INLINE_EXEC_INTERPRETERS:
-                    for following in seg_tokens[idx + 1:]:
-                        norm_flag = following.strip('"\'`(){};|&').lower()
-                        if norm_flag in INLINE_EXEC_FLAGS:
+                    trailing = [t.strip('"\'`(){};|&').lower() for t in seg_tokens[idx + 1:] if t.strip('"\'`(){};|&')]
+                    # Permit purely informational version/help queries (e.g. `python --version`) without HITL
+                    if trailing and all(t in _SAFE_INTERPRETER_INFO_FLAGS for t in trailing):
+                        continue
+                    for norm_flag in trailing:
+                        # Catch exact flags, combined short flags (e.g. `-uc`, `-xc`, `-le`), or PowerShell prefixes (`-co`, `-fi`, `-en`)
+                        is_combined_short = (
+                            len(norm_flag) >= 2
+                            and norm_flag.startswith("-")
+                            and not norm_flag.startswith("--")
+                            and any(ch in norm_flag[1:] for ch in ("c", "e", "m", "f"))
+                        )
+                        is_ps_prefix = (
+                            base_name in ("powershell", "pwsh")
+                            and (norm_flag.startswith("-") or norm_flag.startswith("/"))
+                            and any(
+                                full.startswith(norm_flag[1:]) and len(norm_flag) >= 3
+                                for full in ("command", "encodedcommand", "file")
+                            )
+                        )
+                        if norm_flag in INLINE_EXEC_FLAGS or is_combined_short or is_ps_prefix:
                             return True, "REQUIRES_BIOMETRIC", single_line_cleaned, f"Inline code execution via '{base_name} {norm_flag}' requires biometric confirmation."
+                    # Any other non-trivial interpreter invocation (e.g., `python script.txt`) also requires HITL
+                    if trailing:
+                        return True, "REQUIRES_BIOMETRIC", single_line_cleaned, f"Script execution via interpreter '{base_name}' requires biometric confirmation."
 
         # Redirection check outside quoted literals
         unquoted_outside = re.sub(r'"[^"]*"|\'[^\']*\'', " ", single_line_cleaned)

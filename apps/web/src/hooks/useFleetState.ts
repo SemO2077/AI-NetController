@@ -51,7 +51,10 @@ export function useFleetState() {
     if (typeof window === 'undefined' || typeof fetch !== 'function') return;
     let cancelled = false;
     fetch('/api/wol/schedules', { credentials: 'include' })
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        if (res.ok) backendScheduleSyncOkRef.current = true;
+        return res.ok ? res.json() : null;
+      })
       .then((data) => {
         if (!cancelled && data && Array.isArray(data.schedules) && data.schedules.length > 0) {
           setWolSchedules(data.schedules);
@@ -464,6 +467,7 @@ export function useFleetState() {
   }, []);
 
   const lastTriggeredScheduleRef = useRef<Map<string, string>>(new Map());
+  const backendScheduleSyncOkRef = useRef<boolean>(false);
 
   const updateSchedules = useCallback(
     (s: WolSchedule[]) => {
@@ -474,7 +478,7 @@ export function useFleetState() {
           const targets = resolveScheduleTargets(sched, hosts);
           return {
             ...sched,
-            targetMacs: targets.map((t) => ({ id: t.id, name: t.name, mac: t.mac })),
+            targetMacs: targets.map((t) => t.mac).filter(Boolean),
           };
         });
         fetch('/api/wol/schedules', {
@@ -482,7 +486,13 @@ export function useFleetState() {
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ schedules: enriched }),
-        }).catch(() => {});
+        })
+          .then((res) => {
+            backendScheduleSyncOkRef.current = res.ok;
+          })
+          .catch(() => {
+            backendScheduleSyncOkRef.current = false;
+          });
       }
     },
     [hosts]
@@ -490,6 +500,8 @@ export function useFleetState() {
 
   useEffect(() => {
     const checkSchedules = () => {
+      // Avoid duplicate firing when the Express backend scheduler owns execution
+      if (backendScheduleSyncOkRef.current) return;
       const now = new Date();
       const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
       const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;

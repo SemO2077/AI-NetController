@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from '../../i18n/useTranslation';
 import { triggerHapticFeedback } from '../../services/hapticService';
+import { buildHostWsUri } from '../../services/securityService';
 import { copyToClipboard } from '../../utils/clipboard';
 import { SPRING_BUBBLY, SPRING_POP, MODAL_BUBBLE_VARIANTS } from '../../utils/springPhysics';
 
@@ -36,6 +37,8 @@ interface SetupInfo {
   pairingPin?: string;
   pairingToken?: string;
   daemonOnline?: boolean;
+  allowLanWeb?: boolean;
+  ainetPairUri?: string;
   webOrigin: string;
   mobilePairUrl: string;
   exeDownloadUrl: string;
@@ -79,6 +82,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
   const [isPairedSuccess, setIsPairedSuccess] = useState(false);
   const [showPwaGuide, setShowPwaGuide] = useState(false);
   const [deferredPwaPrompt, setDeferredPwaPrompt] = useState<any>(null);
+  const [qrMode, setQrMode] = useState<'android' | 'browser'>('android');
   const timersRef = useRef<Set<number>>(new Set());
 
   const scheduleTimer = useCallback((fn: () => void, ms: number) => {
@@ -157,7 +161,21 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
   const effectiveToken = setupInfo?.pairingToken || '';
   const isDaemonReady = Boolean(serverReachable && setupInfo && setupInfo.daemonOnline !== false);
   const hasValidMac = /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(effectiveMac);
-  const effectiveWsUri = `ws://${effectiveIp}:${effectivePort}`;
+  const effectiveWsUri = buildHostWsUri(effectiveIp, effectivePort);
+  const allowLanWeb = setupInfo?.allowLanWeb === true;
+
+  const effectiveAndroidPairUri = React.useMemo(() => {
+    if (setupInfo?.ainetPairUri && (!customIp.trim() || customIp.trim() === setupInfo.localIp)) {
+      return setupInfo.ainetPairUri;
+    }
+    const params = new URLSearchParams({
+      ip: effectiveIp,
+      port: String(effectivePort),
+      name: effectiveHostname,
+      ...(effectivePin ? { pin: effectivePin } : {}),
+    });
+    return `ainet://pair?${params.toString()}`;
+  }, [setupInfo?.ainetPairUri, setupInfo?.localIp, customIp, effectiveIp, effectivePort, effectiveHostname, effectivePin]);
 
   const effectiveMobilePairUrl = React.useMemo(() => {
     const baseOrigin =
@@ -176,11 +194,13 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     return `${baseOrigin}/#${params.toString()}`;
   }, [effectiveIp, effectivePort, effectiveHostname, effectiveMac, effectivePin, setupInfo?.osName]);
 
-  // Generate crisp QR Code whenever effectiveMobilePairUrl changes
+  const activeQrPayload = qrMode === 'android' ? effectiveAndroidPairUri : effectiveMobilePairUrl;
+
+  // Generate crisp QR Code whenever activeQrPayload changes
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    QRCode.toDataURL(effectiveMobilePairUrl, {
+    QRCode.toDataURL(activeQrPayload, {
       width: 240,
       margin: 1,
       color: {
@@ -196,7 +216,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [effectiveMobilePairUrl, isOpen]);
+  }, [activeQrPayload, isOpen]);
 
   const handleCopy = (text: string, label: string) => {
     triggerHapticFeedback('light');
@@ -449,7 +469,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                             ? 'Вариант Б: Самостоятелен Windows .EXE файл'
                             : 'Option B: Standalone Windows Executable (.EXE)'}
                         </span>
-                        <span className="text-[10px] font-mono text-slate-400">v0.70.0 (Beta)</span>
+                        <span className="text-[10px] font-mono text-slate-400">v0.80.0 (Beta)</span>
                       </div>
                       <p className="text-[11px] text-slate-400 leading-snug">
                         {isBg
@@ -458,13 +478,13 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </p>
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <a
-                          href={setupInfo?.exeDownloadUrl || '/releases/v0.70.0/AI_NetController_HostAgent_v0.70.0_win64.exe'}
-                          download="AI_NetController_HostAgent_v0.70.0_win64.exe"
+                          href={setupInfo?.exeDownloadUrl || '/releases/v0.80.0/AI_NetController_HostAgent_v0.80.0_win64.exe'}
+                          download="AI_NetController_HostAgent_v0.80.0_win64.exe"
                           onClick={() => triggerHapticFeedback('medium')}
                           className="min-h-[42px] px-4 py-2 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center gap-2 transition cursor-pointer"
                         >
                           <Download className="w-4 h-4 text-emerald-400" />
-                          <span>{isBg ? 'Изтегли AI_NetController_HostAgent_v0.70.0_win64.exe' : 'Download AI_NetController_HostAgent_v0.70.0_win64.exe'}</span>
+                          <span>{isBg ? 'Изтегли AI_NetController_HostAgent_v0.80.0_win64.exe' : 'Download AI_NetController_HostAgent_v0.80.0_win64.exe'}</span>
                         </a>
                       </div>
                     </div>
@@ -528,6 +548,62 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       <QrCode className="w-5 h-5 text-cyan-400" />
                     </div>
 
+                    {/* Prominent 6-Digit Pairing PIN Row */}
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-400/35 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-amber-300 font-bold">
+                          {isBg ? '6-цифрен PIN за сдвояване' : '6-Digit Pairing PIN'}
+                        </div>
+                        <div className="text-lg font-mono font-extrabold tracking-[0.22em] text-white tabular-nums">
+                          {effectivePin || (isBg ? 'Офлайн' : 'Offline')}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!effectivePin}
+                        onClick={() => handleCopy(effectivePin, 'pin')}
+                        className="min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 border border-amber-400/40 text-amber-200 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        {copiedField === 'pin' ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>{isBg ? 'Копиран' : 'Copied'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>{isBg ? 'Копирай PIN' : 'Copy PIN'}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* QR Target Mode Toggle: Android App vs Phone Browser */}
+                    <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-[#050811] border border-white/10">
+                      <button
+                        type="button"
+                        onClick={() => setQrMode('android')}
+                        className={`min-h-[34px] px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition cursor-pointer ${
+                          qrMode === 'android'
+                            ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/40'
+                            : 'text-slate-400 hover:text-white border border-transparent'
+                        }`}
+                      >
+                        {isBg ? 'Android Приложение (Direct)' : 'Android App (Direct)'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQrMode('browser')}
+                        className={`min-h-[34px] px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition cursor-pointer ${
+                          qrMode === 'browser'
+                            ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
+                            : 'text-slate-400 hover:text-white border border-transparent'
+                        }`}
+                      >
+                        {isBg ? 'Уеб Браузър (PWA)' : 'Phone Browser (PWA)'}
+                      </button>
+                    </div>
+
                     {/* QR Code + Editable LAN IP Row */}
                     <div className="p-3.5 rounded-xl bg-[#070c18] border border-white/10 flex flex-col sm:flex-row items-center gap-4">
                       <div className="w-36 h-36 rounded-2xl bg-[#070c18] border-2 border-cyan-400/40 p-2 flex items-center justify-center shrink-0 shadow-[0_0_24px_rgba(34,211,238,0.15)]">
@@ -558,14 +634,22 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                         </div>
 
                         <p className="text-[11px] text-slate-300 leading-snug">
-                          {isBg
-                            ? 'Насочете камерата на телефона към QR кода. Приложението ще се отвори и автоматично ще добави и свърже вашия компютър!'
-                            : 'Point your phone camera at this QR code. It opens the app on your phone and automatically pairs your PC!'}
+                          {qrMode === 'android'
+                            ? isBg
+                              ? 'Сканирайте от Android приложението или камерата. Сдвоява се директно с PC Агента (порт 8765) с E2E криптиране!'
+                              : 'Scan in the Android companion app or phone camera. Pairs directly to the PC Agent (port 8765) with E2E encryption!'
+                            : allowLanWeb
+                            ? isBg
+                              ? 'Насочете камерата на телефона към QR кода. Отваря уеб конзолата и автоматично сдвоява вашия PC!'
+                              : 'Point your phone camera at this QR code. It opens the web console and automatically pairs your PC!'
+                            : isBg
+                            ? 'Забележка: Уеб сървърът слуша само на localhost. За достъп от браузър на телефона стартирайте с ALLOW_LAN_WEB=true или ползвайте Android App QR.'
+                            : 'Note: Web server is currently localhost-only. Set ALLOW_LAN_WEB=true for phone browser access, or switch to Android App QR.'}
                         </p>
 
                         <button
                           type="button"
-                          onClick={() => handleCopy(effectiveMobilePairUrl, 'pairUrl')}
+                          onClick={() => handleCopy(activeQrPayload, 'pairUrl')}
                           className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/12 border border-white/10 text-xs font-mono text-cyan-300 flex items-center justify-center gap-1.5 cursor-pointer"
                         >
                           {copiedField === 'pairUrl' ? (
@@ -576,7 +660,15 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                           ) : (
                             <>
                               <Copy className="w-3.5 h-3.5" />
-                              <span>{isBg ? 'Копирай линк за авто-сдвояване' : 'Copy Auto-Pairing Link'}</span>
+                              <span>
+                                {qrMode === 'android'
+                                  ? isBg
+                                    ? 'Копирай ainet:// линк'
+                                    : 'Copy ainet:// Pair Link'
+                                  : isBg
+                                  ? 'Копирай линк за авто-сдвояване'
+                                  : 'Copy Auto-Pairing Link'}
+                              </span>
                             </>
                           )}
                         </button>
@@ -597,8 +689,8 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </button>
 
                       <a
-                        href={setupInfo?.apkDownloadUrl || '/releases/v0.70.0/AI_NetController_v0.70.0_arm64-v8a.apk'}
-                        download="AI_NetController_v0.70.0_arm64-v8a.apk"
+                        href={setupInfo?.apkDownloadUrl || '/releases/v0.80.0/AI_NetController_v0.80.0_arm64-v8a.apk'}
+                        download="AI_NetController_v0.80.0_arm64-v8a.apk"
                         onClick={() => triggerHapticFeedback('medium')}
                         className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                       >

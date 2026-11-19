@@ -48,6 +48,7 @@ interface FleetDashboardProps {
   onInspectWolPacket: (device: HostDevice) => void;
   onWakeHost?: (payload: WolPacketPayload, deviceId: string) => void;
   onSendCommand?: (command: string, targetOverride?: string) => void;
+  onSendInputOpcode?: (opcode: number, payload: Record<string, any> | string) => boolean;
   onSendWol?: (device: HostDevice) => void;
   onViewScreen: (device: HostDevice) => void;
   onOpenAddHostModal?: () => void;
@@ -194,6 +195,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   onInspectWolPacket,
   onWakeHost,
   onSendCommand,
+  onSendInputOpcode,
   onSendWol,
   onViewScreen,
   onOpenAddHostModal,
@@ -888,6 +890,17 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             )}
             <button
               type="button"
+              onClick={() => {
+                triggerHapticFeedback('light');
+                openModal('quickSetup');
+              }}
+              className="h-10 px-4 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 active:scale-95 text-emerald-200 border border-emerald-400/40 font-bold text-xs flex items-center gap-1.5 transition"
+            >
+              <QrCode className="w-4 h-4 text-emerald-300" />
+              <span>{language === 'bg' ? 'Бързо сдвояване (QR/PIN)' : 'Quick Pair (QR/PIN)'}</span>
+            </button>
+            <button
+              type="button"
               onClick={addHostHandler}
               className="h-10 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
             >
@@ -935,6 +948,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               onViewScreen={onViewScreen}
               onSelectForCommand={onSelectHostForCommand}
               onQuickCommand={onSendCommand}
+              onSendInputOpcode={onSendInputOpcode}
               onDiagnoseHost={handleDiagnoseHost}
               onOpenDetailsModal={(dev) => openModal('hostDetails', dev)}
               onWakeClick={handleWakeClick}

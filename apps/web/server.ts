@@ -5,11 +5,13 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dgram from 'dgram';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import os from 'os';
 import crypto from 'crypto';
 import net from 'net';
 import dns from 'dns/promises';
+import { WebCryptoVault } from './src/utils/cryptoVault.ts';
+import { validateLanAgentHost } from './src/utils/networkGuard.ts';
 
 dotenv.config();
 
@@ -17,8 +19,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const RELEASES_PUBLIC_DIR = path.resolve(ROOT_DIR, 'public/releases');
-const APP_VERSION = '0.70.0';
-const APP_VERSION_LABEL = '0.70.00-beta';
+const APP_VERSION = '0.80.0';
+const APP_VERSION_LABEL = '0.80.00-beta';
 const PROTOCOL_VERSION = 'AI-NET/3.0-SECURE';
 
 const app = express();
@@ -155,6 +157,18 @@ function isLoopbackIp(addr?: string | null): boolean {
 function getAllowedOrigins(): Set<string> {
   const allowed = new Set<string>(['localhost', '127.0.0.1', '[::1]', '::1']);
   if (ALLOW_LAN_WEB) {
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const iface of nets[name] || []) {
+        if (!iface.internal && iface.address) {
+          const clean = iface.address.split('%')[0].toLowerCase();
+          if (clean && !clean.startsWith('169.254.')) {
+            allowed.add(clean);
+            if (clean.includes(':')) allowed.add(`[${clean}]`);
+          }
+        }
+      }
+    }
     allowed.add(detectPrimaryLanIp().toLowerCase());
   }
   const extra = process.env.ALLOWED_ORIGINS || '';
@@ -176,7 +190,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader(
+    'Content-Security-Policy',
+    process.env.NODE_ENV === 'production'
+      ? "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+      : "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss: http://localhost:* http://127.0.0.1:*; worker-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+  );
 
   const origin = req.headers.origin;
   if (origin) {
@@ -184,8 +203,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     try {
       const parsedOrigin = new URL(origin);
       const hn = parsedOrigin.hostname.toLowerCase();
-      const hostHeader = String(req.headers.host || '').split(':')[0].toLowerCase();
-      if (getAllowedOrigins().has(hn) || (ALLOW_LAN_WEB && hostHeader && hn === hostHeader)) {
+      if (getAllowedOrigins().has(hn)) {
         originAllowed = true;
       }
     } catch {
@@ -203,7 +221,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     }
   }
 
-  if (req.headers['sec-fetch-site'] === 'cross-site' && req.path.startsWith('/api/')) {
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (req.path.startsWith('/api/') && (fetchSite === 'cross-site' || (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && fetchSite === 'same-site'))) {
     return res.status(403).json({ error: 'Cross-site request blocked (CSRF shield)' });
   }
 
@@ -318,14 +337,31 @@ interface DaemonConfigData {
   [key: string]: any;
 }
 
-let cachedDaemonConfig: { data: DaemonConfigData; loadedAt: number } | null = null;
+let cachedDaemonConfig: { data: DaemonConfigData; loadedAt: number; mtimeMs: number } | null = null;
+let configWriteQueue: Promise<unknown> = Promise.resolve();
+
+function getDaemonConfigMtimeMs(): number {
+  try {
+    const cfgPath = getDaemonConfigPath();
+    return fs.existsSync(cfgPath) ? fs.statSync(cfgPath).mtimeMs : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function hasDpapiEncryptedFields(raw: Record<string, any>): boolean {
+  if (raw.dpapi_b64) return true;
+  const tok = typeof raw.pairing_token === 'string' ? raw.pairing_token : '';
+  const pin = typeof raw.pairing_pin === 'string' ? raw.pairing_pin : '';
+  return tok.startsWith('dpapi_v1:') || pin.startsWith('dpapi_v1:');
+}
 
 function readPlaintextConfigSync(): DaemonConfigData | null {
   try {
     const cfgPath = getDaemonConfigPath();
     if (!fs.existsSync(cfgPath)) return null;
     const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-    if (raw && typeof raw === 'object' && !raw.dpapi_b64) {
+    if (raw && typeof raw === 'object' && !hasDpapiEncryptedFields(raw)) {
       return raw as DaemonConfigData;
     }
   } catch {
@@ -340,13 +376,19 @@ function getPythonBin(): string {
 
 async function loadDaemonConfig(forceRefresh = false): Promise<DaemonConfigData> {
   const now = Date.now();
-  if (!forceRefresh && cachedDaemonConfig && now - cachedDaemonConfig.loadedAt < 3000) {
+  const currentMtime = getDaemonConfigMtimeMs();
+  if (
+    !forceRefresh &&
+    cachedDaemonConfig &&
+    cachedDaemonConfig.mtimeMs === currentMtime &&
+    (currentMtime > 0 || now - cachedDaemonConfig.loadedAt < 3000)
+  ) {
     return cachedDaemonConfig.data;
   }
 
   const plain = readPlaintextConfigSync();
   if (plain) {
-    cachedDaemonConfig = { data: plain, loadedAt: now };
+    cachedDaemonConfig = { data: plain, loadedAt: now, mtimeMs: currentMtime };
     return plain;
   }
 
@@ -369,46 +411,83 @@ async function loadDaemonConfig(forceRefresh = false): Promise<DaemonConfigData>
     });
   });
 
-  cachedDaemonConfig = { data: loaded, loadedAt: Date.now() };
+  cachedDaemonConfig = { data: loaded, loadedAt: Date.now(), mtimeMs: getDaemonConfigMtimeMs() };
   return loaded;
 }
 
-async function saveDaemonConfigPatch(patch: Partial<DaemonConfigData>): Promise<DaemonConfigData> {
-  const current = await loadDaemonConfig(true);
-  const merged = { ...current, ...patch };
-  const ok = await new Promise<boolean>((resolve) => {
-    const pyScript =
-      'import json,sys; sys.path.insert(0,"agent"); from daemon_config import save_config; cfg=json.loads(sys.argv[1]); print("OK" if save_config(cfg) else "ERR")';
-    execFile(
-      getPythonBin(),
-      ['-c', pyScript, JSON.stringify(merged)],
-      { cwd: ROOT_DIR, timeout: 5000 },
-      (err, stdout) => {
-        resolve(!err && stdout.trim().endsWith('OK'));
+function saveDaemonConfigPatch(patch: Partial<DaemonConfigData>): Promise<DaemonConfigData> {
+  const op = configWriteQueue.then(async () => {
+    const current = await loadDaemonConfig(true);
+    const merged = { ...current, ...patch };
+    const ok = await new Promise<boolean>((resolve) => {
+      const pyScript =
+        'import json,sys; sys.path.insert(0,"agent"); from daemon_config import save_config; cfg=json.loads(sys.stdin.read()); print("OK" if save_config(cfg) else "ERR")';
+      let settled = false;
+      const done = (val: boolean) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(val);
+        }
+      };
+      const child = spawn(getPythonBin(), ['-c', pyScript], {
+        cwd: ROOT_DIR,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      const timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {}
+        done(false);
+      }, 5000);
+      child.stdout.on('data', (chunk) => {
+        stdout += String(chunk);
+      });
+      child.on('error', () => done(false));
+      child.on('close', (code) => {
+        done(code === 0 && stdout.trim().endsWith('OK'));
+      });
+      try {
+        child.stdin.write(JSON.stringify(merged), 'utf-8');
+        child.stdin.end();
+      } catch {
+        done(false);
       }
-    );
-  });
+    });
 
-  if (!ok) {
-    // Fallback plaintext write if Python runtime isn't present on host
-    const cfgPath = getDaemonConfigPath();
-    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
-    fs.writeFileSync(cfgPath, JSON.stringify(merged, null, 2), { encoding: 'utf-8', mode: 0o600 });
-  }
-  cachedDaemonConfig = { data: merged, loadedAt: Date.now() };
-  return merged;
+    if (!ok) {
+      if (process.platform === 'win32') {
+        throw new Error('Failed to persist DPAPI-encrypted Host Agent configuration via Python runtime.');
+      }
+      const cfgPath = getDaemonConfigPath();
+      fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+      fs.writeFileSync(cfgPath, JSON.stringify(merged, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    }
+    cachedDaemonConfig = { data: merged, loadedAt: Date.now(), mtimeMs: getDaemonConfigMtimeMs() };
+    return merged;
+  });
+  configWriteQueue = op.catch(() => {});
+  return op;
 }
 
 // =====================================================================
 // AUTHENTICATION & SESSION MANAGEMENT (Fail-Closed Zero Hardcoded Secrets)
 // =====================================================================
 const activeSessions = new Map<string, { expiresAt: number; ip: string }>();
+const MAX_ACTIVE_SESSIONS = 500;
+const authFailBuckets = new Map<string, { count: number; lockedUntil: number; windowStart: number }>();
 
 setInterval(() => {
   const now = Date.now();
   for (const [sid, meta] of activeSessions.entries()) {
     if (now >= meta.expiresAt) {
       activeSessions.delete(sid);
+    }
+  }
+  for (const [ipKey, rec] of authFailBuckets.entries()) {
+    if (now > rec.lockedUntil && now - rec.windowStart > 15 * 60_000) {
+      authFailBuckets.delete(ipKey);
     }
   }
 }, 5 * 60_000).unref();
@@ -455,14 +534,24 @@ function parseCookies(header?: string): Record<string, string> {
   return out;
 }
 
-function issueSessionCookie(res: Response, clientIp: string): string {
+function issueSessionCookie(req: Request, res: Response, clientIp: string): string {
+  if (activeSessions.size >= MAX_ACTIVE_SESSIONS) {
+    const oldestKey = activeSessions.keys().next().value;
+    if (oldestKey) activeSessions.delete(oldestKey);
+  }
   const sid = crypto.randomBytes(24).toString('hex');
   activeSessions.set(sid, { expiresAt: Date.now() + SESSION_TTL_MS, ip: clientIp });
+  const isHttps = req.secure || String(req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https';
   res.setHeader(
     'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=${sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+    `${SESSION_COOKIE_NAME}=${sid}; Path=/; HttpOnly; SameSite=Strict${isHttps ? '; Secure' : ''}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
   );
   return sid;
+}
+
+function isDirectLoopbackRequest(req: Request): boolean {
+  const remoteIp = req.socket.remoteAddress;
+  return isLoopbackIp(remoteIp) && !req.headers['x-forwarded-for'] && !req.headers['forwarded'];
 }
 
 async function isRequestAuthenticated(req: Request): Promise<boolean> {
@@ -485,8 +574,7 @@ async function isRequestAuthenticated(req: Request): Promise<boolean> {
   }
 
   // Direct loopback requests without forwarding headers are trusted local browser/CLI traffic when using same-origin UI
-  const remoteIp = req.socket.remoteAddress;
-  if (isLoopbackIp(remoteIp) && !req.headers['x-forwarded-for']) {
+  if (isDirectLoopbackRequest(req)) {
     return true;
   }
 
@@ -506,10 +594,10 @@ async function requireControlAuth(req: Request, res: Response, next: NextFunctio
 app.get('/api/auth/session', async (req: Request, res: Response) => {
   const remoteIp = req.socket.remoteAddress;
   const authed = await isRequestAuthenticated(req);
-  if (isLoopbackIp(remoteIp)) {
+  if (isDirectLoopbackRequest(req)) {
     const cookies = parseCookies(req.headers.cookie);
     if (!cookies[SESSION_COOKIE_NAME] || !activeSessions.has(cookies[SESSION_COOKIE_NAME])) {
-      issueSessionCookie(res, String(remoteIp || '127.0.0.1'));
+      issueSessionCookie(req, res, String(remoteIp || '127.0.0.1'));
     }
     return res.json({ authenticated: true, mode: 'loopback', allowLanWeb: ALLOW_LAN_WEB });
   }
@@ -517,13 +605,36 @@ app.get('/api/auth/session', async (req: Request, res: Response) => {
 });
 
 app.post('/api/auth/session', async (req: Request, res: Response) => {
-  const candidate = String(req.body?.token || '').trim();
-  const secret = await getControlSecret();
-  if (!safeTimingEqual(candidate, secret)) {
-    return res.status(401).json({ error: 'Invalid pairing token or control secret' });
+  const clientIp = String(req.socket.remoteAddress || 'unknown');
+  const now = Date.now();
+  const rec = authFailBuckets.get(clientIp);
+  if (rec && now < rec.lockedUntil) {
+    return res.status(429).json({ error: 'Too many failed sign-in attempts. Please wait and try again.' });
   }
-  issueSessionCookie(res, String(req.socket.remoteAddress || 'unknown'));
-  return res.json({ authenticated: true, mode: 'token' });
+  const candidate = String(req.body?.token || req.body?.pin || '').trim();
+  const secret = await getControlSecret();
+  const cfg = await loadDaemonConfig();
+  const pin = cfg.pairing_pin ? String(cfg.pairing_pin).trim() : '';
+  const pinIssuedAt = Number(cfg.pin_issued_at || 0);
+  const pinTtl = Number(cfg.pin_ttl_seconds || 900);
+  const pinValid =
+    Boolean(pin) &&
+    /^\d{6}$/.test(pin) &&
+    (pinIssuedAt <= 0 || Math.floor(now / 1000) - pinIssuedAt <= pinTtl) &&
+    safeTimingEqual(candidate, pin);
+
+  if (!safeTimingEqual(candidate, secret) && !pinValid) {
+    const nextCount = rec && now - rec.windowStart < 15 * 60_000 ? rec.count + 1 : 1;
+    authFailBuckets.set(clientIp, {
+      count: nextCount,
+      windowStart: rec && now - rec.windowStart < 15 * 60_000 ? rec.windowStart : now,
+      lockedUntil: nextCount >= 5 ? now + 15 * 60_000 : 0,
+    });
+    return res.status(401).json({ error: 'Invalid pairing token or 6-digit PIN' });
+  }
+  authFailBuckets.delete(clientIp);
+  issueSessionCookie(req, res, clientIp);
+  return res.json({ authenticated: true, mode: pinValid ? 'pin' : 'token' });
 });
 
 app.post('/api/auth/logout', (req: Request, res: Response) => {
@@ -545,11 +656,13 @@ function isPrivateOrSpecialIp(ip: string): boolean {
   if (net.isIPv4(clean)) {
     const parts = clean.split('.').map(Number);
     if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true;
-    const [a, b] = parts;
+    const [a, b, c] = parts;
     if (a === 0 || a === 10 || a === 127) return true;
     if (a === 169 && b === 254) return true;
     if (a === 172 && b >= 16 && b <= 31) return true;
     if (a === 192 && b === 168) return true;
+    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // IETF protocol / TEST-NET-1
+    if (a === 198 && (b === 18 || b === 19)) return true; // Benchmarking 198.18.0.0/15
     if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
     if (a >= 224) return true; // Multicast & reserved
     return false;
@@ -559,9 +672,24 @@ function isPrivateOrSpecialIp(ip: string): boolean {
     if (clean.startsWith('fc') || clean.startsWith('fd')) return true; // Unique local fc00::/7
     if (/^fe[89ab]/.test(clean)) return true; // Link-local fe80::/10
     if (clean.startsWith('ff')) return true; // Multicast
+    if (clean.startsWith('64:ff9b:') || clean.startsWith('2002:') || clean.startsWith('2001:0:') || clean.startsWith('2001:0000:')) return true; // NAT64, 6to4, Teredo
     return false;
   }
   return true;
+}
+
+function isAllowedAgentTargetIp(rawIp: string): boolean {
+  const clean = String(rawIp || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!clean || net.isIP(clean) === 0) return false;
+  if (isLoopbackIp(clean)) return true;
+  if (net.isIPv4(clean)) {
+    const [a, b] = clean.split('.').map(Number);
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  if (net.isIPv6(clean)) {
+    return clean.startsWith('fc') || clean.startsWith('fd') || /^fe[89ab]/.test(clean);
+  }
+  return false;
 }
 
 async function validateExternalHttpUrl(
@@ -860,13 +988,22 @@ async function dispatchLiveAgentCommand(
   messagePayload: Record<string, unknown>,
   awaitEvent?: string,
   timeoutMs = 6000
-): Promise<{ ok: boolean; response?: any; error?: string }> {
-  const host = isLoopbackIp(targetHost) || !targetHost ? '127.0.0.1' : targetHost;
-  const probe = await probeTcpPortWithRtt(host, port, 500);
+): Promise<{ ok: boolean; response?: any; error?: string; requiresHostApproval?: boolean }> {
+  const hostCheck = validateLanAgentHost(targetHost);
+  if (!hostCheck.ok) {
+    return {
+      ok: false,
+      error: hostCheck.error,
+    };
+  }
+  const host = hostCheck.host;
+  const wsHost = hostCheck.wsHost;
+  const safePort = Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 8765;
+  const probe = await probeTcpPortWithRtt(host, safePort, 500);
   if (!probe.open) {
     return {
       ok: false,
-      error: `Host Agent daemon is offline (no listener on ws://${host}:${port}). Launch AI_NetController_HostAgent first.`,
+      error: `Host Agent daemon is offline (no listener on ws://${wsHost}:${safePort}). Launch AI_NetController_HostAgent first.`,
     };
   }
 
@@ -875,11 +1012,32 @@ async function dispatchLiveAgentCommand(
     let ws: WebSocket;
     let settled = false;
     let authenticated = false;
+    let challengeResponded = false;
+    let vault: WebCryptoVault | null = null;
+    let vaultReady = false;
+    let commandSent = false;
 
-    const finish = (result: { ok: boolean; response?: any; error?: string }) => {
+    const packPlainFrame = (opcode: number, seq: number, payloadBytes: Uint8Array): Uint8Array<ArrayBuffer> => {
+      const out = new Uint8Array(12 + payloadBytes.length);
+      const dv = new DataView(out.buffer);
+      out[0] = 0xc5;
+      out[1] = 0x71;
+      out[2] = opcode & 0xff;
+      out[3] = 0x00;
+      dv.setUint32(4, seq >>> 0, false);
+      dv.setUint32(8, payloadBytes.length >>> 0, false);
+      out.set(payloadBytes, 12);
+      return out;
+    };
+
+    const finish = (result: { ok: boolean; response?: any; error?: string; requiresHostApproval?: boolean }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      try {
+        vault?.close();
+      } catch {}
+      vault = null;
       try {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.close(1000, 'Control request complete');
@@ -888,12 +1046,42 @@ async function dispatchLiveAgentCommand(
       resolve(result);
     };
 
+    const sendEncryptedCommand = () => {
+      if (commandSent || !vault || !vaultReady) return;
+      commandSent = true;
+      const action = String(messagePayload.action || '').toUpperCase();
+      let opcode = 0x08;
+      let payloadBytes: Uint8Array;
+      if (action === 'EXECUTE_PROMPT') {
+        opcode = 0x04;
+        payloadBytes = Buffer.from(String(messagePayload.command || messagePayload.prompt || ''), 'utf-8');
+      } else if (action === 'CLIPBOARD_SYNC') {
+        opcode = 0x07;
+        payloadBytes = Buffer.from(String(messagePayload.text || ''), 'utf-8');
+      } else if (
+        action === 'APPROVAL_RESPONSE' ||
+        action === 'PANIC_KILL_ALL' ||
+        action === 'PANIC' ||
+        action === 'DISCONNECT_CLIENT'
+      ) {
+        opcode = 0x05;
+        payloadBytes = Buffer.from(JSON.stringify(messagePayload), 'utf-8');
+      } else {
+        opcode = 0x08;
+        payloadBytes = Buffer.from(JSON.stringify(messagePayload), 'utf-8');
+      }
+      ws.send(vault.encryptWirePacket(opcode, payloadBytes));
+      if (!awaitEvent) {
+        setTimeout(() => finish({ ok: true, response: { event: 'DISPATCHED_AEAD' } }), 50);
+      }
+    };
+
     const timer = setTimeout(() => {
-      finish({ ok: false, error: `Timed out communicating with Host Agent on ws://${host}:${port}` });
+      finish({ ok: false, error: `Timed out communicating with Host Agent on ws://${wsHost}:${safePort}` });
     }, timeoutMs);
 
     try {
-      ws = new WebSocket(`ws://${host}:${port}`);
+      ws = new WebSocket(`ws://${wsHost}:${safePort}`);
       ws.binaryType = 'arraybuffer';
     } catch (err: any) {
       finish({ ok: false, error: err?.message || 'WebSocket connection initialization failed' });
@@ -903,43 +1091,60 @@ async function dispatchLiveAgentCommand(
     let outboundSeq = 0;
 
     ws.addEventListener('message', (ev) => {
-      if (ev.data instanceof ArrayBuffer) {
-        const bytes = new Uint8Array(ev.data);
+      if (ev.data instanceof ArrayBuffer || ArrayBuffer.isView(ev.data)) {
+        const bytes =
+          ev.data instanceof ArrayBuffer
+            ? new Uint8Array(ev.data)
+            : new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength);
         if (bytes.length < 12 || bytes[0] !== 0xc5 || bytes[1] !== 0x71) return;
         const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         const opcode = dv.getUint8(2);
+        const flags = dv.getUint8(3);
         const seq = dv.getUint32(4, false);
         const len = dv.getUint32(8, false);
         if (len > 10 * 1024 * 1024 || bytes.length !== 12 + len) return;
         const payload = bytes.subarray(12, 12 + len);
 
         if (opcode === 0x06) {
-          if (len === 16) {
+          // IMPORTANT: Check 'OK_AUTHENTICATED' (16 ASCII bytes!) BEFORE treating len === 16 as a nonce challenge!
+          const statusStr = len <= 64 ? Buffer.from(payload).toString('utf-8').trim() : '';
+          if (statusStr === 'OK_AUTHENTICATED' || statusStr === 'AUTH_OK') {
+            authenticated = true;
+            if (!vault) {
+              vault = new WebCryptoVault(secret);
+            }
+            ws.send(packPlainFrame(0x06, 0, vault.createMutualInitPayload()));
+            return;
+          }
+          if (statusStr === 'OK_ECDH_VAULT') {
+            if (!vault || !vault.isKeysReady) {
+              finish({ ok: false, error: 'Unexpected OK_ECDH_VAULT before key derivation' });
+              return;
+            }
+            vault.confirmEstablished();
+            vaultReady = true;
+            sendEncryptedCommand();
+            return;
+          }
+          if (len === 16 && !authenticated && !challengeResponded) {
+            challengeResponded = true;
             const sig = crypto
               .createHmac('sha256', Buffer.from(secret, 'utf-8'))
               .update(payload)
               .digest();
-            const reply = new Uint8Array(12 + sig.length);
-            const rView = new DataView(reply.buffer);
-            reply[0] = 0xc5;
-            reply[1] = 0x71;
-            reply[2] = 0x06;
-            reply[3] = 0x00;
-            rView.setUint32(4, seq, false);
-            rView.setUint32(8, sig.length, false);
-            reply.set(sig, 12);
-            ws.send(reply);
+            ws.send(packPlainFrame(0x06, seq, sig));
             return;
           }
-          const statusStr = Buffer.from(payload).toString('utf-8').trim();
-          if (statusStr === 'OK_AUTHENTICATED' || statusStr === 'AUTH_OK') {
-            authenticated = true;
-            outboundSeq += 1;
-            ws.send(JSON.stringify({ ...messagePayload, _seq: outboundSeq }));
-            if (!awaitEvent) {
-              setTimeout(() => finish({ ok: true, response: { event: 'AUTHENTICATED' } }), 40);
+          if (authenticated && vault && !vault.isKeysReady && (len === 91 || len === 59)) {
+            const resp80 = vault.processHostChallenge(payload);
+            if (!resp80) {
+              finish({ ok: false, error: 'Host ECDH mutual authentication failed' });
+              return;
             }
-          } else if (statusStr) {
+            ws.send(packPlainFrame(0x06, 0, resp80));
+            return;
+          }
+          if (statusStr) {
             finish({ ok: false, error: statusStr });
           }
           return;
@@ -953,18 +1158,43 @@ async function dispatchLiveAgentCommand(
           return;
         }
 
+        let effectiveOpcode = opcode;
+        let effectivePayload = payload;
+        if ((flags & 0x02) !== 0) {
+          if (!vault || !vaultReady) return;
+          const dec = vault.decryptWirePacket(bytes);
+          if (!dec) return;
+          effectiveOpcode = dec.opcode;
+          effectivePayload = dec.plaintext;
+        } else if (vaultReady && opcode !== 0xee) {
+          return;
+        }
+
         try {
-          const text = Buffer.from(payload).toString('utf-8');
+          const text = Buffer.from(effectivePayload).toString('utf-8');
           const parsedBin = text.startsWith('{') ? JSON.parse(text) : { output: text };
-          if (opcode === 0xee) {
+          if (effectiveOpcode === 0xee) {
             finish({ ok: false, error: parsedBin.error || parsedBin.output || 'Agent returned OP_ERR' });
           } else if (
-            opcode === 0x04 &&
+            effectiveOpcode === 0x04 &&
             (!awaitEvent || awaitEvent === 'EXECUTION_RESULT' || awaitEvent === 'SHELL_RESULT')
           ) {
             finish({ ok: true, response: { event: 'EXECUTION_RESULT', ...parsedBin } });
-          } else if (opcode === 0x05 && awaitEvent === 'HITL_REQUIRED') {
-            finish({ ok: true, response: { event: 'HITL_REQUIRED', ...parsedBin } });
+          } else if (effectiveOpcode === 0x05) {
+            if (parsedBin.event === 'PANIC_ACK' && (!awaitEvent || awaitEvent === 'PANIC_ACK')) {
+              finish({ ok: true, response: parsedBin });
+            } else if (parsedBin.event === 'DISCONNECT_ACK' && (!awaitEvent || awaitEvent === 'DISCONNECT_ACK')) {
+              finish({ ok: true, response: parsedBin });
+            } else if (awaitEvent === 'HITL_REQUIRED') {
+              finish({ ok: true, response: { event: 'HITL_REQUIRED', ...parsedBin } });
+            } else {
+              finish({
+                ok: false,
+                requiresHostApproval: true,
+                response: { event: 'APPROVAL_REQUIRED', ...parsedBin },
+                error: parsedBin.reason || 'Host Agent requires local desktop HITL approval for this command.',
+              });
+            }
           }
         } catch {
           // ignore malformed payload
@@ -973,6 +1203,7 @@ async function dispatchLiveAgentCommand(
       }
 
       if (typeof ev.data !== 'string') return;
+      if (vaultReady) return;
       let parsed: any;
       try {
         parsed = JSON.parse(ev.data);
@@ -994,7 +1225,14 @@ async function dispatchLiveAgentCommand(
         return;
       }
 
-      if (awaitEvent && parsed.event === awaitEvent) {
+      if (parsed.event === 'APPROVAL_REQUIRED') {
+        finish({
+          ok: false,
+          requiresHostApproval: true,
+          response: parsed,
+          error: parsed.reason || 'Host Agent requires local desktop HITL approval for this command.',
+        });
+      } else if (awaitEvent && parsed.event === awaitEvent) {
         finish({ ok: true, response: parsed });
       } else if (parsed.event === 'PANIC_ACK' && messagePayload.action === 'PANIC_KILL_ALL') {
         finish({ ok: true, response: parsed });
@@ -1004,7 +1242,7 @@ async function dispatchLiveAgentCommand(
     });
 
     ws.addEventListener('error', () => {
-      finish({ ok: false, error: `WebSocket error communicating with ws://${host}:${port}` });
+      finish({ ok: false, error: `WebSocket error communicating with ws://${wsHost}:${safePort}` });
     });
 
     ws.addEventListener('close', (ev) => {
@@ -1070,8 +1308,10 @@ async function getRealDaemonSnapshot() {
     targetFps: Number(cfg.target_fps || 60),
     setupCompleted: cfg.setup_completed !== false,
     securityProfile: (cfg.security_profile as 'zero_trust' | 'balanced' | 'view_only') || 'balanced',
-    pairingPin: cfg.pairing_pin ? String(cfg.pairing_pin) : '------',
-    wsUri: `ws://${localIp}:${port}`,
+    pairingPin: cfg.pairing_pin && /^\d{6}$/.test(String(cfg.pairing_pin).trim()) ? String(cfg.pairing_pin).trim() : '',
+    hasPairingToken: Boolean(cfg.pairing_token && String(cfg.pairing_token).trim().length >= 16),
+    requireTls: Boolean(cfg.require_tls),
+    wsUri: `${cfg.require_tls ? 'wss' : 'ws'}://${localIp}:${port}`,
     uptime: `${hrs}:${mins}:${secs}`,
     cpuPercent: sampleRealCpuPercent(),
     cpuCores: cpus ? cpus.length : 1,
@@ -1125,7 +1365,7 @@ let cachedReleasesPayload: { data: any; timestamp: number } | null = null;
 const RELEASES_CACHE_TTL_MS = 30_000;
 
 function readFirstAvailableManifest(): any {
-  const candidates = ['v0.70.0', 'v0.60.0', 'v0.51.0', 'v0.50.0', 'v0.35.0', 'v0.32.0', 'v0.31.3', 'v0.30.0'];
+  const candidates = ['v0.80.0', 'v0.70.0', 'v0.60.0', 'v0.51.0', 'v0.50.0', 'v0.35.0', 'v0.32.0', 'v0.31.3', 'v0.30.0'];
   for (const ver of candidates) {
     const p = path.join(RELEASES_PUBLIC_DIR, ver, 'RELEASE_MANIFEST.json');
     if (fs.existsSync(p)) {
@@ -1248,7 +1488,9 @@ app.get('/api/source-files', requireControlAuth, (req: Request, res: Response) =
       })),
     });
   }
-  const meta = EXPORTABLE_SOURCE_MAP[requested];
+  const meta = Object.prototype.hasOwnProperty.call(EXPORTABLE_SOURCE_MAP, requested)
+    ? EXPORTABLE_SOURCE_MAP[requested]
+    : undefined;
   if (!meta) {
     return res.status(404).json({ error: 'Requested source file is not in export whitelist' });
   }
@@ -1268,10 +1510,23 @@ app.get('/api/source-files', requireControlAuth, (req: Request, res: Response) =
 // =====================================================================
 // AI MODELS & LIVE INFERENCE ENDPOINTS
 // =====================================================================
-app.get('/api/ai/models', (_req: Request, res: Response) => {
+const customModelApiKeys = new Map<string, string>();
+const BUILTIN_MODEL_IDS = new Set([
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-2.0-flash',
+  'deepseek-r1:latest',
+  'qwen2.5-coder:latest',
+]);
+
+app.get('/api/ai/models', requireControlAuth, (_req: Request, res: Response) => {
   return res.json({
     success: true,
-    models: DYNAMIC_MODELS,
+    models: DYNAMIC_MODELS.map((m) => ({
+      ...m,
+      isBuiltIn: BUILTIN_MODEL_IDS.has(m.id),
+      hasCustomApiKey: customModelApiKeys.has(m.id),
+    })),
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
     ollamaEndpoint: DEFAULT_OLLAMA_BASE,
   });
@@ -1279,9 +1534,12 @@ app.get('/api/ai/models', (_req: Request, res: Response) => {
 
 app.post('/api/ai/models', requireControlAuth, async (req: Request, res: Response) => {
   try {
-    const { id, name, provider = 'custom', description = '', contextWindow = '128k', endpointUrl, apiKeyUrl } = req.body || {};
+    const { id, name, provider = 'custom', description = '', contextWindow = '128k', endpointUrl, apiKeyUrl, apiKey } = req.body || {};
     if (!id || !name) {
       return res.status(400).json({ error: 'Model ID and Name are required' });
+    }
+    if (provider === 'custom' && !String(endpointUrl || '').trim()) {
+      return res.status(400).json({ error: 'Endpoint URL is required for custom AI model providers' });
     }
 
     let validatedEndpointUrl: string | undefined;
@@ -1307,19 +1565,30 @@ app.post('/api/ai/models', requireControlAuth, async (req: Request, res: Respons
       validatedApiKeyUrl = check.normalized;
     }
 
-    const cleanId = String(id).trim().toLowerCase().replace(/[^a-z0-9_.:-]/g, '-');
+    const cleanId = String(id).trim().toLowerCase().replace(/[^a-z0-9_.:-]/g, '-').slice(0, 96);
+    if (!cleanId) {
+      return res.status(400).json({ error: 'Invalid model identifier' });
+    }
+    const existingIndex = DYNAMIC_MODELS.findIndex((m) => m.id === cleanId);
+    if (existingIndex < 0 && DYNAMIC_MODELS.length >= 32) {
+      return res.status(400).json({ error: 'Maximum custom model registry limit (32) reached' });
+    }
+
     const newDescriptor: AIModelDescriptor = {
       id: cleanId,
-      name: String(name).trim(),
+      name: String(name).trim().slice(0, 120),
       provider: provider as AIModelDescriptor['provider'],
-      description: String(description).trim() || 'Custom AI Model Endpoint',
-      contextWindow: String(contextWindow).trim() || '128k tokens',
+      description: String(description).trim().slice(0, 300) || 'Custom AI Model Endpoint',
+      contextWindow: String(contextWindow).trim().slice(0, 40) || '128k tokens',
       isCustom: true,
       endpointUrl: validatedEndpointUrl,
       apiKeyUrl: validatedApiKeyUrl,
     };
 
-    const existingIndex = DYNAMIC_MODELS.findIndex((m) => m.id === cleanId);
+    if (typeof apiKey === 'string' && apiKey.trim()) {
+      customModelApiKeys.set(cleanId, apiKey.trim());
+    }
+
     if (existingIndex >= 0) {
       DYNAMIC_MODELS[existingIndex] = newDescriptor;
     } else {
@@ -1328,26 +1597,39 @@ app.post('/api/ai/models', requireControlAuth, async (req: Request, res: Respons
 
     return res.json({
       success: true,
-      model: newDescriptor,
-      models: DYNAMIC_MODELS,
+      model: { ...newDescriptor, isBuiltIn: BUILTIN_MODEL_IDS.has(cleanId), hasCustomApiKey: customModelApiKeys.has(cleanId) },
+      models: DYNAMIC_MODELS.map((m) => ({
+        ...m,
+        isBuiltIn: BUILTIN_MODEL_IDS.has(m.id),
+        hasCustomApiKey: customModelApiKeys.has(m.id),
+      })),
       message: `Model '${newDescriptor.name}' saved successfully.`,
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Failed to save model' });
+    console.error('[API /api/ai/models POST error]:', err);
+    return res.status(500).json({ error: 'Failed to save model' });
   }
 });
 
 app.delete('/api/ai/models/:id', requireControlAuth, (req: Request, res: Response) => {
   const id = String(req.params.id || '');
+  if (BUILTIN_MODEL_IDS.has(id)) {
+    return res.status(400).json({ error: 'Built-in AI models cannot be deleted' });
+  }
   DYNAMIC_MODELS = DYNAMIC_MODELS.filter((m) => m.id !== id);
+  customModelApiKeys.delete(id);
   return res.json({
     success: true,
-    models: DYNAMIC_MODELS,
+    models: DYNAMIC_MODELS.map((m) => ({
+      ...m,
+      isBuiltIn: BUILTIN_MODEL_IDS.has(m.id),
+      hasCustomApiKey: customModelApiKeys.has(m.id),
+    })),
     message: `Model '${id}' removed successfully.`,
   });
 });
 
-app.get('/api/settings', async (_req: Request, res: Response) => {
+app.get('/api/settings', requireControlAuth, async (_req: Request, res: Response) => {
   try {
     const stored = readPersistedUiSettings();
     const cfg = await loadDaemonConfig();
@@ -1362,7 +1644,8 @@ app.get('/api/settings', async (_req: Request, res: Response) => {
     };
     return res.json({ success: true, settings });
   } catch (err) {
-    return res.status(500).json({ error: String(err) });
+    console.error('[API /api/settings GET error]:', err);
+    return res.status(500).json({ error: 'Failed to load settings' });
   }
 });
 
@@ -1404,18 +1687,24 @@ app.post('/api/settings', requireControlAuth, async (req: Request, res: Response
 
     return res.json({ success: true, settings: next });
   } catch (err) {
-    return res.status(500).json({ error: String(err) });
+    console.error('[API /api/settings POST error]:', err);
+    return res.status(500).json({ error: 'Failed to save settings' });
   }
 });
 
-app.get('/api/memory/:hostId', (req: Request, res: Response) => {
+const FORBIDDEN_HOST_ID_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'tostring', 'valueof']);
+function isValidMemoryHostId(hostId: string): boolean {
+  return /^[A-Za-z0-9._:-]{1,64}$/.test(hostId) && !FORBIDDEN_HOST_ID_KEYS.has(hostId.toLowerCase());
+}
+
+app.get('/api/memory/:hostId', requireControlAuth, (req: Request, res: Response) => {
   const hostId = String(req.params.hostId || '').trim();
-  if (!hostId || hostId.length > 128) {
+  if (!isValidMemoryHostId(hostId)) {
     return res.status(400).json({ error: 'Invalid hostId' });
   }
   const store = readAllHostMemory();
-  const hasSavedRecord = Boolean(store[hostId]);
-  const record = store[hostId] || { persistent: [], session: [] };
+  const hasSavedRecord = Object.prototype.hasOwnProperty.call(store, hostId);
+  const record = hasSavedRecord ? store[hostId] : { persistent: [], session: [] };
   return res.json({
     success: true,
     hostId,
@@ -1428,7 +1717,7 @@ app.get('/api/memory/:hostId', (req: Request, res: Response) => {
 app.post('/api/memory/:hostId', requireControlAuth, (req: Request, res: Response) => {
   try {
     const hostId = String(req.params.hostId || '').trim();
-    if (!hostId || hostId.length > 128) {
+    if (!isValidMemoryHostId(hostId)) {
       return res.status(400).json({ error: 'Invalid hostId' });
     }
     const sanitizeRules = (raw: unknown): string[] =>
@@ -1440,7 +1729,9 @@ app.post('/api/memory/:hostId', requireControlAuth, (req: Request, res: Response
         : [];
 
     const store = readAllHostMemory();
-    const prev = store[hostId] || { persistent: [], session: [] };
+    const prev = Object.prototype.hasOwnProperty.call(store, hostId)
+      ? store[hostId]
+      : { persistent: [], session: [] };
     const body = req.body || {};
 
     const nextRecord: HostMemoryRecord = {
@@ -1465,7 +1756,8 @@ app.post('/api/memory/:hostId', requireControlAuth, (req: Request, res: Response
     writeAllHostMemory(store);
     return res.json({ success: true, hostId, ...nextRecord });
   } catch (err) {
-    return res.status(500).json({ error: String(err) });
+    console.error('[API /api/memory POST error]:', err);
+    return res.status(500).json({ error: 'Failed to save host memory' });
   }
 });
 
@@ -1503,8 +1795,21 @@ app.post('/api/ai/models/test', requireControlAuth, async (req: Request, res: Re
       return res.status(400).json({ success: false, error: ssrf.error });
     }
 
-    const resp = await fetch(ssrf.normalized!, { signal: AbortSignal.timeout(4000) });
+    const customKey = customModelApiKeys.get(model.id);
+    const resp = await fetch(ssrf.normalized!, {
+      redirect: 'manual',
+      headers: customKey ? { Authorization: `Bearer ${customKey}` } : undefined,
+      signal: AbortSignal.timeout(4000),
+    });
     const latencyMs = Math.max(1, Math.round(performance.now() - start));
+    if (resp.status >= 300 && resp.status < 400) {
+      return res.status(400).json({
+        success: false,
+        modelId: model.id,
+        error: 'HTTP redirects are blocked for custom endpoints (SSRF protection)',
+        latencyMs,
+      });
+    }
     if (!resp.ok) {
       return res.status(502).json({
         success: false,
@@ -1725,13 +2030,25 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         break;
       }
       case 'rotate_token': {
-        const nextToken = `ai_sec_${crypto.randomBytes(16).toString('hex')}`;
+        const nextToken = `ainet_${crypto.randomBytes(24).toString('hex')}`;
         await saveDaemonConfigPatch({ pairing_token: nextToken });
         addServerLog('SECURITY', 'Pairing token rotated and persisted to host daemon config.');
-        break;
+        return res.json({
+          success: true,
+          rotatedToken: nextToken,
+          daemon: await getRealDaemonSnapshot(),
+        });
       }
       case 'rotate_pin': {
-        const nextPin = String(crypto.randomInt(100000, 1000000));
+        const weakPins = new Set([
+          '000000', '111111', '222222', '333333', '444444',
+          '555555', '666666', '777777', '888888', '999999',
+          '123456', '654321', '012345', '543210',
+        ]);
+        let nextPin = String(crypto.randomInt(100000, 1000000));
+        while (weakPins.has(nextPin) || new Set(nextPin.split('')).size < 2) {
+          nextPin = String(crypto.randomInt(100000, 1000000));
+        }
         await saveDaemonConfigPatch({ pairing_pin: nextPin, pin_issued_at: Math.floor(Date.now() / 1000) });
         addServerLog('SECURITY', '6-digit pairing PIN rotated and persisted.');
         break;
@@ -1740,7 +2057,7 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         const nextPort = Number(port);
         if (Number.isInteger(nextPort) && nextPort >= 1024 && nextPort <= 65535) {
           await saveDaemonConfigPatch({ port: nextPort });
-          addServerLog('INFO', `Configured daemon listener port updated to ${nextPort}.`);
+          addServerLog('INFO', `Configured daemon listener port updated to ${nextPort} (restart Host Agent to apply).`);
         }
         break;
       }
@@ -1749,18 +2066,21 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         if (!banIp || !net.isIP(banIp)) {
           return res.status(400).json({ error: 'Valid IPv4/IPv6 address is required to blacklist a peer' });
         }
+        const rawMac = String(req.body?.mac || '').trim();
+        const cleanMac = /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(rawMac) ? rawMac.toUpperCase() : '00:00:00:00:00:00';
         const currentBans = Array.isArray(cfg.blacklisted_devices) ? [...cfg.blacklisted_devices] : [];
         if (!currentBans.some((b: any) => (typeof b === 'string' ? b === banIp : b.ip === banIp))) {
           currentBans.unshift({
             id: `BAN-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
             ip: banIp,
-            mac: '00:00:00:00:00:00',
-            device: String(req.body?.device || `Blocked Peer (${banIp})`),
-            reason: String(req.body?.reason || 'Blacklisted via Web Control Console'),
+            mac: cleanMac,
+            device: String(req.body?.device || `Blocked Peer (${banIp})`).slice(0, 96),
+            reason: String(req.body?.reason || 'Blacklisted via Web Control Console').slice(0, 180),
             bannedAt: new Date().toLocaleTimeString('en-GB', { hour12: false }),
           });
           await saveDaemonConfigPatch({ blacklisted_devices: currentBans });
         }
+        void dispatchLiveAgentCommand('127.0.0.1', daemonPort, { action: 'DISCONNECT_CLIENT', ip: banIp }, 'DISCONNECT_ACK', 2500);
         addServerLog('ALERT', `Blacklisted peer IP ${banIp} in host daemon firewall config.`);
         break;
       }
@@ -1788,6 +2108,8 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
             subnet_geofence_only: true,
             clipboard_sync_allowed: false,
             view_only_mode: false,
+            require_hmac_auth: true,
+            require_aead: true,
           });
         } else if (profile === 'view_only') {
           await saveDaemonConfigPatch({
@@ -1803,6 +2125,8 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
             require_hitl_approval: true,
             clipboard_sync_allowed: true,
             auto_ban_intrusion: true,
+            require_hmac_auth: false,
+            require_aead: false,
           });
         }
         addServerLog('SECURITY', `Applied security profile: ${String(profile || 'balanced').toUpperCase()}.`);
@@ -1867,8 +2191,10 @@ app.get('/api/setup/info', requireControlAuth, async (_req: Request, res: Respon
       pair_name: snap.hostname,
       pair_mac: primaryAdapter.mac,
       pair_os: snap.osName.toLowerCase().includes('win') ? 'windows' : 'linux',
-      pair_pin: snap.pairingPin,
+      ...(snap.pairingPin ? { pair_pin: snap.pairingPin } : {}),
     });
+    const proto = snap.requireTls ? 'wss' : 'ws';
+    const ainetPairUri = `ainet://pair?proto=${proto}&host=${snap.localIp}&port=${snap.port}${snap.pairingPin ? `&pin=${snap.pairingPin}` : ''}`;
 
     return res.json({
       success: true,
@@ -1878,6 +2204,7 @@ app.get('/api/setup/info', requireControlAuth, async (_req: Request, res: Respon
         localIp: snap.localIp,
         daemonPort: snap.port,
         webPort: PORT,
+        allowLanWeb: ALLOW_LAN_WEB,
         mac: primaryAdapter.mac,
         adapterName: primaryAdapter.name,
         wsUri: snap.wsUri,
@@ -1885,6 +2212,7 @@ app.get('/api/setup/info', requireControlAuth, async (_req: Request, res: Respon
         daemonOnline: snap.isRunning,
         webOrigin,
         mobilePairUrl: `${webOrigin}/#${pairParams.toString()}`,
+        ainetPairUri,
         exeDownloadUrl: `/releases/v${APP_VERSION}/AI_NetController_HostAgent_v${APP_VERSION}_win64.exe`,
         apkDownloadUrl: `/releases/v${APP_VERSION}/AI_NetController_v${APP_VERSION}_arm64-v8a.apk`,
         portableZipUrl: `/releases/v${APP_VERSION}/AI_NetController_HostAgent_v${APP_VERSION}_win64_portable.zip`,
@@ -1892,22 +2220,21 @@ app.get('/api/setup/info', requireControlAuth, async (_req: Request, res: Respon
       },
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Failed to generate setup info' });
+    console.error('[API /api/setup/info error]:', err);
+    return res.status(500).json({ error: 'Failed to generate setup info' });
   }
 });
 
 app.get('/api/setup/windows-launcher', requireControlAuth, async (_req: Request, res: Response) => {
   const snap = await getRealDaemonSnapshot();
-  const safeSecret = (await getControlSecret()).replace(/[^a-zA-Z0-9_.:-]/g, '');
   const safePort = Number.isInteger(snap.port) ? snap.port : 8765;
 
   const batLines = [
     '@echo off',
-    'title AI NetController - PC Setup Launcher',
+    'title AI NetController - PC Host Agent Launcher',
     'color 0B',
-    `echo AI NetController v${APP_VERSION} (${APP_VERSION_LABEL}) Setup`,
-    `set "AI_AGENT_SECRET=${safeSecret}"`,
-    `set "CST_AGENT_SECRET=${safeSecret}"`,
+    `echo AI NetController v${APP_VERSION} (${APP_VERSION_LABEL}) Host Agent Launcher`,
+    'echo Note: Credentials are loaded securely from your user DPAPI config.json.',
     `set "CST_AGENT_PORT=${safePort}"`,
     'cd /d "%~dp0"',
     'where python >nul 2>nul',
@@ -1917,8 +2244,12 @@ app.get('/api/setup/windows-launcher', requireControlAuth, async (_req: Request,
     `netsh advfirewall firewall add rule name="AI NetController Daemon" dir=in action=allow protocol=TCP localport=${safePort} profile=private >nul 2>nul`,
     `if exist "AI_NetController_HostAgent_v${APP_VERSION}_win64.exe" (`,
     `    start "AI NetController Host Agent" "AI_NetController_HostAgent_v${APP_VERSION}_win64.exe"`,
+    ') else if exist "agent\\agent.py" (',
+    '    start "AI NetController Host Agent" python "agent\\agent.py"',
     ') else if exist "agent\\agent_daemon.py" (',
     '    start "AI NetController Host Agent" python "agent\\agent_daemon.py"',
+    ') else (',
+    '    echo [!] Place this script in the AI NetController folder or alongside the Host Agent .exe.',
     ')',
     'pause',
   ];
@@ -2098,7 +2429,7 @@ async function buildRealUpdateInventory(checkRemote = false) {
   };
 }
 
-app.get('/api/update/status', async (_req: Request, res: Response) => {
+app.get('/api/update/status', requireControlAuth, async (_req: Request, res: Response) => {
   try {
     const inv = await buildRealUpdateInventory(false);
     return res.json({
@@ -2114,7 +2445,8 @@ app.get('/api/update/status', async (_req: Request, res: Response) => {
       status: 'ready',
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Failed to fetch update status' });
+    console.error('[API /api/update/status error]:', err);
+    return res.status(500).json({ error: 'Failed to fetch update status' });
   }
 });
 
@@ -2134,22 +2466,27 @@ app.post('/api/update/check', requireControlAuth, async (_req: Request, res: Res
       },
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Check failed' });
+    console.error('[API /api/update/check error]:', err);
+    return res.status(500).json({ error: 'Check failed' });
   }
 });
 
 app.post('/api/update/execute', requireControlAuth, async (req: Request, res: Response) => {
   const start = Date.now();
   const { componentId } = req.body || {};
-  const target = String(componentId || 'ALL');
+  const target = String(componentId || 'ALL').trim();
   const logs: string[] = [];
 
   try {
     if (target !== 'ALL' && target !== 'cst-host-agent' && target !== 'ast-security-rules') {
+      if (!/^[a-zA-Z0-9._:/-]{1,128}$/.test(target) || target.includes('..')) {
+        return res.status(400).json({ success: false, error: 'Invalid model/component identifier', logs });
+      }
       // Pull real Ollama model tag
       logs.push(`[OLLAMA] Requesting real model pull for "${target}" via ${DEFAULT_OLLAMA_BASE}/api/pull...`);
       const resp = await fetch(`${DEFAULT_OLLAMA_BASE}/api/pull`, {
         method: 'POST',
+        redirect: 'manual',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: target, stream: false }),
         signal: AbortSignal.timeout(60_000),
@@ -2234,9 +2571,12 @@ function validateBroadcastIpv4(ipRaw: string): boolean {
   const clean = ipRaw.trim();
   const ipv4Regex = /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
   if (!ipv4Regex.test(clean)) return false;
+  if (clean === '255.255.255.255') return true;
   const parts = clean.split('.').map(Number);
   if (parts[0] === 0 || parts[0] === 127 || (parts[0] >= 224 && parts[0] <= 239)) return false;
-  return true;
+  if (process.env.ALLOW_WAN_WOL === 'true') return true;
+  const [a, b] = parts;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
 function sendRealWolPacket(mac: string, broadcastIp = '255.255.255.255', port = 9, secureOn = ''): Promise<void> {
@@ -2359,6 +2699,12 @@ setInterval(async () => {
   const dayKey = WEEKDAY_KEYS[now.getDay()];
   const minuteStamp = `${now.toDateString()} ${hhmm}`;
 
+  if (firedScheduleMinuteKey.size > 200) {
+    for (const [k, v] of firedScheduleMinuteKey.entries()) {
+      if (v !== minuteStamp) firedScheduleMinuteKey.delete(k);
+    }
+  }
+
   for (const sched of schedules) {
     if (!sched.enabled || sched.time !== hhmm) continue;
     const normalizedDays = Array.isArray(sched.days)
@@ -2367,21 +2713,24 @@ setInterval(async () => {
     if (normalizedDays.length > 0 && !normalizedDays.includes(dayKey)) continue;
     if (firedScheduleMinuteKey.get(sched.id) === minuteStamp) continue;
 
+    const rawList: unknown[] = [
+      ...(Array.isArray(sched.targetMacs) ? sched.targetMacs : []),
+      ...(sched.mac ? [sched.mac] : []),
+      ...((sched as any).targetMac ? [(sched as any).targetMac] : []),
+    ];
     const macTargets = Array.from(
       new Set(
-        [
-          ...(Array.isArray(sched.targetMacs) ? sched.targetMacs : []),
-          ...(sched.mac ? [sched.mac] : []),
-        ]
-          .map((m) => String(m || '').trim())
-          .filter(Boolean)
+        rawList
+          .map((m) => (typeof m === 'string' ? m.trim() : typeof m === 'object' && m !== null ? String((m as any).mac || '').trim() : ''))
+          .filter((m) => m.replace(/[^a-fA-F0-9]/g, '').length === 12)
       )
     );
     if (macTargets.length === 0) continue;
 
     firedScheduleMinuteKey.set(sched.id, minuteStamp);
-    const broadcastIp = sched.broadcastIp || '255.255.255.255';
-    const port = Number(sched.port || 9);
+    const broadcastIp = sched.broadcastIp && validateBroadcastIpv4(sched.broadcastIp) ? sched.broadcastIp : '255.255.255.255';
+    const rawPort = Number(sched.port || 9);
+    const port = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65535 ? rawPort : 9;
     const secureOn = String(sched.secureOn || '');
 
     for (const targetMac of macTargets) {
@@ -2404,8 +2753,26 @@ app.post('/api/wol/schedules', requireControlAuth, (req: Request, res: Response)
   if (!list) {
     return res.status(400).json({ error: 'schedules array is required' });
   }
-  writePersistedWolSchedules(list);
-  return res.json({ success: true, schedules: list });
+  const sanitized = list.slice(0, 50).map((item: any) => {
+    const rawPort = Number(item?.port ?? 9);
+    const safePort = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65535 ? rawPort : 9;
+    const safeBroadcast =
+      typeof item?.broadcastIp === 'string' && validateBroadcastIpv4(item.broadcastIp)
+        ? item.broadcastIp.trim()
+        : '255.255.255.255';
+    return {
+      ...item,
+      id: String(item?.id || `wol-${crypto.randomBytes(4).toString('hex')}`).slice(0, 64),
+      name: String(item?.name || 'Wake Schedule').slice(0, 100),
+      time: /^\d{2}:\d{2}$/.test(String(item?.time || '')) ? String(item.time) : '08:00',
+      days: Array.isArray(item?.days) ? item.days.map((d: any) => String(d).slice(0, 12)).slice(0, 7) : [],
+      port: safePort,
+      broadcastIp: safeBroadcast,
+      enabled: Boolean(item?.enabled),
+    };
+  });
+  writePersistedWolSchedules(sanitized);
+  return res.json({ success: true, schedules: sanitized });
 });
 
 app.delete('/api/wol/schedules/:id', requireControlAuth, (req: Request, res: Response) => {
@@ -2607,7 +2974,7 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
       blocked: false,
       requiresConfirmation: true,
       riskLevel: 'HIGH',
-      sanitizedCmd: deobfuscatedCmd,
+      sanitizedCmd: trimmed,
       reason: 'High-risk command requires Human-in-the-Loop confirmation token',
     };
   }
@@ -2617,11 +2984,47 @@ export function inspectCommandSecurity(rawCmd: string): CommandInspectionResult 
     blocked: false,
     requiresConfirmation: false,
     riskLevel: 'SAFE',
-    sanitizedCmd: deobfuscatedCmd,
+    sanitizedCmd: trimmed,
   };
 }
 
-const pendingCommandConfirmations = new Map<string, { command: string; expiresAt: number }>();
+const pendingCommandConfirmations = new Map<string, { command: string; targetIp: string; expiresAt: number }>();
+
+function issueConfirmationToken(command: string, targetIp: string): string {
+  const now = Date.now();
+  if (pendingCommandConfirmations.size >= 500) {
+    for (const [k, v] of pendingCommandConfirmations.entries()) {
+      if (now >= v.expiresAt) pendingCommandConfirmations.delete(k);
+    }
+    if (pendingCommandConfirmations.size >= 500) {
+      const oldest = pendingCommandConfirmations.keys().next().value;
+      if (oldest) pendingCommandConfirmations.delete(oldest);
+    }
+  }
+  const nextConfirmId = crypto.randomBytes(16).toString('hex');
+  pendingCommandConfirmations.set(nextConfirmId, {
+    command,
+    targetIp,
+    expiresAt: now + 120_000,
+  });
+  return nextConfirmId;
+}
+
+function consumeConfirmationToken(confirmationId: unknown, command: string, targetIp: string): boolean {
+  if (!confirmationId) return false;
+  const key = String(confirmationId);
+  const pending = pendingCommandConfirmations.get(key);
+  if (!pending) return false;
+  if (Date.now() >= pending.expiresAt) {
+    pendingCommandConfirmations.delete(key);
+    return false;
+  }
+  if (pending.command !== command || pending.targetIp !== targetIp) {
+    return false;
+  }
+  pendingCommandConfirmations.delete(key);
+  return true;
+}
 
 const SCRUBBED_CHILD_ENV_KEYS = new Set([
   'GEMINI_API_KEY',
@@ -2662,16 +3065,14 @@ app.post('/api/command/execute', requireControlAuth, async (req: Request, res: R
       });
     }
 
+    const targetIp = String(hostIp || '127.0.0.1').trim();
+    if (!isAllowedAgentTargetIp(targetIp)) {
+      return res.status(400).json({ error: 'Invalid or disallowed target host IP (LAN/loopback only)' });
+    }
+
     if (inspection.requiresConfirmation) {
-      const pending = confirmationId ? pendingCommandConfirmations.get(String(confirmationId)) : undefined;
-      const validToken =
-        pending && Date.now() < pending.expiresAt && pending.command === inspection.sanitizedCmd;
-      if (!validToken) {
-        const nextConfirmId = crypto.randomBytes(16).toString('hex');
-        pendingCommandConfirmations.set(nextConfirmId, {
-          command: inspection.sanitizedCmd,
-          expiresAt: Date.now() + 120_000,
-        });
+      if (!consumeConfirmationToken(confirmationId, inspection.sanitizedCmd, targetIp)) {
+        const nextConfirmId = issueConfirmationToken(inspection.sanitizedCmd, targetIp);
         return res.status(403).json({
           error: inspection.reason,
           requiresConfirmation: true,
@@ -2679,12 +3080,10 @@ app.post('/api/command/execute', requireControlAuth, async (req: Request, res: R
           riskLevel: inspection.riskLevel,
         });
       }
-      pendingCommandConfirmations.delete(String(confirmationId));
     }
 
     const cfg = await loadDaemonConfig();
     const daemonPort = Number(cfg.port || 8765);
-    const targetIp = String(hostIp || '127.0.0.1');
 
     // Route execution strictly through the live sandboxed Python Host Agent (never local Node exec)
     const agentExec = await dispatchLiveAgentCommand(
@@ -2698,6 +3097,15 @@ app.post('/api/command/execute', requireControlAuth, async (req: Request, res: R
       'EXECUTION_RESULT',
       15_000
     );
+
+    if (agentExec.requiresHostApproval) {
+      return res.status(403).json({
+        success: false,
+        requiresHostApproval: true,
+        error: agentExec.error || 'Host Agent requires local desktop approval.',
+        approval: agentExec.response,
+      });
+    }
 
     if (agentExec.ok && agentExec.response) {
       return res.json({
@@ -2715,7 +3123,8 @@ app.post('/api/command/execute', requireControlAuth, async (req: Request, res: R
       error: agentExec.error || 'Target Host Agent daemon is offline',
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Command execution failed' });
+    console.error('[API /api/command/execute error]:', err);
+    return res.status(500).json({ error: 'Command execution failed' });
   }
 });
 
@@ -2894,12 +3303,25 @@ function parseActionDirectives(text: string): ParsedAiAction[] {
   return actions;
 }
 
-async function executePcControlAction(action: Partial<ParsedAiAction> & { type: string; mac?: string; hostIp?: string }) {
+async function executePcControlAction(
+  action: Partial<ParsedAiAction> & { type: string; mac?: string; hostIp?: string; confirmationId?: string }
+) {
   const startTime = Date.now();
   const cfg = await loadDaemonConfig();
   const daemonPort = Number(cfg.port || 8765);
   const target = action.target || os.hostname() || 'LOCALHOST';
-  const targetIp = String(action.hostIp || '127.0.0.1');
+  const targetIp = String(action.hostIp || '127.0.0.1').trim();
+  if (!isAllowedAgentTargetIp(targetIp)) {
+    return {
+      success: false,
+      statusCode: 400,
+      actionType: action.type,
+      target,
+      summary: 'Blocked target IP: only loopback or RFC1918 LAN addresses are permitted.',
+      durationMs: Date.now() - startTime,
+      timestamp: new Date().toISOString(),
+    };
+  }
 
   const isInputAction = [
     'mouse_click',
@@ -2925,6 +3347,53 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
       durationMs: Date.now() - startTime,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  if (action.type === 'daemon_control') {
+    const cmd = String(action.command || 'diagnostics').trim().toLowerCase();
+    if (cmd === 'diagnostics') {
+      const probe = await probeTcpPortWithRtt('127.0.0.1', daemonPort, 400);
+      return {
+        success: true,
+        statusCode: 200,
+        actionType: 'daemon_control',
+        target,
+        summary: `Host Agent diagnostics: ${probe.open ? `ONLINE (${probe.rttMs}ms)` : 'OFFLINE'} on port ${daemonPort}`,
+        output: `Active adapters: ${sampleActiveAdapters().length} | Port ${daemonPort}: ${probe.open ? 'OPEN' : 'CLOSED'}`,
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
+    if (cmd === 'view_only' || cmd === 'balanced' || cmd === 'zero_trust') {
+      await saveDaemonConfigPatch(
+        cmd === 'zero_trust'
+          ? { security_profile: 'zero_trust', require_hitl_approval: true, auto_ban_intrusion: true, subnet_geofence_only: true, clipboard_sync_allowed: false, view_only_mode: false, require_hmac_auth: true, require_aead: true }
+          : cmd === 'view_only'
+          ? { security_profile: 'view_only', view_only_mode: true, require_hitl_approval: true, clipboard_sync_allowed: false }
+          : { security_profile: 'balanced', view_only_mode: false, require_hitl_approval: true, clipboard_sync_allowed: true, require_hmac_auth: false, require_aead: false }
+      );
+      return {
+        success: true,
+        statusCode: 200,
+        actionType: 'daemon_control',
+        target,
+        summary: `Applied Host Daemon security profile: ${cmd.toUpperCase()}`,
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
+    if (cmd === 'pause' || cmd === 'resume') {
+      await saveDaemonConfigPatch({ paused: cmd === 'pause' });
+      return {
+        success: true,
+        statusCode: 200,
+        actionType: 'daemon_control',
+        target,
+        summary: `Host Daemon ${cmd === 'pause' ? 'PAUSED' : 'RESUMED'}`,
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
   }
 
   if (action.type === 'wol') {
@@ -2961,6 +3430,8 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
       return {
         success: false,
         statusCode: 403,
+        blocked: true,
+        riskLevel: inspection.riskLevel,
         actionType: 'shell_exec',
         target,
         summary: `Blocked by AST Firewall: "${rawCmd}"`,
@@ -2969,6 +3440,24 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
         timestamp: new Date().toISOString(),
       };
     }
+    if (inspection.requiresConfirmation) {
+      if (!consumeConfirmationToken(action.confirmationId, inspection.sanitizedCmd, targetIp)) {
+        const nextConfirmId = issueConfirmationToken(inspection.sanitizedCmd, targetIp);
+        return {
+          success: false,
+          statusCode: 403,
+          requiresConfirmation: true,
+          confirmationId: nextConfirmId,
+          riskLevel: inspection.riskLevel,
+          actionType: 'shell_exec',
+          target,
+          summary: inspection.reason || 'High-risk command requires explicit confirmation',
+          output: inspection.reason,
+          durationMs: Date.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
+      }
+    }
     const execRes = await dispatchLiveAgentCommand(
       targetIp,
       daemonPort,
@@ -2976,6 +3465,19 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
       'EXECUTION_RESULT',
       15_000
     );
+    if (execRes.requiresHostApproval) {
+      return {
+        success: false,
+        statusCode: 403,
+        requiresHostApproval: true,
+        actionType: 'shell_exec',
+        target,
+        summary: execRes.error || 'Host Agent requires local desktop approval',
+        output: execRes.error || '',
+        durationMs: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    }
     if (!execRes.ok) {
       return {
         success: false,
@@ -3006,7 +3508,7 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
     if (action.type === 'mouse_click' || action.type === 'mouse_double_click') {
       wsInputPayload = {
         action: 'INPUT_EVENT',
-        kind: action.type === 'mouse_double_click' ? 'dblclick' : 'click',
+        kind: action.type === 'mouse_double_click' ? 'double_click' : 'click',
         x: Number.isFinite(action.x) ? Number(action.x) : 960,
         y: Number.isFinite(action.y) ? Number(action.y) : 540,
         button: action.button || 'left',
@@ -3014,7 +3516,7 @@ async function executePcControlAction(action: Partial<ParsedAiAction> & { type: 
     } else if (action.type === 'mouse_move') {
       wsInputPayload = {
         action: 'INPUT_EVENT',
-        kind: 'move',
+        kind: 'move_to',
         x: Number.isFinite(action.x) ? Number(action.x) : 960,
         y: Number.isFinite(action.y) ? Number(action.y) : 540,
       };
@@ -3119,6 +3621,19 @@ app.post('/api/chat', requireControlAuth, async (req: Request, res: Response) =>
     let systemInstruction = SYSTEM_INSTRUCTIONS[role] || SYSTEM_INSTRUCTIONS.commander;
     if (fleetContext) {
       systemInstruction += `\n\n[LIVE FLEET CONTEXT]:\n- Selected Host: ${primaryHost}\n- Hosts Online: ${fleetContext.hostsOnline || 0}/${fleetContext.hostsTotal || 0}\n- Daemon Status: ${snap.isRunning ? 'ONLINE' : 'OFFLINE'} (${snap.localIp}:${snap.port})`;
+      if (isValidMemoryHostId(String(primaryHost))) {
+        const memStore = readAllHostMemory();
+        const memRec = Object.prototype.hasOwnProperty.call(memStore, String(primaryHost))
+          ? memStore[String(primaryHost)]
+          : null;
+        const rules = [
+          ...(Array.isArray(memRec?.persistent) ? memRec!.persistent : []),
+          ...(Array.isArray(memRec?.session) ? memRec!.session : []),
+        ].slice(0, 30);
+        if (rules.length > 0) {
+          systemInstruction += `\n\n[HOST OPERATOR MEMORY RULES FOR ${primaryHost}]:\n${rules.map((r) => `- ${r}`).join('\n')}`;
+        }
+      }
     }
 
     const requestedModel = DYNAMIC_MODELS.find((m) => m.id === model);
@@ -3134,6 +3649,7 @@ app.post('/api/chat', requireControlAuth, async (req: Request, res: Response) =>
       }
       const ollamaRes = await fetch(check.normalized!, {
         method: 'POST',
+        redirect: 'manual',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: requestedModel?.id || model,
@@ -3159,18 +3675,30 @@ app.post('/api/chat', requireControlAuth, async (req: Request, res: Response) =>
       if (!check.valid) {
         return res.status(400).json({ error: check.error });
       }
+      const customKey = customModelApiKeys.get(requestedModel.id);
+      const customHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (customKey) {
+        customHeaders.Authorization = `Bearer ${customKey}`;
+      }
       const customRes = await fetch(check.normalized!, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        redirect: 'manual',
+        headers: customHeaders,
         body: JSON.stringify({
           model: requestedModel.id,
           messages: [
             { role: 'system', content: systemInstruction },
-            ...messages.slice(-20),
+            ...messages.slice(-20).map((m: { role: string; content: string }) => ({
+              role: m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user',
+              content: String(m.content || '').slice(0, 8000),
+            })),
           ],
         }),
         signal: AbortSignal.timeout(30_000),
       });
+      if (customRes.status >= 300 && customRes.status < 400) {
+        return res.status(400).json({ error: 'Custom endpoint redirect rejected (SSRF protection)' });
+      }
       if (!customRes.ok) {
         return res.status(502).json({ error: `Custom endpoint returned HTTP ${customRes.status}` });
       }

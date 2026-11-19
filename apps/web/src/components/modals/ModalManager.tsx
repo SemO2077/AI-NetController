@@ -14,7 +14,7 @@ import { QuickSetupModal } from './QuickSetupModal';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 import { OnboardingModal } from './OnboardingModal';
 import { useTranslation } from '../../i18n/useTranslation';
-import { pairHostWithPin, saveAuthToken } from '../../services/securityService';
+import { buildHostWsUri, pairHostWithPin, saveAuthToken } from '../../services/securityService';
 
 // Props passed from Root Hook state
 interface ModalManagerProps {
@@ -34,7 +34,11 @@ interface ModalManagerProps {
   onConnectWs: any;
   onDisconnectWs: any;
   isCapturingScreen: boolean;
-  onRequestScreenRefresh: (id: string) => void;
+  onRequestScreenRefresh: (id: string, dimensions?: { width: number; height: number }, silent?: boolean) => void;
+  availableDisplays?: Array<{ id: number; index?: number; label?: string; name?: string; width: number; height: number; primary?: boolean }>;
+  activeDisplayIndex?: number;
+  lastHostClipboard?: { text: string; updatedAt: number } | null;
+  isVaultEncrypted?: boolean;
   heartbeatMetrics: any;
   heartbeatStatus?: any;
   latency?: any;
@@ -45,6 +49,7 @@ interface ModalManagerProps {
   onSelectTarget?: (targetId: string) => void;
   onViewScreen?: (host: any) => void;
   onSendInputOpcode?: (opcode: number, payload: Record<string, any> | string) => boolean;
+  onToast?: (msg: string) => void;
 }
 
 export const ModalManager: React.FC<ModalManagerProps> = (props) => {
@@ -115,8 +120,13 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
         isCapturing={props.isCapturingScreen}
         isConnected={props.isConnected}
         wsUrl={props.wsUrl}
+        availableDisplays={props.availableDisplays}
+        activeDisplayIndex={props.activeDisplayIndex}
+        lastHostClipboard={props.lastHostClipboard}
+        isVaultEncrypted={props.isVaultEncrypted}
+        onConnectWs={props.onConnectWs}
         onOpenConnection={() => useUIStore.getState().openModal('wsConfig')}
-        onRefreshFrame={() => liveScreenDevice && props.onRequestScreenRefresh(liveScreenDevice.id)}
+        onRefreshFrame={(dims, silent) => liveScreenDevice && props.onRequestScreenRefresh(liveScreenDevice.id, dims, silent)}
         onSendInputOpcode={props.onSendInputOpcode}
       />
 
@@ -154,9 +164,29 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
             ? payload
             : null
         }
-        onAddHost={(newHost) => {
+        onAddHost={(newHost, pairingPin) => {
           if (props.onAddHost) {
             props.onAddHost(newHost);
+          }
+          if (pairingPin && newHost?.ip) {
+            const targetWs = buildHostWsUri(newHost.ip, newHost.port || 8765);
+            props.setWsUrl?.(targetWs);
+            void pairHostWithPin(targetWs, pairingPin).then((tok) => {
+              if (tok) {
+                props.onConnectWs?.(targetWs);
+                props.onToast?.(
+                  language === 'bg'
+                    ? `✓ Сдвоен и свързан с ${newHost.name}`
+                    : `✓ Paired and connected to ${newHost.name}`
+                );
+              } else {
+                props.onToast?.(
+                  language === 'bg'
+                    ? `Хостът е добавен, но PIN сдвояването се провали.`
+                    : `Host added, but PIN pairing failed — verify the 6-digit PIN.`
+                );
+              }
+            });
           }
         }}
         onEditHost={(updatedHost, previousId) => {
@@ -194,13 +224,27 @@ export const ModalManager: React.FC<ModalManagerProps> = (props) => {
             props.setWsUrl(hostData.wsUri);
           }
           if (hostData.pairingToken) {
+            saveAuthToken(hostData.pairingToken, hostData.wsUri);
             saveAuthToken(hostData.pairingToken);
             if (props.onConnectWs) {
               props.onConnectWs(hostData.wsUri);
             }
           } else if (hostData.pairingPin) {
-            void pairHostWithPin(hostData.wsUri, hostData.pairingPin).then(() => {
-              props.onConnectWs?.(hostData.wsUri);
+            void pairHostWithPin(hostData.wsUri, hostData.pairingPin).then((tok) => {
+              if (tok) {
+                props.onConnectWs?.(hostData.wsUri);
+                props.onToast?.(
+                  language === 'bg'
+                    ? `✓ Сдвоен и свързан с ${hostData.name}`
+                    : `✓ Paired & connected to ${hostData.name}`
+                );
+              } else {
+                props.onToast?.(
+                  language === 'bg'
+                    ? `Неуспешно PIN сдвояване с ${hostData.name}. Уверете се, че PC агентът работи.`
+                    : `PIN pairing failed for ${hostData.name}. Check that the PC Host Agent is running.`
+                );
+              }
             });
           } else if (props.onConnectWs) {
             props.onConnectWs(hostData.wsUri);

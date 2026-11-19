@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to build and publish (e.g. v0.70.0)"
+        description: "Release tag to build and publish (e.g. v0.80.0)"
         required: true
-        default: "v0.70.0"
+        default: "v0.80.0"
 
 permissions:
   contents: write
@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
-          if (-not $tag -or $tag -eq "main") { $tag = "v0.70.0" }
+          if (-not $tag -or $tag -eq "main") { $tag = "v0.80.0" }
           python -m PyInstaller --noconfirm build_agent.spec
           if (Test-Path "dist/AI_NetController_HostAgent") {
             if ($env:AI_CODESIGN_THUMBPRINT) {
@@ -110,7 +110,7 @@ jobs:
         working-directory: apps/mobile
         run: |
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
-          if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then TAG="v0.70.0"; fi
+          if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then TAG="v0.80.0"; fi
           flutter build apk --release --split-per-abi
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "../../AI_NetController_${TAG}_arm64-v8a.apk"
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "../../AI_NetController_${TAG}.apk"
@@ -142,7 +142,7 @@ jobs:
         id: meta
         run: |
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
-          if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then TAG="v0.70.0"; fi
+          if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then TAG="v0.80.0"; fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download built artifacts into release directory

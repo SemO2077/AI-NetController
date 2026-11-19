@@ -304,7 +304,7 @@ class TestAgentSecurityAndPipelinePerformance(unittest.TestCase):
         fake_turbo.encode.assert_called_once()
         args, kwargs = fake_turbo.encode.call_args
         self.assertEqual(args[0].shape[:2], (180, 320))
-        self.assertEqual(kwargs.get("pixel_format"), 0)
+        self.assertIn(kwargs.get("pixel_format"), (0, 3))
 
         pipeline.turbo = None
         pipeline.last_frame_hash = None

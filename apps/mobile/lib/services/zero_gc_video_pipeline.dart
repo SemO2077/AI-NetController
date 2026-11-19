@@ -64,6 +64,7 @@ class _DoubleFrameRingBuffer {
 /// - Dedicated GPU RepaintBoundary Isolation
 class ZeroGcVideoRenderer extends StatefulWidget {
   final Stream<Uint8List> frameStream;
+  final Uint8List? initialFrame;
   final void Function(int opcode)? onRequestKeyframe;
   final BoxFit fit;
   final Alignment alignment;
@@ -71,6 +72,7 @@ class ZeroGcVideoRenderer extends StatefulWidget {
   const ZeroGcVideoRenderer({
     super.key,
     required this.frameStream,
+    this.initialFrame,
     this.onRequestKeyframe,
     this.fit = BoxFit.contain,
     this.alignment = Alignment.center,
@@ -86,6 +88,7 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
 
   StreamSubscription<Uint8List>? _streamSub;
   bool _isDecoding = false;
+  bool _isDisposed = false;
   Uint8List? _latchedPendingFrame;
   int? _cachedTargetWidth;
   DateTime? _lastKeyframeResyncAt;
@@ -95,6 +98,14 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
   void initState() {
     super.initState();
     _subscribeToFrames();
+    final seed = widget.initialFrame;
+    if (seed != null && seed.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_isDisposed && mounted && _activeImageNotifier.value == null) {
+          _onFrameArrival(seed);
+        }
+      });
+    }
   }
 
   @override
@@ -171,11 +182,18 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
               );
               pendingImage = (await codec.getNextFrame()).image;
 
-              if (mounted) {
+              if (!_isDisposed && mounted) {
                 final ui.Image? oldImage = _activeImageNotifier.value;
                 _activeImageNotifier.value = pendingImage;
                 pendingImage = null; // Ownership transferred to notifier
-                oldImage?.dispose();
+                if (oldImage != null) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    oldImage.dispose();
+                  });
+                }
+              } else {
+                pendingImage.dispose();
+                pendingImage = null;
               }
             }
           }
@@ -211,6 +229,7 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     unawaited(_streamSub?.cancel());
     final ui.Image? currentImage = _activeImageNotifier.value;
     _activeImageNotifier.value = null;

@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 /// and frame drops during high-frequency encrypted video decompression.
 ///
 /// States:
-/// - Nominal:  30 FPS, Sigma 24 glassmorphism blur, active mesh gradient.
+/// - Nominal:  60 FPS, Sigma 24 glassmorphism blur, active mesh gradient.
 /// - Fair:     20 FPS, Sigma 8 blur, reduced particle effects.
 /// - Critical: 10 FPS, Flat acrylic fill (Color(0xFF081120)), no blur, snapshot mode.
 /// - Low Battery (<15%): Auto-collapse continuous stream to on-demand snapshot.
@@ -37,7 +37,7 @@ class ThermalConfig {
   });
 
   static const nominal = ThermalConfig(
-    targetFps: 30,
+    targetFps: 60,
     blurSigma: 24.0,
     enableMeshGradient: true,
     enablePulsingAnimations: true,
@@ -71,7 +71,7 @@ class ThermalGovernor extends ChangeNotifier {
   ThermalProfile _currentProfile = ThermalProfile.nominal;
   int _batteryPercentage = 100;
   bool _isCharging = false;
-  String _governorStatusMessage = "Operating in Nominal Hardware Profile (30 FPS)";
+  String _governorStatusMessage = "Operating in Nominal Hardware Profile (60 FPS)";
 
   ThermalProfile get profile => _currentProfile;
   int get batteryPercentage => _batteryPercentage;
@@ -106,7 +106,7 @@ class ThermalGovernor extends ChangeNotifier {
     ThermalProfile newProfile;
     if (thermalIndex <= 1) {
       newProfile = ThermalProfile.nominal;
-      _governorStatusMessage = "Nominal: Full Glassmorphism Active (30 FPS)";
+      _governorStatusMessage = "Nominal: Full Glassmorphism Active (60 FPS)";
     } else if (thermalIndex == 2) {
       newProfile = ThermalProfile.fair;
       _governorStatusMessage = "Fair: Thermal Throttling Activated (20 FPS, Sigma 8)";
@@ -129,6 +129,18 @@ class ThermalGovernor extends ChangeNotifier {
 
     if (_batteryPercentage <= 15 && !_isCharging) {
       _governorStatusMessage = "Low Battery (<15%): Stream collapsed to On-Demand Snapshot Mode";
+    } else if (_governorStatusMessage.startsWith("Low Battery")) {
+      switch (_currentProfile) {
+        case ThermalProfile.nominal:
+          _governorStatusMessage = "Nominal: Full Glassmorphism Active (60 FPS)";
+          break;
+        case ThermalProfile.fair:
+          _governorStatusMessage = "Fair: Thermal Throttling Activated (20 FPS, Sigma 8)";
+          break;
+        case ThermalProfile.critical:
+          _governorStatusMessage = "Critical: GPU Throttling Active (10 FPS, Flat Acrylic)";
+          break;
+      }
     }
 
     if (changed) {

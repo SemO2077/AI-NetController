@@ -152,7 +152,7 @@ def apply_window_icon(window) -> None:
         try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "AINetController.HostAgent.Daemon.0.70"
+                "AINetController.HostAgent.Daemon.0.80"
             )
         except Exception:
             pass

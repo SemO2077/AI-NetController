@@ -552,14 +552,41 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(blocked_res["status"], "rejected")
             self.assertEqual(blocked_res["risk_level"], "BLOCKED")
 
-            # HITL Biometric Gate under strict profile ignores remote approval & resolves via local host approve/deny
+            # HITL Biometric Gate under zero_trust profile requires AEAD + ignores remote approval (local host approval only)
             daemon.security_profile = "zero_trust"
             await ws.send(agent_mod.pack_packet(agent_mod.OP_SHELL, b"taskkill /IM nonexistent_xyz_app.exe", seq=3))
+            plain_gate = agent_mod.unpack_packet(await asyncio.wait_for(ws.recv(), timeout=3.0))
+            self.assertIsNotNone(plain_gate)
+            self.assertEqual(plain_gate[1], agent_mod.OP_ERR)
+            self.assertIn(b"ECDH", plain_gate[5])
+
+            # Upgrade connection to ECDH AEAD vault before issuing privileged OP_SHELL under zero_trust
+            await ws.send(agent_mod.pack_packet(agent_mod.OP_AUTH, b"INIT_ECDH_VAULT", seq=4))
+            chal_pkt = None
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                p = agent_mod.unpack_packet(await asyncio.wait_for(ws.recv(), timeout=3.0))
+                if p and p[1] == agent_mod.OP_AUTH and len(p[5]) == 59:
+                    chal_pkt = p
+                    break
+            self.assertIsNotNone(chal_pkt)
+
+            cv = _ClientVaultSession(daemon.pairing_token.encode("utf-8"))
+            await ws.send(agent_mod.pack_packet(agent_mod.OP_AUTH, cv.build_handshake_response(chal_pkt[5]), seq=5))
+            ok_pkt = agent_mod.unpack_packet(await asyncio.wait_for(ws.recv(), timeout=3.0))
+            self.assertIsNotNone(ok_pkt)
+            self.assertEqual(ok_pkt[5], b"OK_ECDH_VAULT")
+
+            await ws.send(cv.encrypt_packet(agent_mod.OP_SHELL, b"taskkill /IM nonexistent_xyz_app.exe", seq=6))
             hitl_req = None
-            while time.monotonic() < time.monotonic() + 3.0:
-                pkt = agent_mod.unpack_packet(await asyncio.wait_for(ws.recv(), timeout=3.0))
-                if pkt and pkt[1] == agent_mod.OP_HITL:
-                    hitl_req = json.loads(pkt[5].decode("utf-8"))
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
+                op, _, _, plain = cv.decrypt_packet(raw)
+                if op == agent_mod.OP_ERR:
+                    self.fail(f"Unexpected OP_ERR waiting for HITL: {plain}")
+                if op == agent_mod.OP_HITL:
+                    hitl_req = json.loads(plain.decode("utf-8"))
                     break
             self.assertIsNotNone(hitl_req)
             aid = hitl_req["approval_id"]
@@ -567,19 +594,20 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
             sig = hmac.new(daemon.pairing_token.encode("utf-8"), proof, hashlib.sha256).hexdigest()
 
             # Under zero_trust, remote HMAC approval is ignored
-            await ws.send(agent_mod.pack_packet(
+            await ws.send(cv.encrypt_packet(
                 agent_mod.OP_HITL,
                 json.dumps({"approval_id": aid, "approved": True, "signature": sig}).encode("utf-8"),
-                seq=4,
+                seq=7,
             ))
             await asyncio.sleep(0.08)
             self.assertIn(aid, daemon.pending_approvals)
             # Local operator denies it
             daemon.resolve_local_hitl(aid, False)
             while True:
-                pkt = agent_mod.unpack_packet(await asyncio.wait_for(ws.recv(), timeout=3.0))
-                if pkt and pkt[1] == agent_mod.OP_SHELL:
-                    denied_res = json.loads(pkt[5].decode("utf-8"))
+                raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
+                op, _, _, plain = cv.decrypt_packet(raw)
+                if op == agent_mod.OP_SHELL:
+                    denied_res = json.loads(plain.decode("utf-8"))
                     self.assertEqual(denied_res["status"], "rejected")
                     self.assertIn("HITL", denied_res["output"])
                     break

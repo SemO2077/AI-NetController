@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [v0.80.0] (Beta 0.80.00) - 2026-11-19
+
+### Security & Hardening
+- **Full-Stack Mutual X25519 + ChaCha20-Poly1305 AEAD Vault (`agent/`, `apps/web/`, `apps/mobile/`)**:
+  - Upgraded the Web Control Server (`apps/web/server.ts`) and WebWorker binary transport (`apps/web/src/workers/networkWorker.ts`, `apps/web/src/utils/cryptoVault.ts`) to negotiate mutual 91-byte `INIT_ECDH_VAULT_M` handshakes with HKDF-SHA256 directional session keys and `CST_ECDH_V2` ChaCha20-Poly1305 AEAD wire frames, matching the Flutter Mobile and Python Host Agent vaults.
+  - Added post-vault downgrade enforcement (`HostAgentDaemon._aead_required()`) and fail-closed `require_aead` gating so plaintext control frames are rejected once an AEAD session or strict profile is active.
+  - Implemented end-to-end encrypted `CST-PAIR-X25519-V1` ephemeral PIN pairing (`apps/web/src/services/pairCrypto.ts`, `agent/agent.py`, `apps/mobile/lib/services/host_connection_client.dart`) so pairing tokens never traverse the LAN in plaintext.
+- **SSRF, DNS Rebinding & Payload Boundary Protections**:
+  - Added strict RFC 1918 / RFC 4193 private-LAN target validation (`apps/web/src/utils/networkGuard.ts`, `apps/web/server.ts`, `apps/mobile/lib/security/network_validators.dart`) blocking cloud metadata endpoints (`169.254.169.254`), public internet targets, and unbracketed IPv6 ambiguity.
+  - Hardened `apps/web/server.ts` against DNS rebinding via strict `Host` header allowlisting (`isAllowedHostHeader`), added constant-time `crypto.timingSafeEqual` secret comparisons, sanitized `/api/source-files` against path traversal and `.env` leakage, and enforced an 8192-byte shell command bound and 1 MiB clipboard payload bound in `agent/agent.py`.
+- **Expanded Command AST Firewall (`agent/command_ast_firewall.py`)**:
+  - Added high-risk PowerShell cmdlets (`set-mppreference`, `invoke-wmimethod`, `invoke-cimmethod`, `new-service`, `set-service`, `add-content`, `clear-eventlog`, `remove-eventlog`, `export-pfxcertificate`) and hardened quote-stripping tokenization so multi-word destructive patterns cannot be bypassed via inline quotes.
+- **Mobile & Android Platform Hardening (`apps/mobile/`)**:
+  - Enforced hardware-backed `SecureSecretStore` (Android Keystore AES-GCM) on Android builds without silent Hive plaintext fallback, wired `BiometricSecurityGate` into `_confirmRiskyCommand` before `sendHitlResponse(true)` or risky command execution, added Android 12+ `<data-extraction-rules>` excluding sensitive boxes from cloud backup/device-transfer, and removed wildcard CORS (`Access-Control-Allow-Origin: *`) from the Android WebView loopback server (`MainActivity.java`).
+
+### Performance & Screen Streaming
+- **Zero-Bufferbloat 60 FPS Screen Streaming Pipeline (`agent/agent.py`, `agent/multi_monitor_streamer.py`)**:
+  - Enabled Windows Per-Monitor V2 DPI awareness (`SetProcessDpiAwarenessContext(-4)`), `TJFLAG_FASTDCT` SIMD JPEG compression, 2D strided (`img32[::8, ::16]`) static-screen delta detection with 1 high-quality settling frame, thread-local `mss` auto-recovery on Desktop Switch/UAC events, and explicit `OP_FRAME_SYNC`-gated single-in-flight frame delivery (`_send_frame_guarded`) preventing TCP bufferbloat.
+  - Updated `MultiMonitorStreamer` to reuse a thread-local `mss` instance and encode frames via `TurboJPEG` (`4:2:0` chroma subsampling) before falling back to Pillow.
+- **Hardware-Accelerated Web `<canvas>` & Mobile Impeller Rendering (`apps/web/`, `apps/mobile/`)**:
+  - Upgraded Web `ScreenViewerModal.tsx` and `screenStore.ts` to decode binary JPEG frames off the React render cycle via `createImageBitmap` + `requestAnimationFrame` onto a hardware-accelerated `<canvas>` with zero Blob URL leaks, live FPS badge, and 150ms debounced `ResizeObserver` viewport negotiation.
+  - Upgraded Flutter `ZeroGcVideoPipeline` with copy-on-write ring-buffer concurrency protection (`writeSlot == readSlot`), single-flight `ui.instantiateImageCodec` hardware decoding, and lifecycle-aware `AppLifecycleState` pause/resume of `FrameSync` timers in `ViewportStreamWidget`.
+  - Optimized LAN discovery in `apps/mobile/lib/main.dart` to scan local `/24` RFC 1918 subnets cleanly without spawning redundant fallback isolate waves.
+
+### Ergonomics & User Experience
+- **Frictionless Pairing & Universal Deep Links**:
+  - Added `ainet://pair` custom scheme intent filter and MethodChannel bridge (`MainActivity.kt` -> `main.dart`) alongside clipboard pairing link detection (`ainet://pair` and `#pair_ip=`), unmasked 6-digit PIN entry with auto-submit, and automatic PIN pairing prompt when tapping an unpaired LAN host.
+  - Added inline 1-click **Quick Pair (6-Digit PIN)** directly inside the Web `ScreenViewerModal` overlay, plus **Monitor Switcher**, **Pull/Push PC Clipboard Sync**, **Double-Click**, and an inline **AI Approval Bar** for pending `OP_HITL` requests.
+- **Launchers & Cross-Platform Parity**:
+  - Fixed `START_HERE_WINDOWS.bat` and `START_HERE_LINUX.sh` to auto-open `http://localhost:3000` and execute `agent/agent.py` with proper PYTHONPATH resolution.
+  - Wired global `PANIC_KILL_ALL` across Mobile, Web, and Host Agent to immediately terminate running child processes and revoke active sessions.
+
+### Changed
+- **Unified `v0.80.0` (`Beta 0.80.00` / `0.80.00`) Release**: Bumped all Node/Web (`0.80.0`), Python Host Agent (`0.80.0` / PE & MSIX `0.80.0.0`), Flutter/Android (`0.80.0+800` / `versionCode 800` / `0.80.00-beta`), documentation, and release artifacts/manifests.
+
+---
+
 ## [v0.70.0] (Beta 0.70.00) - 2026-11-14
 
 ### Added & Rebuilt

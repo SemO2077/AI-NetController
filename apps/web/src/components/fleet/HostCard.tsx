@@ -49,6 +49,7 @@ export interface HostCardProps {
   onViewScreen: (device: HostDevice) => void;
   onSelectForCommand?: (hostId: string) => void;
   onQuickCommand?: (command: string, targetOverride?: string) => void;
+  onSendInputOpcode?: (opcode: number, payload: Record<string, any> | string) => boolean;
   onDiagnoseHost?: (device: HostDevice) => void;
   onOpenDetailsModal: (device: HostDevice) => void;
   onWakeClick: (e: React.MouseEvent, device: HostDevice) => void;
@@ -167,6 +168,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   onViewScreen,
   onSelectForCommand,
   onQuickCommand,
+  onSendInputOpcode,
   onDiagnoseHost,
   onOpenDetailsModal,
   onWakeClick,
@@ -235,6 +237,16 @@ const HostCardComponent: React.FC<HostCardProps> = ({
     }
     setConfirmRestart(false);
     triggerHapticFeedback('medium');
+    if (actionId === 'lock' && onSendInputOpcode && isSelected) {
+      const sent = onSendInputOpcode(0x09, { type: 'lock_pc' });
+      if (sent) {
+        setDispatchedAction(actionId);
+        scheduleTimer(() => {
+          setDispatchedAction((prev) => (prev === actionId ? null : prev));
+        }, 1500);
+        return;
+      }
+    }
     if (onQuickCommand) {
       setDispatchedAction(actionId);
       onQuickCommand(command, host.id);

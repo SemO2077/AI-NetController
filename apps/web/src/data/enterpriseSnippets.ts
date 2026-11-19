@@ -171,19 +171,20 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "filename": "PATCH_NOTES.md",
     "language": "markdown",
     "category": "docs",
-    "description": "Beta v0.70.00 Release Patch Notes — Full Mobile Rebuild, Cyber Glass Daemon Wizard, Windows Installer/Uninstaller & Full-Stack Dependency Upgrades",
-    "code": `# Patch Notes — AI NetController v0.70.0 (Beta 0.70.00)
+    "description": "Beta v0.80.00 Release Patch Notes — Full Security Hardening, 60 FPS Hardware Screen Streaming, Mutual ECDH/AEAD Vault, Encrypted PIN Pairing & Ergonomic Control UX",
+    "code": `# Patch Notes — AI NetController v0.80.0 (Beta 0.80.00)
 
-**Version:** Beta 0.70.00 (v0.70.0)
+**Version:** Beta 0.80.00 (v0.80.0)
 **Protocol Version:** AI-NET/3.0-SECURE
 
-## 1. Mobile App Rebuild & Responsive Fluid UI (apps/mobile/)
-- Ground-up optimization of Flutter Mobile Client with 3D beveled Cyber Glass surfaces, smooth animations, and viewport scaling from 280x653 up to 1440x900 tablets/foldables.
-- Updated flutter_riverpod 3.5.0, local_auth 3.0.2, network_info_plus 8.2.2, sensors_plus 7.1.1, and 3D Cyber-Glass APK launcher icons.
+## 1. Zero-Bufferbloat 60 FPS Screen Streaming & Multi-Monitor Parity (agent/, apps/web/, apps/mobile/)
+- Upgraded Host Daemon AdaptiveScreenPipeline with Per-Monitor V2 DPI awareness, 2D strided delta hashing, TJFLAG_FASTDCT SIMD encoding, and backpressure-guarded explicit OP_FRAME_SYNC frame delivery.
+- Upgraded Web ScreenViewerModal with hardware-accelerated <canvas> + createImageBitmap + requestAnimationFrame decoding, debounced viewport negotiation, multi-monitor switching, and bidirectional clipboard sync.
+- Upgraded Flutter Mobile ZeroGcVideoPipeline with ring-buffer copy-on-write race protection, single-flight ui.instantiateImageCodec hardware decoding, and lifecycle-aware FrameSync heartbeats.
 
-## 2. Host Daemon, Installer Wizard & Web Sync (agent/, apps/web/)
-- Upgraded Desktop Control Center (CyberUITheme), 2-column Feature Customizer, 3-step Guided Setup Wizard, startup & module toggles, and clean Windows Install/Uninstall with Add/Remove Programs & deferred cleanup.
-- Upgraded Python stack (Pillow 13.0, websockets 17.4, zeroconf 0.154, PyInstaller 6.22.3) and Node/Web stack (Vite 8.3.8, Express 5.3.0, TypeScript 7.0.2).
+## 2. Full-Stack Cryptographic Vault & Security Hardening (agent/, apps/web/, apps/mobile/)
+- Implemented Mutual X25519 + HKDF-SHA256 + ChaCha20-Poly1305 AEAD Vault (INIT_ECDH_VAULT_M / CST_ECDH_V2) and encrypted PIN pairing (CST-PAIR-X25519-V1) across Python Host Daemon, Node/Web Control Server, and Flutter Mobile Client.
+- Hardened command_ast_firewall.py against PowerShell evasion cmdlets, enforced DNS rebinding & SSRF LAN guards on /api/* and WebWorker sockets, and enforced Android Keystore AES-GCM secret storage + Biometric HITL gating.
 `
   }
 ];

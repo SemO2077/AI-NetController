@@ -270,10 +270,26 @@ class PacketReassembler {
     }
 
     final String sessionKey = '${opcode}_$messageId';
-    if (!_sessions.containsKey(sessionKey) && _sessions.length >= 32) {
-      _purgeStaleSessions();
-      if (_sessions.length >= 32) {
-        _sessions.remove(_sessions.keys.first);
+    if (!_sessions.containsKey(sessionKey)) {
+      int totalBufferedBytes = _sessions.values.fold<int>(
+        0,
+        (sum, s) => sum + s.totalLength,
+      );
+      if (_sessions.length >= 32 ||
+          totalBufferedBytes + totalLength > 32 * 1024 * 1024) {
+        _purgeStaleSessions();
+        totalBufferedBytes = _sessions.values.fold<int>(
+          0,
+          (sum, s) => sum + s.totalLength,
+        );
+        while (_sessions.isNotEmpty &&
+            (_sessions.length >= 32 ||
+                totalBufferedBytes + totalLength > 32 * 1024 * 1024)) {
+          final removed = _sessions.remove(_sessions.keys.first);
+          if (removed != null) {
+            totalBufferedBytes -= removed.totalLength;
+          }
+        }
       }
     }
 
@@ -283,7 +299,9 @@ class PacketReassembler {
         // Gap detected: chunks from intermediate frame dropped
         _requestKeyframeResync(BinaryOpcode.frameSync);
       }
-      _lastVideoMessageId = messageId;
+      if (messageId > _lastVideoMessageId) {
+        _lastVideoMessageId = messageId;
+      }
     }
 
     final Uint8List chunkData = Uint8List.sublistView(

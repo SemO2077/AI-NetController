@@ -185,7 +185,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       const saved = localStorage.getItem(AUTO_EXEC_STORAGE_KEY);
       if (saved !== null) return saved === 'true';
     } catch {}
-    return true;
+    return false;
   });
 
   const [showControlDeck, setShowControlDeck] = useState<boolean>(false);

@@ -1,8 +1,8 @@
 {
   "name": "ai-netcontroller",
   "private": true,
-  "version": "0.70.0",
-  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.70.00)",
+  "version": "0.80.0",
+  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.80.00)",
   "type": "module",
   "scripts": {
     "dev": "tsx apps/web/server.ts",
@@ -12,7 +12,7 @@
     "preview": "vite preview --config apps/web/vite.config.ts apps/web",
     "clean": "node -e \"require('node:fs').rmSync('apps/web/dist', { recursive: true, force: true })\"",
     "lint": "tsc --noEmit -p apps/web/tsconfig.json",
-    "test": "tsx apps/web/src/tests/verifyPillars.ts && tsx apps/web/src/tests/stressTest.ts"
+    "test": "tsx apps/web/src/tests/verifyPillars.ts && tsx apps/web/src/tests/stressTest.ts && tsx apps/web/src/tests/verifyCryptoAndSecurity.ts"
   },
   "dependencies": {
     "@google/genai": "^3.3.0",

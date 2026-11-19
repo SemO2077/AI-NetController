@@ -65,97 +65,24 @@ const compareSemver = (a?: string, b?: string): number => {
 
 const INITIAL_COMPONENTS: UpdatableComponent[] = [
   {
-    id: 'deepseek-r1',
-    name: 'deepseek-r1:latest',
-    category: 'ai_model',
-    engineType: 'ai_engine',
-    currentVersion: 'v1.4.0-q4',
-    latestVersion: 'v1.5.2-q4_K_M',
-    description: 'Local Reasoning Model (Chain-of-Thought System Commands & Shell Synthesis)',
-    size: '8.9 GB',
-    status: 'available',
-    progress: 0,
-    driftSeverity: 'moderate',
-    driftDescription: '1 minor version behind (v1.4 -> v1.5.2)',
-    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.70.0 for CoT chunk streaming',
-    minRequiredDaemonVersion: 'v0.70.0',
-    lastCheckedAt: 'Pending check',
-    releaseNotes:
-      'Optimized Q4_K_M quant with 32k context and streaming reasoning tokens via Opcode 0x0B.',
-  },
-  {
-    id: 'qwen25-coder',
-    name: 'qwen2.5-coder:32b',
-    category: 'ai_model',
-    engineType: 'ai_engine',
-    currentVersion: 'v2.1.0',
-    latestVersion: 'v2.2.4-instruct',
-    description: 'Local Autonomous Code & PowerShell Script Generator with Syntax Checking',
-    size: '18.4 GB',
-    status: 'available',
-    progress: 0,
-    driftSeverity: 'minor',
-    driftDescription: '1 minor version behind (v2.1.0 -> v2.2.4)',
-    compatibilityRequirement: 'Supports AI-NET/3.0-SECURE and Job Object sandbox',
-    minRequiredDaemonVersion: 'v0.70.0',
-    lastCheckedAt: 'Pending check',
-    releaseNotes: 'Added enhanced AST de-obfuscation prompts and cmd.exe caret normalization.',
-  },
-  {
-    id: 'llama33-70b',
-    name: 'llama3.3:70b-instruct',
-    category: 'ai_model',
-    engineType: 'ai_engine',
-    currentVersion: 'v3.2.0',
-    latestVersion: 'v3.3.1-q4',
-    description: 'Multi-Host Fleet Orchestrator & Autonomous Task Planner',
-    size: '42.1 GB',
-    status: 'available',
-    progress: 0,
-    driftSeverity: 'minor',
-    driftDescription: '1 minor version behind (v3.2.0 -> v3.3.1)',
-    compatibilityRequirement: 'Compatible with Host Daemon v0.70.0 multi-monitor routing',
-    minRequiredDaemonVersion: 'v0.70.0',
-    lastCheckedAt: 'Pending check',
-    releaseNotes: 'Multi-GPU tensor parallelism enhancements and Wake-on-LAN routing templates.',
-  },
-  {
-    id: 'llama32-3b',
-    name: 'llama3.2:3b',
-    category: 'ai_model',
-    engineType: 'ai_engine',
-    currentVersion: 'v1.2.0-quant',
-    latestVersion: 'v1.2.0-quant',
-    description: 'Low-RAM 3B Local Edge Model (<1.8GB VRAM)',
-    size: '2.0 GB',
-    status: 'up_to_date',
-    progress: 100,
-    driftSeverity: 'none',
-    driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Compatible with Mobile Client & Host Daemon',
-    minRequiredDaemonVersion: 'v0.70.0',
-    lastCheckedAt: 'Pending check',
-    releaseNotes: 'Current verified release for lightweight edge reasoning.',
-  },
-  {
     id: 'cst-host-agent',
     name: 'AI NetController Host Agent (EXE + GUI)',
     category: 'core_system',
     engineType: 'host_daemon',
-    currentVersion: 'v0.70.0',
-    latestVersion: 'v0.70.0',
+    currentVersion: 'v0.80.0',
+    latestVersion: 'v0.80.0',
     description:
       'Native Desktop GUI Control Center, Binary WebSocket Server (0xC5,0x71), Signed Build',
     size: '18.2 MB',
     status: 'up_to_date',
     progress: 100,
     driftSeverity: 'none',
-    driftDescription: 'Synchronized with Beta v0.70.0',
+    driftDescription: 'Synchronized with Beta v0.80.0',
     compatibilityRequirement: 'Core supervisor required by local & cloud AI execution bridge.',
-    minRequiredDaemonVersion: 'v0.70.0',
+    minRequiredDaemonVersion: 'v0.80.0',
     lastCheckedAt: 'Pending check',
     releaseNotes:
-      'Beta 0.70.00: Ground-up Flutter mobile rebuild with 3D beveled Cyber Glass UI & multi-aspect scaling, Host Daemon feature customizer & Guided Setup Wizard, Windows Install/Uninstall lifecycle, 3D icons, and full-stack dependency upgrades.',
+      'Beta 0.80.0: Zero-bufferbloat 60 FPS hardware screen streaming, Mutual X25519 + ChaCha20-Poly1305 AEAD Vault, encrypted CST-PAIR-X25519-V1 PIN pairing, and security-hardened cross-platform architecture.',
   },
   {
     id: 'ast-security-rules',
@@ -171,8 +98,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     progress: 100,
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Requires Host Daemon v0.70.0 for NFKC & caret normalization',
-    minRequiredDaemonVersion: 'v0.70.0',
+    compatibilityRequirement: 'Requires Host Daemon v0.80.0 for NFKC & caret normalization',
+    minRequiredDaemonVersion: 'v0.80.0',
     lastCheckedAt: 'Pending check',
     releaseNotes:
       'Updated heuristics for obfuscated PowerShell/LOLBin execution and symlink traversal.',
@@ -191,7 +118,7 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
     compatibilityRequirement: 'Dual-stack IPv4/IPv6 compliant',
-    minRequiredDaemonVersion: 'v0.70.0',
+    minRequiredDaemonVersion: 'v0.80.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Latest RFC 6762 beacon engine.',
   },
@@ -208,8 +135,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     progress: 100,
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.70.0',
-    minRequiredDaemonVersion: 'v0.70.0',
+    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.80.0',
+    minRequiredDaemonVersion: 'v0.80.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'AVX2/NEON SIMD color space transformation and multi-monitor enumeration.',
   },
@@ -227,7 +154,7 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
     compatibilityRequirement: 'Supports IPv4 Directed Broadcast and persistent schedules',
-    minRequiredDaemonVersion: 'v0.70.0',
+    minRequiredDaemonVersion: 'v0.80.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Backed by persistent disk schedule storage and NIC WakeOnMagicPacket audit.',
   },
@@ -240,7 +167,7 @@ const COMPONENT_BG_MAP: Record<
   'deepseek-r1': {
     description: 'Локален модел за разсъждение (верига от мисли и синтез на системни команди)',
     driftDescription: '1 минорна версия назад (v1.4 -> v1.5.2)',
-    compatibilityRequirement: 'Изисква хост демон >= v0.70.0 за поточно предаване',
+    compatibilityRequirement: 'Изисква хост демон >= v0.80.0 за поточно предаване',
   },
   'qwen25-coder': {
     description: 'Автономен генератор на код и скриптове с проверка на синтаксиса',
@@ -250,7 +177,7 @@ const COMPONENT_BG_MAP: Record<
   'llama33-70b': {
     description: 'Водещ оркестратор за многохостов флот и автономно планиране на задачи',
     driftDescription: '1 минорна версия назад (v3.2.0 -> v3.3.1)',
-    compatibilityRequirement: 'Съвместим с хост демон v0.70.0 за няколко монитора',
+    compatibilityRequirement: 'Съвместим с хост демон v0.80.0 за няколко монитора',
   },
   'llama32-3b': {
     description: 'Лек 3B локален резервен модел (<1.8GB VRAM)',
@@ -260,14 +187,14 @@ const COMPONENT_BG_MAP: Record<
   'cst-host-agent': {
     description:
       'Графичен контролен център за настолен компютър, двоичен сървър и сертифициран компилатор',
-    driftDescription: 'Синхронизиран с Beta v0.70.0',
+    driftDescription: 'Синхронизиран с Beta v0.80.0',
     compatibilityRequirement: 'Основен супервайзър за AI и отдалечено управление.',
   },
   'ast-security-rules': {
     description:
       'Правила за карантина на високорискови команди (изтриване, форматиране, акаунти)',
     driftDescription: 'Актуална политика за сигурност',
-    compatibilityRequirement: 'Изисква хост демон v0.70.0 за NFKC нормализиране',
+    compatibilityRequirement: 'Изисква хост демон v0.80.0 за NFKC нормализиране',
   },
   'zeroconf-mdns': {
     description: 'Откриване на мрежови интерфейси по RFC 6762 и активен кеш на адреси',
@@ -277,7 +204,7 @@ const COMPONENT_BG_MAP: Record<
   'turbojpeg-pipeline': {
     description: 'Бързо хеширане на делта кадри под 5ms и споделена памет за видео поток',
     driftDescription: 'Актуална версия (v1.8.0)',
-    compatibilityRequirement: 'Изисква хост демон >= v0.70.0',
+    compatibilityRequirement: 'Изисква хост демон >= v0.80.0',
   },
   'directed-wol-engine': {
     description: 'Мрежов двигател за насочени пакети за събуждане през маршрутизатори',
@@ -316,15 +243,17 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     modelUsed: string;
   } | null>(null);
 
-  const [updateLogs, setUpdateLogs] = useState<string[]>([
-    '[INIT] System & AI Model Registry initialized (Beta v0.70.0).',
-    '[INFO] Gemini 2.5 Flash & Local Ollama Runtime checks ready.',
-    '[READY] Update Center ready to query /api/update/status and /api/update/check.',
+  const nextLogIdRef = React.useRef<number>(4);
+  const [updateLogs, setUpdateLogs] = useState<Array<{ id: number; text: string }>>([
+    { id: 1, text: '[INIT] System & AI Model Registry initialized (Beta v0.80.0).' },
+    { id: 2, text: '[INFO] Gemini & Local Ollama Runtime checks ready.' },
+    { id: 3, text: '[READY] Update Center ready to query /api/update/status and /api/update/check.' },
   ]);
 
   const appendLog = (msg: string) => {
     const timestamp = new Date().toLocaleTimeString('en-GB', { hour12: false });
-    setUpdateLogs((prev) => [...prev, `[${timestamp}] ${msg}`]);
+    const id = nextLogIdRef.current++;
+    setUpdateLogs((prev) => [...prev.slice(-100), { id, text: `[${timestamp}] ${msg}` }]);
   };
 
   useEffect(() => {
@@ -334,8 +263,8 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data) => {
         if (cancelled || !data?.components || !Array.isArray(data.components)) return;
-        setComponents((prev) =>
-          prev.map((comp) => {
+        setComponents((prev) => {
+          const updatedExisting = prev.map((comp) => {
             const srv = data.components.find((s: any) => s.id === comp.id);
             if (!srv) return comp;
             const isUpToDate = srv.status === 'up_to_date';
@@ -343,15 +272,37 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
               ...comp,
               currentVersion: srv.currentVersion || comp.currentVersion,
               latestVersion: srv.latestVersion || comp.latestVersion,
-              status: isUpToDate ? 'up_to_date' : 'available',
+              status: isUpToDate ? ('up_to_date' as const) : ('available' as const),
               progress: isUpToDate ? 100 : 0,
-              driftSeverity: isUpToDate ? 'none' : comp.driftSeverity,
+              driftSeverity: isUpToDate ? ('none' as const) : comp.driftSeverity,
               driftDescription: isUpToDate
                 ? 'No version drift (Up to date)'
                 : comp.driftDescription,
             };
-          })
-        );
+          });
+          const existingIds = new Set(updatedExisting.map((c) => c.id));
+          const extraFromServer: UpdatableComponent[] = data.components
+            .filter((s: any) => s?.id && !existingIds.has(s.id))
+            .map((s: any) => {
+              const isUpToDate = s.status === 'up_to_date';
+              return {
+                id: String(s.id),
+                name: String(s.name || s.id),
+                category: (s.category || 'ai_model') as ComponentCategory,
+                engineType: (s.category === 'ai_model' ? 'ai_engine' : 'host_daemon') as EngineType,
+                currentVersion: String(s.currentVersion || 'installed'),
+                latestVersion: String(s.latestVersion || s.currentVersion || 'latest'),
+                description: String(s.description || 'Server-reported runtime component'),
+                size: String(s.size || '—'),
+                status: isUpToDate ? 'up_to_date' : 'available',
+                progress: isUpToDate ? 100 : 0,
+                driftSeverity: isUpToDate ? 'none' : 'minor',
+                driftDescription: isUpToDate ? 'No version drift (Up to date)' : 'Update available',
+                compatibilityRequirement: 'Verified by Control Server',
+              };
+            });
+          return [...updatedExisting, ...extraFromServer];
+        });
       })
       .catch(() => {
         if (!cancelled) {
@@ -397,7 +348,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
   const systemCompatibility = useMemo(() => {
     const daemonComp = components.find((c) => c.id === 'cst-host-agent');
-    const daemonVersion = daemonComp ? daemonComp.currentVersion : 'v0.70.0';
+    const daemonVersion = daemonComp ? daemonComp.currentVersion : 'v0.80.0';
     const isDaemonLatest =
       daemonComp?.status === 'up_to_date' || daemonComp?.status === 'completed';
 
@@ -535,16 +486,17 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     setIsCheckingAiEngine(true);
     appendLog('[CHECK: AI ENGINE] Querying local Ollama & Gemini runtime via /api/update/check...');
     try {
-      await runServerCheck('ai_engine');
-      const aiPending = components.filter(
-        (c) => c.engineType === 'ai_engine' && c.status === 'available'
+      const data = await runServerCheck('ai_engine');
+      const checked = Array.isArray(data?.checkedComponents) ? data.checkedComponents : [];
+      const aiPending = checked.filter(
+        (c: any) => c.status && c.status !== 'up_to_date'
       ).length;
       appendLog(`[AI ENGINE CHECK] Completed (${aiPending} update(s) available).`);
       if (onNotify) {
         onNotify(
           isBg
             ? `AI двигател: ${aiPending} модела имат налични актуализации.`
-            : `AI Model Engine: ${aiPending} models have updates available.`,
+            : `AI Model Engine: ${aiPending} model(s) have updates available.`,
           aiPending > 0 ? 'info' : 'success'
         );
       }
@@ -561,9 +513,10 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     setIsCheckingHostDaemon(true);
     appendLog('[CHECK: HOST DAEMON] Querying Host Agent & AST rules via /api/update/check...');
     try {
-      await runServerCheck('host_daemon');
-      const daemonPending = components.filter(
-        (c) => c.engineType === 'host_daemon' && c.status === 'available'
+      const data = await runServerCheck('host_daemon');
+      const checked = Array.isArray(data?.checkedComponents) ? data.checkedComponents : [];
+      const daemonPending = checked.filter(
+        (c: any) => c.status && c.status !== 'up_to_date'
       ).length;
       appendLog(`[HOST DAEMON CHECK] Completed (${daemonPending} update(s) available).`);
       if (onNotify) {
@@ -609,18 +562,14 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
   };
 
   const executeComponentUpdate = async (item: UpdatableComponent) => {
-    const endpoint =
-      item.category === 'ai_model' ? '/api/update/ollama-pull' : '/api/update/agent';
-    const body =
-      item.category === 'ai_model'
-        ? { model: item.name, componentId: item.id }
-        : { componentId: item.id };
-
-    const res = await fetch(endpoint, {
+    const res = await fetch('/api/update/execute', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        componentId: item.id,
+        model: item.category === 'ai_model' ? item.name : undefined,
+      }),
     });
     const data = await res.json().catch(() => ({}));
     if (Array.isArray(data.logs)) {
@@ -789,7 +738,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                       : 'System & AI Model Update Center'}
                   </h2>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 shrink-0">
-                    Beta v0.70.0 OTA
+                    Beta v0.80.0 OTA
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5 break-words leading-snug">
@@ -967,51 +916,66 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
             </div>
 
             {/* Card 2: AI Model Engine Hub */}
-            <div className="p-3.5 rounded-2xl bg-[#081224]/90 border border-purple-500/30 flex flex-col justify-between gap-2.5 min-w-0">
-              <div className="space-y-1.5 min-w-0">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-xs font-mono text-purple-300 flex items-center gap-1.5 font-semibold">
-                    <Brain className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                    <span>{isBg ? 'AI Моделен Двигател' : 'AI Model Engine'}</span>
-                  </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-950/70 text-purple-300 border border-purple-500/40 shrink-0">
-                    Ollama v0.5.8
-                  </span>
+            {(() => {
+              const aiModelsCount = components.filter((c) => c.category === 'ai_model').length;
+              return (
+                <div className="p-3.5 rounded-2xl bg-[#081224]/90 border border-purple-500/30 flex flex-col justify-between gap-2.5 min-w-0">
+                  <div className="space-y-1.5 min-w-0">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-xs font-mono text-purple-300 flex items-center gap-1.5 font-semibold">
+                        <Brain className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                        <span>{isBg ? 'AI Моделен Двигател' : 'AI Model Engine'}</span>
+                      </span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-950/70 text-purple-300 border border-purple-500/40 shrink-0">
+                        Gemini + Ollama
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 leading-snug break-words">
+                      {systemCompatibility.availableAiUpdates > 0
+                        ? isBg
+                          ? `${systemCompatibility.availableAiUpdates} модела имат налични актуализации.`
+                          : `${systemCompatibility.availableAiUpdates} model(s) have available updates.`
+                        : aiModelsCount > 0
+                        ? isBg
+                          ? `Всички ${aiModelsCount} локални AI модела са синхронизирани.`
+                          : `All ${aiModelsCount} local AI model(s) are synchronized.`
+                        : isBg
+                        ? 'Използвайте „Провери AI“, за да инспектирате локални Ollama модели.'
+                        : 'Click "Check AI" to query local Ollama models and cloud runtime status.'}
+                    </p>
+                  </div>
+                  <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {aiModelsCount > 0
+                        ? isBg
+                          ? `${aiModelsCount} локални модела`
+                          : `${aiModelsCount} local model(s)`
+                        : isBg
+                        ? 'Облачен / Локален режим'
+                        : 'Cloud / Local runtime'}
+                    </span>
+                    <button
+                      id="check-ai-engine-btn"
+                      type="button"
+                      onClick={handleCheckAiEngine}
+                      disabled={isCheckingAiEngine || isUpdatingAll}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-semibold bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 border border-purple-500/40 hover:border-purple-400 transition cursor-pointer"
+                    >
+                      <Search className={`w-3 h-3 ${isCheckingAiEngine ? 'animate-spin' : ''}`} />
+                      <span>
+                        {isCheckingAiEngine
+                          ? isBg
+                            ? 'Проверка...'
+                            : 'Checking...'
+                          : isBg
+                          ? 'Провери AI'
+                          : 'Check AI'}
+                      </span>
+                    </button>
+                  </div>
                 </div>
-                <p className="text-[11px] text-slate-300 leading-snug break-words">
-                  {systemCompatibility.availableAiUpdates > 0
-                    ? isBg
-                      ? `${systemCompatibility.availableAiUpdates} модела с нови версии (DeepSeek-R1, Qwen2.5)`
-                      : `${systemCompatibility.availableAiUpdates} models with version drift (DeepSeek-R1, Qwen2.5)`
-                    : isBg
-                    ? 'Всички 4 локални AI модела са синхронизирани.'
-                    : 'All 4 local AI models are synchronized.'}
-                </p>
-              </div>
-              <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-[10px] font-mono text-slate-400">
-                  {isBg ? '4 заредени модела' : '4 loaded models'}
-                </span>
-                <button
-                  id="check-ai-engine-btn"
-                  type="button"
-                  onClick={handleCheckAiEngine}
-                  disabled={isCheckingAiEngine || isUpdatingAll}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-semibold bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 border border-purple-500/40 hover:border-purple-400 transition cursor-pointer"
-                >
-                  <Search className={`w-3 h-3 ${isCheckingAiEngine ? 'animate-spin' : ''}`} />
-                  <span>
-                    {isCheckingAiEngine
-                      ? isBg
-                        ? 'Проверка...'
-                        : 'Checking...'
-                      : isBg
-                      ? 'Провери AI'
-                      : 'Check AI'}
-                  </span>
-                </button>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Card 3: Host Daemon & Kernel Bridge Hub */}
             <div className="p-3.5 rounded-2xl bg-[#081224]/90 border border-cyan-500/30 flex flex-col justify-between gap-2.5 min-w-0">
@@ -1028,11 +992,11 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                 <p className="text-[11px] text-slate-300 leading-snug break-words">
                   {systemCompatibility.availableDaemonUpdates > 0
                     ? isBg
-                      ? 'Налична е актуализация за Beta v0.70.0 хост агента.'
-                      : 'Host Agent update available for Beta v0.70.0.'
+                      ? 'Налична е актуализация за Beta v0.80.0 хост агента.'
+                      : 'Host Agent update available for Beta v0.80.0.'
                     : isBg
-                    ? 'Хост демонът е актуален с протокол Beta v0.70.0 (AI-NET/3.0).'
-                    : 'Host Daemon is up to date with Beta v0.70.0 (AI-NET/3.0).'}
+                    ? 'Хост демонът е актуален с протокол Beta v0.80.0 (AI-NET/3.0).'
+                    : 'Host Daemon is up to date with Beta v0.80.0 (AI-NET/3.0).'}
                 </p>
               </div>
               <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 flex-wrap">
@@ -1284,9 +1248,9 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
               </span>
             </div>
             <div className="bg-black/60 rounded-xl p-2.5 max-h-28 overflow-y-auto space-y-1 border border-white/5 text-slate-300 font-mono text-[10.5px]">
-              {updateLogs.slice(-8).map((log, idx) => (
-                <div key={idx} className="leading-snug break-words">
-                  {log}
+              {updateLogs.slice(-8).map((entry) => (
+                <div key={entry.id} className="leading-snug break-words">
+                  {entry.text}
                 </div>
               ))}
             </div>

@@ -8,8 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
 
+import 'security/biometric_security_gate.dart';
 import 'security/network_validators.dart';
 import 'security/secure_secret_store.dart';
 import 'services/app_preferences.dart';
@@ -699,6 +699,8 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
 final selectedHostIdProvider = StateProvider<String>((ref) => '');
 
 class CommandLogItem {
+  static int _nextId = 1;
+  final int id;
   final String timestamp;
   final String hostName;
   final String command;
@@ -706,12 +708,13 @@ class CommandLogItem {
   final bool isError;
 
   CommandLogItem({
+    int? id,
     required this.timestamp,
     required this.hostName,
     required this.command,
     required this.status,
     this.isError = false,
-  });
+  }) : id = id ?? (_nextId++);
 }
 
 // =====================================================================
@@ -776,6 +779,9 @@ class MainAdaptiveScreen extends ConsumerStatefulWidget {
 }
 
 class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
+  static const MethodChannel _deeplinkChannel =
+      MethodChannel('com.cst.autonomouslan/deeplink');
+
   int _currentTabIndex = 0;
   final TextEditingController _commandController = TextEditingController();
   final TextEditingController _fleetSearchController = TextEditingController();
@@ -795,6 +801,134 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               .catchError((_) {}),
         );
       } catch (_) {}
+      _initDeepLinkListener();
+    }
+  }
+
+  void _initDeepLinkListener() {
+    _deeplinkChannel.setMethodCallHandler((MethodCall call) async {
+      if (call.method == 'onUri' && call.arguments is String) {
+        await _handleIncomingPairingLink(call.arguments as String);
+      }
+      return null;
+    });
+    unawaited(
+      _deeplinkChannel
+          .invokeMethod<String>('getInitialUri')
+          .then((uri) {
+            if (uri != null && uri.trim().isNotEmpty) {
+              unawaited(_handleIncomingPairingLink(uri));
+            }
+          })
+          .catchError((_) {}),
+    );
+  }
+
+  /// Parses both `ainet://pair?host=...&port=...&pin=...` and
+  /// `http(s)://.../#pair_ip=...&pair_port=...&pair_pin=...` QR/pairing links.
+  Future<bool> _handleIncomingPairingLink(String rawInput) async {
+    final trimmed = rawInput.trim();
+    if (trimmed.isEmpty) return false;
+    try {
+      final uri = Uri.tryParse(trimmed);
+      if (uri == null) return false;
+      final Map<String, String> params = <String, String>{
+        ...uri.queryParameters,
+      };
+      if (uri.fragment.isNotEmpty) {
+        try {
+          params.addAll(Uri.splitQueryString(uri.fragment));
+        } catch (_) {}
+      }
+      final String ip = (params['host'] ?? params['pair_ip'] ?? '').trim();
+      if (!NetworkValidators.isValidIpOrHost(ip)) return false;
+      final int port = int.tryParse(
+            (params['port'] ?? params['pair_port'] ?? '8765').trim(),
+          ) ??
+          8765;
+      final String pin = (params['pin'] ?? params['pair_pin'] ?? '').trim();
+      final String token =
+          (params['token'] ?? params['pair_token'] ?? '').trim();
+      final String rawName =
+          (params['name'] ?? params['pair_name'] ?? 'PC-$ip').trim();
+      final String proto =
+          (params['proto'] ?? params['pair_proto'] ?? '').trim().toLowerCase();
+      String certFp = (params['fp'] ?? params['pair_fp'] ?? '').trim();
+      final bool useTls = proto == 'wss' || certFp.isNotEmpty;
+
+      String resolvedSecret = token;
+      if (RegExp(r'^\d{6}$').hasMatch(pin)) {
+        final exchanged = await _pairWithHostPin(
+          ip,
+          pin,
+          port: port,
+          useTls: useTls,
+          certFingerprint: certFp.isNotEmpty ? certFp : null,
+        );
+        if (exchanged != null && exchanged.pairingToken.isNotEmpty) {
+          resolvedSecret = exchanged.pairingToken;
+          if (exchanged.certFingerprint != null &&
+              exchanged.certFingerprint!.isNotEmpty) {
+            certFp = exchanged.certFingerprint!;
+          }
+        }
+      }
+
+      if (resolvedSecret.isNotEmpty || certFp.isNotEmpty) {
+        saveHostPairingSecret(ip, resolvedSecret, certFingerprint: certFp);
+        if (ref.read(globalPairingSecretProvider).trim().isEmpty &&
+            resolvedSecret.isNotEmpty) {
+          ref.read(globalPairingSecretProvider.notifier).state = resolvedSecret;
+        }
+      }
+
+      final cleanName = NetworkValidators.sanitizeLabel(
+        rawName.isNotEmpty ? rawName : 'PC-$ip',
+      );
+      final hostId = 'PC-${ip.replaceAll('.', '-')}-$port';
+      final existing =
+          ref.read(fleetProvider).where((h) => h.ip == ip).firstOrNull;
+      if (existing != null) {
+        ref.read(fleetProvider.notifier).editHost(
+              existing.id,
+              name: cleanName,
+              ip: ip,
+              wsPort: port,
+              mac: existing.mac,
+              sharedSecret: resolvedSecret.isNotEmpty
+                  ? resolvedSecret
+                  : existing.sharedSecret,
+              useTls: useTls || existing.useTls,
+              certFingerprint:
+                  certFp.isNotEmpty ? certFp : existing.certFingerprint,
+            );
+        ref.read(selectedHostIdProvider.notifier).state = existing.id;
+      } else {
+        final host = HostState(
+          id: hostId,
+          name: cleanName,
+          ip: ip,
+          wsPort: port,
+          mac: '00:00:00:00:00:00',
+          isOnline: resolvedSecret.isNotEmpty,
+          sharedSecret: resolvedSecret,
+          useTls: useTls,
+          certFingerprint: certFp,
+        );
+        ref.read(fleetProvider.notifier).addHost(host);
+        ref.read(selectedHostIdProvider.notifier).state = host.id;
+      }
+      _showToast(
+        resolvedSecret.isNotEmpty
+            ? 'Paired with $cleanName ($ip:$port)!'
+            : 'Added $cleanName ($ip:$port) — enter 6-digit PIN to pair.',
+        accentColor: resolvedSecret.isNotEmpty
+            ? CyberColors.success
+            : CyberColors.warning,
+      );
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -810,7 +944,35 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       case 'action_open_terminal':
         setState(() => _currentTabIndex = 1);
         break;
+      case 'action_panic_kill':
+        unawaited(_triggerPanicKillAll());
+        break;
     }
+  }
+
+  Future<void> _triggerPanicKillAll() async {
+    final hosts = ref.read(fleetProvider).where((h) => h.isOnline).toList();
+    int triggered = 0;
+    for (final host in hosts) {
+      try {
+        final client = await _acquireConnectedClient(host);
+        if (client != null) {
+          client.retain();
+          try {
+            if (client.sendPanicKill()) triggered++;
+          } finally {
+            client.release();
+          }
+        }
+      } catch (_) {}
+    }
+    HostConnectionPool.instance.disposeAll();
+    _showToast(
+      triggered > 0
+          ? 'Emergency PANIC KILL sent to $triggered active workstation(s).'
+          : 'All local remote sessions disconnected (Emergency Panic).',
+      accentColor: _kDangerColor,
+    );
   }
 
   @override
@@ -1011,6 +1173,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
     try {
       final Set<String> candidateIps = {
+        for (final h in ref.read(fleetProvider))
+          if (NetworkValidators.isValidIpOrHost(h.ip)) h.ip,
         '127.0.0.1',
         '10.0.2.2',
       };
@@ -1024,6 +1188,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           for (final addr in iface.addresses) {
             final parts = addr.address.split('.');
             if (parts.length == 4) {
+              final int o0 = int.tryParse(parts[0]) ?? 0;
+              final int o1 = int.tryParse(parts[1]) ?? 0;
+              final bool isRfc1918 = o0 == 10 ||
+                  (o0 == 192 && o1 == 168) ||
+                  (o0 == 172 && o1 >= 16 && o1 <= 31);
+              if (!isRfc1918) continue;
               final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
               for (int octet = 1; octet <= 254; octet++) {
                 candidateIps.add('$prefix.$octet');
@@ -1087,7 +1257,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             final hostName = (ip == '127.0.0.1' || ip == '10.0.2.2')
                 ? 'Host PC (Local)'
                 : 'Host PC ($ip)';
-            final hostId = 'PC-${ip.replaceAll('.', '-')}';
+            final hostId = 'PC-${ip.replaceAll('.', '-')}-$scanPort';
 
             foundPcs.add(
               HostState(
@@ -1151,6 +1321,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   void _openStreamScreen(HostState host) {
     final prefs = ref.read(appPreferencesProvider);
     final effectiveSecret = _resolveSecretForHost(host);
+    if (effectiveSecret.isEmpty) {
+      _showToast(
+        'Enter the 6-digit PIN from ${host.name} to pair & view its screen.',
+        accentColor: CyberColors.warning,
+      );
+      unawaited(_showHostEditorDialog(existing: host));
+      return;
+    }
     final effectiveFp = host.certFingerprint.trim().isNotEmpty
         ? host.certFingerprint.trim()
         : loadHostCertFingerprint(host.ip);
@@ -1296,7 +1474,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     const SizedBox(height: 10),
                     TextField(
                       controller: secretCtrl,
-                      obscureText: true,
+                      obscureText: secretCtrl.text.trim().length > 6 &&
+                          !RegExp(r'^\d+$').hasMatch(secretCtrl.text.trim()),
+                      onChanged: (_) => setDialogState(() {}),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 13,
@@ -1308,6 +1488,40 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       ),
                     ),
                     const SizedBox(height: 6),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                        ),
+                        icon: Icon(Icons.qr_code_2_rounded,
+                            size: 16, color: primary),
+                        label: Text(
+                          'Paste Pairing Link from Clipboard',
+                          style: TextStyle(color: primary, fontSize: 11.5),
+                        ),
+                        onPressed: isSaving
+                            ? null
+                            : () async {
+                                final nav = Navigator.of(ctx);
+                                final clip =
+                                    await Clipboard.getData('text/plain');
+                                final txt = clip?.text?.trim() ?? '';
+                                if (txt.isEmpty) return;
+                                final ok =
+                                    await _handleIncomingPairingLink(txt);
+                                if (ok && nav.mounted) {
+                                  nav.pop();
+                                } else {
+                                  setDialogState(() {
+                                    validationError =
+                                        'Clipboard does not contain a valid ainet://pair or #pair_ip= link.';
+                                  });
+                                }
+                              },
+                      ),
+                    ),
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
                       dense: true,
@@ -1398,7 +1612,6 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                               existing?.certFingerprint.trim().isNotEmpty == true
                                   ? existing!.certFingerprint.trim()
                                   : loadHostCertFingerprint(ip);
-                          bool pinFailed = false;
                           if (RegExp(r'^\d{6}$').hasMatch(secret)) {
                             final exchanged = await _pairWithHostPin(
                               ip,
@@ -1415,8 +1628,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                                 certFp = exchanged.certFingerprint!;
                               }
                             } else {
-                              secret = existing?.sharedSecret ?? '';
-                              pinFailed = true;
+                              if (ctx.mounted) {
+                                setDialogState(() {
+                                  isSaving = false;
+                                  validationError =
+                                      'PIN pairing failed — verify the 6-digit PIN shown on the PC Agent ($ip:$parsedPort).';
+                                });
+                              }
+                              return;
                             }
                           }
 
@@ -1426,7 +1645,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                               secret,
                               certFingerprint: certFp,
                             );
-                            if (secret.isNotEmpty) {
+                            if (secret.isNotEmpty &&
+                                ref.read(globalPairingSecretProvider).trim().isEmpty) {
                               ref
                                   .read(globalPairingSecretProvider.notifier)
                                   .state = secret;
@@ -1445,16 +1665,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                                   certFingerprint: certFp,
                                 );
                           } else {
-                            final id = name
-                                .toUpperCase()
-                                .replaceAll(RegExp(r'[^A-Z0-9_-]'), '-');
+                            final id = 'PC-${ip.replaceAll('.', '-')}-$parsedPort';
                             final host = HostState(
-                              id: id.isEmpty ? 'PC-${ip.replaceAll('.', '-')}' : id,
+                              id: id,
                               name: name,
                               ip: ip,
                               wsPort: parsedPort!,
                               mac: normalizedMac,
-                              isOnline: true,
+                              isOnline: secret.isNotEmpty,
                               sharedSecret: secret,
                               useTls: useTls,
                               certFingerprint: certFp,
@@ -1466,13 +1684,6 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
                           if (ctx.mounted) {
                             Navigator.of(ctx).pop();
-                          }
-                          if (pinFailed) {
-                            _showToast(
-                              'PIN pairing failed — workstation saved without token. Open Settings to pair.',
-                              accentColor: CyberColors.warning,
-                              duration: const Duration(seconds: 3),
-                            );
                           }
                         },
                   child: Text(
@@ -1551,7 +1762,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     }
                     final client = await _acquireConnectedClient(host);
                     if (client == null) return;
-                    client.sendClipboard(txt);
+                    client.retain();
+                    try {
+                      client.sendClipboard(txt);
+                    } finally {
+                      client.release();
+                    }
                     _showToast(
                       'Pushed ${txt.length} clipboard characters to ${host.name}.',
                     );
@@ -1569,16 +1785,21 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   try {
                     final client = await _acquireConnectedClient(host);
                     if (client == null) return;
-                    final nextClip = client.clipboardStream.first
-                        .timeout(const Duration(seconds: 5));
-                    client.requestClipboard();
-                    final text = await nextClip;
-                    await Clipboard.setData(ClipboardData(text: text));
-                    _showToast(
-                      text.isEmpty
-                          ? 'PC clipboard is empty.'
-                          : 'Copied ${text.length} chars from ${host.name}.',
-                    );
+                    client.retain();
+                    try {
+                      final nextClip = client.clipboardStream.first
+                          .timeout(const Duration(seconds: 5));
+                      client.requestClipboard();
+                      final text = await nextClip;
+                      await Clipboard.setData(ClipboardData(text: text));
+                      _showToast(
+                        text.isEmpty
+                            ? 'PC clipboard is empty.'
+                            : 'Copied ${text.length} chars from ${host.name}.',
+                      );
+                    } finally {
+                      client.release();
+                    }
                   } catch (e) {
                     _showToast('Clipboard pull failed: $e',
                         accentColor: _kDangerColor);
@@ -1602,68 +1823,72 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           accentColor: _kDangerColor);
     }
     if (client == null || !mounted) return;
-    final activeClient = client;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: CyberColors.surfaceElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
-          child: Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            alignment: WrapAlignment.center,
-            children: [
-              ActionChip(
-                avatar: const Icon(Icons.skip_previous_rounded, size: 18),
-                label: const Text('Prev'),
-                onPressed: () => activeClient.sendAudioCommand('prev'),
-              ),
-              ActionChip(
-                avatar: Icon(Icons.play_arrow_rounded,
-                    size: 18, color: primary),
-                label: const Text('Play/Pause'),
-                onPressed: () => activeClient.sendAudioCommand('play_pause'),
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.skip_next_rounded, size: 18),
-                label: const Text('Next'),
-                onPressed: () => activeClient.sendAudioCommand('next'),
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.volume_down_rounded, size: 18),
-                label: const Text('Vol -'),
-                onPressed: () => activeClient.sendAudioCommand('volume_down'),
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.volume_off_rounded, size: 18),
-                label: const Text('Mute'),
-                onPressed: () => activeClient.sendAudioCommand('mute'),
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.volume_up_rounded, size: 18),
-                label: const Text('Vol +'),
-                onPressed: () => activeClient.sendAudioCommand('volume_up'),
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.lock_rounded,
-                    size: 18, color: _kDangerColor),
-                label: const Text('Lock PC'),
-                onPressed: () {
-                  Navigator.of(ctx).pop();
-                  activeClient.sendAudioCommand('lock_pc');
-                  _showToast('Sent lock_pc command to ${host.name}.',
-                      accentColor: CyberColors.warning);
-                },
-              ),
-            ],
+    final activeClient = client..retain();
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: CyberColors.surfaceElevated,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              alignment: WrapAlignment.center,
+              children: [
+                ActionChip(
+                  avatar: const Icon(Icons.skip_previous_rounded, size: 18),
+                  label: const Text('Prev'),
+                  onPressed: () => activeClient.sendAudioCommand('prev'),
+                ),
+                ActionChip(
+                  avatar: Icon(Icons.play_arrow_rounded,
+                      size: 18, color: primary),
+                  label: const Text('Play/Pause'),
+                  onPressed: () => activeClient.sendAudioCommand('play_pause'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.skip_next_rounded, size: 18),
+                  label: const Text('Next'),
+                  onPressed: () => activeClient.sendAudioCommand('next'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.volume_down_rounded, size: 18),
+                  label: const Text('Vol -'),
+                  onPressed: () => activeClient.sendAudioCommand('volume_down'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.volume_off_rounded, size: 18),
+                  label: const Text('Mute'),
+                  onPressed: () => activeClient.sendAudioCommand('mute'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.volume_up_rounded, size: 18),
+                  label: const Text('Vol +'),
+                  onPressed: () => activeClient.sendAudioCommand('volume_up'),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.lock_rounded,
+                      size: 18, color: _kDangerColor),
+                  label: const Text('Lock PC'),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    activeClient.sendAudioCommand('lock_pc');
+                    _showToast('Sent lock_pc command to ${host.name}.',
+                        accentColor: CyberColors.warning);
+                  },
+                ),
+              ],
+            ),
           ),
         ),
-      ),
-    );
+      );
+    } finally {
+      activeClient.release();
+    }
   }
 
   Future<void> _showSendFileToHostDialog(HostState host) async {
@@ -1748,6 +1973,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
     File? tempFile;
     File targetFile;
+    HostConnectionClient? client;
     try {
       if (filePath.isNotEmpty) {
         targetFile = File(filePath);
@@ -1756,16 +1982,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           return;
         }
       } else {
-        final safeName = NetworkValidators.sanitizeLabel(noteName)
+        String safeName = NetworkValidators.sanitizeLabel(noteName)
             .replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+        if (safeName.isEmpty || safeName == '.' || safeName == '..') {
+          safeName = 'mobile_note.txt';
+        }
         tempFile = File(
             '${Directory.systemTemp.path}${Platform.pathSeparator}$safeName');
         await tempFile.writeAsString(noteBody, flush: true);
         targetFile = tempFile;
       }
 
-      final client = await _acquireConnectedClient(host);
+      client = await _acquireConnectedClient(host);
       if (client == null || !mounted) return;
+      client.retain();
 
       final fileLen = await targetFile.length();
       if (!mounted) return;
@@ -1781,6 +2011,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           state: TransferState.hashing,
         ),
       );
+      bool dialogDisposed = false;
 
       unawaited(
         showDialog<void>(
@@ -1804,17 +2035,23 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               );
             },
           ),
-        ).whenComplete(progressNotifier.dispose),
+        ).whenComplete(() {
+          dialogDisposed = true;
+          progressNotifier.dispose();
+        }),
       );
 
+      final activeClient = client;
       await for (final progress in engine.sendFile(
         file: targetFile,
-        sendPacket: client.sendRawEncryptedPacket,
-        ackStream: client.fileAckStream,
+        sendPacket: activeClient.sendRawEncryptedPacket,
+        ackStream: activeClient.fileAckStream,
         packetBuilder: (opcode, payload) =>
-            client.encryptFrame(opcode, payload),
+            activeClient.encryptFrame(opcode, payload),
       )) {
-        progressNotifier.value = progress;
+        if (!dialogDisposed) {
+          progressNotifier.value = progress;
+        }
         if (progress.state == TransferState.completed) {
           _showToast('Encrypted transfer complete: ${progress.filename}');
           break;
@@ -1830,6 +2067,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     } catch (e) {
       _showToast('File transfer error: $e', accentColor: _kDangerColor);
     } finally {
+      client?.release();
       if (tempFile != null && await tempFile.exists()) {
         unawaited(tempFile.delete().catchError((_) => tempFile!));
       }
@@ -2165,7 +2403,17 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           },
         ) ??
         false;
-    return approved;
+    if (!approved) return false;
+    if (biometricArmed) {
+      final gateRes = await BiometricSecurityGate.instance.verifyApproval(
+        commandId: 'local-${DateTime.now().millisecondsSinceEpoch}',
+        shellCommand: command,
+        targetHostId: 'mobile-operator',
+        riskLevel: 'HIGH',
+      );
+      return gateRes.isApproved;
+    }
+    return true;
   }
 
   Future<void> _dispatchCommand(String cmd, HostState? targetHost) async {
@@ -2199,14 +2447,23 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final targetLabel = targetHost != null
         ? '${targetHost.name} (${targetHost.ip})'
         : 'No Target Selected';
+    final initialLog = CommandLogItem(
+      timestamp: timeStr,
+      hostName: targetLabel,
+      command: trimmed,
+      status: targetHost == null
+          ? 'Select a PC workstation in Fleet before dispatching commands.'
+          : 'Authenticating via AI-NET/3.0-SECURE WebSocket (${targetHost.ip}:${targetHost.wsPort})...',
+      isError: targetHost == null,
+    );
+    final int logId = initialLog.id;
 
     void updateLatestStatus(String status, {bool isError = false}) {
       if (!mounted) return;
       setState(() {
-        final idx = _commandLogs.indexWhere(
-          (e) => e.timestamp == timeStr && e.command == trimmed,
-        );
+        final idx = _commandLogs.indexWhere((e) => e.id == logId);
         final updated = CommandLogItem(
+          id: logId,
           timestamp: timeStr,
           hostName: targetLabel,
           command: trimmed,
@@ -2217,23 +2474,18 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           _commandLogs[idx] = updated;
         } else {
           _commandLogs.insert(0, updated);
+          if (_commandLogs.length > 100) {
+            _commandLogs.removeRange(100, _commandLogs.length);
+          }
         }
       });
     }
 
     setState(() {
-      _commandLogs.insert(
-        0,
-        CommandLogItem(
-          timestamp: timeStr,
-          hostName: targetLabel,
-          command: trimmed,
-          status: targetHost == null
-              ? 'Select a PC workstation in Fleet before dispatching commands.'
-              : 'Authenticating via AI-NET/3.0-SECURE WebSocket (${targetHost.ip}:${targetHost.wsPort})...',
-          isError: targetHost == null,
-        ),
-      );
+      _commandLogs.insert(0, initialLog);
+      if (_commandLogs.length > 100) {
+        _commandLogs.removeRange(100, _commandLogs.length);
+      }
       _commandController.clear();
     });
 
@@ -2248,6 +2500,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       return;
     }
 
+    HostConnectionClient? retainedClient;
     try {
       final resolvedFp = targetHost.certFingerprint.trim().isNotEmpty
           ? targetHost.certFingerprint.trim()
@@ -2258,7 +2511,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         sharedSecret: effectiveSecret,
         useTls: targetHost.useTls || prefs.preferTls,
         certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
-      );
+      )..retain();
+      retainedClient = client;
 
       final lowerCmd = trimmed.toLowerCase();
       if (lowerCmd.startsWith('ai:') || lowerCmd.startsWith('ollama:')) {
@@ -2280,14 +2534,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         }
 
         final sub = client.llmTokenStream.listen((token) {
-          if (buf.isEmpty && token.trimLeft().startsWith('{')) {
+          if (token.trimLeft().startsWith('{')) {
             try {
-              final err = jsonDecode(token);
-              if (err is Map && err['error'] != null) {
-                updateLatestStatus('Ollama Error: ${err['error']}',
-                    isError: true);
-                if (!done.isCompleted) done.complete();
-                return;
+              final parsed = jsonDecode(token);
+              if (parsed is Map) {
+                if (parsed['done'] == true) {
+                  if (!done.isCompleted) done.complete();
+                  return;
+                }
+                if (buf.isEmpty && parsed['error'] != null) {
+                  updateLatestStatus('Ollama Error: ${parsed['error']}',
+                      isError: true);
+                  if (!done.isCompleted) done.complete();
+                  return;
+                }
               }
             } catch (_) {}
           }
@@ -2320,7 +2580,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
       final res = await client.executeCommand(
         trimmed,
-        timeout: const Duration(seconds: 25),
+        timeout: const Duration(seconds: 45),
       );
       final out = res.output.trim();
       final failed = res.exitCode != 0 || res.status == 'error' || res.status == 'timeout';
@@ -2330,6 +2590,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       );
     } catch (e) {
       updateLatestStatus('Dispatch error: $e', isError: true);
+    } finally {
+      retainedClient?.release();
     }
   }
 
@@ -3763,9 +4025,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               spacing: 10,
               runSpacing: 10,
               children: CyberAccentPreset.values.map((preset) {
-                final swatchColor = CyberTheme.fromPalette(
-                  CyberPalette.fromPreset(preset),
-                ).colorScheme.primary;
+                final swatchColor = CyberPalette.fromPreset(preset).primary;
                 final isSelected = prefs.accent == preset;
                 return Semantics(
                   button: true,
@@ -4135,7 +4395,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           subtitle:
               'Impeller Hardware Engine • AI-NET/3.0-SECURE Protocol',
           trailing: const Text(
-            'v0.70.0',
+            'v0.80.0',
             style: TextStyle(
               color: CyberColors.success,
               fontFamily: 'monospace',
@@ -4317,20 +4577,6 @@ class FullscreenStreamPage extends StatefulWidget {
 
 class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
   @override
-  void initState() {
-    super.initState();
-    if (widget.keepScreenAwake) {
-      unawaited(WakelockPlus.enable().catchError((_) {}));
-    }
-  }
-
-  @override
-  void dispose() {
-    unawaited(WakelockPlus.disable().catchError((_) {}));
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final effectiveSecret = widget.sharedSecret.trim().isNotEmpty
         ? widget.sharedSecret.trim()
@@ -4360,6 +4606,7 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
                 useTls: widget.useTls || widget.host.useTls,
                 certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
                 targetFps: widget.targetFps,
+                keepScreenAwake: widget.keepScreenAwake,
                 onTelemetry: widget.onTelemetry,
               ),
             ),

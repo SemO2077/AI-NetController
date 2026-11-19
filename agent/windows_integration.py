@@ -121,7 +121,7 @@ logger = logging.getLogger("AI-NetController-WindowsIntegration")
 
 APP_NAME = "AI NetController"
 APP_DESCRIPTION = "AI NetController — PC Host Agent & Desktop Control Center"
-APP_VERSION = "0.70.0"
+APP_VERSION = "0.80.0"
 APP_PUBLISHER = "AI NetController"
 MUTEX_NAME = "Global\\AI_NetController_HostAgent_Mutex"
 REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -731,7 +731,10 @@ def _stop_external_agent_processes() -> bool:
                 if (
                     "ai_netcontroller_hostagent" in name
                     or "ai_netcontroller_hostagent" in exe
-                    or ("agent_daemon.py" in cmdline and "python" in name)
+                    or (
+                        "python" in name
+                        and any(tok in cmdline for tok in ("agent_daemon.py", "agent.py", "launch_agent.pyw"))
+                    )
                 ):
                     matched.append(proc)
             except Exception:
@@ -817,14 +820,34 @@ def perform_full_uninstall(
         "message": "",
     }
 
+    # Resolve custom InstallLocation BEFORE unregistering the uninstall key
+    custom_install_dir = None
+    if IS_WINDOWS and winreg is not None:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_UNINSTALL_KEY, 0, winreg.KEY_READ) as key:
+                loc_val, _ = winreg.QueryValueEx(key, "InstallLocation")
+                if isinstance(loc_val, str) and loc_val.strip():
+                    custom_install_dir = os.path.abspath(loc_val.strip())
+        except Exception:
+            pass
+
     count, _ = remove_shortcuts()
     results["removed_shortcuts"] = count
     results["removed_autostart"] = set_windows_autostart(enabled=False)
     results["removed_uninstaller"] = unregister_windows_uninstaller()
 
     try:
-        install_dir = get_default_install_dir()
-        if os.path.isdir(install_dir):
+        default_install_dir = get_default_install_dir()
+        candidate_dirs = [default_install_dir]
+        if (
+            custom_install_dir
+            and custom_install_dir.lower() != default_install_dir.lower()
+            and os.path.basename(custom_install_dir).lower() == APP_NAME.lower()
+        ):
+            candidate_dirs.append(custom_install_dir)
+        for install_dir in candidate_dirs:
+            if not os.path.isdir(install_dir):
+                continue
             shutil.rmtree(install_dir, ignore_errors=True)
             if os.path.exists(install_dir) and IS_WINDOWS and kernel32 is not None and wintypes is not None:
                 # Self-running EXE inside install_dir cannot be unlinked immediately; schedule OS cleanup on reboot.
@@ -894,10 +917,12 @@ def validate_install_path(path: str) -> Tuple[bool, str]:
     if "\x00" in path:
         return False, "Invalid path: null bytes detected."
 
+    if path.startswith("\\\\") or path.startswith("//"):
+        return False, "Cannot install onto a UNC network share path."
+
     is_windows_path = (
         IS_WINDOWS
         or (len(path) >= 2 and path[1] == ":" and path[0].isalpha())
-        or path.startswith("\\\\")
     )
     path_mod = ntpath if is_windows_path else os.path
     try:
@@ -1032,12 +1057,13 @@ def perform_full_install(
         internal_src = os.path.join(src_dir, "_internal")
         if os.path.isdir(internal_src):
             internal_dest = os.path.join(valid_dir, "_internal")
-            try:
-                if os.path.exists(internal_dest):
-                    shutil.rmtree(internal_dest, ignore_errors=True)
-                shutil.copytree(internal_src, internal_dest, dirs_exist_ok=True)
-            except Exception as e:
-                logger.debug(f"Optional _internal bundle copy notice: {e}")
+            if os.path.abspath(internal_src).lower() != os.path.abspath(internal_dest).lower():
+                try:
+                    if os.path.exists(internal_dest):
+                        shutil.rmtree(internal_dest, ignore_errors=True)
+                    shutil.copytree(internal_src, internal_dest, dirs_exist_ok=True)
+                except Exception as e:
+                    logger.debug(f"Optional _internal bundle copy notice: {e}")
     else:
         src_agent_dir = os.path.dirname(os.path.abspath(__file__))
         dest_agent_dir = os.path.join(valid_dir, "agent")
@@ -1045,8 +1071,9 @@ def perform_full_install(
         for fname in os.listdir(src_agent_dir):
             if fname.endswith((".py", ".txt", ".spec", ".xml", ".ico", ".png")):
                 sf = os.path.join(src_agent_dir, fname)
-                if os.path.isfile(sf):
-                    shutil.copy2(sf, os.path.join(dest_agent_dir, fname))
+                df = os.path.join(dest_agent_dir, fname)
+                if os.path.isfile(sf) and os.path.abspath(sf).lower() != os.path.abspath(df).lower():
+                    shutil.copy2(sf, df)
 
         # Native Python windowless entrypoint (.pyw) launched via PSF-signed pythonw.exe (no .bat dropper)
         launcher_pyw = os.path.join(valid_dir, "launch_agent.pyw")
@@ -1116,7 +1143,7 @@ def perform_full_install(
     if ollama_bridge_enabled is not None:
         cfg_updates["ollama_bridge_enabled"] = bool(ollama_bridge_enabled)
 
-    if len(cfg_updates) > 1 or not autostart:
+    if cfg_updates:
         try:
             try:
                 from daemon_config import update_config
@@ -1712,7 +1739,7 @@ def show_uninstall_dialog(
             perform_full_uninstall(
                 interactive=False,
                 remove_config=remove_cfg_var.get(),
-                on_complete=done_cb,
+                on_complete=None,
             )
         else:
             if rm_links_var.get():
@@ -1720,16 +1747,33 @@ def show_uninstall_dialog(
                 set_windows_autostart(enabled=False)
             if remove_cfg_var.get():
                 try:
-                    local_app = os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local"))
-                    shutil.rmtree(os.path.join(local_app, "AI NetController"), ignore_errors=True)
+                    try:
+                        from daemon_config import get_config_dir
+                        cfg_dir = get_config_dir()
+                    except Exception:
+                        local_app = os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local"))
+                        cfg_dir = os.path.join(local_app, "AI NetController")
+                    if os.path.isdir(cfg_dir):
+                        shutil.rmtree(cfg_dir, ignore_errors=True)
                 except Exception:
                     pass
 
-        prog_canvas.coords(prog_fill, 0, 0, w, 6)
-        prog_canvas.itemconfig(prog_fill, fill=CyberColors.SUCCESS)
-        status_lbl.config(fg=CyberColors.SUCCESS)
-        status_var.set("AI NetController removed cleanly.")
-        win.after(800, win.destroy)
+        if win.winfo_exists():
+            prog_canvas.coords(prog_fill, 0, 0, w, 6)
+            prog_canvas.itemconfig(prog_fill, fill=CyberColors.SUCCESS)
+            status_lbl.config(fg=CyberColors.SUCCESS)
+            status_var.set("AI NetController removed cleanly.")
+            def _finish_close() -> None:
+                try:
+                    if win.winfo_exists():
+                        win.destroy()
+                except Exception:
+                    pass
+                if callable(done_cb):
+                    done_cb()
+            win.after(800, _finish_close)
+        elif callable(done_cb):
+            done_cb()
 
     uninst_btn.config(command=_do_uninstall)
     uninst_btn.pack(side=tk.RIGHT)

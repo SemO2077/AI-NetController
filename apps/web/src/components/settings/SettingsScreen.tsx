@@ -116,6 +116,8 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
     'gemini' | 'ollama' | 'deepseek' | 'custom'
   >('gemini');
   const [newModelDesc, setNewModelDesc] = useState('');
+  const [newModelEndpointUrl, setNewModelEndpointUrl] = useState('');
+  const [newModelApiKey, setNewModelApiKey] = useState('');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [isTestingModel, setIsTestingModel] = useState(false);
   const [settingsSyncError, setSettingsSyncError] = useState<string | null>(null);
@@ -256,6 +258,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
       description: string;
       descriptionBg?: string;
       provider: string;
+      isBuiltIn?: boolean;
     }>
   >([
     {
@@ -365,6 +368,8 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
           name: newModelName,
           provider: newModelProvider,
           description: newModelDesc || 'Custom Model Endpoint',
+          ...(newModelEndpointUrl.trim() ? { endpointUrl: newModelEndpointUrl.trim() } : {}),
+          ...(newModelApiKey.trim() ? { apiKey: newModelApiKey.trim() } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -374,6 +379,8 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
         setNewModelId('');
         setNewModelName('');
         setNewModelDesc('');
+        setNewModelEndpointUrl('');
+        setNewModelApiKey('');
         setIsAddModelOpen(false);
         triggerHapticFeedback('medium');
       } else {
@@ -496,7 +503,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                 {language === 'bg' ? 'Системен & AI Център' : 'System & AI Center'}
               </div>
               <div className="text-[11px] text-cyan-300 font-mono truncate mt-0.5">
-                Beta v0.70.0 • AI-NET/3.0
+                Beta v0.80.0 • AI-NET/3.0
               </div>
             </div>
           </button>
@@ -744,7 +751,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                                 {language === 'bg' ? m.descriptionBg || m.description : m.description}
                               </span>
                             </button>
-                            {!DEFAULT_BUILTIN_MODEL_IDS.has(m.id) && (
+                            {!(m.isBuiltIn ?? DEFAULT_BUILTIN_MODEL_IDS.has(m.id)) && (
                               <button
                                 type="button"
                                 onClick={(e) => void handleDeleteCustomModel(m.id, e)}
@@ -859,6 +866,50 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                               className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
                             />
                           </div>
+
+                          {(newModelProvider === 'custom' || newModelProvider === 'ollama') && (
+                            <>
+                              <div>
+                                <label className="block text-[11px] text-slate-400 mb-1">
+                                  {language === 'bg'
+                                    ? 'URL на API крайната точка'
+                                    : 'Endpoint URL'}{' '}
+                                  {newModelProvider === 'custom' && (
+                                    <span className="text-cyan-400">*</span>
+                                  )}
+                                </label>
+                                <input
+                                  type="url"
+                                  required={newModelProvider === 'custom'}
+                                  value={newModelEndpointUrl}
+                                  onChange={(e) => setNewModelEndpointUrl(e.target.value)}
+                                  placeholder={
+                                    newModelProvider === 'ollama'
+                                      ? 'http://127.0.0.1:11434'
+                                      : 'https://api.example.com/v1/chat/completions'
+                                  }
+                                  className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
+                                />
+                              </div>
+                              {newModelProvider === 'custom' && (
+                                <div>
+                                  <label className="block text-[11px] text-slate-400 mb-1">
+                                    {language === 'bg'
+                                      ? 'API ключ (По избор — съхранява се само на сървъра)'
+                                      : 'API Key (Optional — stored server-side only)'}
+                                  </label>
+                                  <input
+                                    type="password"
+                                    autoComplete="off"
+                                    value={newModelApiKey}
+                                    onChange={(e) => setNewModelApiKey(e.target.value)}
+                                    placeholder="sk-..."
+                                    className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
+                                  />
+                                </div>
+                              )}
+                            </>
+                          )}
 
                           <div className="pt-2 flex justify-end gap-2">
                             <button

@@ -530,3 +530,44 @@ class HostCryptoVault:
             self._send_cipher = None
             self._recv_cipher = None
             self.is_established = False
+
+
+# ------------------------------------------------------------------------------
+# Accelerated Ephemeral Pairing Helpers (C-backend when available, pure-Py fallback)
+# ------------------------------------------------------------------------------
+def fast_x25519_generate_keypair() -> Tuple[bytes, bytes]:
+    """Generates an ephemeral X25519 keypair using C-accelerated backend when installed."""
+    if HAS_CRYPTOGRAPHY_ACCEL:
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, PrivateFormat, NoEncryption
+        priv_obj = x25519.X25519PrivateKey.generate()
+        priv_raw = priv_obj.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+        pub_raw = priv_obj.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        return priv_raw, pub_raw
+    return FallbackCurve25519.generate_keypair()
+
+
+def fast_x25519_shared_secret(private_key: bytes, peer_public_key: bytes) -> bytes:
+    """Computes an X25519 shared secret using C-accelerated backend when installed."""
+    if HAS_CRYPTOGRAPHY_ACCEL:
+        priv_obj = x25519.X25519PrivateKey.from_private_bytes(private_key)
+        peer_obj = x25519.X25519PublicKey.from_public_bytes(peer_public_key)
+        return priv_obj.exchange(peer_obj)
+    return FallbackCurve25519.compute_shared_secret(private_key, peer_public_key)
+
+
+def fast_chacha20_encrypt(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes = b"") -> bytes:
+    """Encrypts with ChaCha20-Poly1305 using C-accelerated backend when installed."""
+    if HAS_CRYPTOGRAPHY_ACCEL:
+        return ChaCha20Poly1305(key).encrypt(nonce, plaintext, aad)
+    return FallbackChaCha20Poly1305.encrypt(key, nonce, plaintext, aad=aad)
+
+
+def fast_chacha20_decrypt(key: bytes, nonce: bytes, ciphertext_and_tag: bytes, aad: bytes = b"") -> Optional[bytes]:
+    """Decrypts with ChaCha20-Poly1305 using C-accelerated backend when installed."""
+    if HAS_CRYPTOGRAPHY_ACCEL:
+        try:
+            return ChaCha20Poly1305(key).decrypt(nonce, ciphertext_and_tag, aad)
+        except Exception:
+            return None
+    return FallbackChaCha20Poly1305.decrypt(key, nonce, ciphertext_and_tag, aad=aad)
+

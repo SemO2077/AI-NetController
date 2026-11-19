@@ -123,7 +123,7 @@ interface PcDaemonGuiModalProps {
 }
 
 const INITIAL_DAEMON_STATE: DaemonStateSnapshot = {
-  version: '0.70.0',
+  version: '0.80.0',
   protocol: 'AI-NET/3.0',
   hostname: 'LOCAL-HOST',
   osName: 'Windows / Linux Host',
@@ -224,7 +224,10 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       const data = await res.json();
       setServerReachable(res.ok);
       if (res.ok && data.success && data.daemon) {
-        setDaemon(data.daemon);
+        setDaemon((prev) => ({
+          ...data.daemon,
+          pairingToken: data.daemon.pairingToken || prev.pairingToken || '',
+        }));
         if (!isEditingPort) {
           setPortInput(String(data.daemon.port));
         }
@@ -240,7 +243,10 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     fetchDaemonState();
-    const timer = setInterval(fetchDaemonState, 1000);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void fetchDaemonState();
+    }, 3000);
     return () => clearInterval(timer);
   }, [isOpen, fetchDaemonState]);
 
@@ -253,10 +259,11 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, onClose]);
 
-  // Generate QR code for Setup tab
+  const primaryAdapterMac = daemon.activeAdapters?.[0]?.mac || '';
+
+  // Generate QR code for Setup tab only when primitive pairing URI changes
   useEffect(() => {
     if (!isOpen) return;
-    const primaryMac = daemon.activeAdapters?.[0]?.mac || '';
     const baseOrigin =
       window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
         ? `http://${daemon.localIp}:${window.location.port || 3000}`
@@ -265,19 +272,25 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       pair_ip: daemon.localIp,
       pair_port: String(daemon.port),
       pair_name: daemon.hostname,
-      pair_mac: primaryMac,
+      pair_mac: primaryAdapterMac,
       pair_os: daemon.osName?.toLowerCase().includes('linux') ? 'linux' : 'windows',
       ...(daemon.pairingPin ? { pair_pin: daemon.pairingPin } : {}),
     });
     const pairUrl = `${baseOrigin}/#${params.toString()}`;
+    let cancelled = false;
     QRCode.toDataURL(pairUrl, {
       width: 200,
       margin: 1,
       color: { dark: '#e0f2fe', light: '#070c18' },
     })
-      .then((url) => setQrDataUrl(url))
+      .then((url) => {
+        if (!cancelled) setQrDataUrl(url);
+      })
       .catch(() => {});
-  }, [isOpen, daemon.localIp, daemon.port, daemon.hostname, daemon.osName, daemon.pairingPin, daemon.activeAdapters]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, daemon.localIp, daemon.port, daemon.hostname, daemon.osName, daemon.pairingPin, primaryAdapterMac]);
 
   if (!isOpen) return null;
 
@@ -295,7 +308,14 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       const data = await res.json().catch(() => ({}));
       setServerReachable(res.ok);
       if (res.ok && data.success && data.daemon) {
-        setDaemon(data.daemon);
+        const nextDaemon =
+          typeof data.rotatedToken === 'string' && data.rotatedToken
+            ? { ...data.daemon, pairingToken: data.rotatedToken }
+            : data.daemon;
+        setDaemon(nextDaemon);
+        if (typeof data.rotatedToken === 'string' && data.rotatedToken) {
+          setShowToken(true);
+        }
       } else {
         setActionError(
           data?.error ||
@@ -479,8 +499,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href="/releases/v0.70.0/AI_NetController_HostAgent_v0.70.0_win64.exe"
-              download="AI_NetController_HostAgent_v0.70.0_win64.exe"
+              href="/releases/v0.80.0/AI_NetController_HostAgent_v0.80.0_win64.exe"
+              download="AI_NetController_HostAgent_v0.80.0_win64.exe"
               onClick={() => triggerHapticFeedback('medium')}
               className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-mono text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(34,211,238,0.3)] transition"
             >
@@ -728,7 +748,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                       <div>
                         <div className="text-[10px] font-mono text-slate-400">mDNS ZeroConf</div>
                         <div className="text-xs font-mono font-bold text-white truncate">
-                          {daemon.mdnsEnabled ? '_ai-net._tcp' : isBg ? 'Изключен' : 'Muted'}
+                          {daemon.mdnsEnabled ? '_cst-agent._tcp.local.' : isBg ? 'Изключен' : 'Muted'}
                         </div>
                       </div>
                       <button

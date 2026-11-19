@@ -171,6 +171,7 @@ class TelemetryData {
   final double? ramTotalGb;
   final String os;
   final String status;
+  final bool viewOnlyMode;
   final DateTime timestamp;
 
   TelemetryData({
@@ -181,6 +182,7 @@ class TelemetryData {
     this.ramTotalGb,
     required this.os,
     required this.status,
+    this.viewOnlyMode = false,
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -193,6 +195,7 @@ class TelemetryData {
       ramTotalGb: (json['ram_total_gb'] as num?)?.toDouble(),
       os: json['os'] as String? ?? 'Windows',
       status: json['status'] as String? ?? 'ready',
+      viewOnlyMode: json['view_only_mode'] == true,
     );
   }
 }
@@ -225,6 +228,7 @@ class HitlApprovalEvent {
 
 /// Shell output decoded from OP_SHELL.
 class ShellResult {
+  final String? commandId;
   final String status;
   final int exitCode;
   final String output;
@@ -233,6 +237,7 @@ class ShellResult {
   bool get isSuccess => status == 'success' && exitCode == 0;
 
   ShellResult({
+    this.commandId,
     required this.status,
     required this.exitCode,
     required this.output,
@@ -241,6 +246,7 @@ class ShellResult {
 
   factory ShellResult.fromJson(Map<String, dynamic> json) {
     return ShellResult(
+      commandId: json['command_id'] as String?,
       status: json['status'] as String? ?? 'unknown',
       exitCode: json['exit_code'] as int? ?? 0,
       output: json['output'] as String? ?? '',

@@ -55,8 +55,8 @@ class PipStreamViewer extends StatefulWidget {
 class _PipStreamViewerState extends State<PipStreamViewer>
     with WidgetsBindingObserver {
   bool _isInPipMode = false;
-  double _gyroOffsetX = 0.0;
-  double _gyroOffsetY = 0.0;
+  final ValueNotifier<Offset> _gyroOffsetNotifier =
+      ValueNotifier<Offset>(Offset.zero);
   StreamSubscription<AccelerometerEvent>? _sensorSub;
 
   @override
@@ -70,6 +70,7 @@ class _PipStreamViewerState extends State<PipStreamViewer>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _sensorSub?.cancel();
+    _gyroOffsetNotifier.dispose();
     super.dispose();
   }
 
@@ -98,14 +99,14 @@ class _PipStreamViewerState extends State<PipStreamViewer>
       _sensorSub =
           accelerometerEventStream().listen((AccelerometerEvent event) {
         if (!mounted || _isInPipMode) return;
-        // Damped low-pass filter for smooth perspective shifting
+        // Damped low-pass filter for smooth perspective shifting (without rebuilding widget tree)
         final double targetX = (event.x / 9.8).clamp(-1.0, 1.0);
         final double targetY = (event.y / 9.8).clamp(-1.0, 1.0);
-
-        setState(() {
-          _gyroOffsetX = _gyroOffsetX * 0.85 + targetX * 0.15;
-          _gyroOffsetY = _gyroOffsetY * 0.85 + targetY * 0.15;
-        });
+        final Offset prev = _gyroOffsetNotifier.value;
+        _gyroOffsetNotifier.value = Offset(
+          prev.dx * 0.85 + targetX * 0.15,
+          prev.dy * 0.85 + targetY * 0.15,
+        );
       });
     } catch (_) {
       // Gracefully ignore sensors on desktop or simulators without hardware accelerometers
@@ -195,11 +196,14 @@ class _PipStreamViewerState extends State<PipStreamViewer>
           // 1. Gyroscope-Driven Dynamic Cyber Mesh Gradient Background
           Positioned.fill(
             child: RepaintBoundary(
-              child: CustomPaint(
-                painter: _GyroMeshGradientPainter(
-                  offsetX: _gyroOffsetX,
-                  offsetY: _gyroOffsetY,
-                  accentColor: widget.dominantAccentColor,
+              child: ValueListenableBuilder<Offset>(
+                valueListenable: _gyroOffsetNotifier,
+                builder: (_, offset, _) => CustomPaint(
+                  painter: _GyroMeshGradientPainter(
+                    offsetX: offset.dx,
+                    offsetY: offset.dy,
+                    accentColor: widget.dominantAccentColor,
+                  ),
                 ),
               ),
             ),

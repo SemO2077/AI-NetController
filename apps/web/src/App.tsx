@@ -9,10 +9,14 @@ import { HitlApprovalModal } from './components/modals/HitlApprovalModal';
 import { useWorkerEngine } from './hooks/useWorkerEngine';
 import { useFleetState } from './hooks/useFleetState';
 import { useUIStore, applyAppearanceToDocument } from './store/uiStore';
-import { useScreenStore } from './store/screenStore';
 import { triggerHapticFeedback } from './services/hapticService';
-import { pairHostWithPin, saveAuthToken } from './services/securityService';
-import { AlertTriangle, ShieldAlert, X } from 'lucide-react';
+import {
+  buildHostWsUri,
+  getStoredAuthToken,
+  pairHostWithPin,
+  saveAuthToken,
+} from './services/securityService';
+import { AlertTriangle, KeyRound, ShieldAlert, X } from 'lucide-react';
 import { SPRING_BUBBLY, TAB_VIEW_VARIANTS } from './utils/springPhysics';
 
 const CommandTerminal = React.lazy(() =>
@@ -56,7 +60,10 @@ export default function App() {
   const fontFamily = useUIStore((s) => s.fontFamily);
   const glassIntensity = useUIStore((s) => s.glassIntensity);
   const ambientMode = useUIStore((s) => s.ambientMode);
-  const screenBase64 = useScreenStore((s) => s.screenBase64);
+  const [lanAuthRequired, setLanAuthRequired] = React.useState(false);
+  const [lanAuthInput, setLanAuthInput] = React.useState('');
+  const [lanAuthError, setLanAuthError] = React.useState<string | null>(null);
+  const [isSubmittingLanAuth, setIsSubmittingLanAuth] = React.useState(false);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -106,7 +113,7 @@ export default function App() {
           ? fleet.hosts.find((h) => h.id === hostIdOrDev)
           : hostIdOrDev;
       if (targetHost && targetHost.ip && targetHost.ip !== '0.0.0.0') {
-        const expectedWs = `ws://${targetHost.ip}:${targetHost.port || 8765}`;
+        const expectedWs = buildHostWsUri(targetHost.ip, targetHost.port || 8765);
         if (agent.wsUrl !== expectedWs) {
           agent.setWsUrl(expectedWs);
           if (agent.isConnected || agent.isReconnecting) {
@@ -143,10 +150,16 @@ export default function App() {
   const handleViewScreen = useCallback(
     (dev: any) => {
       syncAgentWithHost(dev);
+      if (dev?.ip && dev.ip !== '0.0.0.0') {
+        const expectedWs = buildHostWsUri(dev.ip, dev.port || 8765);
+        if (!agent.isConnected && !agent.isConnecting && getStoredAuthToken(expectedWs)) {
+          agent.connect(expectedWs);
+        }
+      }
       openModal('screen', dev);
-      agent.requestScreenRefresh(dev.id);
+      agent.requestScreenRefresh(dev.id, undefined, true);
     },
-    [openModal, agent.requestScreenRefresh, syncAgentWithHost]
+    [openModal, agent, syncAgentWithHost]
   );
 
   const handleOpenMemory = useCallback(() => openModal('memory'), [openModal]);
@@ -187,7 +200,7 @@ export default function App() {
         const pairOs = getParam('pair_os') === 'linux' ? 'linux' : 'windows';
         const pairToken = getParam('pair_token') || getParam('token');
         const pairPin = getParam('pair_pin') || getParam('pin');
-        const wsUri = `ws://${pairIp}:${pairPort}`;
+        const wsUri = buildHostWsUri(pairIp, pairPort);
 
         fleet.addCustomHost({
           id: pairName.toUpperCase().replace(/[^A-Z0-9-]/g, '-'),
@@ -203,21 +216,62 @@ export default function App() {
         });
         agent.setWsUrl(wsUri);
         if (pairToken) {
+          saveAuthToken(pairToken, wsUri);
           saveAuthToken(pairToken);
           agent.connect(wsUri);
+          fetch('/api/auth/session', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ secret: pairToken }),
+          })
+            .then((r) => {
+              if (r.ok) setLanAuthRequired(false);
+            })
+            .catch(() => {});
+          triggerHapticFeedback('heavy');
+          triggerToast(
+            language === 'bg'
+              ? `✓ Свързване с ${pairName} (${pairIp})`
+              : `✓ Connecting to ${pairName} (${pairIp})`
+          );
         } else if (pairPin) {
-          void pairHostWithPin(wsUri, pairPin).then(() => {
-            agent.connect(wsUri);
+          fetch('/api/auth/session', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: pairPin }),
+          })
+            .then((r) => {
+              if (r.ok) setLanAuthRequired(false);
+            })
+            .catch(() => {});
+          void pairHostWithPin(wsUri, pairPin).then((tok) => {
+            if (tok) {
+              agent.connect(wsUri);
+              triggerHapticFeedback('heavy');
+              triggerToast(
+                language === 'bg'
+                  ? `✓ Автоматично сдвоен с ${pairName} (${pairIp})`
+                  : `✓ Automatically paired with ${pairName} (${pairIp})`
+              );
+            } else {
+              triggerToast(
+                language === 'bg'
+                  ? `Неуспешно сдвояване с ${pairName} — проверете PIN кода или хост агента.`
+                  : `PIN pairing failed for ${pairName} — check PIN or host agent.`
+              );
+            }
           });
         } else {
           agent.connect(wsUri);
+          triggerHapticFeedback('heavy');
+          triggerToast(
+            language === 'bg'
+              ? `Свързване с ${pairName} (${pairIp})...`
+              : `Connecting to ${pairName} (${pairIp})...`
+          );
         }
-        triggerHapticFeedback('heavy');
-        triggerToast(
-          language === 'bg'
-            ? `✓ Автоматично сдвоен с ${pairName} (${pairIp})`
-            : `✓ Automatically paired with ${pairName} (${pairIp})`
-        );
         window.history.replaceState({}, document.title, window.location.pathname);
       } else if (setupFlag === '1' || setupFlag === 'true') {
         openModal('quickSetup');
@@ -232,32 +286,96 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Hydrate persisted security & automation settings from backend on startup
+  const hydrateAfterAuth = useCallback(
+    (signal?: AbortSignal) => {
+      fetch('/api/settings', { credentials: 'include', signal })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (signal?.aborted) return;
+          if (data?.settings) {
+            useUIStore.getState().hydrateSecuritySettings(data.settings);
+          }
+          const autoDiscovery =
+            typeof data?.settings?.isAutoDiscovery === 'boolean'
+              ? data.settings.isAutoDiscovery
+              : useUIStore.getState().isAutoDiscovery;
+          if (autoDiscovery) {
+            void fleet.scanMdns();
+          }
+        })
+        .catch(() => {
+          if (!signal?.aborted && useUIStore.getState().isAutoDiscovery) {
+            void fleet.scanMdns();
+          }
+        });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  // Verify Control Server session & hydrate persisted security/automation settings on startup
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/settings', { credentials: 'include', signal: controller.signal })
+    fetch('/api/auth/session', { credentials: 'include', signal: controller.signal })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
+      .then((sessionData) => {
         if (controller.signal.aborted) return;
-        if (data?.settings) {
-          useUIStore.getState().hydrateSecuritySettings(data.settings);
+        if (sessionData && sessionData.authenticated === false) {
+          setLanAuthRequired(true);
+          return;
         }
-        const autoDiscovery =
-          typeof data?.settings?.isAutoDiscovery === 'boolean'
-            ? data.settings.isAutoDiscovery
-            : useUIStore.getState().isAutoDiscovery;
-        if (autoDiscovery) {
-          void fleet.scanMdns();
-        }
+        setLanAuthRequired(false);
+        hydrateAfterAuth(controller.signal);
       })
       .catch(() => {
-        if (!controller.signal.aborted && useUIStore.getState().isAutoDiscovery) {
-          void fleet.scanMdns();
+        if (!controller.signal.aborted) {
+          hydrateAfterAuth(controller.signal);
         }
       });
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hydrateAfterAuth]);
+
+  const handleSubmitLanAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const raw = lanAuthInput.trim();
+    if (!raw || isSubmittingLanAuth) return;
+    setIsSubmittingLanAuth(true);
+    setLanAuthError(null);
+    const isSixDigitPin = /^\d{6}$/.test(raw);
+    try {
+      const res = await fetch('/api/auth/session', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isSixDigitPin ? { pin: raw } : { secret: raw }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.authenticated) {
+        setLanAuthRequired(false);
+        setLanAuthInput('');
+        triggerHapticFeedback('medium');
+        triggerToast(
+          language === 'bg' ? '✓ Сесията е удостоверена' : '✓ Session authenticated'
+        );
+        hydrateAfterAuth();
+      } else {
+        setLanAuthError(
+          data?.error ||
+            (language === 'bg'
+              ? 'Невалиден 6-цифрен PIN или ключ за достъп.'
+              : 'Invalid 6-digit PIN or control secret.')
+        );
+      }
+    } catch {
+      setLanAuthError(
+        language === 'bg'
+          ? 'Няма връзка с контролния сървър.'
+          : 'Unable to reach control server.'
+      );
+    } finally {
+      setIsSubmittingLanAuth(false);
+    }
+  };
 
   // Global QoL Keyboard Shortcuts (1-4 Tabs, R Rescan, / Omnibar)
   useEffect(() => {
@@ -484,6 +602,7 @@ export default function App() {
                         prompt: cmd,
                       })
                     }
+                    onSendInputOpcode={agent.sendInputOpcode}
                     onViewScreen={handleViewScreen}
                     onRescan={fleet.scanMdns}
                     isScanning={fleet.isScanning}
@@ -511,7 +630,6 @@ export default function App() {
                       isExecuting={agent.isSendingCommand}
                       lastExecutionResult={agent.lastExecutionResult}
                       onViewScreen={handleViewScreen}
-                      screenBase64={screenBase64}
                       onRefreshScreen={agent.requestScreenRefresh}
                       isCapturingScreen={agent.isCapturingScreen}
                     />
@@ -604,6 +722,89 @@ export default function App() {
           onRescanMdns={fleet.scanMdns}
         />
 
+        <AnimatePresence>
+          {lanAuthRequired && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[105] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.94, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.94, y: 12 }}
+                className="w-full max-w-md rounded-3xl bg-[#091020]/96 border border-cyan-400/35 shadow-[0_24px_64px_rgba(0,0,0,0.92)] p-6 space-y-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center text-cyan-300 shrink-0">
+                      <KeyRound className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="font-display text-base font-bold text-white">
+                        {language === 'bg' ? 'Удостоверяване в LAN' : 'LAN Session Sign-In'}
+                      </h2>
+                      <p className="text-xs text-slate-400">
+                        {language === 'bg'
+                          ? 'Въведете 6-цифрения PIN от PC агента или секретния ключ'
+                          : 'Enter the 6-digit PIN from the PC Agent or your control secret'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLanAuthRequired(false)}
+                    className="w-8 h-8 rounded-full bg-white/[0.06] hover:bg-white/15 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer"
+                    aria-label={language === 'bg' ? 'Затвори' : 'Close'}
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleSubmitLanAuth} className="space-y-3">
+                  <input
+                    type="text"
+                    inputMode="text"
+                    autoComplete="off"
+                    value={lanAuthInput}
+                    onChange={(e) => setLanAuthInput(e.target.value)}
+                    placeholder={language === 'bg' ? '6-цифрен PIN (напр. 482910) или ключ' : '6-digit PIN (e.g. 482910) or token'}
+                    className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/15 focus:border-cyan-400 text-sm font-mono text-cyan-100 outline-none"
+                  />
+                  {lanAuthError && (
+                    <div className="text-xs text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded-xl px-3 py-2">
+                      {lanAuthError}
+                    </div>
+                  )}
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setLanAuthRequired(false)}
+                      className="min-h-[42px] px-4 py-2 rounded-xl bg-white/[0.06] hover:bg-white/12 text-slate-300 text-xs font-semibold cursor-pointer"
+                    >
+                      {language === 'bg' ? 'По-късно' : 'Later'}
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!lanAuthInput.trim() || isSubmittingLanAuth}
+                      className="min-h-[42px] px-5 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 disabled:opacity-45 text-slate-950 text-xs font-bold cursor-pointer"
+                    >
+                      {isSubmittingLanAuth
+                        ? language === 'bg'
+                          ? 'Проверка...'
+                          : 'Verifying...'
+                        : language === 'bg'
+                        ? 'Влез'
+                        : 'Unlock Console'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <HitlApprovalModal
           event={agent.activeHitlEvent}
           isOpen={!!agent.activeHitlEvent}
@@ -625,6 +826,10 @@ export default function App() {
           onDeleteHost={fleet.deleteHost}
           isCapturingScreen={agent.isCapturingScreen}
           onRequestScreenRefresh={agent.requestScreenRefresh}
+          availableDisplays={agent.availableDisplays}
+          activeDisplayIndex={agent.activeDisplayIndex}
+          lastHostClipboard={agent.lastHostClipboard}
+          isVaultEncrypted={agent.isVaultEncrypted}
           wsUrl={agent.wsUrl}
           setWsUrl={agent.setWsUrl}
           isConnected={agent.isConnected}
@@ -641,6 +846,7 @@ export default function App() {
           onSelectTarget={handleSelectHostTerminal}
           onViewScreen={handleViewScreen}
           onSendInputOpcode={agent.sendInputOpcode}
+          onToast={triggerToast}
         />
       </div>
     </GlobalErrorBoundary>
