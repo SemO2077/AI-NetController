@@ -120,6 +120,20 @@ jobs:
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
           if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then TAG="v0.80.0"; fi
           flutter config --jdk-dir="$JAVA_HOME"
+          python3 -c '
+          import os, pathlib
+          block = "pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n"
+          init_d = pathlib.Path.home() / ".gradle" / "init.d"
+          init_d.mkdir(parents=True, exist_ok=True)
+          (init_d / "flutter-plugin-repos.init.gradle").write_text("beforeSettings { s ->\n    s.pluginManagement {\n        repositories {\n            google()\n            mavenCentral()\n            gradlePluginPortal()\n        }\n    }\n}\n")
+          fl_root = os.environ.get("FLUTTER_ROOT", "")
+          if fl_root:
+              s_file = pathlib.Path(fl_root) / "packages" / "flutter_tools" / "gradle" / "settings.gradle.kts"
+              if s_file.is_file():
+                  txt = s_file.read_text()
+                  if "pluginManagement" not in txt:
+                      s_file.write_text(block + "\n" + txt)
+          '
           flutter build apk --release --split-per-abi
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "../../AI_NetController_${TAG}_arm64-v8a.apk"
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "../../AI_NetController_${TAG}.apk"

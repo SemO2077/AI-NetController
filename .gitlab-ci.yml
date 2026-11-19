@@ -79,6 +79,7 @@ android:build:
     - if: $CI_PIPELINE_SOURCE == "web"
       when: manual
   script:
+    - python3 -c 'import pathlib; p = pathlib.Path.home() / ".gradle" / "init.d"; p.mkdir(parents=True, exist_ok=True); (p / "flutter-plugin-repos.init.gradle").write_text("beforeSettings { s -> s.pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } } }\n")'
     - cd apps/mobile
     - flutter pub get
     - flutter build apk --release --split-per-abi
