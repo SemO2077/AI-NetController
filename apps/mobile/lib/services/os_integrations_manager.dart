@@ -62,22 +62,22 @@ class OsIntegrationsManager {
         const ShortcutItem(
           type: 'action_wake_pc',
           localizedTitle: 'Wake PC (WoL)',
-          icon: 'ic_wol_power',
+          icon: 'ic_launcher',
         ),
         const ShortcutItem(
           type: 'action_panic_kill',
           localizedTitle: 'Emergency Lock',
-          icon: 'ic_panic_kill',
+          icon: 'ic_launcher',
         ),
         const ShortcutItem(
           type: 'action_scan_fleet',
           localizedTitle: 'Scan LAN Fleet',
-          icon: 'ic_radar_scan',
+          icon: 'ic_launcher',
         ),
         const ShortcutItem(
           type: 'action_open_terminal',
           localizedTitle: 'Remote Shell',
-          icon: 'ic_terminal',
+          icon: 'ic_launcher',
         ),
       ]);
     } catch (e) {

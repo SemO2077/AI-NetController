@@ -39,7 +39,7 @@ def update_manifest(rel_tag: str) -> None:
 
     arm64_apk = os.path.join(rel_dir, f"AI_NetController_{rel_tag}_arm64-v8a.apk")
     univ_apk = os.path.join(rel_dir, f"AI_NetController_{rel_tag}.apk")
-    if os.path.exists(arm64_apk):
+    if os.path.exists(arm64_apk) and not os.path.exists(univ_apk):
         shutil.copy2(arm64_apk, univ_apk)
 
     files_to_hash = [

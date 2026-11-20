@@ -79,10 +79,12 @@ android:build:
     - if: $CI_PIPELINE_SOURCE == "web"
       when: manual
   script:
-    - python3 -c 'import pathlib; p = pathlib.Path.home() / ".gradle" / "init.d"; p.mkdir(parents=True, exist_ok=True); (p / "flutter-plugin-repos.init.gradle").write_text("beforeSettings { s -> s.pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } } }\n")'
+    - python3 -c 'import os, pathlib; p = pathlib.Path.home() / ".gradle" / "init.d"; p.mkdir(parents=True, exist_ok=True); (p / "flutter-plugin-repos.init.gradle").write_text("beforeSettings { s -> s.pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } } }\n")'
     - cd apps/mobile
     - flutter pub get
-    - flutter build apk --release --split-per-abi
+    - flutter build apk --release --target-platform=android-arm64
+    - cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+    - flutter build apk --release
   artifacts:
     name: "android-apk-$CI_COMMIT_REF_SLUG"
     expire_in: 30 days
@@ -104,7 +106,9 @@ package:upload:
     - |
       if [ -f "apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" ]; then
         cp -f "apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" "public/releases/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}_arm64-v8a.apk"
-        cp -f "apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" "public/releases/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}.apk"
+      fi
+      if [ -f "apps/mobile/build/app/outputs/flutter-apk/app-release.apk" ]; then
+        cp -f "apps/mobile/build/app/outputs/flutter-apk/app-release.apk" "public/releases/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}.apk"
       fi
     - python3 scripts/update_release_manifest.py --tag "$CI_COMMIT_TAG"
     - python3 scripts/publish_gitlab_release.py --tag "$CI_COMMIT_TAG" --packages-only

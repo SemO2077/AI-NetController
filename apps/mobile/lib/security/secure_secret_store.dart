@@ -31,28 +31,31 @@ class SecureSecretStore {
   Future<void> init() async {
     if (_initialized && _vaultBox != null && _vaultBox!.isOpen) return;
 
-    Uint8List? masterKey;
+    Uint8List? rawMasterKey;
     try {
       final keyProvider = _customKeyProvider;
       if (keyProvider != null) {
-        masterKey = await keyProvider();
+        rawMasterKey = await keyProvider();
       } else if (Platform.isAndroid) {
-        masterKey =
+        rawMasterKey =
             await _keystoreChannel.invokeMethod<Uint8List>('getOrCreateHiveKey');
       } else {
         // Off-Android desktop/test harness: generate an ephemeral CSPRNG key rather than unencrypted storage.
         final rnd = Random.secure();
-        masterKey = Uint8List.fromList(
+        rawMasterKey = Uint8List.fromList(
           List<int>.generate(32, (_) => rnd.nextInt(256)),
         );
       }
     } on MissingPluginException {
-      masterKey = null;
+      rawMasterKey = null;
     } catch (_) {
-      masterKey = null;
+      rawMasterKey = null;
     }
 
-    if (masterKey != null && masterKey.length == 32) {
+    if (rawMasterKey != null && rawMasterKey.length == 32) {
+      // Android MethodChannel decodes ByteArray as an UnmodifiableUint8ListView;
+      // copy into a mutable buffer so in-place zeroization never throws UnsupportedError.
+      final Uint8List masterKey = Uint8List.fromList(rawMasterKey);
       try {
         try {
           _vaultBox = await Hive.openBox<dynamic>(
@@ -76,6 +79,13 @@ class SecureSecretStore {
       } finally {
         for (int i = 0; i < masterKey.length; i++) {
           masterKey[i] = 0;
+        }
+        try {
+          for (int i = 0; i < rawMasterKey.length; i++) {
+            rawMasterKey[i] = 0;
+          }
+        } catch (_) {
+          // Ignore UnsupportedError when rawMasterKey is an UnmodifiableUint8ListView
         }
       }
     }

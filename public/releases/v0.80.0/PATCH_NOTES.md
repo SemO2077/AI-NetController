@@ -35,8 +35,9 @@
 - **SSRF, DNS Rebinding & Payload Bounds (`apps/web/server.ts`, `apps/web/src/utils/networkGuard.ts`, `apps/mobile/lib/security/network_validators.dart`)**:
   - Enforced strict RFC 1918 / RFC 4193 private-LAN target validation blocking cloud metadata endpoints (`169.254.169.254`), public internet hosts, and unbracketed IPv6 ambiguity.
   - Added DNS rebinding `Host` header validation (`isAllowedHostHeader`), constant-time `crypto.timingSafeEqual` secret comparisons, `/api/source-files` directory allowlisting (`CodeExportModal.tsx`), 8192-byte shell command bounds, and 1 MiB clipboard bounds.
-- **Android Hardware Keystore & Biometric HITL Gating (`apps/mobile/`)**:
-  - Enforced Android Keystore AES-GCM hardware storage (`SecureSecretStore`) without silent plaintext Hive fallback on Android, added Android 12+ `<data-extraction-rules>` and `allowBackup="false"`, removed wildcard CORS (`Access-Control-Allow-Origin: *`) from the Android WebView loopback server (`MainActivity.java`), and gated HITL approvals (`sendHitlResponse(true)`) and high-risk commands behind `BiometricSecurityGate`.
+- **Android Hardware Keystore, Startup Resilience & Biometric HITL Gating (`apps/mobile/`)**:
+  - Enforced Android Keystore AES-GCM hardware storage (`SecureSecretStore`) with safe mutable key copying for Android `MethodChannel` byte views (`_UnmodifiableUint8ArrayView`), self-healing Keystore alias recovery in `MainActivity.kt`, guarded display refresh-rate setup, fault-tolerant Hive bootstrap recovery before `runApp()`, Android 12+ `<data-extraction-rules>` and `allowBackup="false"`, removed wildcard CORS (`Access-Control-Allow-Origin: *`) from the Android WebView loopback server (`MainActivity.java`), and gated HITL approvals (`sendHitlResponse(true)`) and high-risk commands behind `BiometricSecurityGate`.
+  - Added full R8/ProGuard keep rules for JNI (`jni`, `jni_flutter`, `path_provider_android`) and Flutter plugins, upgraded Android build tooling to Gradle `9.5.0` / AGP `9.3.1` / Kotlin `2.4.20`, and shipped both a compact `arm64-v8a` APK and a true multi-ABI Universal APK (`arm64-v8a`, `armeabi-v7a`, `x86_64`) with consistent `versionCode 800`.
 
 ### 4. Frictionless Pairing, Remote Control UX & Verification Suites
 - **1-Tap Deep-Link, Clipboard & Inline PIN Pairing**:
@@ -50,13 +51,13 @@
 
 ---
 
-## Release Deliverables & SHA-256 Checksums (`v0.80.0` / `0.80.00`)
+## Release Deliverables (`v0.80.0` / `0.80.00`)
 
-| File | Target Platform | Size | SHA-256 Checksum |
-| :--- | :--- | :--- | :--- |
-| `AI_NetController_HostAgent_v0.80.0_win64.exe` | Windows 10/11 x64 (Standalone Signed Host Agent `.EXE`) | 36.02 MB | `fe0379e7af5cbd44eaf52fdbf3f4e481307d9e7c5716ca28a266f22e8ffcf33b` |
-| `AI_NetController_HostAgent_v0.80.0_win64_portable.zip` | Windows x64 (`--onedir` Bundle + Source & MSIX Manifest) | 36.33 MB | `c56033a1eb915b58a8086fe9cf8644c1e1cde74107494c81e2a58a450ca1b2fb` |
-| `AI_NetController_v0.80.0_arm64-v8a.apk` | Android 10–15 `arm64-v8a` (`0.80.00-beta`, versionCode `800`) | 1.50 MB | `193704989e61b8e6d859e41c30f2b16787d9f62d4320262f27697ee498b7baa3` |
-| `AI_NetController_v0.80.0.apk` | Android Universal (`0.80.00-beta`, versionCode `800`) | 1.50 MB | `193704989e61b8e6d859e41c30f2b16787d9f62d4320262f27697ee498b7baa3` |
-| `SHA256SUMS.txt` | All Platforms | 435 B | Cryptographic SHA-256 digest list |
-| `RELEASE_MANIFEST.json` | All Platforms | 1.82 KB | Machine-readable release metadata & asset manifest |
+| File | Target Platform | Description |
+| :--- | :--- | :--- |
+| `AI_NetController_HostAgent_v0.80.0_win64.exe` | Windows 10/11 x64 | Standalone signed Host Agent executable with GUI, tray & Guided Setup |
+| `AI_NetController_HostAgent_v0.80.0_win64_portable.zip` | Windows x64 | Signed `--onedir` archive containing Host Agent build, source, and MSIX manifest |
+| `AI_NetController_v0.80.0_arm64-v8a.apk` | Android 7.0–16 (`arm64-v8a`) | Compact 64-bit native Flutter Android APK (`0.80.00-beta`, `versionCode 800`) |
+| `AI_NetController_v0.80.0.apk` | Android Universal (`arm64-v8a`, `armeabi-v7a`, `x86_64`) | Multi-ABI universal native Flutter Android APK (`0.80.00-beta`, `versionCode 800`) |
+| `SHA256SUMS.txt` | All Platforms | Authoritative SHA-256 cryptographic digests for release validation |
+| `RELEASE_MANIFEST.json` | All Platforms | Machine-readable release metadata, file sizes, and SHA-256 asset manifest |

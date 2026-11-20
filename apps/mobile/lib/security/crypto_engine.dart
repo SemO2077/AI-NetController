@@ -24,10 +24,14 @@ const int kTagSize = 16;
 const int kSaltSize = 16;
 const int kWindowSize = 128;
 
-/// Secure in-place buffer zeroization helper
+/// Secure in-place buffer zeroization helper (safe against unmodifiable views)
 void zeroize(Uint8List buffer) {
-  for (int i = 0; i < buffer.length; i++) {
-    buffer[i] = 0;
+  try {
+    for (int i = 0; i < buffer.length; i++) {
+      buffer[i] = 0;
+    }
+  } on UnsupportedError {
+    // UnmodifiableUint8ListView cannot be mutated in place
   }
 }
 

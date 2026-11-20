@@ -11,12 +11,15 @@
     @android.webkit.JavascriptInterface <methods>;
 }
 
-# Preserve QuickActions, HomeWidget, LocalAuth, and App Entrypoints
+# Preserve QuickActions, HomeWidget, LocalAuth, JNI (path_provider_android), Plus plugins, and App Entrypoints
 -keep class com.cst.autonomouslan.** { *; }
 -keep class es.antonborri.home_widget.** { *; }
--keep class io.flutter.plugins.quickactions.** { *; }
--keep class io.flutter.plugins.localauth.** { *; }
+-keep class io.flutter.plugins.** { *; }
 -keep class androidx.biometric.** { *; }
+-keep class com.github.dart_lang.jni.** { *; }
+-keep class com.github.dart_lang.jni_flutter.** { *; }
+-keep class dev.fluttercommunity.plus.** { *; }
+-keep class com.benjaminabel.vibration.** { *; }
 
 # Preserve ChaCha20-Poly1305 and Curve25519 reflection models
 -keepclassmembers enum * {

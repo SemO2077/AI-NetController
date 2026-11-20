@@ -179,5 +179,34 @@ void main() {
         }
       }
     });
+
+    test('SecureSecretStore & zeroize handle UnmodifiableUint8ListView from Android MethodChannel', () async {
+      final tmpDir = Directory.systemTemp.createTempSync('ainet_ks_unmod_');
+      try {
+        Hive.init(tmpDir.path);
+        final backing = Uint8List.fromList(
+          List<int>.generate(32, (i) => (i * 13 + 7) & 0xFF),
+        );
+        // Simulate Flutter StandardMessageCodec ByteArray decoding on Android
+        final unmodifiableKey = backing.asUnmodifiableView();
+
+        // zeroize() must never throw UnsupportedError on unmodifiable views
+        expect(() => ce.zeroize(unmodifiableKey), returnsNormally);
+
+        final store = SecureSecretStore(
+          keyProvider: () async => unmodifiableKey,
+        );
+        await store.init();
+        expect(store.hasOpenVault, isTrue);
+
+        await store.saveToken('192.168.1.99', 'ainet_android_keystore_tok');
+        expect(store.getToken('192.168.1.99'), equals('ainet_android_keystore_tok'));
+      } finally {
+        await Hive.close();
+        if (tmpDir.existsSync()) {
+          tmpDir.deleteSync(recursive: true);
+        }
+      }
+    });
   });
 }

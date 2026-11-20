@@ -720,23 +720,60 @@ class CommandLogItem {
 // =====================================================================
 // ROOT APPLICATION ENTRY WITH PERSISTENCE & CLAMPED ACCESSIBILITY SCALER
 // =====================================================================
+Future<void> _openHiveBoxSafely(String boxName) async {
+  try {
+    if (!Hive.isBoxOpen(boxName)) {
+      await Hive.openBox(boxName);
+    }
+  } catch (e) {
+    debugPrint('Hive box "$boxName" open failed ($e); recreating cleanly.');
+    try {
+      await Hive.deleteBoxFromDisk(boxName);
+      await Hive.openBox(boxName);
+    } catch (inner) {
+      debugPrint('Hive box "$boxName" recovery failed: $inner');
+    }
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Hive.initFlutter();
-  await Future.wait([
-    Hive.openBox(_kGhostDevicesBox),
-    Hive.openBox(kAppPrefsBoxName),
-    Hive.openBox(kVaultSecretsBoxName),
-  ]);
-  await appSecretStore.init();
-  await appSecretStore.migrateLegacyPairingKeys(Hive.box(_kGhostDevicesBox));
-  await appSecretStore.migrateLegacyPairingKeys(Hive.box(kVaultSecretsBoxName));
-  _migrateLegacySecretsIfNeeded();
+
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint('FLUTTER ERROR CAUGHT: ${details.exceptionAsString()}');
+  };
 
   PlatformDispatcher.instance.onError = (error, stack) {
     debugPrint('CENTRALIZED ERROR CAUGHT: $error');
     return true;
   };
+
+  try {
+    await Hive.initFlutter();
+    await Future.wait([
+      _openHiveBoxSafely(_kGhostDevicesBox),
+      _openHiveBoxSafely(kAppPrefsBoxName),
+      _openHiveBoxSafely(kVaultSecretsBoxName),
+    ]);
+  } catch (e) {
+    debugPrint('Hive storage bootstrap warning: $e');
+  }
+
+  try {
+    await appSecretStore.init();
+    if (Hive.isBoxOpen(_kGhostDevicesBox)) {
+      await appSecretStore.migrateLegacyPairingKeys(Hive.box(_kGhostDevicesBox));
+    }
+    if (Hive.isBoxOpen(kVaultSecretsBoxName)) {
+      await appSecretStore.migrateLegacyPairingKeys(
+        Hive.box(kVaultSecretsBoxName),
+      );
+    }
+    _migrateLegacySecretsIfNeeded();
+  } catch (e) {
+    debugPrint('SecureSecretStore bootstrap warning: $e');
+  }
 
   runApp(const ProviderScope(child: AINetControllerApp()));
 }

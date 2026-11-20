@@ -96,10 +96,25 @@ class MainActivity : FlutterFragmentActivity() {
             }
     }
 
-    private fun getOrCreateMasterKey(): SecretKey {
+    private fun getOrCreateMasterKey(forceRegenerate: Boolean = false): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        val existing = keyStore.getKey(MASTER_KEY_ALIAS, null) as? SecretKey
-        if (existing != null) return existing
+        if (forceRegenerate) {
+            try {
+                if (keyStore.containsAlias(MASTER_KEY_ALIAS)) {
+                    keyStore.deleteEntry(MASTER_KEY_ALIAS)
+                }
+            } catch (_: Exception) {}
+        } else {
+            try {
+                val existing = keyStore.getKey(MASTER_KEY_ALIAS, null) as? SecretKey
+                if (existing != null) return existing
+            } catch (_: Exception) {
+                // Keystore entry corrupted or permanently invalidated; recreate below
+                try {
+                    keyStore.deleteEntry(MASTER_KEY_ALIAS)
+                } catch (_: Exception) {}
+            }
+        }
 
         val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         val spec = KeyGenParameterSpec.Builder(
@@ -118,7 +133,13 @@ class MainActivity : FlutterFragmentActivity() {
     private fun sealWithKeystore(plain: ByteArray): ByteArray {
         val masterKey = getOrCreateMasterKey()
         val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, masterKey)
+        try {
+            cipher.init(Cipher.ENCRYPT_MODE, masterKey)
+        } catch (_: Exception) {
+            // Master key permanently invalidated after OS/lockscreen change; rotate cleanly
+            val freshMaster = getOrCreateMasterKey(forceRegenerate = true)
+            cipher.init(Cipher.ENCRYPT_MODE, freshMaster)
+        }
         val iv = cipher.iv
         val encrypted = cipher.doFinal(plain)
         val out = ByteArray(1 + iv.size + encrypted.size)
@@ -182,32 +203,41 @@ class MainActivity : FlutterFragmentActivity() {
         extractPairingUri(intent)?.let { pendingInitialUri = it }
 
         // Enable hardware accelerated smooth rendering pipeline
-        window.setFlags(
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-        )
+        try {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+            )
+        } catch (_: Throwable) {}
 
         // Automatically unlock highest available display refresh rate (120Hz / 90Hz)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val targetModeId = getHighRefreshRateModeId()
-            if (targetModeId != 0) {
-                val params = window.attributes
-                params.preferredDisplayModeId = targetModeId
-                window.attributes = params
-            }
+            try {
+                val targetModeId = getHighRefreshRateModeId()
+                if (targetModeId != 0) {
+                    val params = window.attributes
+                    params.preferredDisplayModeId = targetModeId
+                    window.attributes = params
+                }
+            } catch (_: Throwable) {}
         }
     }
 
     private fun getHighRefreshRateModeId(): Int {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                display
-            } else {
+            val activeDisplay = try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    display ?: @Suppress("DEPRECATION") windowManager.defaultDisplay
+                } else {
+                    @Suppress("DEPRECATION")
+                    windowManager.defaultDisplay
+                }
+            } catch (_: Throwable) {
                 @Suppress("DEPRECATION")
                 windowManager.defaultDisplay
             }
-            val modes = display?.supportedModes ?: return 0
-            val activeMode = display.mode
+            val modes = activeDisplay?.supportedModes ?: return 0
+            val activeMode = activeDisplay.mode
             var highestRate = 60.0f
             var targetModeId = 0
             for (mode in modes) {
