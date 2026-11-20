@@ -82,8 +82,7 @@ android:build:
     - python3 -c 'import os, pathlib; p = pathlib.Path.home() / ".gradle" / "init.d"; p.mkdir(parents=True, exist_ok=True); (p / "flutter-plugin-repos.init.gradle").write_text("beforeSettings { s -> s.pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } } }\n")'
     - cd apps/mobile
     - flutter pub get
-    - flutter build apk --release --target-platform=android-arm64
-    - cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+    - flutter build apk --release --split-per-abi
     - flutter build apk --release
   artifacts:
     name: "android-apk-$CI_COMMIT_REF_SLUG"
