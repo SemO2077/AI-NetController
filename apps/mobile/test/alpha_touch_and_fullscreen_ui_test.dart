@@ -1,5 +1,6 @@
 import 'package:ai_netcontroller/theme/fluid_theme.dart';
 import 'package:ai_netcontroller/ui/remote_keyboard_bar.dart';
+import 'package:ai_netcontroller/ui/responsive_device_card.dart';
 import 'package:ai_netcontroller/ui/touch_coordinate_mapper.dart';
 import 'package:ai_netcontroller/ui/touch_feedback_overlay.dart';
 import 'package:flutter/material.dart';
@@ -335,6 +336,137 @@ void main() {
       await tester.tap(find.byTooltip('Hide Keyboard Bar'));
       await tester.pump();
       expect(closed, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('ResponsiveDeviceCard', () {
+    testWidgets('shows prominent 1-tap Fullscreen Touch Control CTA, latency & TLS pills for online hosts and WoL for sleeping hosts', (tester) async {
+      int openFullscreenCount = 0;
+      int openStreamCount = 0;
+      int wolCount = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: CyberTheme.themeData,
+          home: Scaffold(
+            body: ListView(
+              padding: const EdgeInsets.all(12),
+              children: [
+                ResponsiveDeviceCard(
+                  id: 'pc-online',
+                  name: 'Studio Workstation',
+                  ip: '192.168.1.42',
+                  mac: 'AA:BB:CC:DD:EE:FF',
+                  isOnline: true,
+                  cpuUsage: 34,
+                  ramUsage: 58,
+                  latencyMs: 14,
+                  useTls: true,
+                  onOpenFullscreen: () => openFullscreenCount++,
+                  onOpenStream: () => openStreamCount++,
+                ),
+                ResponsiveDeviceCard(
+                  id: 'pc-fallback',
+                  name: 'Legacy Caller Host',
+                  ip: '192.168.1.43',
+                  mac: 'AA:BB:CC:DD:EE:01',
+                  isOnline: true,
+                  onOpenStream: () => openStreamCount++,
+                ),
+                ResponsiveDeviceCard(
+                  id: 'pc-offline',
+                  name: 'Render Rig',
+                  ip: '192.168.1.44',
+                  mac: 'AA:BB:CC:DD:EE:02',
+                  isOnline: false,
+                  onWakeOnLan: () => wolCount++,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Online'), findsNWidgets(2));
+      expect(find.text('14ms'), findsOneWidget);
+      expect(find.text('TLS'), findsOneWidget);
+      expect(find.text('Fullscreen Touch Control'), findsNWidgets(2));
+      expect(find.text('Sleeping'), findsOneWidget);
+      expect(find.text('Wake Sleeping PC (WoL)'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('device-card-touch-cta-pc-online')));
+      await tester.pump();
+      expect(openFullscreenCount, equals(1));
+
+      await tester.tap(find.byKey(const ValueKey('device-card-touch-cta-pc-fallback')));
+      await tester.pump();
+      expect(openStreamCount, equals(1));
+
+      await tester.tap(find.byKey(const ValueKey('device-card-wol-cta-pc-offline')));
+      await tester.pump();
+      expect(wolCount, equals(1));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('adapts cleanly inside tight grid extents at 1.35x text scale without overflow', (tester) async {
+      int tapCount = 0;
+      tester.platformDispatcher.textScaleFactorTestValue = 1.35;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: CyberTheme.fromPalette(
+            CyberPalette.fromPreset(
+              CyberAccentPreset.cobalt,
+              themeMode: AppThemeMode.dark,
+            ),
+          ),
+          home: Scaffold(
+            body: Column(
+              children: [
+                SizedBox(
+                  width: 260,
+                  height: 150,
+                  child: ResponsiveDeviceCard(
+                    id: 'tight-online',
+                    name: 'UltraLongWorkstationName-01',
+                    ip: '192.168.1.100',
+                    mac: 'AA:BB:CC:DD:EE:99',
+                    isOnline: true,
+                    cpuUsage: 91,
+                    ramUsage: 88,
+                    latencyMs: 95,
+                    useTls: true,
+                    onOpenStream: () => tapCount++,
+                    onMoreActions: () {},
+                  ),
+                ),
+                SizedBox(
+                  width: 260,
+                  height: 120,
+                  child: ResponsiveDeviceCard(
+                    id: 'tight-offline',
+                    name: 'SleepingNode-02',
+                    ip: '192.168.1.101',
+                    mac: 'AA:BB:CC:DD:EE:98',
+                    isOnline: false,
+                    onWakeOnLan: () => tapCount++,
+                    onMoreActions: () {},
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('device-card-touch-cta-tight-online')));
+      await tester.tap(find.byKey(const ValueKey('device-card-wol-cta-tight-offline')));
+      await tester.pump();
+      expect(tapCount, equals(2));
       expect(tester.takeException(), isNull);
     });
   });

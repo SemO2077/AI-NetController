@@ -105,10 +105,13 @@ class ResponsiveDeviceCard extends StatefulWidget {
   final int ramUsage;
   final int? latencyMs;
   final bool isSelected;
+  final bool useTls;
+  final String? connectionStatusLabel;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final VoidCallback? onWakeOnLan;
   final VoidCallback? onOpenStream;
+  final VoidCallback? onOpenFullscreen;
   final VoidCallback? onMoreActions;
 
   const ResponsiveDeviceCard({
@@ -122,10 +125,13 @@ class ResponsiveDeviceCard extends StatefulWidget {
     this.ramUsage = 0,
     this.latencyMs,
     this.isSelected = false,
+    this.useTls = false,
+    this.connectionStatusLabel,
     this.onTap,
     this.onLongPress,
     this.onWakeOnLan,
     this.onOpenStream,
+    this.onOpenFullscreen,
     this.onMoreActions,
   });
 
@@ -146,7 +152,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
       duration: const Duration(milliseconds: 210),
     );
 
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.94).animate(
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.96).animate(
       CurvedAnimation(
         parent: _scaleController,
         curve: Curves.easeOutCubic,
@@ -179,6 +185,12 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     }
   }
 
+  Color _latencyColor(CyberPalette palette, int ms) {
+    if (ms <= 30) return palette.success;
+    if (ms <= 80) return palette.sky;
+    return palette.warning;
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
@@ -187,13 +199,10 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     final disableAnim = MediaQuery.disableAnimationsOf(context);
     final animDuration =
         disableAnim ? Duration.zero : const Duration(milliseconds: 240);
-
-    final statusParts = <String>[
-      widget.ip,
-      isOnline ? 'Online' : 'Sleeping',
-      if (isOnline && widget.latencyMs != null && widget.latencyMs! > 0)
-        '${widget.latencyMs}ms',
-    ];
+    final VoidCallback? openControlCallback =
+        widget.onOpenFullscreen ?? widget.onOpenStream;
+    final String statusLabel = widget.connectionStatusLabel ??
+        (isOnline ? 'Online' : 'Sleeping');
 
     return RepaintBoundary(
       child: Padding(
@@ -208,17 +217,25 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
             scale: _scaleAnimation,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final isCompactCard =
+                final bool isCompactCard =
                     constraints.maxWidth.isFinite && constraints.maxWidth < 290;
-                final hPad = isCompactCard ? 11.0 : 15.0;
+                final bool isTightHeight = constraints.maxHeight.isFinite &&
+                    constraints.maxHeight < (isOnline ? 184.0 : 148.0);
+                final bool showFullOnlineCta =
+                    isOnline && openControlCallback != null && !isTightHeight;
+                final bool showFullOfflineCta = !isOnline &&
+                    widget.onWakeOnLan != null &&
+                    !isTightHeight;
+                final double hPad = isCompactCard ? 11.0 : 15.0;
+
                 return AnimatedContainer(
                   duration: animDuration,
                   curve: Curves.easeOutCubic,
                   padding: EdgeInsets.fromLTRB(
                     hPad,
-                    isCompactCard ? 10.0 : 12.0,
+                    isTightHeight ? 8.0 : (isCompactCard ? 10.0 : 12.0),
                     hPad,
-                    isCompactCard ? 14.0 : 16.0,
+                    isTightHeight ? 10.0 : (isCompactCard ? 12.0 : 14.0),
                   ),
                   decoration: BoxDecoration(
                     gradient: palette.cardBevelGradient(isSelected: isSelected),
@@ -241,19 +258,19 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                       FluidSpecularBar(
                         isSelected: isSelected || isOnline,
                         height: 1.2,
-                        margin: const EdgeInsets.only(
+                        margin: EdgeInsets.only(
                           left: 8,
                           right: 8,
-                          bottom: 10,
+                          bottom: isTightHeight ? 6 : 9,
                         ),
                       ),
                       Row(
                         children: [
                           Container(
-                            width: isCompactCard ? 38 : 44,
-                            height: isCompactCard ? 38 : 44,
+                            width: isCompactCard ? 36 : 42,
+                            height: isCompactCard ? 36 : 42,
                             decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(15),
+                              borderRadius: BorderRadius.circular(14),
                               gradient: isOnline
                                   ? palette.heroGradient
                                   : const LinearGradient(
@@ -282,8 +299,8 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                             child: Center(
                               child: CustomPaint(
                                 size: Size(
-                                  isCompactCard ? 18 : 22,
-                                  isCompactCard ? 18 : 22,
+                                  isCompactCard ? 17 : 21,
+                                  isCompactCard ? 17 : 21,
                                 ),
                                 painter: CyberNodeBadgePainter(
                                   isOnline: isOnline,
@@ -292,7 +309,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               ),
                             ),
                           ),
-                          SizedBox(width: isCompactCard ? 10 : 12),
+                          SizedBox(width: isCompactCard ? 9 : 11),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -302,7 +319,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                                   widget.name,
                                   style: TextStyle(
                                     fontWeight: FontWeight.w800,
-                                    fontSize: context.fluidFont(14.5),
+                                    fontSize: context.fluidFont(14.0),
                                     color: palette.textPrimary,
                                     letterSpacing: -0.3,
                                   ),
@@ -310,31 +327,32 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 const SizedBox(height: 3),
-                                Text(
-                                  statusParts.join(' · '),
-                                  style: TextStyle(
-                                    fontSize: context.fluidFont(11),
-                                    fontWeight: FontWeight.w600,
-                                    color: isOnline
-                                        ? palette.success
-                                        : palette.warning,
-                                    fontFamily: 'monospace',
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                _buildStatusPillsRow(
+                                  context: context,
+                                  palette: palette,
+                                  statusLabel: statusLabel,
+                                  isCompact: isCompactCard || isTightHeight,
                                 ),
                               ],
                             ),
                           ),
-                          if (isOnline && widget.onOpenStream != null)
+                          if (isOnline &&
+                              openControlCallback != null &&
+                              !showFullOnlineCta)
                             _ActionOrbButton(
-                              tooltip: 'Open Live Stream',
-                              icon: Icons.videocam_rounded,
-                              color: palette.sky,
-                              onPressed: widget.onOpenStream!,
+                              key: ValueKey(
+                                'device-card-touch-cta-${widget.id}',
+                              ),
+                              tooltip: 'Fullscreen Touchscreen Control',
+                              icon: Icons.touch_app_rounded,
+                              color: palette.primary,
+                              onPressed: openControlCallback,
                             )
-                          else if (!isOnline && widget.onWakeOnLan != null)
+                          else if (!isOnline &&
+                              widget.onWakeOnLan != null &&
+                              !showFullOfflineCta)
                             _ActionOrbButton(
+                              key: ValueKey('device-card-wol-cta-${widget.id}'),
                               tooltip: 'Send Wake-on-LAN Magic Packet',
                               icon: Icons.bolt_rounded,
                               color: palette.warning,
@@ -365,7 +383,10 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                         child: isOnline
                             ? Padding(
                                 padding: EdgeInsets.only(
-                                    top: isCompactCard ? 9.0 : 12.0),
+                                  top: isTightHeight
+                                      ? 7.0
+                                      : (isCompactCard ? 8.0 : 10.0),
+                                ),
                                 child: Row(
                                   children: [
                                     Expanded(
@@ -402,10 +423,290 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               )
                             : const SizedBox.shrink(),
                       ),
+                      if (showFullOnlineCta) ...[
+                        SizedBox(height: isCompactCard ? 9.0 : 11.0),
+                        _buildPrimaryTouchCta(
+                          context: context,
+                          palette: palette,
+                          isCompact: isCompactCard,
+                          onPressed: openControlCallback,
+                        ),
+                      ] else if (showFullOfflineCta) ...[
+                        SizedBox(height: isCompactCard ? 8.0 : 10.0),
+                        _buildWakeQuickAction(
+                          context: context,
+                          palette: palette,
+                          isCompact: isCompactCard,
+                          onPressed: widget.onWakeOnLan!,
+                        ),
+                      ],
                     ],
                   ),
                 );
               },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusPillsRow({
+    required BuildContext context,
+    required CyberPalette palette,
+    required String statusLabel,
+    required bool isCompact,
+  }) {
+    final bool isOnline = widget.isOnline;
+    final Color statusColor = isOnline ? palette.success : palette.warning;
+    final int? latency = widget.latencyMs;
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const NeverScrollableScrollPhysics(),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Live status dot pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(
+                alpha: palette.isDaylight ? 0.13 : 0.18,
+              ),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: statusColor.withValues(alpha: 0.42)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 5.5,
+                  height: 5.5,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: statusColor,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  statusLabel,
+                  style: TextStyle(
+                    fontSize: context.fluidFont(9.5),
+                    fontWeight: FontWeight.w700,
+                    color: statusColor,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isOnline && latency != null && latency > 0) ...[
+            const SizedBox(width: 5),
+            Builder(
+              builder: (_) {
+                final Color latColor = _latencyColor(palette, latency);
+                return Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: latColor.withValues(
+                      alpha: palette.isDaylight ? 0.10 : 0.16,
+                    ),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: latColor.withValues(alpha: 0.35)),
+                  ),
+                  child: Text(
+                    '${latency}ms',
+                    style: TextStyle(
+                      fontSize: context.fluidFont(9.5),
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                      color: latColor,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+          if (widget.useTls && !isCompact) ...[
+            const SizedBox(width: 5),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: palette.primary.withValues(
+                  alpha: palette.isDaylight ? 0.10 : 0.16,
+                ),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: palette.primary.withValues(alpha: 0.32),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lock_rounded, size: 9, color: palette.primary),
+                  const SizedBox(width: 2),
+                  Text(
+                    'TLS',
+                    style: TextStyle(
+                      fontSize: context.fluidFont(8.5),
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                      color: palette.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(width: 6),
+          Text(
+            widget.ip,
+            style: TextStyle(
+              fontSize: context.fluidFont(10.0),
+              fontWeight: FontWeight.w600,
+              color: palette.textSecondary,
+              fontFamily: 'monospace',
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPrimaryTouchCta({
+    required BuildContext context,
+    required CyberPalette palette,
+    required bool isCompact,
+    required VoidCallback onPressed,
+  }) {
+    return Semantics(
+      button: true,
+      label: 'Open Fullscreen Touchscreen Control for ${widget.name}',
+      child: FluidPressScale(
+        pressedScale: 0.96,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            key: ValueKey('device-card-touch-cta-${widget.id}'),
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(14),
+            child: Ink(
+              padding: EdgeInsets.symmetric(
+                horizontal: isCompact ? 10 : 12,
+                vertical: isCompact ? 7 : 8.5,
+              ),
+              decoration: BoxDecoration(
+                gradient: palette.heroGradient,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.45),
+                  width: 1.0,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: palette.primary.withValues(alpha: 0.30),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.touch_app_rounded,
+                    size: 16,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 7),
+                  Flexible(
+                    child: Text(
+                      isCompact
+                          ? 'Touch Control'
+                          : 'Fullscreen Touch Control',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: context.fluidFont(11.5),
+                        letterSpacing: -0.1,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Icon(
+                    Icons.fullscreen_rounded,
+                    size: 16,
+                    color: Colors.white,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWakeQuickAction({
+    required BuildContext context,
+    required CyberPalette palette,
+    required bool isCompact,
+    required VoidCallback onPressed,
+  }) {
+    return Semantics(
+      button: true,
+      label: 'Send Wake-on-LAN Magic Packet to ${widget.name}',
+      child: FluidPressScale(
+        pressedScale: 0.96,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            key: ValueKey('device-card-wol-cta-${widget.id}'),
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: isCompact ? 10 : 12,
+                vertical: isCompact ? 6.5 : 7.5,
+              ),
+              decoration: BoxDecoration(
+                color: palette.warning.withValues(
+                  alpha: palette.isDaylight ? 0.13 : 0.16,
+                ),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: palette.warning.withValues(alpha: 0.48),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.bolt_rounded,
+                    size: 15,
+                    color: palette.warning,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      isCompact ? 'Wake PC (WoL)' : 'Wake Sleeping PC (WoL)',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.warning,
+                        fontWeight: FontWeight.w800,
+                        fontSize: context.fluidFont(11.0),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -449,7 +750,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
             ),
           ],
         ),
-        const SizedBox(height: 5),
+        const SizedBox(height: 4),
         ClipRRect(
           borderRadius: BorderRadius.circular(5),
           child: Container(
@@ -506,6 +807,7 @@ class _ActionOrbButton extends StatelessWidget {
   final VoidCallback onPressed;
 
   const _ActionOrbButton({
+    super.key,
     required this.tooltip,
     required this.icon,
     required this.color,
@@ -517,8 +819,8 @@ class _ActionOrbButton extends StatelessWidget {
     return FluidPressScale(
       pressedScale: 0.92,
       child: Container(
-        width: 40,
-        height: 40,
+        width: 38,
+        height: 38,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: RadialGradient(
