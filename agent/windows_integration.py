@@ -51,7 +51,6 @@ try:
     from icon_assets import (
         apply_window_icon,
         get_icon_ico_path,
-        get_icon_image,
         get_icon_png_path,
     )
 except ImportError:
@@ -59,13 +58,11 @@ except ImportError:
         from agent.icon_assets import (
             apply_window_icon,
             get_icon_ico_path,
-            get_icon_image,
             get_icon_png_path,
         )
     except ImportError:
         get_icon_ico_path = lambda: None  # type: ignore[assignment]
         get_icon_png_path = lambda size=512: None  # type: ignore[assignment]
-        get_icon_image = lambda size=64: None  # type: ignore[assignment]
         apply_window_icon = lambda win: None  # type: ignore[assignment]
 
 try:
@@ -74,7 +71,6 @@ try:
         apply_dark_titlebar,
         enable_hidpi_awareness,
         render_ambient_backdrop,
-        render_glass_card_image,
         render_node_orb_image,
         resolve_font_families,
     )
@@ -85,7 +81,6 @@ except ImportError:
             apply_dark_titlebar,
             enable_hidpi_awareness,
             render_ambient_backdrop,
-            render_glass_card_image,
             render_node_orb_image,
             resolve_font_families,
         )
@@ -113,7 +108,6 @@ except ImportError:
         apply_dark_titlebar = lambda *_a, **_kw: None  # type: ignore[assignment]
         enable_hidpi_awareness = lambda: None  # type: ignore[assignment]
         render_ambient_backdrop = lambda *_a, **_kw: None  # type: ignore[assignment]
-        render_glass_card_image = lambda *_a, **_kw: None  # type: ignore[assignment]
         render_node_orb_image = lambda *_a, **_kw: None  # type: ignore[assignment]
         resolve_font_families = lambda *_a, **_kw: ("Segoe UI", "Consolas")  # type: ignore[assignment]
 
@@ -210,21 +204,6 @@ def get_executable_path() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "agent_daemon.py"))
 
 
-def _resolve_python_gui_launcher() -> Tuple[str, str]:
-    """
-    Returns (target_exe, arguments_prefix) pointing cleanly to PSF-signed pythonw.exe
-    when running from Python source, avoiding unsigned batch/VBS stubs under Smart App Control.
-    """
-    if getattr(sys, "frozen", False):
-        return os.path.abspath(sys.executable), ""
-    py_exe = os.path.abspath(sys.executable)
-    py_dir = os.path.dirname(py_exe)
-    pythonw = os.path.join(py_dir, "pythonw.exe")
-    if IS_WINDOWS and os.path.isfile(pythonw):
-        return pythonw, f'"{get_executable_path()}"'
-    return py_exe, f'"{get_executable_path()}"'
-
-
 # ==============================================================================
 # 2. NATIVE WIN32 SECURITY ACLs & MARK-OF-THE-WEB (ZERO SUBPROCESSES)
 # ==============================================================================
@@ -254,6 +233,10 @@ def harden_windows_acl(path: str, is_dir: Optional[bool] = None) -> bool:
     p_str_sid = wintypes.LPWSTR()
     try:
         kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
         advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
         advapi32.OpenProcessToken.restype = wintypes.BOOL
 
@@ -327,7 +310,7 @@ def harden_windows_acl(path: str, is_dir: Optional[bool] = None) -> bool:
     finally:
         try:
             if p_str_sid and p_str_sid.value:
-                kernel32.LocalFree(p_str_sid)
+                kernel32.LocalFree(ctypes.cast(p_str_sid, ctypes.c_void_p))
         except Exception:
             pass
         try:
@@ -565,9 +548,10 @@ def create_start_menu_shortcut(
 def remove_shortcuts() -> Tuple[int, str]:
     """Removes Desktop and Start Menu shortcuts for AI NetController."""
     removed = 0
+    desktop_dir = _resolve_desktop_dir()
     targets = [
-        os.path.join(_resolve_desktop_dir(), f"{APP_NAME}.lnk"),
-        os.path.join(_resolve_desktop_dir(), "AI_NetController_HostAgent.lnk"),
+        os.path.join(desktop_dir, f"{APP_NAME}.lnk"),
+        os.path.join(desktop_dir, "AI_NetController_HostAgent.lnk"),
     ]
     appdata = os.environ.get("APPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Roaming"))
     sm_folder = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", APP_NAME)
@@ -696,6 +680,14 @@ def _terminate_pid_native(pid: int, timeout_ms: int = 2000) -> bool:
         return True
     PROCESS_TERMINATE = 0x0001
     SYNCHRONIZE = 0x00100000
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
     h = kernel32.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, int(pid))
     if not h:
         return False
@@ -772,8 +764,17 @@ def _stop_external_agent_processes() -> bool:
                     ("szExeFile", wintypes.WCHAR * 260),
                 ]
 
+            kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+            kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+            kernel32.Process32FirstW.restype = wintypes.BOOL
+            kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+            kernel32.Process32NextW.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
             snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-            if snap == wintypes.HANDLE(-1).value:
+            if not snap or snap == wintypes.HANDLE(-1).value:
                 return False
             try:
                 entry = _PROCESSENTRY32W()
@@ -799,12 +800,13 @@ def perform_full_uninstall(
     interactive: bool = True,
     remove_config: bool = False,
     on_complete: Optional[Callable[[], None]] = None,
+    remove_shortcuts_and_autostart: bool = True,
 ) -> Dict[str, Any]:
     """
     Executes clean uninstallation of AI NetController from the host PC:
     1. Stops running external daemon instances
-    2. Removes Desktop and Start Menu shortcuts
-    3. Removes Windows Run autostart entry
+    2. Removes Desktop and Start Menu shortcuts (when requested)
+    3. Removes Windows Run autostart entry (when requested)
     4. Removes Windows Installed Apps registry entries
     5. Removes user-space install folder and optionally local config/keys
     """
@@ -831,9 +833,12 @@ def perform_full_uninstall(
         except Exception:
             pass
 
-    count, _ = remove_shortcuts()
-    results["removed_shortcuts"] = count
-    results["removed_autostart"] = set_windows_autostart(enabled=False)
+    if remove_shortcuts_and_autostart:
+        count, _ = remove_shortcuts()
+        results["removed_shortcuts"] = count
+        results["removed_autostart"] = set_windows_autostart(enabled=False)
+    else:
+        count = 0
     results["removed_uninstaller"] = unregister_windows_uninstaller()
 
     try:
@@ -875,8 +880,16 @@ def perform_full_uninstall(
 
     if remove_config:
         try:
-            local_app = os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local"))
-            app_data_dir = os.path.join(local_app, "AI NetController")
+            try:
+                from daemon_config import get_config_dir
+                app_data_dir = get_config_dir()
+            except Exception:
+                try:
+                    from agent.daemon_config import get_config_dir
+                    app_data_dir = get_config_dir()
+                except Exception:
+                    local_app = os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local"))
+                    app_data_dir = os.path.join(local_app, "AI NetController")
             if os.path.isdir(app_data_dir):
                 shutil.rmtree(app_data_dir, ignore_errors=True)
                 results["removed_config"] = True
@@ -1168,6 +1181,7 @@ def perform_full_install(
             subprocess.Popen(
                 cmd_args,
                 cwd=valid_dir,
+                close_fds=True,
                 creationflags=0x00000008 if IS_WINDOWS else 0,
             )
         except Exception as e:
@@ -1452,7 +1466,7 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
         right_col,
         text="Tip: Any disabled module can be re-enabled anytime in the Host Control Center.",
         font=(ui_font, 8),
-        fg=CyberColors.TEXT_MUTED,
+        fg=CyberColors.TEXT_TERTIARY,
         bg=CyberColors.TERMINAL_BG,
         wraplength=250,
         justify=tk.LEFT,
@@ -1740,6 +1754,7 @@ def show_uninstall_dialog(
                 interactive=False,
                 remove_config=remove_cfg_var.get(),
                 on_complete=None,
+                remove_shortcuts_and_autostart=rm_links_var.get(),
             )
         else:
             if rm_links_var.get():

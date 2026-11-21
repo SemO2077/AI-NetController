@@ -28,11 +28,11 @@ AGENT_DIR = Path(__file__).resolve().parents[1]
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
-from crypto_handshake import HostCryptoSession, AuthenticatedCipher, derive_session_key, INFO_STRING
+from crypto_handshake import AuthenticatedCipher
 from command_ast_firewall import CommandASTFirewall
 from host_file_writer import (
-    HostFileWriter, CMD_INIT, CMD_CHUNK, CMD_FINISH, CMD_ABORT,
-    STATUS_OK, STATUS_PROGRESS, STATUS_COMPLETED, STATUS_ERR_CHECKSUM, STATUS_ERR_TRAVERSAL,
+    HostFileWriter, CMD_INIT, CMD_CHUNK, CMD_FINISH,
+    STATUS_OK, STATUS_PROGRESS, STATUS_COMPLETED, STATUS_ERR_CHECKSUM,
     STATUS_ERR_IO,
 )
 

@@ -53,10 +53,12 @@ logger = logging.getLogger("AI_Agent_GUI")
 # Resolve sibling modules cleanly whether imported directly or via `agent.*`
 try:
     from cyber_ui_theme import (
-        CyberColors,
         FluidDesktopScale,
-        apply_dark_titlebar,
+        LIQUID_ACCENT_PRESETS,
+        LiquidThemePalette,
+        apply_titlebar_theme,
         enable_hidpi_awareness,
+        get_liquid_palette,
         mix_hex,
         render_ambient_backdrop,
         render_node_orb_image,
@@ -65,16 +67,38 @@ try:
     )
 except (ImportError, ModuleNotFoundError):
     from agent.cyber_ui_theme import (
-        CyberColors,
         FluidDesktopScale,
-        apply_dark_titlebar,
+        LIQUID_ACCENT_PRESETS,
+        LiquidThemePalette,
+        apply_titlebar_theme,
         enable_hidpi_awareness,
+        get_liquid_palette,
         mix_hex,
         render_ambient_backdrop,
         render_node_orb_image,
         render_qr_card_image,
         resolve_font_families,
     )
+
+
+class _LiveThemeProxy:
+    """Dynamic proxy exposing active Apple Liquid Glass tokens across all desktop views."""
+
+    def __init__(self, palette: LiquidThemePalette) -> None:
+        self._palette = palette
+
+    def set_palette(self, palette: LiquidThemePalette) -> None:
+        self._palette = palette
+
+    @property
+    def palette(self) -> LiquidThemePalette:
+        return self._palette
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._palette, name)
+
+
+CyberColors = _LiveThemeProxy(get_liquid_palette("light", "violet"))
 
 try:
     from daemon_config import (
@@ -113,13 +137,10 @@ try:
         APP_VERSION,
         create_desktop_shortcut,
         create_native_shortcut,
-        install_to_system,
-        is_app_installed,
         is_autostart_enabled,
         set_autostart,
         show_install_dialog,
         show_uninstall_dialog,
-        uninstall_from_system,
     )
 except (ImportError, ModuleNotFoundError):
     try:
@@ -127,25 +148,19 @@ except (ImportError, ModuleNotFoundError):
             APP_VERSION,
             create_desktop_shortcut,
             create_native_shortcut,
-            install_to_system,
-            is_app_installed,
             is_autostart_enabled,
             set_autostart,
             show_install_dialog,
             show_uninstall_dialog,
-            uninstall_from_system,
         )
     except (ImportError, ModuleNotFoundError):
         APP_VERSION = "0.80.0"
         create_desktop_shortcut = None
         create_native_shortcut = None
-        install_to_system = None
-        is_app_installed = None
         is_autostart_enabled = None
         set_autostart = None
         show_install_dialog = None
         show_uninstall_dialog = None
-        uninstall_from_system = None
 
 
 def _detect_av_integrity() -> Dict[str, Any]:
@@ -212,6 +227,10 @@ class HostDaemonState:
         self.ollama_bridge_enabled = bool(self.config.get("ollama_bridge_enabled", True))
         self.security_profile = str(self.config.get("security_profile", "balanced"))
         self.setup_completed = bool(self.config.get("setup_completed", False))
+        raw_theme_mode = str(self.config.get("ui_theme_mode", "light")).lower()
+        self.ui_theme_mode = "dark" if raw_theme_mode == "dark" else "light"
+        raw_accent = str(self.config.get("ui_accent", "violet")).lower()
+        self.ui_accent = raw_accent if raw_accent in LIQUID_ACCENT_PRESETS else "violet"
 
         # Hardened transport & auth policy flags
         self.require_hmac_auth = bool(self.config.get("require_hmac_auth", False))
@@ -261,6 +280,9 @@ class HostDaemonState:
                     loaded_bl.append(dict(item))
         self.blacklisted_devices: List[Dict[str, Any]] = loaded_bl
         self._saving_config = False
+        self._save_lock = threading.Lock()
+        self._last_disk_time = 0.0
+        self._cached_disk_pct = 0.0
         self._unbanned_ips: set[str] = set()
         self.av_integrity: Dict[str, Any] = _detect_av_integrity()
 
@@ -366,46 +388,49 @@ class HostDaemonState:
         return "127.0.0.1"
 
     def save_policy_config(self) -> None:
-        """Persists security, policy, and PIN metadata safely to disk."""
-        with self.lock:
-            self.config.update(
-                {
-                    "port": int(self.port),
-                    "mdns_enabled": bool(self.mdns_enabled),
-                    "view_only_mode": bool(self.view_only_mode),
-                    "paused": bool(self.is_paused),
-                    "require_hitl_approval": bool(self.require_hitl_approval),
-                    "clipboard_sync_allowed": bool(self.clipboard_sync_allowed),
-                    "auto_lock_on_disconnect": bool(self.auto_lock_on_disconnect),
-                    "auto_ban_intrusion": bool(self.auto_ban_intrusion),
-                    "subnet_geofence_only": bool(self.subnet_geofence_only),
-                    "autostart_on_boot": bool(self.autostart_on_boot),
-                    "start_minimized": bool(self.start_minimized),
-                    "close_to_tray": bool(self.close_to_tray),
-                    "enable_tray_icon": bool(self.enable_tray_icon),
-                    "file_transfer_enabled": bool(self.file_transfer_enabled),
-                    "audio_control_enabled": bool(self.audio_control_enabled),
-                    "ollama_bridge_enabled": bool(self.ollama_bridge_enabled),
-                    "security_profile": self.security_profile,
-                    "setup_completed": bool(self.setup_completed),
-                    "require_hmac_auth": bool(self.require_hmac_auth),
-                    "require_aead": bool(self.require_aead),
-                    "require_tls": bool(self.require_tls),
-                    "local_hitl_prompt": bool(self.local_hitl_prompt),
-                    "pin_ttl_seconds": int(self.pin_ttl_seconds),
-                    "pin_issued_at": int(self.pin_issued_at),
-                    "pairing_pin": self.pairing_pin,
-                    "pairing_token": self.pairing_token,
-                    "blacklisted_devices": list(self.blacklisted_devices),
-                }
-            )
-            snapshot_cfg = dict(self.config)
-            self._saving_config = True
-        try:
-            if callable(save_config):
-                save_config(snapshot_cfg)
-        finally:
-            self._saving_config = False
+        """Persists security, policy, and PIN metadata safely to disk (serialized across threads)."""
+        with self._save_lock:
+            with self.lock:
+                self.config.update(
+                    {
+                        "port": int(self.port),
+                        "mdns_enabled": bool(self.mdns_enabled),
+                        "view_only_mode": bool(self.view_only_mode),
+                        "paused": bool(self.is_paused),
+                        "require_hitl_approval": bool(self.require_hitl_approval),
+                        "clipboard_sync_allowed": bool(self.clipboard_sync_allowed),
+                        "auto_lock_on_disconnect": bool(self.auto_lock_on_disconnect),
+                        "auto_ban_intrusion": bool(self.auto_ban_intrusion),
+                        "subnet_geofence_only": bool(self.subnet_geofence_only),
+                        "autostart_on_boot": bool(self.autostart_on_boot),
+                        "start_minimized": bool(self.start_minimized),
+                        "close_to_tray": bool(self.close_to_tray),
+                        "enable_tray_icon": bool(self.enable_tray_icon),
+                        "file_transfer_enabled": bool(self.file_transfer_enabled),
+                        "audio_control_enabled": bool(self.audio_control_enabled),
+                        "ollama_bridge_enabled": bool(self.ollama_bridge_enabled),
+                        "security_profile": self.security_profile,
+                        "setup_completed": bool(self.setup_completed),
+                        "require_hmac_auth": bool(self.require_hmac_auth),
+                        "require_aead": bool(self.require_aead),
+                        "require_tls": bool(self.require_tls),
+                        "local_hitl_prompt": bool(self.local_hitl_prompt),
+                        "pin_ttl_seconds": int(self.pin_ttl_seconds),
+                        "pin_issued_at": int(self.pin_issued_at),
+                        "pairing_pin": self.pairing_pin,
+                        "pairing_token": self.pairing_token,
+                        "blacklisted_devices": list(self.blacklisted_devices),
+                        "ui_theme_mode": self.ui_theme_mode,
+                        "ui_accent": self.ui_accent,
+                    }
+                )
+                snapshot_cfg = dict(self.config)
+                self._saving_config = True
+            try:
+                if callable(save_config):
+                    save_config(snapshot_cfg)
+            finally:
+                self._saving_config = False
 
     def get_pairing_uri(self) -> str:
         """Returns safe transient QR pairing URI omitting the master pairing_token."""
@@ -571,11 +596,11 @@ class HostDaemonState:
                 ram_used = round(vm.used / (1024 ** 3), 2)
                 ram_total = round(vm.total / (1024 ** 3), 2)
                 now = time.time()
-                if not hasattr(self, "_last_disk_time") or (now - self._last_disk_time) > 5.0:
+                if (now - self._last_disk_time) > 5.0:
                     du = psutil.disk_usage(os.path.abspath(os.sep))
                     self._cached_disk_pct = float(du.percent)
                     self._last_disk_time = now
-                disk_pct = getattr(self, "_cached_disk_pct", 0.0)
+                disk_pct = self._cached_disk_pct
             except Exception:
                 pass
 
@@ -615,10 +640,9 @@ class HostDaemonState:
 
         udp_bcast_ok = False
         try:
-            test_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            test_sock.close()
-            udp_bcast_ok = True
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as test_sock:
+                test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                udp_bcast_ok = True
         except Exception:
             udp_bcast_ok = False
 
@@ -760,19 +784,26 @@ class HostDaemonDesktopGUI:
         self._orb_frames: List[Any] = []
         self._qr_cache_uri = ""
         self._qr_cache_px = 0
+        self._qr_cache_theme: Tuple[str, str] = ("", "")
         self._qr_photo: Any = None
         self._backdrop_photo: Any = None
         self._backdrop_size: Tuple[int, int] = (0, 0)
         self._backdrop_focal: float = 0.0
         self._resize_after_id: Optional[str] = None
         self._gauge_anim_after_id: Optional[str] = None
+        self._refresh_after_id: Optional[str] = None
         self._gauge_display_pct: Dict[str, float] = {}
         self._gauge_target_pct: Dict[str, float] = {}
+        self._gauge_paint_sig: Dict[str, Tuple[Any, ...]] = {}
         self._last_tele_tick = 0.0
         self._last_peer_sig: Optional[Tuple[Any, ...]] = None
         self._last_ban_sig: Optional[Tuple[Any, ...]] = None
         self._scale = FluidDesktopScale(1120, 760)
         self._last_layout_sig: Optional[Tuple[Any, ...]] = None
+        self._palette: LiquidThemePalette = get_liquid_palette(
+            self.state.ui_theme_mode, self.state.ui_accent
+        )
+        CyberColors.set_palette(self._palette)
 
         self.root = tk.Tk()
         self.root.title("AI NetController — Host Control Center")
@@ -787,7 +818,7 @@ class HostDaemonDesktopGUI:
         self.root.minsize(640, 420)
         self.root.configure(bg=CyberColors.BACKGROUND)
 
-        apply_dark_titlebar(self.root, CyberColors.BACKGROUND)
+        apply_titlebar_theme(self.root, self._palette)
         self._load_window_icon()
         self.ui_font, self.mono_font = resolve_font_families(self.root)
         self._configure_ttk_styles()
@@ -801,6 +832,9 @@ class HostDaemonDesktopGUI:
         self.root.bind("<Configure>", self._on_root_configure)
         self.root.bind("<Map>", lambda _e: self._set_hidden(False))
         self.root.bind("<Unmap>", self._on_unmap)
+        self.root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close_request)
 
         # Launch guided setup automatically on clean first-time start, or start minimized if configured
@@ -810,7 +844,7 @@ class HostDaemonDesktopGUI:
             self.root.after(150, self._hide_to_tray)
 
         self._refresh_ui(force_telemetry=True)
-        self.root.after(250, self._schedule_refresh)
+        self._refresh_after_id = self.root.after(250, self._schedule_refresh)
 
     def _load_window_icon(self) -> None:
         if callable(apply_window_icon):
@@ -873,18 +907,20 @@ class HostDaemonDesktopGUI:
     def _make_glass_card(
         self,
         parent: tk.Widget,
-        bg: str = CyberColors.SURFACE,
-        border: str = CyberColors.GLASS_BORDER,
+        bg: Optional[str] = None,
+        border: Optional[str] = None,
         pad_x: int = 16,
         pad_y: int = 14,
         specular_color: Optional[str] = None,
     ) -> tk.Frame:
         """
-        Builds a 3D beveled glassmorphic card with:
-          - Top specular highlight rim (cyan/accent luminance)
-          - Bottom recessed shadow bevel for physical depth
-          - Interactive hover border elevation
+        Builds a 3D beveled Apple Liquid Glass card with:
+          - Top specular highlight rim
+          - Soft recessed bottom bevel for depth separation
+          - Interactive hover accent rim elevation
         """
+        bg = bg or CyberColors.SURFACE
+        border = border or CyberColors.GLASS_BORDER
         outer = tk.Frame(
             parent,
             bg=bg,
@@ -892,9 +928,9 @@ class HostDaemonDesktopGUI:
             highlightthickness=1,
             bd=0,
         )
-        spec_hex = specular_color or mix_hex(border, CyberColors.SPECULAR_TOP, 0.42)
-        hover_border = mix_hex(border, CyberColors.SPECULAR_TOP, 0.55)
-        hover_spec = mix_hex(spec_hex, "#FFFFFF", 0.35)
+        spec_hex = specular_color or mix_hex(border, CyberColors.SPECULAR_TOP, 0.58)
+        hover_border = mix_hex(border, CyberColors.PRIMARY, 0.45)
+        hover_spec = mix_hex(spec_hex, "#FFFFFF", 0.45)
 
         top_spec = tk.Frame(outer, bg=spec_hex, height=2, bd=0)
         top_spec.pack(side="top", fill="x")
@@ -930,18 +966,18 @@ class HostDaemonDesktopGUI:
         parent: tk.Widget,
         text: str,
         command: Callable[[], None],
-        fg: str = CyberColors.PRIMARY,
-        bg: str = CyberColors.PRIMARY_SOFT,
-        border: str = CyberColors.GLASS_BORDER,
+        fg: Optional[str] = None,
+        bg: Optional[str] = None,
+        border: Optional[str] = None,
         pad_x: int = 12,
         pad_y: int = 6,
         font_size: int = 9,
         bold: bool = True,
     ) -> tk.Button:
+        fg = fg or CyberColors.PRIMARY
+        bg = bg or CyberColors.PRIMARY_SOFT
+        border = border or CyberColors.GLASS_BORDER
         weight = "bold" if bold else "normal"
-        hover_bg = mix_hex(bg, fg, 0.24)
-        hover_border = mix_hex(border, fg, 0.50)
-        press_bg = mix_hex(bg, fg, 0.42)
         btn = tk.Button(
             parent,
             text=text,
@@ -949,7 +985,7 @@ class HostDaemonDesktopGUI:
             font=(self.ui_font, font_size, weight),
             fg=fg,
             bg=bg,
-            activeforeground=CyberColors.BACKGROUND,
+            activeforeground=CyberColors.ON_PRIMARY,
             activebackground=fg,
             relief="flat",
             bd=0,
@@ -1019,9 +1055,6 @@ class HostDaemonDesktopGUI:
 
         self._stage.bind("<Configure>", self._on_stage_inner_configure)
         self._stage_canvas.bind("<Configure>", self._on_stage_canvas_configure)
-        self.root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
-        self.root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
-        self.root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
 
         self._views: Dict[str, tk.Frame] = {}
         self._build_overview_view()
@@ -1090,10 +1123,22 @@ class HostDaemonDesktopGUI:
         if cache is None:
             cache = {}
             self._backdrop_cache = cache
-        cache_key = (w // 16, h // 16, round(self._backdrop_focal, 2))
+        cache_key = (
+            w // 16,
+            h // 16,
+            round(self._backdrop_focal, 2),
+            self._palette.theme_mode,
+            self._palette.accent_id,
+        )
         photo = cache.get(cache_key)
         if photo is None:
-            img = render_ambient_backdrop(w, h, focal_shift=self._backdrop_focal)
+            img = render_ambient_backdrop(
+                w,
+                h,
+                focal_shift=self._backdrop_focal,
+                theme_mode=self._palette.theme_mode,
+                accent=self._palette.accent_id,
+            )
             if img is None:
                 return
             photo = ImageTk.PhotoImage(img)
@@ -1116,6 +1161,12 @@ class HostDaemonDesktopGUI:
         self._resize_after_id = self.root.after(90, lambda: self._handle_debounced_resize(w, h))
 
     def _handle_debounced_resize(self, width: int, height: int) -> None:
+        self._resize_after_id = None
+        try:
+            if not self.root.winfo_exists():
+                return
+        except Exception:
+            return
         self._apply_ambient_backdrop(width, height)
         self._apply_responsive_scaling(width, height)
 
@@ -1169,18 +1220,18 @@ class HostDaemonDesktopGUI:
         # 2. Floating Capsule Pill Dock responsive labels & padding
         try:
             full_labels = {
-                "overview": "OVERVIEW & PAIR",
-                "security": "ZERO-TRUST SHIELD",
-                "console": "HITL & CONSOLE",
-                "system": "DIAGNOSTICS & SETUP",
+                "overview": "Overview & Pair",
+                "security": "Zero-Trust Shield",
+                "console": "HITL & Console",
+                "system": "Diagnostics & Studio",
             }
             compact_labels = {
-                "overview": "OVERVIEW",
-                "security": "SHIELD",
-                "console": "CONSOLE",
-                "system": "SYSTEM",
+                "overview": "Overview",
+                "security": "Shield",
+                "console": "Console",
+                "system": "Studio",
             }
-            use_short = width < 720
+            use_short = width < 740
             btn_padx = 8 if use_short else (12 if scale.is_compact_width else 16)
             btn_pady = 4 if scale.is_short_height else 6
             btn_font = (self.ui_font, 8 if use_short else 9, "bold")
@@ -1245,9 +1296,18 @@ class HostDaemonDesktopGUI:
         except Exception:
             pass
 
-        # 5. System / Diagnostics Tab: 2-column vs 1-column + dynamic wraplength
+        # 5. System / Diagnostics Tab: Appearance Studio accent grid + 2-column vs 1-column
         try:
             avail_w = max(280, width - scale.shell_padx * 2 - 48)
+            if hasattr(self, "_accent_btn_grid") and hasattr(self, "_accent_buttons"):
+                accent_cols = 2 if width < 720 else (3 if width < 1040 else 6)
+                for col_idx in range(6):
+                    self._accent_btn_grid.columnconfigure(
+                        col_idx, weight=1 if col_idx < accent_cols else 0
+                    )
+                for idx, btn in enumerate(self._accent_buttons):
+                    r_i, c_i = divmod(idx, accent_cols)
+                    btn.grid_configure(row=r_i, column=c_i, sticky="ew", padx=3, pady=3)
             if scale.columns == 1:
                 self._diag_top_grid.columnconfigure(0, weight=1)
                 self._diag_top_grid.columnconfigure(1, weight=0)
@@ -1376,26 +1436,38 @@ class HostDaemonDesktopGUI:
         btns.pack(side="top", anchor="e")
         self._header_btns = btns
 
+        theme_label = "☀ Daylight" if self._palette.is_daylight else "☾ Dark"
+        self._btn_theme = self._make_cyber_button(
+            btns, theme_label, self.toggle_theme_mode,
+            fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, border=CyberColors.GLASS_BORDER_BRIGHT,
+            pad_x=9, pad_y=5, font_size=8,
+        )
+        self._btn_theme.pack(side="left", padx=(0, 6))
+
         self._btn_pause = self._make_cyber_button(
-            btns, "PAUSE", self._toggle_pause,
+            btns, "Pause", self._toggle_pause,
             fg=CyberColors.WARNING, bg=CyberColors.WARNING_SOFT, border=CyberColors.WARNING,
+            pad_x=9, pad_y=5, font_size=8,
         )
         self._btn_pause.pack(side="left", padx=(0, 6))
 
         self._btn_viewonly = self._make_cyber_button(
-            btns, "LOCK INPUT", self._toggle_view_only_quick,
+            btns, "Lock Input", self._toggle_view_only_quick,
             fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, border=CyberColors.GLASS_BORDER,
+            pad_x=9, pad_y=5, font_size=8,
         )
         self._btn_viewonly.pack(side="left", padx=(0, 6))
 
         self._make_cyber_button(
-            btns, "PANIC KILL", self._panic_kill,
+            btns, "Panic Kill", self._panic_kill,
             fg=CyberColors.ACCENT, bg=CyberColors.ACCENT_SOFT, border=CyberColors.ACCENT,
+            pad_x=9, pad_y=5, font_size=8,
         ).pack(side="left", padx=(0, 6))
 
         self._make_cyber_button(
-            btns, "TRAY", self._hide_to_tray,
+            btns, "Tray", self._hide_to_tray,
             fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.SURFACE_ELEVATED, border=CyberColors.GLASS_BORDER_IDLE,
+            pad_x=9, pad_y=5, font_size=8,
         ).pack(side="left")
 
     def _prebuild_orb_frames(self) -> None:
@@ -1440,10 +1512,10 @@ class HostDaemonDesktopGUI:
 
         self._tab_buttons: Dict[str, tk.Button] = {}
         tabs = [
-            ("overview", "OVERVIEW & PAIR"),
-            ("security", "ZERO-TRUST SHIELD"),
-            ("console", "HITL & CONSOLE"),
-            ("system", "DIAGNOSTICS & SETUP"),
+            ("overview", "Overview & Pair"),
+            ("security", "Zero-Trust Shield"),
+            ("console", "HITL & Console"),
+            ("system", "Diagnostics & Studio"),
         ]
         for key, label in tabs:
             btn = tk.Button(
@@ -1453,7 +1525,7 @@ class HostDaemonDesktopGUI:
                 font=(self.ui_font, 9, "bold"),
                 fg=CyberColors.TEXT_SECONDARY,
                 bg=CyberColors.SURFACE_DOCK,
-                activeforeground=CyberColors.BACKGROUND,
+                activeforeground=CyberColors.ON_PRIMARY,
                 activebackground=CyberColors.PRIMARY,
                 relief="flat",
                 bd=0,
@@ -1466,14 +1538,14 @@ class HostDaemonDesktopGUI:
                 "<Enter>",
                 lambda _e, k=key, b=btn: b.configure(
                     bg=CyberColors.PRIMARY if self._active_tab == k else CyberColors.SURFACE_HOVER,
-                    fg=CyberColors.BACKGROUND if self._active_tab == k else CyberColors.TEXT_PRIMARY,
+                    fg=CyberColors.ON_PRIMARY if self._active_tab == k else CyberColors.TEXT_PRIMARY,
                 ),
             )
             btn.bind(
                 "<Leave>",
                 lambda _e, k=key, b=btn: b.configure(
                     bg=CyberColors.PRIMARY if self._active_tab == k else CyberColors.SURFACE_DOCK,
-                    fg=CyberColors.BACKGROUND if self._active_tab == k else CyberColors.TEXT_SECONDARY,
+                    fg=CyberColors.ON_PRIMARY if self._active_tab == k else CyberColors.TEXT_SECONDARY,
                 ),
             )
             self._tab_buttons[key] = btn
@@ -1487,7 +1559,7 @@ class HostDaemonDesktopGUI:
                 frame.pack_forget()
         for k, btn in self._tab_buttons.items():
             if k == tab_key:
-                btn.configure(fg=CyberColors.BACKGROUND, bg=CyberColors.PRIMARY)
+                btn.configure(fg=CyberColors.ON_PRIMARY, bg=CyberColors.PRIMARY)
             else:
                 btn.configure(fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.SURFACE_DOCK)
 
@@ -1499,6 +1571,8 @@ class HostDaemonDesktopGUI:
             if self._backdrop_size[0] > 0:
                 self._apply_ambient_backdrop(self._backdrop_size[0], self._backdrop_size[1], force=True)
 
+        if tab_key == "console":
+            self._flush_logs_to_console()
         self.root.after_idle(self._sync_stage_scrollregion)
 
     # ------------------------------------------------------------------
@@ -1523,16 +1597,16 @@ class HostDaemonDesktopGUI:
         tele_card.pack(fill="x")
         tb = tele_card._body  # type: ignore[attr-defined]
         tk.Label(
-            tb, text="HOST TELEMETRY ENGINE",
-            font=(self.ui_font, 10, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
+            tb, text="Host Telemetry Engine",
+            font=(self.ui_font, 11, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
         ).pack(anchor="w", pady=(0, 10))
 
         self._gauges: Dict[str, Tuple[tk.Canvas, tk.Label, str]] = {}
         for key, label_txt, base_color in (
-            ("cpu", "CPU UTILIZATION", CyberColors.PRIMARY),
-            ("ram", "MEMORY PRESSURE", CyberColors.SECONDARY),
-            ("disk", "SYSTEM STORAGE", CyberColors.SUCCESS),
-            ("fps", "STREAM PIPELINE", CyberColors.PRIMARY),
+            ("cpu", "CPU Utilization", CyberColors.PRIMARY),
+            ("ram", "Memory Pressure", CyberColors.SECONDARY),
+            ("disk", "System Storage", CyberColors.SUCCESS),
+            ("fps", "Stream Pipeline", CyberColors.TERTIARY),
         ):
             row = tk.Frame(tb, bg=CyberColors.SURFACE)
             row.pack(fill="x", pady=4)
@@ -1578,11 +1652,11 @@ class HostDaemonDesktopGUI:
         p_hdr = tk.Frame(pb, bg=CyberColors.SURFACE)
         p_hdr.pack(fill="x", pady=(0, 8))
         tk.Label(
-            p_hdr, text="CONNECTED PEERS",
-            font=(self.ui_font, 10, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
+            p_hdr, text="Connected Peers",
+            font=(self.ui_font, 11, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
         ).pack(side="left")
         self._make_cyber_button(
-            p_hdr, "MANAGE ALL & BAN LIST", self._open_devices_modal,
+            p_hdr, "Manage & Ban List", self._open_devices_modal,
             fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, pad_x=8, pad_y=3, font_size=8,
         ).pack(side="right")
 
@@ -1606,8 +1680,8 @@ class HostDaemonDesktopGUI:
         pr_hdr = tk.Frame(prb, bg=CyberColors.SURFACE)
         pr_hdr.pack(fill="x", pady=(0, 8))
         tk.Label(
-            pr_hdr, text="COMPANION PAIRING & QR BRIDGE",
-            font=(self.ui_font, 10, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
+            pr_hdr, text="Companion Pairing & QR Bridge",
+            font=(self.ui_font, 11, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
         ).pack(side="left")
         self._lbl_tls_badge = tk.Label(
             pr_hdr, text=" WS COMPAT ", font=(self.mono_font, 8, "bold"),
@@ -1720,8 +1794,8 @@ class HostDaemonDesktopGUI:
         prof_card.pack(fill="x")
         pb = prof_card._body  # type: ignore[attr-defined]
         tk.Label(
-            pb, text="SECURITY POSTURE PRESETS",
-            font=(self.ui_font, 10, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
+            pb, text="Security Posture Presets",
+            font=(self.ui_font, 11, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
         ).pack(anchor="w", pady=(0, 8))
 
         p_row = tk.Frame(pb, bg=CyberColors.SURFACE)
@@ -1764,8 +1838,8 @@ class HostDaemonDesktopGUI:
         tog_card.pack(fill="both", expand=True, pady=(10, 0))
         tb = tog_card._body  # type: ignore[attr-defined]
         tk.Label(
-            tb, text="REAL-TIME POLICY & CRYPTO ENFORCEMENT",
-            font=(self.ui_font, 10, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
+            tb, text="Real-Time Policy & Crypto Enforcement",
+            font=(self.ui_font, 11, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
         ).pack(anchor="w", pady=(0, 8))
 
         cols = tk.Frame(tb, bg=CyberColors.SURFACE)
@@ -1829,11 +1903,11 @@ class HostDaemonDesktopGUI:
         hdr = tk.Frame(cb, bg=CyberColors.SURFACE)
         hdr.pack(fill="x", pady=(0, 8))
         tk.Label(
-            hdr, text="SECURITY AUDIT & TELEMETRY STREAM",
-            font=(self.ui_font, 10, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
+            hdr, text="Security Audit & Telemetry Stream",
+            font=(self.ui_font, 11, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
         ).pack(side="left")
         self._make_cyber_button(
-            hdr, "CLEAR CONSOLE", self._clear_console,
+            hdr, "Clear Console", self._clear_console,
             fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.SURFACE_ELEVATED, border=CyberColors.GLASS_BORDER_IDLE, pad_x=10, pad_y=3, font_size=8,
         ).pack(side="right")
 
@@ -1866,11 +1940,84 @@ class HostDaemonDesktopGUI:
         self._console_text.tag_configure("SYSTEM", foreground=CyberColors.TEXT_PRIMARY)
 
     # ------------------------------------------------------------------
-    # TAB 4: DIAGNOSTICS, AV / SMART APP CONTROL AUDIT & INSTALLER
+    # TAB 4: APPEARANCE STUDIO, DIAGNOSTICS, AV / SMART APP CONTROL & INSTALLER
     # ------------------------------------------------------------------
     def _build_diagnostics_view(self) -> None:
         view = tk.Frame(self._stage, bg=CyberColors.BACKGROUND)
         self._views["system"] = view
+
+        # Elevated Apple Liquid Glass Appearance Studio Card
+        studio_card = self._make_glass_card(
+            view,
+            bg=CyberColors.SURFACE,
+            border=CyberColors.GLASS_BORDER_BRIGHT,
+            specular_color=CyberColors.SPECULAR_TOP,
+            pad_x=16,
+            pad_y=12,
+        )
+        studio_card.pack(fill="x", pady=(0, 10))
+        stb = studio_card._body  # type: ignore[attr-defined]
+
+        st_hdr = tk.Frame(stb, bg=CyberColors.SURFACE)
+        st_hdr.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            st_hdr,
+            text="Apple Liquid Glass Studio",
+            font=(self.ui_font, 11, "bold"),
+            fg=CyberColors.TEXT_PRIMARY,
+            bg=CyberColors.SURFACE,
+        ).pack(side="left")
+
+        mode_bar = tk.Frame(st_hdr, bg=CyberColors.SURFACE)
+        mode_bar.pack(side="right")
+        is_light = self._palette.is_daylight
+        self._make_cyber_button(
+            mode_bar,
+            "☀ Bright Daylight",
+            lambda: self.set_theme_mode("light"),
+            fg=CyberColors.ON_PRIMARY if is_light else CyberColors.TEXT_SECONDARY,
+            bg=CyberColors.PRIMARY if is_light else CyberColors.SURFACE_ELEVATED,
+            border=CyberColors.PRIMARY if is_light else CyberColors.GLASS_BORDER_IDLE,
+            pad_x=10,
+            pad_y=4,
+            font_size=8,
+        ).pack(side="left", padx=(0, 6))
+        self._make_cyber_button(
+            mode_bar,
+            "☾ Vibrant Dark",
+            lambda: self.set_theme_mode("dark"),
+            fg=CyberColors.ON_PRIMARY if not is_light else CyberColors.TEXT_SECONDARY,
+            bg=CyberColors.PRIMARY if not is_light else CyberColors.SURFACE_ELEVATED,
+            border=CyberColors.PRIMARY if not is_light else CyberColors.GLASS_BORDER_IDLE,
+            pad_x=10,
+            pad_y=4,
+            font_size=8,
+        ).pack(side="left")
+
+        accent_grid = tk.Frame(stb, bg=CyberColors.SURFACE)
+        accent_grid.pack(fill="x")
+        self._accent_btn_grid = accent_grid
+        self._accent_buttons: List[tk.Button] = []
+        for idx, (acc_key, spec) in enumerate(LIQUID_ACCENT_PRESETS.items()):
+            swatch = spec["light_primary"] if is_light else spec["dark_primary"]
+            active = acc_key == self._palette.accent_id
+            btn_fg = CyberColors.ON_PRIMARY if active else swatch
+            btn_bg = swatch if active else mix_hex(CyberColors.SURFACE_ELEVATED, swatch, 0.12)
+            btn_border = swatch if active else mix_hex(CyberColors.GLASS_BORDER_IDLE, swatch, 0.45)
+            abtn = self._make_cyber_button(
+                accent_grid,
+                f"● {spec['label']}",
+                lambda k=acc_key: self.set_accent(k),
+                fg=btn_fg,
+                bg=btn_bg,
+                border=btn_border,
+                pad_x=8,
+                pad_y=5,
+                font_size=8,
+            )
+            abtn.grid(row=0, column=idx, sticky="ew", padx=3, pady=3)
+            accent_grid.columnconfigure(idx, weight=1)
+            self._accent_buttons.append(abtn)
 
         top = tk.Frame(view, bg=CyberColors.BACKGROUND)
         top.pack(fill="both", expand=True)
@@ -1884,8 +2031,8 @@ class HostDaemonDesktopGUI:
         self._av_card = av_card
         ab = av_card._body  # type: ignore[attr-defined]
         tk.Label(
-            ab, text="AV & SMART APP CONTROL INTEGRITY",
-            font=(self.ui_font, 10, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
+            ab, text="AV & Smart App Control Integrity",
+            font=(self.ui_font, 11, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
         ).pack(anchor="w", pady=(0, 10))
 
         checks = [
@@ -1922,8 +2069,8 @@ class HostDaemonDesktopGUI:
         self._sys_card = sys_card
         sb = sys_card._body  # type: ignore[attr-defined]
         tk.Label(
-            sb, text="NIC PROBE & WINDOWS INTEGRATION",
-            font=(self.ui_font, 10, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
+            sb, text="NIC Probe & Windows Integration",
+            font=(self.ui_font, 11, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE,
         ).pack(anchor="w", pady=(0, 10))
 
         self._diag_output = tk.Label(
@@ -2007,19 +2154,26 @@ class HostDaemonDesktopGUI:
     # PERIODIC REFRESH & IDLE-AWARE SCHEDULER
     # ------------------------------------------------------------------
     def _schedule_refresh(self) -> None:
-        if not self.state.is_running and self.state._exit_requested:
+        self._refresh_after_id = None
+        if not self.state.is_running:
             return
         try:
+            if not self.root.winfo_exists():
+                return
             self._handle_cross_thread_requests()
+            if not self.state.is_running:
+                return
             self._refresh_ui(force_telemetry=False)
         except Exception as e:
             logger.debug(f"GUI refresh tick warning: {e}")
 
+        if not self.state.is_running:
+            return
         delay_ms = 2000 if self._is_hidden else 250
         try:
-            self.root.after(delay_ms, self._schedule_refresh)
+            self._refresh_after_id = self.root.after(delay_ms, self._schedule_refresh)
         except Exception:
-            pass
+            self._refresh_after_id = None
 
     def _handle_cross_thread_requests(self) -> None:
         show_req = hide_req = inst_req = uninst_req = exit_req = False
@@ -2105,14 +2259,14 @@ class HostDaemonDesktopGUI:
                 text=" ● PAUSED ", fg=CyberColors.WARNING, bg=CyberColors.WARNING_SOFT,
                 highlightbackground=CyberColors.WARNING,
             )
-            self._btn_pause.configure(text="RESUME")
+            self._btn_pause.configure(text="Resume")
         else:
             tls_tag = " · TLS" if snap["tlsEnabled"] else ""
             self._pill_status.configure(
                 text=f" ● ONLINE{tls_tag} ", fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT,
                 highlightbackground=CyberColors.SUCCESS,
             )
-            self._btn_pause.configure(text="PAUSE")
+            self._btn_pause.configure(text="Pause")
 
         peer_count = len(snap["connectedClients"])
         self._pill_peers.configure(text=f" {peer_count} PEER{'S' if peer_count != 1 else ''} ")
@@ -2124,7 +2278,7 @@ class HostDaemonDesktopGUI:
         self._btn_viewonly._base_bg = vo_bg  # type: ignore[attr-defined]
         self._btn_viewonly._base_border = vo_br  # type: ignore[attr-defined]
         self._btn_viewonly.configure(
-            text="INPUT LOCKED" if snap["viewOnlyMode"] else "LOCK INPUT",
+            text="Input Locked" if snap["viewOnlyMode"] else "Lock Input",
             fg=vo_fg,
             bg=vo_bg,
             highlightbackground=vo_br,
@@ -2168,15 +2322,16 @@ class HostDaemonDesktopGUI:
             self._refresh_qr_card(snap["pairingUri"])
             self._refresh_peers_panel(snap["connectedClients"])
 
-        # Append only newly emitted logs to Terminal Console
-        self._flush_logs_to_console()
+        # Append newly emitted logs only while Terminal Console tab is visible
+        if self._active_tab == "console":
+            self._flush_logs_to_console()
 
         # Sync Devices Drawer if currently open
         if self._devices_win is not None and self._devices_win.winfo_exists():
             self._refresh_devices_modal_lists(snap["connectedClients"], snap["blacklistedDevices"])
 
     def _draw_gauge(self, key: str, percent: float, text_val: str) -> None:
-        cv, lbl, _ = self._gauges[key]
+        _, lbl, _ = self._gauges[key]
         target = max(0.0, min(100.0, float(percent)))
         if lbl.cget("text") != text_val:
             lbl.configure(text=text_val)
@@ -2220,13 +2375,17 @@ class HostDaemonDesktopGUI:
             CyberColors.ACCENT if pct >= 88.0
             else (CyberColors.WARNING if pct >= 70.0 else base_hex)
         )
+        fill_w = int((w * pct) / 100.0)
+        paint_sig = (w, h, fill_w, fill_color)
+        if self._gauge_paint_sig.get(key) == paint_sig:
+            return
+        self._gauge_paint_sig[key] = paint_sig
         sheen_color = mix_hex(fill_color, "#FFFFFF", 0.45)
         cv.delete("all")
         # Subtle 25%, 50%, 75% instrument ticks inside the dark trough
         for frac in (0.25, 0.50, 0.75):
             tx = int(w * frac)
             cv.create_line(tx, 0, tx, h, fill=CyberColors.SURFACE_ELEVATED, width=1)
-        fill_w = int((w * pct) / 100.0)
         if fill_w > 0:
             cv.create_rectangle(0, 0, fill_w, h, fill=fill_color, width=0)
             # Top 2px 3D specular highlight sheen
@@ -2237,14 +2396,26 @@ class HostDaemonDesktopGUI:
 
     def _refresh_qr_card(self, pairing_uri: str) -> None:
         target_px = self._scale.qr_size
-        if not HAS_IMAGETK or (pairing_uri == self._qr_cache_uri and target_px == self._qr_cache_px):
+        theme_key = (self._palette.theme_mode, self._palette.accent_id)
+        if not HAS_IMAGETK or (
+            pairing_uri == self._qr_cache_uri
+            and target_px == self._qr_cache_px
+            and theme_key == self._qr_cache_theme
+        ):
             return
-        qr_img = render_qr_card_image(pairing_uri, pixel_size=target_px)
+        qr_img = render_qr_card_image(
+            pairing_uri,
+            pixel_size=target_px,
+            dark_hex="#141530",
+            light_hex="#FFFFFF",
+            accent_hex=CyberColors.PRIMARY,
+        )
         if qr_img is not None:
             self._qr_photo = ImageTk.PhotoImage(qr_img)
             self._qr_label.configure(image=self._qr_photo)
             self._qr_cache_uri = pairing_uri
             self._qr_cache_px = target_px
+            self._qr_cache_theme = theme_key
 
     def _refresh_peers_panel(self, clients: List[Dict[str, Any]]) -> None:
         sig = tuple(
@@ -2346,32 +2517,33 @@ class HostDaemonDesktopGUI:
     # NEON CORAL LOCAL HITL APPROVAL MODAL
     # ------------------------------------------------------------------
     def _show_hitl_approval_modal(self, command: str, reason: str, approval_id: str) -> bool:
-        """Displays a Neon Coral (#FF0055) interactive desktop confirmation prompt."""
+        """Displays a Liquid Glass interactive desktop HITL approval confirmation prompt."""
+        p = self._palette
         decision = {"approved": False}
         modal = tk.Toplevel(self.root)
         modal.title("Zero-Trust HITL Approval Required")
-        w, _ = self._clamp_modal_geometry(modal, 560, 350, min_w=380, min_h=280)
-        modal.configure(bg=CyberColors.BACKGROUND)
+        w, _ = self._clamp_modal_geometry(modal, 560, 360, min_w=380, min_h=280)
+        modal.configure(bg=p.BACKGROUND)
         modal.transient(self.root)
         modal.grab_set()
         if callable(apply_window_icon):
             apply_window_icon(modal)
-        apply_dark_titlebar(modal, CyberColors.BACKGROUND)
+        apply_titlebar_theme(modal, p)
 
         card = self._make_glass_card(
             modal,
-            bg=CyberColors.SURFACE,
-            border=CyberColors.ACCENT,
-            pad_x=16,
-            pad_y=14,
-            specular_color=CyberColors.ACCENT,
+            bg=p.SURFACE,
+            border=p.ACCENT,
+            pad_x=18,
+            pad_y=16,
+            specular_color=p.ACCENT,
         )
-        card.pack(fill="both", expand=True, padx=12, pady=12)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
         body = card._body  # type: ignore[attr-defined]
 
         # Pack bottom button bar first so action buttons are never clipped on short viewports
-        btn_row = tk.Frame(body, bg=CyberColors.SURFACE)
-        btn_row.pack(side="bottom", fill="x", pady=(6, 0))
+        btn_row = tk.Frame(body, bg=p.SURFACE)
+        btn_row.pack(side="bottom", fill="x", pady=(8, 0))
 
         def _decide(ok: bool) -> None:
             decision["approved"] = ok
@@ -2381,46 +2553,48 @@ class HostDaemonDesktopGUI:
                 pass
 
         self._make_cyber_button(
-            btn_row, "APPROVE EXECUTION", lambda: _decide(True),
-            fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT, border=CyberColors.SUCCESS, pad_x=14, pad_y=6,
-        ).pack(side="left", padx=(0, 8))
+            btn_row, "Approve & Execute", lambda: _decide(True),
+            fg=p.ON_PRIMARY, bg=p.SUCCESS, border=p.SUCCESS, pad_x=16, pad_y=7,
+        ).pack(side="left", padx=(0, 10))
         self._make_cyber_button(
-            btn_row, "DENY & BLOCK", lambda: _decide(False),
-            fg=CyberColors.ACCENT, bg=CyberColors.ACCENT_SOFT, border=CyberColors.ACCENT, pad_x=14, pad_y=6,
+            btn_row, "Deny & Block", lambda: _decide(False),
+            fg=p.ACCENT, bg=p.ACCENT_SOFT, border=p.ACCENT, pad_x=16, pad_y=7,
         ).pack(side="left")
 
         countdown_lbl = tk.Label(
             body, text="Auto-deny timeout in 25s",
-            font=(self.mono_font, 8, "bold"), fg=CyberColors.WARNING, bg=CyberColors.SURFACE,
+            font=(self.mono_font, 8, "bold"), fg=p.WARNING, bg=p.SURFACE,
         )
-        countdown_lbl.pack(side="bottom", anchor="w", pady=(4, 4))
+        countdown_lbl.pack(side="bottom", anchor="w", pady=(6, 4))
 
         tk.Label(
             body,
-            text="SECURITY CONFIRMATION REQUIRED (HITL)",
-            font=(self.ui_font, 11, "bold"),
-            fg=CyberColors.ACCENT,
-            bg=CyberColors.SURFACE,
+            text="Human-in-the-Loop Approval Required",
+            font=(self.ui_font, 12, "bold"),
+            fg=p.ACCENT,
+            bg=p.SURFACE,
         ).pack(anchor="w")
         tk.Label(
             body,
-            text=f"Approval ID: {approval_id}  //  {reason}",
+            text=f"Approval ID: {approval_id}  •  {reason}",
             font=(self.ui_font, 9),
-            fg=CyberColors.TEXT_SECONDARY,
-            bg=CyberColors.SURFACE,
+            fg=p.TEXT_SECONDARY,
+            bg=p.SURFACE,
             wraplength=max(280, w - 64),
             justify="left",
-        ).pack(anchor="w", pady=(4, 8))
+        ).pack(anchor="w", pady=(4, 10))
 
         cmd_box = tk.Text(
             body,
             height=4,
-            bg=CyberColors.TERMINAL_BG,
-            fg=CyberColors.TEXT_PRIMARY,
+            bg=p.TERMINAL_BG,
+            fg=p.TEXT_PRIMARY,
             font=(self.mono_font, 9),
             relief="flat",
+            padx=10,
+            pady=8,
             highlightthickness=1,
-            highlightbackground=CyberColors.ACCENT,
+            highlightbackground=p.GLASS_BORDER_CRITICAL,
             wrap="word",
         )
         cmd_box.insert("1.0", command)
@@ -2446,31 +2620,48 @@ class HostDaemonDesktopGUI:
         return decision["approved"]
 
     # ------------------------------------------------------------------
-    # SUB-WINDOWS: DEVICES / BAN LIST & 4-STEP SETUP WIZARD
+    # SUB-WINDOWS: DEVICES / BAN LIST & 3-STEP SETUP WIZARD
     # ------------------------------------------------------------------
     def _open_devices_modal(self) -> None:
         if self._devices_win is not None and self._devices_win.winfo_exists():
             self._devices_win.lift()
             return
+        p = self._palette
         win = tk.Toplevel(self.root)
         win.title("Connected Peers & Intrusion Blacklist")
         self._clamp_modal_geometry(win, 680, 460, min_w=420, min_h=300)
-        win.configure(bg=CyberColors.BACKGROUND)
+        win.configure(bg=p.BACKGROUND)
         if callable(apply_window_icon):
             apply_window_icon(win)
-        apply_dark_titlebar(win, CyberColors.BACKGROUND)
+        apply_titlebar_theme(win, p)
         self._devices_win = win
         self._last_ban_sig = None
 
-        c = self._make_glass_card(win, bg=CyberColors.SURFACE, border=CyberColors.GLASS_BORDER)
-        c.pack(fill="both", expand=True, padx=12, pady=12)
+        c = self._make_glass_card(win, bg=p.SURFACE, border=p.GLASS_BORDER, pad_x=16, pad_y=14)
+        c.pack(fill="both", expand=True, padx=14, pady=14)
         b = c._body  # type: ignore[attr-defined]
-        tk.Label(b, text="ACTIVE SESSIONS & FIREWALL BLACKLIST", font=(self.ui_font, 11, "bold"), fg=CyberColors.PRIMARY, bg=CyberColors.SURFACE).pack(anchor="w", pady=(0, 8))
+        tk.Label(
+            b, text="Connected Peers & Firewall Blacklist",
+            font=(self.ui_font, 12, "bold"), fg=p.PRIMARY, bg=p.SURFACE,
+        ).pack(anchor="w", pady=(0, 2))
+        tk.Label(
+            b, text="Monitor active sessions, disconnect devices, or unban blocked IP addresses.",
+            font=(self.ui_font, 9), fg=p.TEXT_SECONDARY, bg=p.SURFACE,
+        ).pack(anchor="w", pady=(0, 10))
 
-        self._modal_peers_box = tk.Frame(b, bg=CyberColors.TERMINAL_BG, padx=8, pady=8)
+        self._modal_peers_box = tk.Frame(
+            b, bg=p.TERMINAL_BG, padx=10, pady=10,
+            highlightthickness=1, highlightbackground=p.GLASS_BORDER_IDLE,
+        )
         self._modal_peers_box.pack(fill="x", pady=(0, 12))
-        tk.Label(b, text="BANNED IP ADDRESSES", font=(self.ui_font, 9, "bold"), fg=CyberColors.ACCENT, bg=CyberColors.SURFACE).pack(anchor="w", pady=(0, 4))
-        self._modal_bans_box = tk.Frame(b, bg=CyberColors.TERMINAL_BG, padx=8, pady=8)
+        tk.Label(
+            b, text="Banned IP Addresses",
+            font=(self.ui_font, 10, "bold"), fg=p.ACCENT, bg=p.SURFACE,
+        ).pack(anchor="w", pady=(0, 6))
+        self._modal_bans_box = tk.Frame(
+            b, bg=p.TERMINAL_BG, padx=10, pady=10,
+            highlightthickness=1, highlightbackground=p.GLASS_BORDER_CRITICAL,
+        )
         self._modal_bans_box.pack(fill="both", expand=True)
 
         snap = self.state.get_snapshot()
@@ -2481,47 +2672,51 @@ class HostDaemonDesktopGUI:
         if sig == self._last_ban_sig:
             return
         self._last_ban_sig = sig
+        p = self._palette
 
         for frame, empty_txt, items, is_ban in (
-            (self._modal_peers_box, "No connected clients.", clients, False),
+            (self._modal_peers_box, "No connected clients right now.", clients, False),
             (self._modal_bans_box, "No blacklisted devices.", bans, True),
         ):
             for w in frame.winfo_children():
                 w.destroy()
             if not items:
-                tk.Label(frame, text=empty_txt, font=(self.ui_font, 9), fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.TERMINAL_BG).pack(anchor="w")
+                tk.Label(frame, text=empty_txt, font=(self.ui_font, 9), fg=p.TEXT_SECONDARY, bg=p.TERMINAL_BG).pack(anchor="w")
                 continue
             for item in items:
-                row = tk.Frame(frame, bg=CyberColors.TERMINAL_BG)
+                row = tk.Frame(frame, bg=p.TERMINAL_BG)
                 row.pack(fill="x", pady=3)
                 ip = str(item.get("ip", "?"))
                 dev = str(item.get("device", "Unknown"))
                 if is_ban:
-                    tk.Label(row, text=f"{dev} [{ip}] — {item.get('reason', '')}", font=(self.mono_font, 8), fg=CyberColors.ACCENT, bg=CyberColors.TERMINAL_BG).pack(side="left")
-                    self._make_cyber_button(row, "UNBAN", lambda p=ip: self.state.unban_device(p), fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT, pad_x=8, pad_y=2, font_size=8).pack(side="right")
+                    tk.Label(row, text=f"{dev} [{ip}] — {item.get('reason', '')}", font=(self.mono_font, 8), fg=p.ACCENT, bg=p.TERMINAL_BG).pack(side="left")
+                    self._make_cyber_button(row, "Unban", lambda ip_addr=ip: self.state.unban_device(ip_addr), fg=p.SUCCESS, bg=p.SUCCESS_SOFT, border=p.SUCCESS, pad_x=10, pad_y=3, font_size=8).pack(side="right")
                 else:
                     cid = str(item.get("id", ""))
-                    tk.Label(row, text=f"{dev} [{ip}]", font=(self.mono_font, 9), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG).pack(side="left")
-                    self._make_cyber_button(row, "DISCONNECT", lambda i=cid: self.state.disconnect_client(i), fg=CyberColors.WARNING, bg=CyberColors.WARNING_SOFT, pad_x=8, pad_y=2, font_size=8).pack(side="right")
+                    tk.Label(row, text=f"{dev} [{ip}]", font=(self.mono_font, 9), fg=p.TEXT_PRIMARY, bg=p.TERMINAL_BG).pack(side="left")
+                    self._make_cyber_button(row, "Disconnect", lambda i=cid: self.state.disconnect_client(i), fg=p.WARNING, bg=p.WARNING_SOFT, border=p.WARNING, pad_x=10, pad_y=3, font_size=8).pack(side="right")
 
     def _open_setup_wizard(self) -> None:
         if self._setup_win is not None and self._setup_win.winfo_exists():
             self._setup_win.lift()
             return
+        p = self._palette
         win = tk.Toplevel(self.root)
         win.title("AI NetController — Guided Setup & Feature Customizer")
-        w, _ = self._clamp_modal_geometry(win, 660, 480, min_w=440, min_h=360)
-        win.configure(bg=CyberColors.BACKGROUND)
+        w, _ = self._clamp_modal_geometry(win, 680, 500, min_w=460, min_h=380)
+        win.configure(bg=p.BACKGROUND)
         if callable(apply_window_icon):
             apply_window_icon(win)
-        apply_dark_titlebar(win, CyberColors.BACKGROUND)
+        apply_titlebar_theme(win, p)
         self._setup_win = win
 
         card = self._make_glass_card(
             win,
-            bg=CyberColors.SURFACE,
-            border=CyberColors.GLASS_BORDER_BRIGHT,
-            specular_color=CyberColors.SPECULAR_TOP,
+            bg=p.SURFACE,
+            border=p.GLASS_BORDER_BRIGHT,
+            pad_x=16,
+            pad_y=14,
+            specular_color=p.SPECULAR_TOP,
         )
         card.pack(fill="both", expand=True, padx=14, pady=14)
         b = card._body  # type: ignore[attr-defined]
@@ -2530,21 +2725,22 @@ class HostDaemonDesktopGUI:
         dont_show_var = tk.BooleanVar(value=True)
 
         # Bottom-pinned navigation bar guarantees buttons remain accessible at any screen height
-        btn_r = tk.Frame(b, bg=CyberColors.SURFACE)
-        btn_r.pack(side="bottom", fill="x", pady=(8, 0))
+        btn_r = tk.Frame(b, bg=p.SURFACE)
+        btn_r.pack(side="bottom", fill="x", pady=(10, 0))
 
         tk.Checkbutton(
             btn_r,
             text="Don't show automatically on startup",
             variable=dont_show_var,
             font=(self.ui_font, 8),
-            fg=CyberColors.TEXT_SECONDARY,
-            bg=CyberColors.SURFACE,
-            selectcolor=CyberColors.TERMINAL_BG,
-            activebackground=CyberColors.SURFACE,
+            fg=p.TEXT_SECONDARY,
+            bg=p.SURFACE,
+            selectcolor=p.SURFACE_ELEVATED,
+            activebackground=p.SURFACE,
+            activeforeground=p.TEXT_PRIMARY,
         ).pack(side="left")
 
-        nav_right = tk.Frame(btn_r, bg=CyberColors.SURFACE)
+        nav_right = tk.Frame(btn_r, bg=p.SURFACE)
         nav_right.pack(side="right")
 
         def _save_all_and_close() -> None:
@@ -2558,65 +2754,62 @@ class HostDaemonDesktopGUI:
             win.destroy()
 
         btn_back = self._make_cyber_button(
-            nav_right, "◀ BACK", lambda: _go_step(wiz_step["index"] - 1),
-            fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.SURFACE_ELEVATED, border=CyberColors.GLASS_BORDER_IDLE, pad_x=10, pad_y=5,
+            nav_right, "◀ Back", lambda: _go_step(wiz_step["index"] - 1),
+            fg=p.TEXT_SECONDARY, bg=p.SURFACE_ELEVATED, border=p.GLASS_BORDER_IDLE, pad_x=12, pad_y=6,
         )
         btn_back.pack(side="left", padx=(0, 6))
 
         btn_next = self._make_cyber_button(
-            nav_right, "NEXT ▶", lambda: _go_step(wiz_step["index"] + 1),
-            fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, border=CyberColors.PRIMARY, pad_x=12, pad_y=5,
+            nav_right, "Next ▶", lambda: _go_step(wiz_step["index"] + 1),
+            fg=p.PRIMARY, bg=p.PRIMARY_SOFT, border=p.PRIMARY, pad_x=12, pad_y=6,
         )
         btn_next.pack(side="left", padx=(0, 6))
 
         btn_finish = self._make_cyber_button(
-            nav_right, "SAVE & FINISH", _save_all_and_close,
-            fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT, border=CyberColors.SUCCESS, pad_x=14, pad_y=5,
+            nav_right, "Save & Finish", _save_all_and_close,
+            fg=p.ON_PRIMARY, bg=p.SUCCESS, border=p.SUCCESS, pad_x=14, pad_y=6,
         )
         btn_finish.pack(side="left")
 
-        # Top title + step indicator pills
+        # Top title + interactive step indicator pills
         tk.Label(
-            b, text="WELCOME TO AI NETCONTROLLER HOST AGENT",
-            font=(self.ui_font, 12, "bold"), fg=CyberColors.PRIMARY, bg=CyberColors.SURFACE,
+            b, text="AI NetController Host Agent Setup",
+            font=(self.ui_font, 13, "bold"), fg=p.PRIMARY, bg=p.SURFACE,
         ).pack(anchor="w")
 
-        step_bar = tk.Frame(b, bg=CyberColors.SURFACE)
-        step_bar.pack(fill="x", pady=(6, 8))
+        step_bar = tk.Frame(b, bg=p.SURFACE)
+        step_bar.pack(fill="x", pady=(8, 10))
         step_pills: List[tk.Label] = []
-        for idx, st_title in enumerate(("1. STARTUP & TRAY", "2. OPTIONAL FEATURES", "3. SECURITY & PAIRING")):
+        for idx, st_title in enumerate(("1. Startup & Tray", "2. Modules", "3. Security & Pairing")):
             pill = tk.Label(
                 step_bar,
-                text=f" {st_title} ",
-                font=(self.mono_font, 8, "bold"),
+                text=f"  {st_title}  ",
+                font=(self.ui_font, 9, "bold"),
                 padx=8,
-                pady=3,
+                pady=4,
                 cursor="hand2",
             )
-            pill.pack(side="left", padx=(0, 6))
+            pill.pack(side="left", padx=(0, 8))
             pill.bind("<Button-1>", lambda _e, i=idx: _go_step(i))
             step_pills.append(pill)
 
         content_box = tk.Frame(
-            b, bg=CyberColors.TERMINAL_BG, padx=14, pady=12,
-            highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE,
+            b, bg=p.TERMINAL_BG, padx=14, pady=12,
+            highlightthickness=1, highlightbackground=p.GLASS_BORDER_IDLE,
         )
         content_box.pack(fill="both", expand=True)
 
         def _go_step(target_idx: int) -> None:
             idx = max(0, min(2, int(target_idx)))
             wiz_step["index"] = idx
-            for i, p in enumerate(step_pills):
+            for i, pill_lbl in enumerate(step_pills):
                 active = (i == idx)
-                p.configure(
-                    fg=CyberColors.BACKGROUND if active else CyberColors.TEXT_SECONDARY,
-                    bg=CyberColors.PRIMARY if active else CyberColors.SURFACE_ELEVATED,
+                pill_lbl.configure(
+                    fg=p.ON_PRIMARY if active else p.TEXT_SECONDARY,
+                    bg=p.PRIMARY if active else p.SURFACE_ELEVATED,
                 )
             btn_back.configure(state="normal" if idx > 0 else "disabled")
-            if idx < 2:
-                btn_next.configure(state="normal")
-            else:
-                btn_next.configure(state="disabled")
+            btn_next.configure(state="normal" if idx < 2 else "disabled")
 
             for child in content_box.winfo_children():
                 child.destroy()
@@ -2624,48 +2817,49 @@ class HostDaemonDesktopGUI:
             if idx == 0:
                 tk.Label(
                     content_box,
-                    text="STEP 1: STARTUP, TRAY & PC INSTALLATION OPTIONS",
-                    font=(self.ui_font, 10, "bold"), fg=CyberColors.PRIMARY, bg=CyberColors.TERMINAL_BG,
+                    text="Step 1 — Startup, Tray & Installation Options",
+                    font=(self.ui_font, 10, "bold"), fg=p.PRIMARY, bg=p.TERMINAL_BG,
                 ).pack(anchor="w", pady=(0, 4))
                 tk.Label(
                     content_box,
-                    text="Choose whether AI NetController runs on Windows startup or stays in the background tray:",
-                    font=(self.ui_font, 9), fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.TERMINAL_BG,
+                    text="Choose whether AI NetController launches on Windows sign-in or stays accessible in the background tray:",
+                    font=(self.ui_font, 9), fg=p.TEXT_SECONDARY, bg=p.TERMINAL_BG,
                     wraplength=max(320, w - 72), justify="left",
                 ).pack(anchor="w", pady=(0, 8))
 
                 for txt, var in (
                     ("Run automatically when Windows signs in (Run on Startup)", self.var_autostart),
-                    ("Start Minimized in System Tray on launch", self.var_start_minimized),
+                    ("Start minimized in System Tray on launch", self.var_start_minimized),
                     ("Minimize to System Tray when closing window (Uncheck to exit on close)", self.var_close_to_tray),
                 ):
                     tk.Checkbutton(
                         content_box, text=txt, variable=var,
-                        font=(self.ui_font, 9), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG,
-                        selectcolor=CyberColors.SURFACE, activebackground=CyberColors.TERMINAL_BG,
+                        font=(self.ui_font, 9), fg=p.TEXT_PRIMARY, bg=p.TERMINAL_BG,
+                        selectcolor=p.SURFACE_ELEVATED, activebackground=p.TERMINAL_BG,
+                        activeforeground=p.TEXT_PRIMARY,
                     ).pack(anchor="w", pady=3)
 
-                act_f = tk.Frame(content_box, bg=CyberColors.TERMINAL_BG)
-                act_f.pack(fill="x", pady=(10, 0))
+                act_f = tk.Frame(content_box, bg=p.TERMINAL_BG)
+                act_f.pack(fill="x", pady=(12, 0))
                 self._make_cyber_button(
-                    act_f, "OPEN PC INSTALLER / REPAIR / UNINSTALLER...", self._trigger_install_dialog,
-                    fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, border=CyberColors.PRIMARY, pad_x=12, pad_y=5,
+                    act_f, "Open PC Installer / Repair...", self._trigger_install_dialog,
+                    fg=p.PRIMARY, bg=p.PRIMARY_SOFT, border=p.PRIMARY, pad_x=12, pad_y=5,
                 ).pack(side="left", padx=(0, 8))
                 self._make_cyber_button(
-                    act_f, "CREATE DESKTOP SHORTCUT", self._create_shortcut_now,
-                    fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT, border=CyberColors.SUCCESS, pad_x=12, pad_y=5,
+                    act_f, "Create Desktop Shortcut", self._create_shortcut_now,
+                    fg=p.SUCCESS, bg=p.SUCCESS_SOFT, border=p.SUCCESS, pad_x=12, pad_y=5,
                 ).pack(side="left")
 
             elif idx == 1:
                 tk.Label(
                     content_box,
-                    text="STEP 2: ENABLE OR DISABLE OPTIONAL DAEMON MODULES",
-                    font=(self.ui_font, 10, "bold"), fg=CyberColors.SECONDARY, bg=CyberColors.TERMINAL_BG,
+                    text="Step 2 — Enable or Disable Optional Daemon Modules",
+                    font=(self.ui_font, 10, "bold"), fg=p.SECONDARY, bg=p.TERMINAL_BG,
                 ).pack(anchor="w", pady=(0, 4))
                 tk.Label(
                     content_box,
-                    text="Disable any subsystem you do not plan to use. Disabled modules reject remote requests immediately:",
-                    font=(self.ui_font, 9), fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.TERMINAL_BG,
+                    text="Disable any subsystem you do not need. Disabled modules reject remote requests immediately:",
+                    font=(self.ui_font, 9), fg=p.TEXT_SECONDARY, bg=p.TERMINAL_BG,
                     wraplength=max(320, w - 72), justify="left",
                 ).pack(anchor="w", pady=(0, 6))
 
@@ -2679,46 +2873,131 @@ class HostDaemonDesktopGUI:
                 ):
                     tk.Checkbutton(
                         content_box, text=txt, variable=var,
-                        font=(self.ui_font, 9), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG,
-                        selectcolor=CyberColors.SURFACE, activebackground=CyberColors.TERMINAL_BG,
+                        font=(self.ui_font, 9), fg=p.TEXT_PRIMARY, bg=p.TERMINAL_BG,
+                        selectcolor=p.SURFACE_ELEVATED, activebackground=p.TERMINAL_BG,
+                        activeforeground=p.TEXT_PRIMARY,
                     ).pack(anchor="w", pady=2)
 
             else:
                 tk.Label(
                     content_box,
-                    text="STEP 3: SECURITY POSTURE & COMPANION PAIRING",
-                    font=(self.ui_font, 10, "bold"), fg=CyberColors.SUCCESS, bg=CyberColors.TERMINAL_BG,
-                ).pack(anchor="w", pady=(0, 4))
+                    text="Step 3 — Security Posture & Companion Pairing",
+                    font=(self.ui_font, 10, "bold"), fg=p.SUCCESS, bg=p.TERMINAL_BG,
+                ).pack(anchor="w", pady=(0, 6))
 
-                prof_row = tk.Frame(content_box, bg=CyberColors.TERMINAL_BG)
-                prof_row.pack(fill="x", pady=(0, 8))
+                prof_row = tk.Frame(content_box, bg=p.TERMINAL_BG)
+                prof_row.pack(fill="x", pady=(0, 10))
                 self._make_cyber_button(
-                    prof_row, "APPLY BALANCED (DEFAULT)", lambda: self._apply_profile("balanced"),
-                    fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, border=CyberColors.PRIMARY, pad_x=10, pad_y=4, font_size=8,
+                    prof_row, "Balanced (Default)", lambda: self._apply_profile("balanced"),
+                    fg=p.PRIMARY, bg=p.PRIMARY_SOFT, border=p.PRIMARY, pad_x=10, pad_y=4, font_size=8,
                 ).pack(side="left", padx=(0, 6))
                 self._make_cyber_button(
-                    prof_row, "APPLY STRICT ZERO-TRUST", lambda: self._apply_profile("zero_trust"),
-                    fg=CyberColors.ACCENT, bg=CyberColors.ACCENT_SOFT, border=CyberColors.ACCENT, pad_x=10, pad_y=4, font_size=8,
+                    prof_row, "Strict Zero-Trust", lambda: self._apply_profile("zero_trust"),
+                    fg=p.ACCENT, bg=p.ACCENT_SOFT, border=p.ACCENT, pad_x=10, pad_y=4, font_size=8,
                 ).pack(side="left", padx=(0, 6))
                 self._make_cyber_button(
-                    prof_row, "APPLY VIEW-ONLY", lambda: self._apply_profile("view_only"),
-                    fg=CyberColors.WARNING, bg=CyberColors.WARNING_SOFT, border=CyberColors.WARNING, pad_x=10, pad_y=4, font_size=8,
+                    prof_row, "View-Only", lambda: self._apply_profile("view_only"),
+                    fg=p.WARNING, bg=p.WARNING_SOFT, border=p.WARNING, pad_x=10, pad_y=4, font_size=8,
                 ).pack(side="left")
 
                 summary_txt = (
                     f"1. Endpoint URI      : {self.state.get_snapshot()['wsUri']}\n"
-                    f"2. Ephemeral PIN     : {self.state.pairing_pin} (auto-rotates every {self.state.pin_ttl_seconds}s)\n"
+                    f"2. Ephemeral PIN     : {self.state.pairing_pin} (rotates every {self.state.pin_ttl_seconds}s)\n"
                     f"3. Secret Protection : DPAPI + Current-User NTFS DACL\n"
                     f"4. AV/SAC Hygiene    : Pure Win32 COM shortcuts, UPX=OFF, Zero .vbs/.bat\n"
                     f"5. Execution Firewall: AST Normalizer + Local HITL Prompt ({'ON' if self.state.require_hitl_approval else 'OFF'})"
                 )
                 tk.Label(
-                    content_box, text=summary_txt, font=(self.mono_font, 9), fg=CyberColors.TEXT_PRIMARY,
-                    bg=CyberColors.SURFACE, padx=10, pady=8, justify="left", anchor="w",
-                    highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE,
+                    content_box, text=summary_txt, font=(self.mono_font, 9), fg=p.TEXT_PRIMARY,
+                    bg=p.SURFACE, padx=12, pady=10, justify="left", anchor="w",
+                    highlightthickness=1, highlightbackground=p.GLASS_BORDER_IDLE,
                 ).pack(fill="both", expand=True)
 
         _go_step(0)
+
+    # ------------------------------------------------------------------
+    # LIVE APPLE LIQUID GLASS THEME & ACCENT HOT-SWAP
+    # ------------------------------------------------------------------
+    def set_theme_mode(self, mode: str) -> None:
+        normalized = "dark" if str(mode).lower() == "dark" else "light"
+        if normalized == self._palette.theme_mode:
+            return
+        with self.state.lock:
+            self.state.ui_theme_mode = normalized
+        self._apply_theme_live()
+
+    def toggle_theme_mode(self) -> None:
+        next_mode = "dark" if self._palette.is_daylight else "light"
+        self.set_theme_mode(next_mode)
+
+    def set_accent(self, accent_id: str) -> None:
+        if accent_id not in LIQUID_ACCENT_PRESETS or accent_id == self._palette.accent_id:
+            return
+        with self.state.lock:
+            self.state.ui_accent = accent_id
+        self._apply_theme_live()
+
+    def _apply_theme_live(self) -> None:
+        active_tab = self._active_tab
+        if self._gauge_anim_after_id is not None:
+            try:
+                self.root.after_cancel(self._gauge_anim_after_id)
+            except Exception:
+                pass
+            self._gauge_anim_after_id = None
+        if self._resize_after_id is not None:
+            try:
+                self.root.after_cancel(self._resize_after_id)
+            except Exception:
+                pass
+            self._resize_after_id = None
+
+        self._palette = get_liquid_palette(self.state.ui_theme_mode, self.state.ui_accent)
+        CyberColors.set_palette(self._palette)
+        self.state.save_policy_config()
+
+        self.root.configure(bg=CyberColors.BACKGROUND)
+        apply_titlebar_theme(self.root, self._palette)
+        self._configure_ttk_styles()
+
+        try:
+            cur_w = int(self.root.winfo_width())
+            cur_h = int(self.root.winfo_height())
+            if cur_w < 320 or cur_h < 240:
+                cur_w, cur_h = self._scale.width, self._scale.height
+        except Exception:
+            cur_w, cur_h = self._scale.width, self._scale.height
+
+        # Reset render caches before rebuilding layout
+        if hasattr(self, "_backdrop_cache") and isinstance(self._backdrop_cache, dict):
+            self._backdrop_cache.clear()
+        self._backdrop_size = (0, 0)
+        self._qr_cache_uri = ""
+        self._qr_cache_px = 0
+        self._qr_cache_theme = ("", "")
+        self._last_layout_sig = None
+        self._last_peer_sig = None
+        self._last_ban_sig = None
+        self._gauge_paint_sig.clear()
+        self._rendered_log_seq = -1
+
+        for widget_attr in ("_bg_label", "_shell"):
+            w = getattr(self, widget_attr, None)
+            if w is not None:
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+
+        self._build_layout()
+        self._apply_ambient_backdrop(cur_w, cur_h, force=True)
+        self._apply_responsive_scaling(cur_w, cur_h)
+        self._select_tab(active_tab)
+        self._refresh_ui(force_telemetry=True)
+        self.state.add_log(
+            "SYSTEM",
+            f"Appearance updated -> {self._palette.theme_mode.title()} Glass ({LIQUID_ACCENT_PRESETS[self._palette.accent_id]['label']}).",
+        )
 
     # ------------------------------------------------------------------
     # OPERATOR ACTIONS
@@ -2936,6 +3215,14 @@ class HostDaemonDesktopGUI:
     def _full_shutdown(self) -> None:
         with self.state.lock:
             self.state.is_running = False
+        for attr in ("_refresh_after_id", "_resize_after_id", "_gauge_anim_after_id"):
+            after_id = getattr(self, attr, None)
+            if after_id is not None:
+                setattr(self, attr, None)
+                try:
+                    self.root.after_cancel(after_id)
+                except Exception:
+                    pass
         if callable(self.on_stop_daemon):
             try:
                 self.on_stop_daemon()

@@ -7,5 +7,7 @@
 *.ts text eol=lf
 *.tsx text eol=lf
 *.dart text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
 .env.example text eol=lf
 gradlew text eol=lf

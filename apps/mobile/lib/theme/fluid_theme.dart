@@ -1,50 +1,81 @@
 import 'package:flutter/material.dart';
 
 // =====================================================================
-// DYNAMIC & LEGACY CYBERNETIC COLOR TOKENS
+// APPLE LIQUID GLASS DUAL-POLARITY & HERO ACCENT TOKENS
 // =====================================================================
-enum CyberAccentPreset {
-  cyan(
-    label: 'Cyber Cyan',
-    subtitle: 'Electric Cyan & Indigo',
-    primary: Color(0xFF00F0FF),
-    secondary: Color(0xFF8A2BE2),
-    accent: Color(0xFFFF0055),
+enum AppThemeMode {
+  daylight(
+    label: 'Bright Daylight',
+    subtitle: 'Sunlit iOS 26 pastel-prism Liquid Glass',
   ),
+  dark(
+    label: 'Vibrant Dark',
+    subtitle: 'Luminous twilight indigo Liquid Glass',
+  );
+
+  final String label;
+  final String subtitle;
+
+  const AppThemeMode({
+    required this.label,
+    required this.subtitle,
+  });
+}
+
+enum CyberAccentPreset {
   violet(
-    label: 'Ultraviolet',
-    subtitle: 'Royal Violet & Magenta',
+    label: 'Iridescent Violet',
+    subtitle: 'VisionOS Violet & Magenta',
     primary: Color(0xFFC084FC),
     secondary: Color(0xFFF472B6),
     accent: Color(0xFFFF2E93),
-  ),
-  emerald(
-    label: 'Bio Mint',
-    subtitle: 'Neon Emerald & Cyan',
-    primary: Color(0xFF34D399),
-    secondary: Color(0xFF22D3EE),
-    accent: Color(0xFFFF4D6D),
-  ),
-  rose(
-    label: 'Crimson Rose',
-    subtitle: 'Neon Rose & Coral',
-    primary: Color(0xFFFB7185),
-    secondary: Color(0xFFFB923C),
-    accent: Color(0xFFFF0055),
-  ),
-  amber(
-    label: 'Solar Gold',
-    subtitle: 'Warm Amber & Flame',
-    primary: Color(0xFFFBBF24),
-    secondary: Color(0xFFF97316),
-    accent: Color(0xFFFF2A6D),
+    daylightPrimary: Color(0xFF7C3AED),
+    daylightSecondary: Color(0xFFEC4899),
   ),
   cobalt(
-    label: 'Sapphire Blue',
-    subtitle: 'Deep Cobalt & Teal',
+    label: 'Electric Azure',
+    subtitle: 'Apple Sky & Cobalt',
     primary: Color(0xFF60A5FA),
     secondary: Color(0xFF8B5CF6),
     accent: Color(0xFFFF2A6D),
+    daylightPrimary: Color(0xFF2563EB),
+    daylightSecondary: Color(0xFF0EA5E9),
+  ),
+  cyan(
+    label: 'Aqua Cyan',
+    subtitle: 'Ocean Aqua & Indigo',
+    primary: Color(0xFF22D3EE),
+    secondary: Color(0xFF818CF8),
+    accent: Color(0xFFFF0055),
+    daylightPrimary: Color(0xFF0891B2),
+    daylightSecondary: Color(0xFF6366F1),
+  ),
+  emerald(
+    label: 'Bio Mint',
+    subtitle: 'Vibrant Emerald & Mint',
+    primary: Color(0xFF34D399),
+    secondary: Color(0xFF22D3EE),
+    accent: Color(0xFFFF4D6D),
+    daylightPrimary: Color(0xFF059669),
+    daylightSecondary: Color(0xFF06B6D4),
+  ),
+  rose(
+    label: 'Coral Rose',
+    subtitle: 'Poppy Rose & Coral',
+    primary: Color(0xFFFB7185),
+    secondary: Color(0xFFFB923C),
+    accent: Color(0xFFFF0055),
+    daylightPrimary: Color(0xFFE11D48),
+    daylightSecondary: Color(0xFFF97316),
+  ),
+  amber(
+    label: 'Solar Amber',
+    subtitle: 'Sunlit Gold & Flame',
+    primary: Color(0xFFFBBF24),
+    secondary: Color(0xFFF97316),
+    accent: Color(0xFFFF2A6D),
+    daylightPrimary: Color(0xFFD97706),
+    daylightSecondary: Color(0xFFF97316),
   );
 
   final String label;
@@ -52,6 +83,8 @@ enum CyberAccentPreset {
   final Color primary;
   final Color secondary;
   final Color accent;
+  final Color daylightPrimary;
+  final Color daylightSecondary;
 
   const CyberAccentPreset({
     required this.label,
@@ -59,13 +92,36 @@ enum CyberAccentPreset {
     required this.primary,
     required this.secondary,
     required this.accent,
+    required this.daylightPrimary,
+    required this.daylightSecondary,
   });
+
+  Color resolvedPrimary(AppThemeMode mode) =>
+      mode == AppThemeMode.daylight ? daylightPrimary : primary;
+
+  Color resolvedSecondary(AppThemeMode mode) =>
+      mode == AppThemeMode.daylight ? daylightSecondary : secondary;
 }
 
 enum GlassIntensity {
-  minimal(label: 'Minimal', subtitle: 'Max battery & 120 FPS', blurSigma: 0.0, fillAlpha: 0.90),
-  balanced(label: 'Balanced', subtitle: 'Crisp translucent depth', blurSigma: 10.0, fillAlpha: 0.72),
-  ultra(label: 'Ultra Glass', subtitle: 'Rich layered glow', blurSigma: 18.0, fillAlpha: 0.56);
+  minimal(
+    label: 'Frosted',
+    subtitle: 'Crisp high-contrast matte & battery saver',
+    blurSigma: 0.0,
+    fillAlpha: 0.88,
+  ),
+  balanced(
+    label: 'Liquid Glass',
+    subtitle: 'Signature Apple Liquid Glass depth',
+    blurSigma: 14.0,
+    fillAlpha: 0.66,
+  ),
+  ultra(
+    label: 'Crystal',
+    subtitle: 'Ultra-clear prismatic refraction',
+    blurSigma: 22.0,
+    fillAlpha: 0.44,
+  );
 
   final String label;
   final String subtitle;
@@ -100,14 +156,10 @@ class CyberColors {
   static const Color glassHighlight = Color(0x1A00F0FF);
 }
 
-class NeonColors {
-  static const Color cyan = CyberColors.primary;
-  static const Color violet = CyberColors.secondary;
-}
-
-/// Dynamic Material 3 ThemeExtension carrying active persisted color palette.
+/// Dynamic Material 3 ThemeExtension carrying active Daylight / Vibrant Dark Liquid Glass palette.
 @immutable
 class CyberPalette extends ThemeExtension<CyberPalette> {
+  final AppThemeMode themeMode;
   final CyberAccentPreset preset;
   final GlassIntensity glass;
   final Color background;
@@ -118,11 +170,15 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
   final Color accent;
   final Color success;
   final Color warning;
+  final Color sky;
   final Color textPrimary;
   final Color textSecondary;
   final Color textTertiary;
+  final Color terminalBackground;
+  final Color terminalText;
 
   const CyberPalette({
+    this.themeMode = AppThemeMode.daylight,
     required this.preset,
     required this.glass,
     required this.background,
@@ -133,58 +189,141 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
     required this.accent,
     required this.success,
     required this.warning,
+    this.sky = const Color(0xFF0EA5E9),
     required this.textPrimary,
     required this.textSecondary,
     required this.textTertiary,
+    this.terminalBackground = const Color(0xB8FFFFFF),
+    this.terminalText = const Color(0xFF141530),
   });
+
+  bool get isDaylight => themeMode == AppThemeMode.daylight;
+  Brightness get brightness => isDaylight ? Brightness.light : Brightness.dark;
 
   factory CyberPalette.fromPreset(
     CyberAccentPreset preset, {
     GlassIntensity glass = GlassIntensity.balanced,
+    AppThemeMode themeMode = AppThemeMode.daylight,
   }) {
+    final isLight = themeMode == AppThemeMode.daylight;
+    if (isLight) {
+      return CyberPalette(
+        themeMode: AppThemeMode.daylight,
+        preset: preset,
+        glass: glass,
+        background: const Color(0xFFEEF2FF),
+        surface: const Color(0xFFF7F8FF),
+        surfaceElevated: const Color(0xFFFFFFFF),
+        primary: preset.daylightPrimary,
+        secondary: preset.daylightSecondary,
+        accent: const Color(0xFFE11D48),
+        success: const Color(0xFF059669),
+        warning: const Color(0xFFD97706),
+        sky: const Color(0xFF0284C7),
+        textPrimary: const Color(0xFF141530),
+        textSecondary: const Color(0xFF4B4F75),
+        textTertiary: const Color(0xFF7B80A6),
+        terminalBackground: const Color(0xCCFFFFFF),
+        terminalText: const Color(0xFF161836),
+      );
+    }
+
     return CyberPalette(
+      themeMode: AppThemeMode.dark,
       preset: preset,
       glass: glass,
-      background: CyberColors.background,
-      surface: CyberColors.surface,
-      surfaceElevated: CyberColors.surfaceElevated,
+      background: const Color(0xFF090B1D),
+      surface: const Color(0xFF141838),
+      surfaceElevated: const Color(0xFF1C214A),
       primary: preset.primary,
       secondary: preset.secondary,
       accent: preset.accent,
-      success: CyberColors.success,
-      warning: CyberColors.warning,
-      textPrimary: CyberColors.textPrimary,
-      textSecondary: CyberColors.textSecondary,
-      textTertiary: CyberColors.textTertiary,
+      success: const Color(0xFF34D399),
+      warning: const Color(0xFFFBBF24),
+      sky: const Color(0xFF38BDF8),
+      textPrimary: const Color(0xFFF7F9FF),
+      textSecondary: const Color(0xFFB5BFE0),
+      textTertiary: const Color(0xFF7C87B2),
+      terminalBackground: const Color(0xCC0D112B),
+      terminalText: const Color(0xFFEEF2FF),
     );
   }
 
   static final CyberPalette defaultPalette = CyberPalette.fromPreset(
-    CyberAccentPreset.cyan,
+    CyberAccentPreset.violet,
+    themeMode: AppThemeMode.daylight,
   );
 
   static CyberPalette of(BuildContext context) {
     return Theme.of(context).extension<CyberPalette>() ?? defaultPalette;
   }
 
-  Color get glassBorderActive => primary.withValues(alpha: 0.48);
-  Color get glassBorderIdle => Colors.white.withValues(alpha: 0.13);
-  Color get cardSurfaceTop =>
-      Color.lerp(surfaceElevated, primary, 0.11)!.withValues(alpha: glass.fillAlpha);
-  Color get cardSurfaceBottom =>
-      Color.lerp(surface, Colors.black, 0.22)!
-          .withValues(alpha: (glass.fillAlpha + 0.12).clamp(0.0, 0.96));
+  Color get glassBorderActive => primary.withValues(alpha: isDaylight ? 0.56 : 0.62);
+  Color get glassBorderIdle => isDaylight
+      ? Colors.white.withValues(alpha: 0.84)
+      : Colors.white.withValues(alpha: 0.17);
+
+  Color get dividerColor => isDaylight
+      ? primary.withValues(alpha: 0.12)
+      : Colors.white.withValues(alpha: 0.10);
+
+  Color get cardSurfaceTop => isDaylight
+      ? Colors.white.withValues(alpha: (glass.fillAlpha + 0.14).clamp(0.45, 0.94))
+      : Color.lerp(surfaceElevated, primary, 0.12)!
+          .withValues(alpha: glass.fillAlpha);
+
+  Color get cardSurfaceBottom => isDaylight
+      ? Color.lerp(Colors.white, primary, 0.04)!
+          .withValues(alpha: glass.fillAlpha.clamp(0.36, 0.88))
+      : Color.lerp(surface, Colors.black, 0.20)!
+          .withValues(alpha: (glass.fillAlpha + 0.12).clamp(0.0, 0.95));
+
+  LinearGradient get heroGradient => LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [primary, secondary],
+  );
+
+  LinearGradient squircleGradient(Color start, Color end) => LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [start, end],
+  );
 
   LinearGradient cardBevelGradient({bool isSelected = false}) {
+    if (isDaylight) {
+      final top = Colors.white.withValues(
+        alpha: isSelected
+            ? (glass.fillAlpha + 0.22).clamp(0.58, 0.96)
+            : (glass.fillAlpha + 0.16).clamp(0.48, 0.94),
+      );
+      final mid = Color.lerp(
+        Colors.white,
+        primary,
+        isSelected ? 0.09 : 0.025,
+      )!.withValues(alpha: glass.fillAlpha.clamp(0.38, 0.90));
+      final bottom = Color.lerp(
+        const Color(0xFFF6F7FF),
+        secondary,
+        isSelected ? 0.07 : 0.02,
+      )!.withValues(alpha: (glass.fillAlpha + 0.04).clamp(0.42, 0.92));
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        stops: const [0.0, 0.48, 1.0],
+        colors: [top, mid, bottom],
+      );
+    }
+
     final topColor = Color.lerp(
       surfaceElevated,
       primary,
-      isSelected ? 0.22 : 0.10,
-    )!.withValues(alpha: (glass.fillAlpha + 0.05).clamp(0.0, 0.96));
+      isSelected ? 0.24 : 0.11,
+    )!.withValues(alpha: (glass.fillAlpha + 0.06).clamp(0.0, 0.96));
     final midColor = Color.lerp(
       surfaceElevated,
       secondary,
-      isSelected ? 0.10 : 0.04,
+      isSelected ? 0.14 : 0.05,
     )!.withValues(alpha: glass.fillAlpha);
     return LinearGradient(
       begin: Alignment.topLeft,
@@ -195,13 +334,26 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
   }
 
   LinearGradient specularBorderGradient({bool isSelected = false}) {
+    if (isDaylight) {
+      return LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: [
+          Colors.white.withValues(alpha: 0.95),
+          isSelected
+              ? primary.withValues(alpha: 0.48)
+              : Colors.white.withValues(alpha: 0.72),
+          secondary.withValues(alpha: isSelected ? 0.34 : 0.12),
+        ],
+      );
+    }
     return LinearGradient(
       begin: Alignment.centerLeft,
       end: Alignment.centerRight,
       colors: [
-        Colors.white.withValues(alpha: isSelected ? 0.34 : 0.22),
-        primary.withValues(alpha: isSelected ? 0.62 : 0.24),
-        Colors.transparent,
+        Colors.white.withValues(alpha: isSelected ? 0.46 : 0.26),
+        primary.withValues(alpha: isSelected ? 0.68 : 0.28),
+        secondary.withValues(alpha: isSelected ? 0.42 : 0.08),
       ],
     );
   }
@@ -211,6 +363,22 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
     Color? glowColor,
   }) {
     final glow = glowColor ?? primary;
+    if (isDaylight) {
+      return [
+        BoxShadow(
+          color: const Color(0xFF4C3E94)
+              .withValues(alpha: isSelected ? 0.16 : 0.10),
+          blurRadius: isSelected ? 26 : 18,
+          spreadRadius: isSelected ? 1 : -2,
+          offset: const Offset(0, 10),
+        ),
+        BoxShadow(
+          color: glow.withValues(alpha: isSelected ? 0.24 : 0.08),
+          blurRadius: isSelected ? 22 : 12,
+          offset: const Offset(0, 3),
+        ),
+      ];
+    }
     return [
       BoxShadow(
         color: Colors.black.withValues(alpha: isSelected ? 0.56 : 0.44),
@@ -219,8 +387,8 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
         offset: const Offset(0, 10),
       ),
       BoxShadow(
-        color: glow.withValues(alpha: isSelected ? 0.25 : 0.08),
-        blurRadius: isSelected ? 22 : 14,
+        color: glow.withValues(alpha: isSelected ? 0.30 : 0.10),
+        blurRadius: isSelected ? 24 : 14,
         spreadRadius: isSelected ? 1 : -2,
         offset: const Offset(0, 2),
       ),
@@ -229,6 +397,7 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
 
   @override
   CyberPalette copyWith({
+    AppThemeMode? themeMode,
     CyberAccentPreset? preset,
     GlassIntensity? glass,
     Color? background,
@@ -239,11 +408,15 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
     Color? accent,
     Color? success,
     Color? warning,
+    Color? sky,
     Color? textPrimary,
     Color? textSecondary,
     Color? textTertiary,
+    Color? terminalBackground,
+    Color? terminalText,
   }) {
     return CyberPalette(
+      themeMode: themeMode ?? this.themeMode,
       preset: preset ?? this.preset,
       glass: glass ?? this.glass,
       background: background ?? this.background,
@@ -254,9 +427,12 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
       accent: accent ?? this.accent,
       success: success ?? this.success,
       warning: warning ?? this.warning,
+      sky: sky ?? this.sky,
       textPrimary: textPrimary ?? this.textPrimary,
       textSecondary: textSecondary ?? this.textSecondary,
       textTertiary: textTertiary ?? this.textTertiary,
+      terminalBackground: terminalBackground ?? this.terminalBackground,
+      terminalText: terminalText ?? this.terminalText,
     );
   }
 
@@ -264,6 +440,7 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
   CyberPalette lerp(ThemeExtension<CyberPalette>? other, double t) {
     if (other is! CyberPalette) return this;
     return CyberPalette(
+      themeMode: t < 0.5 ? themeMode : other.themeMode,
       preset: t < 0.5 ? preset : other.preset,
       glass: t < 0.5 ? glass : other.glass,
       background: Color.lerp(background, other.background, t)!,
@@ -274,11 +451,59 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
       accent: Color.lerp(accent, other.accent, t)!,
       success: Color.lerp(success, other.success, t)!,
       warning: Color.lerp(warning, other.warning, t)!,
+      sky: Color.lerp(sky, other.sky, t)!,
       textPrimary: Color.lerp(textPrimary, other.textPrimary, t)!,
       textSecondary: Color.lerp(textSecondary, other.textSecondary, t)!,
       textTertiary: Color.lerp(textTertiary, other.textTertiary, t)!,
+      terminalBackground:
+          Color.lerp(terminalBackground, other.terminalBackground, t)!,
+      terminalText: Color.lerp(terminalText, other.terminalText, t)!,
     );
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is CyberPalette &&
+        other.themeMode == themeMode &&
+        other.preset == preset &&
+        other.glass == glass &&
+        other.background == background &&
+        other.surface == surface &&
+        other.surfaceElevated == surfaceElevated &&
+        other.primary == primary &&
+        other.secondary == secondary &&
+        other.accent == accent &&
+        other.success == success &&
+        other.warning == warning &&
+        other.sky == sky &&
+        other.textPrimary == textPrimary &&
+        other.textSecondary == textSecondary &&
+        other.textTertiary == textTertiary &&
+        other.terminalBackground == terminalBackground &&
+        other.terminalText == terminalText;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+        themeMode,
+        preset,
+        glass,
+        background,
+        surface,
+        surfaceElevated,
+        primary,
+        secondary,
+        accent,
+        success,
+        warning,
+        sky,
+        textPrimary,
+        textSecondary,
+        textTertiary,
+        terminalBackground,
+        terminalText,
+      );
 }
 
 // =====================================================================
@@ -288,9 +513,6 @@ class FluidSize {
   static const double baselineWidth = 390.0;
   static const double baselineHeight = 780.0;
 
-  /// Aspect-ratio & resolution-aware scale factor that adapts smoothly from
-  /// 260dp foldable cover screens and 320dp landscape phones up to 4K desktops
-  /// without ever blowing up typography on short landscape viewports.
   static double getScaleFactor(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final shortest = size.shortestSide;
@@ -298,10 +520,9 @@ class FluidSize {
     final shortRatio = shortest / baselineWidth;
     final heightCap = (size.height / baselineHeight).clamp(0.76, 1.25);
 
-    // Blend shortest-side and width ratios so landscape phones don't inflate
-    // text to 1.5x while tablets/desktops still get a clean proportional step-up.
     final blended = (shortRatio * 0.72) + (widthRatio * 0.28);
-    final raw = blended < heightCap ? blended : (blended * 0.55 + heightCap * 0.45);
+    final raw =
+        blended < heightCap ? blended : (blended * 0.55 + heightCap * 0.45);
     return raw.clamp(0.75, 1.22);
   }
 
@@ -313,8 +534,8 @@ class FluidSize {
 
   static EdgeInsets pagePadding(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final h = size.width < 340 ? 10.0 : (size.width < 600 ? 14.0 : 16.0);
-    final v = size.height < 460 ? 8.0 : 12.0;
+    final h = size.width < 340 ? 12.0 : (size.width < 600 ? 16.0 : 20.0);
+    final v = size.height < 460 ? 10.0 : 14.0;
     return EdgeInsets.symmetric(horizontal: h, vertical: v);
   }
 
@@ -326,9 +547,6 @@ class FluidSize {
     return (baseSpace * getScaleFactor(context)).roundToDouble();
   }
 
-  /// Clamped TextScaler restricting system OS-level accessibility font scaling
-  /// between 0.85x and 1.20x (or 1.08x on ultra-narrow/short viewports)
-  /// to guarantee zero-overflow layout rendering.
   static TextScaler clampedTextScaler(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final maxScale = (size.width < 340 || size.height < 440) ? 1.08 : 1.20;
@@ -359,49 +577,74 @@ extension FluidContext on BuildContext {
 }
 
 // =====================================================================
-// CYBERNETIC MATERIAL 3 THEME
+// APPLE LIQUID GLASS MATERIAL 3 THEME (DAYLIGHT + VIBRANT DARK)
 // =====================================================================
 class CyberTheme {
   static ThemeData get themeData => fromPalette(CyberPalette.defaultPalette);
 
   static ThemeData fromPalette(CyberPalette palette) {
+    final colorScheme = palette.isDaylight
+        ? ColorScheme.light(
+            primary: palette.primary,
+            secondary: palette.secondary,
+            surface: palette.surface,
+            error: palette.accent,
+            onPrimary: Colors.white,
+            onSecondary: Colors.white,
+            onSurface: palette.textPrimary,
+          )
+        : ColorScheme.dark(
+            primary: palette.primary,
+            secondary: palette.secondary,
+            surface: palette.surface,
+            error: palette.accent,
+            onPrimary: Colors.white,
+            onSecondary: Colors.white,
+            onSurface: palette.textPrimary,
+          );
+
     return ThemeData(
       useMaterial3: true,
-      brightness: Brightness.dark,
+      brightness: palette.brightness,
       scaffoldBackgroundColor: palette.background,
-      colorScheme: ColorScheme.dark(
-        primary: palette.primary,
-        secondary: palette.secondary,
-        surface: palette.surface,
-        error: palette.accent,
-        onPrimary: Colors.black,
-        onSurface: palette.textPrimary,
-      ),
+      colorScheme: colorScheme,
+      textTheme: (palette.isDaylight
+              ? ThemeData.light().textTheme
+              : ThemeData.dark().textTheme)
+          .apply(
+            bodyColor: palette.textPrimary,
+            displayColor: palette.textPrimary,
+          ),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: false,
         titleTextStyle: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 16,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 2.0,
+          fontSize: 18,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.4,
           color: palette.textPrimary,
         ),
       ),
-      dividerTheme: const DividerThemeData(
-        color: Colors.white10,
+      dividerTheme: DividerThemeData(
+        color: palette.dividerColor,
         thickness: 1,
         space: 1,
       ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: palette.surfaceElevated,
-        contentTextStyle: TextStyle(color: palette.textPrimary, fontSize: 13),
+        backgroundColor: palette.isDaylight
+            ? const Color(0xF5FFFFFF)
+            : palette.surfaceElevated,
+        contentTextStyle: TextStyle(
+          color: palette.textPrimary,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: palette.primary.withValues(alpha: 0.35)),
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: palette.primary.withValues(alpha: 0.40)),
         ),
       ),
       extensions: [palette],
@@ -409,8 +652,7 @@ class CyberTheme {
   }
 }
 
-/// Reusable tactile micro-interaction wrapper that gives cards, pills, and
-/// buttons a subtle spring scale-down on press while respecting reduced-motion.
+/// Expressive bouncy jelly micro-interaction wrapper for pills, cards, and buttons.
 class FluidPressScale extends StatefulWidget {
   final Widget child;
   final VoidCallback? onTap;
@@ -421,8 +663,8 @@ class FluidPressScale extends StatefulWidget {
     super.key,
     required this.child,
     this.onTap,
-    this.pressedScale = 0.968,
-    this.duration = const Duration(milliseconds: 140),
+    this.pressedScale = 0.93,
+    this.duration = const Duration(milliseconds: 220),
   });
 
   @override
@@ -440,27 +682,39 @@ class _FluidPressScaleState extends State<FluidPressScale> {
   @override
   Widget build(BuildContext context) {
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    final effectiveDuration = disableAnimations ? Duration.zero : widget.duration;
+    if (disableAnimations) {
+      if (widget.onTap == null) return widget.child;
+      return GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: widget.onTap,
+        child: widget.child,
+      );
+    }
+
+    final Widget scaled = AnimatedScale(
+      scale: _isPressed ? widget.pressedScale : 1.0,
+      duration: widget.duration,
+      curve: _isPressed ? Curves.easeOutCubic : Curves.elasticOut,
+      child: widget.child,
+    );
+
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => _setPressed(true),
       onPointerUp: (_) => _setPressed(false),
       onPointerCancel: (_) => _setPressed(false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: widget.onTap,
-        child: AnimatedScale(
-          scale: _isPressed ? widget.pressedScale : 1.0,
-          duration: effectiveDuration,
-          curve: Curves.easeOutCubic,
-          child: widget.child,
-        ),
-      ),
+      child: widget.onTap != null
+          ? GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: widget.onTap,
+              child: scaled,
+            )
+          : scaled,
     );
   }
 }
 
-/// Top-edge specular highlight bar that gives glassmorphic surfaces a 3D bevel rim.
+/// Top-edge specular highlight bar for Apple Liquid Glass curved bevel reflection.
 class FluidSpecularBar extends StatelessWidget {
   final bool isSelected;
   final double height;
@@ -469,8 +723,8 @@ class FluidSpecularBar extends StatelessWidget {
   const FluidSpecularBar({
     super.key,
     this.isSelected = false,
-    this.height = 1.0,
-    this.margin = const EdgeInsets.symmetric(horizontal: 10),
+    this.height = 1.2,
+    this.margin = const EdgeInsets.symmetric(horizontal: 12),
   });
 
   @override
@@ -486,4 +740,3 @@ class FluidSpecularBar extends StatelessWidget {
     );
   }
 }
-

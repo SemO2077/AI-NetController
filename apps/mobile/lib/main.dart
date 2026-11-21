@@ -151,6 +151,9 @@ void saveHostPairingSecret(
   if (appSecretStore.hasOpenVault) {
     if (cleanIp.isNotEmpty) {
       unawaited(appSecretStore.saveToken(cleanIp, trimmed));
+      if (trimmed.isEmpty && Hive.isBoxOpen(kVaultSecretsBoxName)) {
+        unawaited(Hive.box(kVaultSecretsBoxName).delete('$_kHostSecretPrefix$cleanIp'));
+      }
       if (cleanFp.isNotEmpty) {
         unawaited(appSecretStore.saveCertFingerprint(cleanIp, cleanFp));
       }
@@ -481,22 +484,29 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
         ? certFingerprint.trim().toLowerCase()
         : existing.certFingerprint;
 
+    final String? providedSecret =
+        (sharedSecret != null && sharedSecret.trim().isNotEmpty)
+            ? sharedSecret.trim()
+            : null;
     if (existing.ip != nextIp) {
       HostConnectionPool.instance.invalidate(existing.ip);
-      if (existing.sharedSecret.isNotEmpty || nextFp.isNotEmpty) {
-        deleteHostPairingSecret(existing.ip);
+      deleteHostPairingSecret(existing.ip);
+      final String migratedSecret = providedSecret ?? existing.sharedSecret;
+      if (migratedSecret.isNotEmpty || nextFp.isNotEmpty) {
         saveHostPairingSecret(
           nextIp,
-          existing.sharedSecret,
+          migratedSecret,
           certFingerprint: nextFp,
         );
       }
     }
 
     String nextSecret = existing.sharedSecret;
-    if (sharedSecret != null && sharedSecret.trim().isNotEmpty) {
-      nextSecret = sharedSecret.trim();
-      saveHostPairingSecret(nextIp, nextSecret, certFingerprint: nextFp);
+    if (providedSecret != null) {
+      nextSecret = providedSecret;
+      if (existing.ip == nextIp) {
+        saveHostPairingSecret(nextIp, nextSecret, certFingerprint: nextFp);
+      }
     } else {
       nextSecret = loadHostPairingSecret(nextIp);
       if (nextFp.isEmpty) {
@@ -552,33 +562,61 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
     int? latencyMs,
     bool clearLatency = false,
   }) {
-    state = [
+    bool changed = false;
+    final nextList = <HostState>[
       for (final h in state)
         if (h.id == id)
-          h.copyWith(
-            isOnline: isOnline,
-            cpuUsage: cpu,
-            ramUsage: ram,
-            latencyMs: latencyMs,
-            clearLatency: clearLatency,
-          )
+          (() {
+            final nextOnline = isOnline ?? h.isOnline;
+            final nextCpu = cpu ?? h.cpuUsage;
+            final nextRam = ram ?? h.ramUsage;
+            final nextLat = clearLatency ? null : (latencyMs ?? h.latencyMs);
+            if (nextOnline == h.isOnline &&
+                nextCpu == h.cpuUsage &&
+                nextRam == h.ramUsage &&
+                nextLat == h.latencyMs) {
+              return h;
+            }
+            changed = true;
+            return h.copyWith(
+              isOnline: nextOnline,
+              cpuUsage: nextCpu,
+              ramUsage: nextRam,
+              latencyMs: nextLat,
+              clearLatency: clearLatency,
+            );
+          })()
         else
           h,
     ];
+    if (changed) {
+      state = nextList;
+    }
   }
 
   void updateLatencyByIp(String ip, int? latencyMs, {bool? isOnline}) {
-    state = [
+    bool changed = false;
+    final nextList = <HostState>[
       for (final h in state)
         if (h.ip == ip)
-          h.copyWith(
-            latencyMs: latencyMs,
-            clearLatency: latencyMs == null,
-            isOnline: isOnline ?? (latencyMs != null),
-          )
+          (() {
+            final nextOnline = isOnline ?? (latencyMs != null);
+            if (h.latencyMs == latencyMs && h.isOnline == nextOnline) {
+              return h;
+            }
+            changed = true;
+            return h.copyWith(
+              latencyMs: latencyMs,
+              clearLatency: latencyMs == null,
+              isOnline: nextOnline,
+            );
+          })()
         else
           h,
     ];
+    if (changed) {
+      state = nextList;
+    }
   }
 
   void setHostSecret(String ip, String secret, {String? certFingerprint}) {
@@ -631,7 +669,8 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
         : '';
 
     bool persistentMetadataChanged = false;
-    state = [
+    bool stateChanged = false;
+    final nextList = <HostState>[
       for (final h in state)
         if (h.ip == ip)
           (() {
@@ -649,24 +688,51 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
                 (osVal != null && osVal != h.osName)) {
               persistentMetadataChanged = true;
             }
+            final nextCpu = cpuVal ?? h.cpuUsage;
+            final nextRam = ramVal ?? h.ramUsage;
+            final nextDisk = diskVal ?? h.diskUsage;
+            final nextCores = coresVal ?? h.cpuCores;
+            final nextRamUsed = ramUsedVal ?? h.ramUsedGb;
+            final nextRamTotal = ramTotalVal ?? h.ramTotalGb;
+            final nextUptime = uptimeVal ?? h.uptimeSec;
+            final nextViewOnly = viewOnlyVal ?? h.viewOnlyMode;
+            final nextOs = osVal ?? h.osName;
+            if (nextName == h.name &&
+                nextMac == h.mac &&
+                h.isOnline &&
+                nextCpu == h.cpuUsage &&
+                nextRam == h.ramUsage &&
+                nextDisk == h.diskUsage &&
+                nextCores == h.cpuCores &&
+                nextRamUsed == h.ramUsedGb &&
+                nextRamTotal == h.ramTotalGb &&
+                nextUptime == h.uptimeSec &&
+                nextViewOnly == h.viewOnlyMode &&
+                nextOs == h.osName) {
+              return h;
+            }
+            stateChanged = true;
             return h.copyWith(
               name: nextName,
               mac: nextMac,
               isOnline: true,
-              cpuUsage: cpuVal,
-              ramUsage: ramVal,
-              diskUsage: diskVal,
-              cpuCores: coresVal,
-              ramUsedGb: ramUsedVal,
-              ramTotalGb: ramTotalVal,
-              uptimeSec: uptimeVal,
-              viewOnlyMode: viewOnlyVal,
-              osName: osVal,
+              cpuUsage: nextCpu,
+              ramUsage: nextRam,
+              diskUsage: nextDisk,
+              cpuCores: nextCores,
+              ramUsedGb: nextRamUsed,
+              ramTotalGb: nextRamTotal,
+              uptimeSec: nextUptime,
+              viewOnlyMode: nextViewOnly,
+              osName: nextOs,
             );
           })()
         else
           h,
     ];
+    if (stateChanged) {
+      state = nextList;
+    }
 
     if (persistentMetadataChanged) {
       _persistHosts();
@@ -783,7 +849,9 @@ class AINetControllerApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final prefs = ref.watch(appPreferencesProvider);
+    final reducedMotion = ref.watch(
+      appPreferencesProvider.select((p) => p.reducedMotion),
+    );
     final palette = ref.watch(cyberPaletteProvider);
 
     return MaterialApp(
@@ -795,7 +863,7 @@ class AINetControllerApp extends ConsumerWidget {
         return MediaQuery(
           data: mq.copyWith(
             textScaler: FluidSize.clampedTextScaler(context),
-            disableAnimations: prefs.reducedMotion || mq.disableAnimations,
+            disableAnimations: reducedMotion || mq.disableAnimations,
           ),
           child: child ?? const SizedBox.shrink(),
         );
@@ -913,10 +981,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
       if (resolvedSecret.isNotEmpty || certFp.isNotEmpty) {
         saveHostPairingSecret(ip, resolvedSecret, certFingerprint: certFp);
-        if (ref.read(globalPairingSecretProvider).trim().isEmpty &&
-            resolvedSecret.isNotEmpty) {
-          ref.read(globalPairingSecretProvider.notifier).state = resolvedSecret;
-        }
+      }
+      if (!mounted) return false;
+      if (resolvedSecret.isNotEmpty &&
+          ref.read(globalPairingSecretProvider).trim().isEmpty) {
+        ref.read(globalPairingSecretProvider.notifier).state = resolvedSecret;
       }
 
       final cleanName = NetworkValidators.sanitizeLabel(
@@ -991,6 +1060,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final hosts = ref.read(fleetProvider).where((h) => h.isOnline).toList();
     int triggered = 0;
     for (final host in hosts) {
+      if (!mounted) break;
       try {
         final client = await _acquireConnectedClient(host);
         if (client != null) {
@@ -1014,6 +1084,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
   @override
   void dispose() {
+    if (Platform.isAndroid || Platform.isIOS) {
+      _deeplinkChannel.setMethodCallHandler(null);
+      OsIntegrationsManager.instance.clearQuickActionHandler(_handleQuickAction);
+    }
     HostConnectionPool.instance.disposeAll();
     _commandController.dispose();
     _fleetSearchController.dispose();
@@ -1031,25 +1105,31 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     Duration duration = const Duration(seconds: 2),
   }) {
     if (!mounted) return;
-    final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
+    final Color effectiveAccent = accentColor ?? palette.primary;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          backgroundColor: CyberColors.surfaceElevated,
+          backgroundColor: palette.isDaylight
+              ? const Color(0xF5FFFFFF)
+              : palette.surfaceElevated,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
             side: BorderSide(
-              color: (accentColor ?? primary).withValues(alpha: 0.35),
+              color: effectiveAccent.withValues(alpha: 0.42),
             ),
           ),
           content: Text(
             message,
             style: TextStyle(
-              color: accentColor ?? primary,
+              color: palette.isDaylight
+                  ? (accentColor == null ? palette.textPrimary : effectiveAccent)
+                  : effectiveAccent,
               fontFamily: 'monospace',
               fontSize: 12,
+              fontWeight: FontWeight.w600,
             ),
           ),
           duration: duration,
@@ -1428,19 +1508,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
-            final primary = Theme.of(ctx).colorScheme.primary;
+            final dlgPalette = ctx.palette;
+            final primary = dlgPalette.primary;
             return AlertDialog(
               insetPadding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-              backgroundColor: CyberColors.surfaceElevated,
+              backgroundColor: dlgPalette.surfaceElevated,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                side: BorderSide(color: dlgPalette.dividerColor),
               ),
               title: Text(
                 existing == null ? 'Add Workstation' : 'Edit Workstation',
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: dlgPalette.textPrimary,
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
                 ),
@@ -1452,7 +1533,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   children: [
                     TextField(
                       controller: nameCtrl,
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      style: TextStyle(color: dlgPalette.textPrimary, fontSize: 13),
                       decoration: const InputDecoration(
                         labelText: 'Hostname',
                         hintText: 'e.g. WORKSTATION-01',
@@ -1465,8 +1546,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           flex: 3,
                           child: TextField(
                             controller: ipCtrl,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: dlgPalette.textPrimary,
                               fontSize: 13,
                               fontFamily: 'monospace',
                             ),
@@ -1482,8 +1563,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           child: TextField(
                             controller: portCtrl,
                             keyboardType: TextInputType.number,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: dlgPalette.textPrimary,
                               fontSize: 13,
                               fontFamily: 'monospace',
                             ),
@@ -1498,8 +1579,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     const SizedBox(height: 10),
                     TextField(
                       controller: macCtrl,
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: dlgPalette.textPrimary,
                         fontSize: 13,
                         fontFamily: 'monospace',
                       ),
@@ -1514,8 +1595,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       obscureText: secretCtrl.text.trim().length > 6 &&
                           !RegExp(r'^\d+$').hasMatch(secretCtrl.text.trim()),
                       onChanged: (_) => setDialogState(() {}),
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: dlgPalette.textPrimary,
                         fontSize: 13,
                         fontFamily: 'monospace',
                       ),
@@ -1545,12 +1626,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                                 final clip =
                                     await Clipboard.getData('text/plain');
                                 final txt = clip?.text?.trim() ?? '';
-                                if (txt.isEmpty) return;
+                                if (txt.isEmpty || !mounted) return;
                                 final ok =
                                     await _handleIncomingPairingLink(txt);
                                 if (ok && nav.mounted) {
                                   nav.pop();
-                                } else {
+                                } else if (ctx.mounted) {
                                   setDialogState(() {
                                     validationError =
                                         'Clipboard does not contain a valid ainet://pair or #pair_ip= link.';
@@ -1564,9 +1645,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       dense: true,
                       activeThumbColor: primary,
                       activeTrackColor: primary.withValues(alpha: 0.45),
-                      title: const Text(
+                      title: Text(
                         'Require WSS TLS',
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                        style: TextStyle(
+                          color: dlgPalette.textSecondary,
+                          fontSize: 12,
+                        ),
                       ),
                       value: useTls,
                       onChanged: isSaving
@@ -1589,15 +1673,17 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               actions: [
                 TextButton(
                   onPressed: isSaving ? null : () => Navigator.of(ctx).pop(),
-                  child: const Text(
+                  child: Text(
                     'Cancel',
-                    style: TextStyle(color: CyberColors.textSecondary),
+                    style: TextStyle(color: dlgPalette.textSecondary),
                   ),
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primary,
-                    foregroundColor: Colors.black,
+                    foregroundColor: dlgPalette.isDaylight
+                        ? Colors.white
+                        : const Color(0xFF090B1D),
                   ),
                   onPressed: isSaving
                       ? null
@@ -1682,12 +1768,13 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                               secret,
                               certFingerprint: certFp,
                             );
-                            if (secret.isNotEmpty &&
-                                ref.read(globalPairingSecretProvider).trim().isEmpty) {
-                              ref
-                                  .read(globalPairingSecretProvider.notifier)
-                                  .state = secret;
-                            }
+                          }
+                          if (!mounted) return;
+                          if (secret.isNotEmpty &&
+                              ref.read(globalPairingSecretProvider).trim().isEmpty) {
+                            ref
+                                .read(globalPairingSecretProvider.notifier)
+                                .state = secret;
                           }
 
                           if (existing != null) {
@@ -1771,10 +1858,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   Future<void> _showHostClipboardActions(HostState host) async {
-    final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
+    final primary = palette.primary;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: CyberColors.surfaceElevated,
+      backgroundColor: palette.surfaceElevated,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -1797,6 +1885,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           accentColor: CyberColors.warning);
                       return;
                     }
+                    if (!mounted) return;
                     final client = await _acquireConnectedClient(host);
                     if (client == null) return;
                     client.retain();
@@ -1819,6 +1908,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                 title: const Text('Pull PC Clipboard to Phone'),
                 onTap: () async {
                   Navigator.of(ctx).pop();
+                  if (!mounted) return;
                   try {
                     final client = await _acquireConnectedClient(host);
                     if (client == null) return;
@@ -1851,7 +1941,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   Future<void> _showHostAudioActions(HostState host) async {
-    final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
+    final primary = palette.primary;
     HostConnectionClient? client;
     try {
       client = await _acquireConnectedClient(host);
@@ -1859,12 +1950,17 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       _showToast('Failed to connect to ${host.name}: $e',
           accentColor: _kDangerColor);
     }
-    if (client == null || !mounted) return;
+    if (client == null) return;
+    if (!mounted) {
+      client.retain();
+      client.release();
+      return;
+    }
     final activeClient = client..retain();
     try {
       await showModalBottomSheet<void>(
         context: context,
-        backgroundColor: CyberColors.surfaceElevated,
+        backgroundColor: palette.surfaceElevated,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
@@ -1935,58 +2031,61 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
     final submitted = await showDialog<bool>(
           context: context,
-          builder: (ctx) => AlertDialog(
-            backgroundColor: CyberColors.surfaceElevated,
-            title: Text('Send Encrypted File -> ${host.name}'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: pathCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Local File Path (optional)',
-                      hintText: '/storage/emulated/0/Download/file.bin',
+          builder: (ctx) {
+            final dlgPalette = ctx.palette;
+            return AlertDialog(
+              backgroundColor: dlgPalette.surfaceElevated,
+              title: Text('Send Encrypted File -> ${host.name}'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: pathCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Local File Path (optional)',
+                        hintText: '/storage/emulated/0/Download/file.bin',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Or send a text note payload directly:',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: CyberColors.textSecondary,
+                    const SizedBox(height: 12),
+                    Text(
+                      'Or send a text note payload directly:',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: dlgPalette.textSecondary,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: noteNameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Target Filename',
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: noteNameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Target Filename',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: noteBodyCtrl,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: 'Quick Text Content',
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: noteBodyCtrl,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: 'Quick Text Content',
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('Send AEAD'),
-              ),
-            ],
-          ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: const Text('Send AEAD'),
+                ),
+              ],
+            );
+          },
         ) ??
         false;
 
@@ -2011,6 +2110,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     File? tempFile;
     File targetFile;
     HostConnectionClient? client;
+    ValueNotifier<TransferProgress>? activeProgressNotifier;
+    bool dialogDisposed = false;
     try {
       if (filePath.isNotEmpty) {
         targetFile = File(filePath);
@@ -2030,9 +2131,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         targetFile = tempFile;
       }
 
+      if (!mounted) return;
       client = await _acquireConnectedClient(host);
-      if (client == null || !mounted) return;
+      if (client == null) return;
       client.retain();
+      if (!mounted) return;
 
       final fileLen = await targetFile.length();
       if (!mounted) return;
@@ -2048,7 +2151,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           state: TransferState.hashing,
         ),
       );
-      bool dialogDisposed = false;
+      activeProgressNotifier = progressNotifier;
 
       unawaited(
         showDialog<void>(
@@ -2102,6 +2205,19 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         }
       }
     } catch (e) {
+      if (activeProgressNotifier != null && !dialogDisposed) {
+        final prev = activeProgressNotifier.value;
+        activeProgressNotifier.value = TransferProgress(
+          transferId: prev.transferId,
+          filename: prev.filename,
+          totalBytes: prev.totalBytes,
+          bytesSent: prev.bytesSent,
+          speedBytesPerSec: 0,
+          eta: Duration.zero,
+          state: TransferState.failed,
+          errorMessage: e.toString(),
+        );
+      }
       _showToast('File transfer error: $e', accentColor: _kDangerColor);
     } finally {
       client?.release();
@@ -2113,16 +2229,18 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
   Future<void> _showHostActionsSheet(HostState host) async {
     _hapticTap();
-    final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
     final hasValidMac = NetworkValidators.normalizeMac(host.mac) != null;
 
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: CyberColors.surfaceElevated,
+      backgroundColor: palette.surfaceElevated,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
+        final sheetPalette = ctx.palette;
+        final primary = sheetPalette.primary;
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -2133,7 +2251,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   width: 38,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.white24,
+                    color: sheetPalette.textTertiary.withValues(alpha: 0.35),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -2145,7 +2263,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           ? Icons.computer_rounded
                           : Icons.power_settings_new_rounded,
                       color:
-                          host.isOnline ? CyberColors.success : primary,
+                          host.isOnline ? sheetPalette.success : primary,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -2154,16 +2272,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                         children: [
                           Text(
                             host.name,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: sheetPalette.textPrimary,
                               fontWeight: FontWeight.bold,
                               fontSize: 15,
                             ),
                           ),
                           Text(
                             '${host.ip}:${host.wsPort}${host.latencyMs != null ? ' • ${host.latencyMs}ms' : ''}',
-                            style: const TextStyle(
-                              color: CyberColors.textSecondary,
+                            style: TextStyle(
+                              color: sheetPalette.textSecondary,
                               fontFamily: 'monospace',
                               fontSize: 11,
                             ),
@@ -2173,7 +2291,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     ),
                   ],
                 ),
-                const Divider(height: 20, color: Colors.white12),
+                Divider(height: 20, color: sheetPalette.dividerColor),
                 Flexible(
                   child: SingleChildScrollView(
                     child: Column(
@@ -2201,9 +2319,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           },
                         ),
                         ListTile(
-                          leading: const Icon(
+                          leading: Icon(
                             Icons.content_paste_go_rounded,
-                            color: Colors.white70,
+                            color: sheetPalette.textSecondary,
                           ),
                           title: const Text('Sync Clipboard with PC'),
                           onTap: () {
@@ -2212,9 +2330,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           },
                         ),
                         ListTile(
-                          leading: const Icon(
+                          leading: Icon(
                             Icons.tune_rounded,
-                            color: Colors.white70,
+                            color: sheetPalette.textSecondary,
                           ),
                           title: const Text('Remote Audio & Lock PC'),
                           onTap: () {
@@ -2234,9 +2352,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           },
                         ),
                         ListTile(
-                          leading: const Icon(
+                          leading: Icon(
                             Icons.network_ping_rounded,
-                            color: CyberColors.success,
+                            color: sheetPalette.success,
                           ),
                           title: const Text('Measure Latency (Ping)'),
                           onTap: () {
@@ -2248,8 +2366,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           leading: Icon(
                             Icons.bolt_rounded,
                             color: hasValidMac
-                                ? CyberColors.warning
-                                : CyberColors.textTertiary,
+                                ? sheetPalette.warning
+                                : sheetPalette.textTertiary,
                           ),
                           title: const Text('Send Wake-on-LAN Packet'),
                           subtitle: hasValidMac
@@ -2265,8 +2383,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           },
                         ),
                         ListTile(
-                          leading: const Icon(Icons.copy_rounded,
-                              color: Colors.white70),
+                          leading: Icon(Icons.copy_rounded,
+                              color: sheetPalette.textSecondary),
                           title: const Text('Copy IP Address'),
                           onTap: () {
                             Navigator.of(ctx).pop();
@@ -2275,8 +2393,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           },
                         ),
                         ListTile(
-                          leading: const Icon(Icons.edit_rounded,
-                              color: Colors.white70),
+                          leading: Icon(Icons.edit_rounded,
+                              color: sheetPalette.textSecondary),
                           title: const Text('Edit Workstation'),
                           onTap: () {
                             Navigator.of(ctx).pop();
@@ -2316,7 +2434,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             insetPadding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
             scrollable: true,
-            backgroundColor: CyberColors.surfaceElevated,
+            backgroundColor: ctx.palette.surfaceElevated,
             title: const Text('Remove Workstation?'),
             content: Text(
               'Remove ${host.name} (${host.ip}) and purge its saved pairing token from this device?',
@@ -2357,11 +2475,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final approved = await showDialog<bool>(
           context: context,
           builder: (ctx) {
+            final dlgPalette = ctx.palette;
             return AlertDialog(
               insetPadding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               scrollable: true,
-              backgroundColor: CyberColors.surfaceElevated,
+              backgroundColor: dlgPalette.surfaceElevated,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
                 side: BorderSide(
@@ -2386,8 +2505,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                 children: [
                   Text(
                     riskReason,
-                    style: const TextStyle(
-                      color: CyberColors.warning,
+                    style: TextStyle(
+                      color: dlgPalette.warning,
                       fontSize: 12.5,
                       fontWeight: FontWeight.w600,
                     ),
@@ -2397,25 +2516,25 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF060B16),
+                      color: dlgPalette.terminalBackground,
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.white12),
+                      border: Border.all(color: dlgPalette.dividerColor),
                     ),
                     child: Text(
                       command,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 11.5,
-                        color: Colors.white,
+                        color: dlgPalette.terminalText,
                       ),
                     ),
                   ),
                   if (biometricArmed) ...[
                     const SizedBox(height: 10),
-                    const Text(
+                    Text(
                       'Device Biometric HITL guard is armed — confirm only if you intended this action.',
                       style: TextStyle(
-                        color: CyberColors.textSecondary,
+                        color: dlgPalette.textSecondary,
                         fontSize: 11,
                       ),
                     ),
@@ -2570,6 +2689,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           });
         }
 
+        bool hadError = false;
         final sub = client.llmTokenStream.listen((token) {
           if (token.trimLeft().startsWith('{')) {
             try {
@@ -2579,9 +2699,13 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   if (!done.isCompleted) done.complete();
                   return;
                 }
-                if (buf.isEmpty && parsed['error'] != null) {
-                  updateLatestStatus('Ollama Error: ${parsed['error']}',
-                      isError: true);
+                if (parsed['error'] != null) {
+                  hadError = true;
+                  final prefix = buf.isEmpty ? '' : '[Ollama Stream]\n${buf.toString()}\n\n';
+                  updateLatestStatus(
+                    '${prefix}Ollama Error: ${parsed['error']}',
+                    isError: true,
+                  );
                   if (!done.isCompleted) done.complete();
                   return;
                 }
@@ -2602,7 +2726,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           updateLatestStatus('[Ollama Stream] Awaiting host AI tokens...');
           resetIdle(const Duration(seconds: 12));
           await done.future;
-          if (buf.isEmpty) {
+          if (buf.isEmpty && !hadError) {
             updateLatestStatus(
               'No response from host Ollama bridge within 12s.',
               isError: true,
@@ -2666,12 +2790,30 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       ),
     ];
 
+    final isDaylight = ref.watch(
+      appPreferencesProvider.select((p) => p.themeMode == AppThemeMode.daylight),
+    );
+
     return AdaptiveScaffold(
-      title: 'AI NETCONTROLLER',
+      title: 'AI NetController',
       navItems: navDestinations,
       selectedIndex: _currentTabIndex,
       onIndexChanged: (idx) => setState(() => _currentTabIndex = idx),
       actions: [
+        IconButton(
+          tooltip: isDaylight
+              ? 'Switch to Vibrant Dark Glass'
+              : 'Switch to Bright Daylight Glass',
+          icon: Icon(
+            isDaylight ? Icons.wb_sunny_rounded : Icons.nightlight_round,
+            color: isDaylight ? const Color(0xFFF59E0B) : primary,
+            size: 21,
+          ),
+          onPressed: () {
+            _hapticTap();
+            ref.read(appPreferencesProvider.notifier).toggleThemeMode();
+          },
+        ),
         IconButton(
           tooltip: 'Scan for PC',
           icon: _isScanning
@@ -2748,10 +2890,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   Widget _buildOnboardingBanner() {
-    final prefs = ref.watch(appPreferencesProvider);
-    if (prefs.hasCompletedOnboarding) return const SizedBox.shrink();
-    final primary = Theme.of(context).colorScheme.primary;
+    final hasCompletedOnboarding = ref.watch(
+      appPreferencesProvider.select((p) => p.hasCompletedOnboarding),
+    );
+    if (hasCompletedOnboarding) return const SizedBox.shrink();
     final palette = context.palette;
+    final primary = palette.primary;
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.fromLTRB(12, 8, 8, 10),
@@ -2786,11 +2930,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             children: [
               Icon(Icons.auto_awesome_rounded, color: primary, size: 18),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
                   'New to AI NetController?',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: palette.textPrimary,
                     fontWeight: FontWeight.bold,
                     fontSize: 12.5,
                   ),
@@ -2815,10 +2959,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 tooltip: 'Dismiss tour banner',
-                icon: const Icon(
+                icon: Icon(
                   Icons.close_rounded,
                   size: 16,
-                  color: CyberColors.textSecondary,
+                  color: palette.textSecondary,
                 ),
                 onPressed: () => ref
                     .read(appPreferencesProvider.notifier)
@@ -2827,10 +2971,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             ],
           ),
           const SizedBox(height: 2),
-          const Text(
+          Text(
             'Gestures, Wake-on-LAN & PIN pairing tips.',
             style: TextStyle(
-              color: CyberColors.textSecondary,
+              color: palette.textSecondary,
               fontSize: 11,
             ),
           ),
@@ -2840,7 +2984,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   Widget _buildFleetToolbar(List<HostState> hosts) {
-    final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
+    final primary = palette.primary;
     final hasSleepingWithMac = hosts.any(
       (h) => !h.isOnline && NetworkValidators.normalizeMac(h.mac) != null,
     );
@@ -2891,15 +3036,15 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                         minimumSize: Size.zero,
                       ),
                       onPressed: () => _wakeAllOfflineHosts(hosts),
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.bolt_rounded,
                         size: 15,
-                        color: CyberColors.warning,
+                        color: palette.warning,
                       ),
-                      label: const Text(
+                      label: Text(
                         'Wake All',
                         style: TextStyle(
-                          color: CyberColors.warning,
+                          color: palette.warning,
                           fontSize: 11.5,
                         ),
                       ),
@@ -2913,7 +3058,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           TextField(
             controller: _fleetSearchController,
             onChanged: (val) => setState(() => _fleetSearchQuery = val),
-            style: const TextStyle(color: Colors.white, fontSize: 12.5),
+            style: TextStyle(color: palette.terminalText, fontSize: 12.5),
             decoration: InputDecoration(
               isDense: true,
               prefixIcon: Icon(Icons.search_rounded, size: 18, color: primary),
@@ -2927,21 +3072,19 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     )
                   : null,
               hintText: 'Filter by hostname, IP, or MAC...',
-              hintStyle: const TextStyle(
-                color: CyberColors.textTertiary,
+              hintStyle: TextStyle(
+                color: palette.textTertiary,
                 fontSize: 12,
               ),
               filled: true,
-              fillColor: CyberColors.surfaceElevated.withValues(alpha: 0.7),
+              fillColor: palette.terminalBackground,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(14),
-                borderSide:
-                    BorderSide(color: Colors.white.withValues(alpha: 0.10)),
+                borderSide: BorderSide(color: palette.glassBorderIdle),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(14),
-                borderSide:
-                    BorderSide(color: Colors.white.withValues(alpha: 0.10)),
+                borderSide: BorderSide(color: palette.glassBorderIdle),
               ),
             ),
           ),
@@ -2952,15 +3095,15 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   Widget _buildEmptyFleetState() {
-    final primary = Theme.of(context).colorScheme.primary;
     final palette = context.palette;
+    final primary = palette.primary;
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 16),
       padding: const EdgeInsets.fromLTRB(24, 14, 24, 24),
       decoration: BoxDecoration(
         gradient: palette.cardBevelGradient(isSelected: false),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+        border: Border.all(color: palette.glassBorderIdle),
         boxShadow: palette.elevationShadows(isSelected: false),
       ),
       child: Column(
@@ -2993,20 +3136,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             child: Icon(Icons.devices_rounded, color: primary, size: 24),
           ),
           const SizedBox(height: 14),
-          const Text(
+          Text(
             'No Workstations Found',
             style: TextStyle(
-              color: Colors.white,
+              color: palette.textPrimary,
               fontSize: 15,
               fontWeight: FontWeight.bold,
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
+          Text(
             'Scan your Wi-Fi network to detect active PCs running the AI NetController host daemon, or manually register an IP address.',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: CyberColors.textSecondary,
+              color: palette.textSecondary,
               fontSize: 12,
               height: 1.4,
             ),
@@ -3020,7 +3163,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: primary,
-                  foregroundColor: Colors.black,
+                  foregroundColor: palette.isDaylight
+                      ? Colors.white
+                      : const Color(0xFF090B1D),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
@@ -3030,12 +3175,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   ),
                 ),
                 icon: _isScanning
-                    ? const SizedBox(
+                    ? SizedBox(
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: Colors.black,
+                          color: palette.isDaylight
+                              ? Colors.white
+                              : const Color(0xFF090B1D),
                         ),
                       )
                     : const Icon(Icons.radar_rounded, size: 18),
@@ -3050,9 +3197,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               ),
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side:
-                      BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+                  foregroundColor: palette.textPrimary,
+                  side: BorderSide(color: palette.dividerColor, width: 1.2),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
@@ -3248,7 +3394,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       );
     }
 
-    final prefs = ref.watch(appPreferencesProvider);
+    final (preferTls, targetFps, keepScreenAwake) = ref.watch(
+      appPreferencesProvider.select(
+        (p) => (p.preferTls, p.targetFps, p.keepScreenAwake),
+      ),
+    );
+    final palette = context.palette;
     return LayoutBuilder(
       key: ValueKey<String>(host.id),
       builder: (context, constraints) {
@@ -3273,11 +3424,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       wsPort: host.wsPort,
                       isInline: true,
                       sharedSecret: _resolveSecretForHost(host),
-                      useTls: host.useTls || prefs.preferTls,
+                      useTls: host.useTls || preferTls,
                       certFingerprint: host.certFingerprint.trim().isNotEmpty
                           ? host.certFingerprint.trim()
                           : loadHostCertFingerprint(host.ip),
-                      targetFps: prefs.targetFps,
+                      targetFps: targetFps,
+                      keepScreenAwake: keepScreenAwake,
                       onTelemetry: (data) => ref
                           .read(fleetProvider.notifier)
                           .updateTelemetryByIp(host.ip, data),
@@ -3286,12 +3438,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   : Container(
                       key: ValueKey('offline-${host.id}'),
                       decoration: BoxDecoration(
-                        color:
-                            CyberColors.surfaceElevated.withValues(alpha: 0.92),
+                        gradient: palette.cardBevelGradient(isSelected: false),
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.1),
-                        ),
+                        border: Border.all(color: palette.glassBorderIdle),
                       ),
                       child: Center(
                         child: SingleChildScrollView(
@@ -3302,26 +3451,30 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                               Icon(
                                 Icons.power_settings_new_rounded,
                                 size: isShortPane ? 28 : 40,
-                                color: CyberColors.textTertiary,
+                                color: palette.textTertiary,
                               ),
                               SizedBox(height: isShortPane ? 6 : 12),
                               Text(
                                 '${host.name} is currently in S3/S5 Sleep State',
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: CyberColors.textSecondary,
+                                style: TextStyle(
+                                  color: palette.textSecondary,
                                 ),
                               ),
                               SizedBox(height: isShortPane ? 8 : 12),
                               ElevatedButton.icon(
-                                icon: const Icon(
+                                icon: Icon(
                                   Icons.bolt_rounded,
-                                  color: Colors.black,
+                                  color: palette.isDaylight
+                                      ? Colors.white
+                                      : Colors.black,
                                 ),
                                 label: const Text('WAKE ON LAN (WoL)'),
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: CyberColors.warning,
-                                  foregroundColor: Colors.black,
+                                  backgroundColor: palette.warning,
+                                  foregroundColor: palette.isDaylight
+                                      ? Colors.white
+                                      : Colors.black,
                                 ),
                                 onPressed: () =>
                                     _sendWakeOnLan(host.mac, targetIp: host.ip),
@@ -3364,8 +3517,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     bool isEmbedded = false,
     List<HostState> hosts = const [],
   }) {
-    final primary = Theme.of(context).colorScheme.primary;
-    final prefs = ref.watch(appPreferencesProvider);
+    final palette = context.palette;
+    final primary = palette.primary;
+    final terminalHistory = ref.watch(
+      appPreferencesProvider.select((p) => p.terminalHistory),
+    );
     final commands = const [
       'Get-Process | Sort-Object CPU -Descending | Select -First 8',
       'ipconfig /all',
@@ -3375,8 +3531,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     ];
 
     final targetHeader = host != null
-        ? 'DISPATCH COMMAND TO: ${host.name} • ${host.ip}'
-        : 'DISPATCH COMMAND (SELECT OR ADD A HOST FIRST)';
+        ? 'Command Console · ${host.name} (${host.ip})'
+        : 'Command Console · Select or Add a Host';
 
     return ListView(
       physics: const BouncingScrollPhysics(),
@@ -3397,10 +3553,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     value: host.id,
                     isExpanded: true,
                     isDense: true,
-                    dropdownColor: CyberColors.surfaceElevated,
+                    dropdownColor: palette.surfaceElevated,
                     style: TextStyle(
                       color: primary,
                       fontFamily: 'monospace',
+                      fontWeight: FontWeight.w700,
                       fontSize: 11.5,
                     ),
                     items: hosts
@@ -3437,62 +3594,61 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               child: TextField(
                 controller: _commandController,
                 onSubmitted: (val) => _dispatchCommand(val, host),
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: palette.terminalText,
                   fontFamily: 'monospace',
                   fontSize: 12.5,
                 ),
                 decoration: InputDecoration(
                   hintText: 'Enter PowerShell or Bash command...',
                   hintStyle: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.35),
+                    color: palette.textSecondary,
                     fontFamily: 'monospace',
                     fontSize: 12,
                   ),
                   filled: true,
-                  fillColor:
-                      CyberColors.surfaceElevated.withValues(alpha: 0.92),
+                  fillColor: palette.terminalBackground,
                   contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
+                    horizontal: 16,
+                    vertical: 13,
                   ),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide(
-                      color: Colors.white.withValues(alpha: 0.12),
-                    ),
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(color: palette.glassBorderIdle),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide(
-                      color: Colors.white.withValues(alpha: 0.12),
-                    ),
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(color: palette.glassBorderIdle),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(color: primary, width: 1.5),
                   ),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             FluidPressScale(
-              pressedScale: 0.94,
+              pressedScale: 0.91,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: primary,
-                  foregroundColor: Colors.black,
+                  foregroundColor: Colors.white,
                   elevation: 6,
                   shadowColor: primary.withValues(alpha: 0.45),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(24),
                   ),
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 13,
+                    horizontal: 18,
+                    vertical: 14,
                   ),
                 ),
                 onPressed: () =>
                     _dispatchCommand(_commandController.text, host),
                 child: const Text(
                   'Run',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5),
                 ),
               ),
             ),
@@ -3504,19 +3660,19 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           runSpacing: 8,
           children: commands.map((cmd) {
             return FluidPressScale(
-              pressedScale: 0.95,
+              pressedScale: 0.92,
               child: ActionChip(
-                backgroundColor:
-                    CyberColors.surfaceElevated.withValues(alpha: 0.92),
-                side: BorderSide(color: primary.withValues(alpha: 0.40)),
+                backgroundColor: palette.terminalBackground,
+                side: BorderSide(color: primary.withValues(alpha: 0.35)),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(20),
                 ),
                 label: Text(
                   cmd.split('|').first.trim(),
                   style: TextStyle(
                     color: primary,
                     fontSize: context.fluidFont(11),
+                    fontWeight: FontWeight.w600,
                     fontFamily: 'monospace',
                   ),
                 ),
@@ -3525,19 +3681,19 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             );
           }).toList(),
         ),
-        if (prefs.terminalHistory.isNotEmpty) ...[
+        if (terminalHistory.isNotEmpty) ...[
           const SizedBox(height: 14),
           Row(
             children: [
-              Expanded(child: _buildSectionHeader('RECENT COMMAND HISTORY')),
+              Expanded(child: _buildSectionHeader('Recent Command History')),
               TextButton(
                 onPressed: () => ref
                     .read(appPreferencesProvider.notifier)
                     .clearTerminalHistory(),
-                child: const Text(
+                child: Text(
                   'Clear History',
                   style: TextStyle(
-                    color: CyberColors.textSecondary,
+                    color: palette.textSecondary,
                     fontSize: 11,
                   ),
                 ),
@@ -3547,18 +3703,21 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-              children: prefs.terminalHistory.map((item) {
+              children: terminalHistory.map((item) {
                 return Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: ActionChip(
-                    backgroundColor: Colors.white.withValues(alpha: 0.04),
-                    side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+                    backgroundColor: palette.terminalBackground,
+                    side: BorderSide(color: palette.glassBorderIdle),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
                     label: Text(
                       item,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white70,
+                      style: TextStyle(
+                        color: palette.terminalText,
                         fontFamily: 'monospace',
                         fontSize: 10.5,
                       ),
@@ -3577,16 +3736,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           children: [
             Expanded(
               child: _buildSectionHeader(
-                'TERMINAL CONSOLE OUTPUT • SANDBOXED JOB OBJECT',
+                'Terminal Output · Sandboxed Job Object',
               ),
             ),
             if (_commandLogs.isNotEmpty)
               TextButton(
                 onPressed: () => setState(() => _commandLogs.clear()),
-                child: const Text(
+                child: Text(
                   'Clear Log',
                   style: TextStyle(
-                    color: CyberColors.textSecondary,
+                    color: palette.textSecondary,
                     fontSize: 11,
                   ),
                 ),
@@ -3597,37 +3756,25 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         RepaintBoundary(
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFF0A1224),
-                  Color(0xFF050912),
-                ],
+              color: palette.terminalBackground,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: palette.isDaylight
+                    ? Colors.white.withValues(alpha: 0.90)
+                    : primary.withValues(alpha: 0.34),
+                width: 1.2,
               ),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: primary.withValues(alpha: 0.28)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.52),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-                BoxShadow(
-                  color: primary.withValues(alpha: 0.08),
-                  blurRadius: 14,
-                ),
-              ],
+              boxShadow: palette.elevationShadows(isSelected: false),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const FluidSpecularBar(
                   isSelected: true,
-                  height: 1.0,
-                  margin: EdgeInsets.only(bottom: 10),
+                  height: 1.2,
+                  margin: EdgeInsets.only(bottom: 12),
                 ),
                 _commandLogs.isEmpty
                     ? Text(
@@ -3636,7 +3783,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                             : 'No active command session. Add a workstation in the Fleet tab to execute remote commands.',
                         style: TextStyle(
                           fontFamily: 'monospace',
-                          color: CyberColors.textSecondary,
+                          color: palette.textSecondary,
                           fontSize: context.fluidFont(11),
                         ),
                       )
@@ -3668,10 +3815,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                                         minHeight: 28,
                                       ),
                                       tooltip: 'Copy output',
-                                      icon: const Icon(
+                                      icon: Icon(
                                         Icons.copy_rounded,
                                         size: 14,
-                                        color: CyberColors.textTertiary,
+                                        color: palette.textSecondary,
                                       ),
                                       onPressed: () {
                                         Clipboard.setData(
@@ -3688,9 +3835,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                                   style: TextStyle(
                                     fontFamily: 'monospace',
                                     color: entry.isError
-                                        ? CyberColors.warning
-                                        : CyberColors.success,
-                                    fontSize: context.fluidFont(10),
+                                        ? palette.accent
+                                        : palette.terminalText,
+                                    fontSize: context.fluidFont(10.5),
                                   ),
                                 ),
                               ],
@@ -3722,137 +3869,155 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       );
     }
 
+    bool isSaving = false;
     await showDialog<void>(
       context: context,
       builder: (ctx) {
-        final primary = Theme.of(ctx).colorScheme.primary;
-        return AlertDialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          scrollable: true,
-          backgroundColor: CyberColors.surfaceElevated,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-          ),
-          title: const Text(
-            'Pair Workstation Credentials',
-            style: TextStyle(color: Colors.white, fontSize: 16),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: secretCtrl,
-                obscureText: true,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontFamily: 'monospace',
-                ),
-                decoration: const InputDecoration(
-                  labelText: 'New Global Pairing Token (ainet_...)',
-                  hintText: 'Leave blank to keep current token',
-                ),
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            final dlgPalette = ctx.palette;
+            final primary = dlgPalette.primary;
+            return AlertDialog(
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              scrollable: true,
+              backgroundColor: dlgPalette.surfaceElevated,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: dlgPalette.dividerColor),
               ),
-              if (targetHost != null) ...[
-                const SizedBox(height: 12),
-                TextField(
-                  controller: pinCtrl,
-                  keyboardType: TextInputType.number,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontFamily: 'monospace',
+              title: Text(
+                'Pair Workstation Credentials',
+                style: TextStyle(color: dlgPalette.textPrimary, fontSize: 16),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: secretCtrl,
+                    obscureText: true,
+                    style: TextStyle(
+                      color: dlgPalette.textPrimary,
+                      fontSize: 13,
+                      fontFamily: 'monospace',
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'New Global Pairing Token (ainet_...)',
+                      hintText: 'Leave blank to keep current token',
+                    ),
                   ),
-                  decoration: InputDecoration(
-                    labelText: 'Or Pair ${targetHost.ip} with 6-Digit PIN',
-                    hintText: 'e.g. 482910',
+                  if (targetHost != null) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: pinCtrl,
+                      keyboardType: TextInputType.number,
+                      style: TextStyle(
+                        color: dlgPalette.textPrimary,
+                        fontSize: 13,
+                        fontFamily: 'monospace',
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Or Pair ${targetHost.ip} with 6-Digit PIN',
+                        hintText: 'e.g. 482910',
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSaving ? null : () => Navigator.of(ctx).pop(),
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(color: dlgPalette.textSecondary),
+                  ),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primary,
+                    foregroundColor: dlgPalette.isDaylight
+                        ? Colors.white
+                        : const Color(0xFF090B1D),
+                  ),
+                  onPressed: isSaving
+                      ? null
+                      : () async {
+                          setDialogState(() => isSaving = true);
+                          String nextSecret = secretCtrl.text.trim();
+                          String? nextCertFp = targetHost?.certFingerprint;
+                          final pin = pinCtrl.text.trim();
+                          bool? pinPaired;
+                          if (targetHost != null &&
+                              RegExp(r'^\d{6}$').hasMatch(pin)) {
+                            final exchanged = await _pairWithHostPin(
+                              targetHost.ip,
+                              pin,
+                              port: targetHost.wsPort,
+                              useTls: targetHost.useTls ||
+                                  ref.read(appPreferencesProvider).preferTls,
+                              certFingerprint:
+                                  targetHost.certFingerprint.isNotEmpty
+                                      ? targetHost.certFingerprint
+                                      : null,
+                            );
+                            if (exchanged != null &&
+                                exchanged.pairingToken.isNotEmpty) {
+                              nextSecret = exchanged.pairingToken;
+                              if (exchanged.certFingerprint != null &&
+                                  exchanged.certFingerprint!.isNotEmpty) {
+                                nextCertFp = exchanged.certFingerprint;
+                              }
+                              pinPaired = true;
+                            } else {
+                              pinPaired = false;
+                            }
+                          }
+                          if (nextSecret.isNotEmpty) {
+                            saveHostPairingSecret(
+                              targetHost?.ip ?? '',
+                              nextSecret,
+                              certFingerprint: nextCertFp,
+                            );
+                            if (mounted) {
+                              ref
+                                  .read(globalPairingSecretProvider.notifier)
+                                  .state = nextSecret;
+                              if (targetHost != null) {
+                                ref.read(fleetProvider.notifier).setHostSecret(
+                                      targetHost.ip,
+                                      nextSecret,
+                                      certFingerprint: nextCertFp,
+                                    );
+                              }
+                            }
+                          }
+                          if (ctx.mounted) {
+                            Navigator.of(ctx).pop();
+                          }
+                          if (pinPaired != null) {
+                            _showToast(
+                              pinPaired
+                                  ? 'Paired with ${targetHost?.ip} — session token saved.'
+                                  : 'PIN pairing failed — verify the 6-digit PIN on the PC daemon.',
+                              accentColor: pinPaired
+                                  ? CyberColors.success
+                                  : CyberColors.warning,
+                            );
+                          } else if (nextSecret.isNotEmpty) {
+                            _showToast(
+                              'Pairing token stored in secure local vault.',
+                              accentColor: CyberColors.success,
+                            );
+                          }
+                        },
+                  child: Text(
+                    isSaving ? 'Pairing...' : 'Save & Pair',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text(
-                'Cancel',
-                style: TextStyle(color: CyberColors.textSecondary),
-              ),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primary,
-                foregroundColor: Colors.black,
-              ),
-              onPressed: () async {
-                String nextSecret = secretCtrl.text.trim();
-                String? nextCertFp = targetHost?.certFingerprint;
-                final pin = pinCtrl.text.trim();
-                bool? pinPaired;
-                if (targetHost != null && RegExp(r'^\d{6}$').hasMatch(pin)) {
-                  final exchanged = await _pairWithHostPin(
-                    targetHost.ip,
-                    pin,
-                    port: targetHost.wsPort,
-                    useTls: targetHost.useTls ||
-                        ref.read(appPreferencesProvider).preferTls,
-                    certFingerprint: targetHost.certFingerprint.isNotEmpty
-                        ? targetHost.certFingerprint
-                        : null,
-                  );
-                  if (exchanged != null && exchanged.pairingToken.isNotEmpty) {
-                    nextSecret = exchanged.pairingToken;
-                    if (exchanged.certFingerprint != null &&
-                        exchanged.certFingerprint!.isNotEmpty) {
-                      nextCertFp = exchanged.certFingerprint;
-                    }
-                    pinPaired = true;
-                  } else {
-                    pinPaired = false;
-                  }
-                }
-                if (nextSecret.isNotEmpty) {
-                  ref.read(globalPairingSecretProvider.notifier).state =
-                      nextSecret;
-                  saveHostPairingSecret(
-                    targetHost?.ip ?? '',
-                    nextSecret,
-                    certFingerprint: nextCertFp,
-                  );
-                  if (targetHost != null) {
-                    ref.read(fleetProvider.notifier).setHostSecret(
-                          targetHost.ip,
-                          nextSecret,
-                          certFingerprint: nextCertFp,
-                        );
-                  }
-                }
-                if (ctx.mounted) {
-                  Navigator.of(ctx).pop();
-                }
-                if (pinPaired != null) {
-                  _showToast(
-                    pinPaired
-                        ? 'Paired with ${targetHost?.ip} — session token saved.'
-                        : 'PIN pairing failed — verify the 6-digit PIN on the PC daemon.',
-                    accentColor: pinPaired
-                        ? CyberColors.success
-                        : CyberColors.warning,
-                  );
-                } else if (nextSecret.isNotEmpty) {
-                  _showToast(
-                    'Pairing token stored in secure local vault.',
-                    accentColor: CyberColors.success,
-                  );
-                }
-              },
-              child: const Text(
-                'Save & Pair',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
+            );
+          },
         );
       },
     ).whenComplete(() {
@@ -3870,7 +4035,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: CyberColors.surfaceElevated,
+          backgroundColor: ctx.palette.surfaceElevated,
           title: const Text('LAN Discovery Port'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -3920,7 +4085,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final confirmed = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            backgroundColor: CyberColors.surfaceElevated,
+            backgroundColor: ctx.palette.surfaceElevated,
             title: const Text('Purge All Saved Tokens?'),
             content: const Text(
               'This clears all global and per-host pairing secrets saved on this phone. You will need to re-pair via 6-digit PIN or token.',
@@ -3944,6 +4109,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         false;
     if (!confirmed || !mounted) return;
     await purgeAllPairingSecrets();
+    if (!mounted) return;
     ref.read(globalPairingSecretProvider.notifier).state = '';
     ref.read(fleetProvider.notifier).clearAllHostSecrets();
     _showToast(
@@ -3997,7 +4163,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             border: Border.all(color: primary.withValues(alpha: 0.30)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.32),
+                color: (palette.isDaylight
+                        ? const Color(0xFF4C3E94)
+                        : Colors.black)
+                    .withValues(alpha: palette.isDaylight ? 0.10 : 0.32),
                 blurRadius: 8,
                 offset: const Offset(0, 3),
               ),
@@ -4008,7 +4177,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             style: TextStyle(
               fontFamily: 'monospace',
               fontSize: context.fluidFont(9.5),
-              color: CyberColors.textSecondary,
+              color: palette.textSecondary,
             ),
           ),
         );
@@ -4018,40 +4187,136 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
 
   Widget _buildAppearanceStudioCard(AppPreferencesState prefs) {
     final prefsNotifier = ref.read(appPreferencesProvider.notifier);
-    final primary = Theme.of(context).colorScheme.primary;
     final palette = context.palette;
+    final primary = palette.primary;
     final disableAnim = MediaQuery.disableAnimationsOf(context);
-    final dur = disableAnim ? Duration.zero : const Duration(milliseconds: 200);
+    final dur = disableAnim ? Duration.zero : const Duration(milliseconds: 220);
 
     return Container(
       decoration: BoxDecoration(
         gradient: palette.cardBevelGradient(isSelected: false),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: primary.withValues(alpha: 0.28)),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: palette.glassBorderIdle, width: 1.2),
         boxShadow: palette.elevationShadows(isSelected: false),
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const FluidSpecularBar(
               isSelected: true,
-              height: 1.0,
-              margin: EdgeInsets.only(left: 8, right: 8, bottom: 10),
+              height: 1.2,
+              margin: EdgeInsets.only(left: 8, right: 8, bottom: 12),
             ),
+            Row(
+              children: [
+                Icon(
+                  prefs.themeMode == AppThemeMode.daylight
+                      ? Icons.wb_sunny_rounded
+                      : Icons.nightlight_round,
+                  color: prefs.themeMode == AppThemeMode.daylight
+                      ? const Color(0xFFF59E0B)
+                      : primary,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Liquid Glass Polarity',
+                    style: TextStyle(
+                      color: palette.textPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: AppThemeMode.values.map((mode) {
+                final selected = prefs.themeMode == mode;
+                final isSun = mode == AppThemeMode.daylight;
+                return Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(right: isSun ? 8 : 0),
+                    child: FluidPressScale(
+                      pressedScale: 0.94,
+                      onTap: () {
+                        _hapticTap();
+                        prefsNotifier.setThemeMode(mode);
+                      },
+                      child: AnimatedContainer(
+                        key: ValueKey('theme-mode-${mode.name}'),
+                        duration: dur,
+                        curve: Curves.easeOutCubic,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          gradient: selected ? palette.heroGradient : null,
+                          color: selected
+                              ? null
+                              : palette.surfaceElevated.withValues(alpha: 0.45),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: selected
+                                ? Colors.white.withValues(alpha: 0.55)
+                                : palette.glassBorderIdle,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              isSun
+                                  ? Icons.wb_sunny_rounded
+                                  : Icons.nightlight_round,
+                              size: 16,
+                              color: selected
+                                  ? Colors.white
+                                  : (isSun
+                                      ? const Color(0xFFF59E0B)
+                                      : palette.primary),
+                            ),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                mode.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: selected
+                                      ? Colors.white
+                                      : palette.textPrimary,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 16),
             Row(
               children: [
                 Icon(Icons.palette_rounded, color: primary, size: 18),
                 const SizedBox(width: 8),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Accent Palette (Saved Across Restarts)',
+                    'Hero Accent Palette (Saved Across Restarts)',
                     style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
+                      color: palette.textPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13.5,
                     ),
                   ),
                 ),
@@ -4062,7 +4327,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               spacing: 10,
               runSpacing: 10,
               children: CyberAccentPreset.values.map((preset) {
-                final swatchColor = CyberPalette.fromPreset(preset).primary;
+                final swatchColor = preset.resolvedPrimary(prefs.themeMode);
                 final isSelected = prefs.accent == preset;
                 return Semantics(
                   button: true,
@@ -4070,15 +4335,15 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   label: 'Theme color ${_formatEnumLabel(preset)}',
                   child: InkWell(
                     key: ValueKey('accent-${preset.name}'),
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(20),
                     onTap: () {
                       _hapticTap();
                       prefsNotifier.setAccent(preset);
                     },
                     child: AnimatedScale(
-                      scale: isSelected ? 1.04 : 1.0,
+                      scale: isSelected ? 1.05 : 1.0,
                       duration: dur,
-                      curve: Curves.easeOutCubic,
+                      curve: Curves.easeOutBack,
                       child: AnimatedContainer(
                         duration: dur,
                         curve: Curves.easeOutCubic,
@@ -4092,27 +4357,27 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
                                   colors: [
-                                    swatchColor.withValues(alpha: 0.26),
-                                    swatchColor.withValues(alpha: 0.12),
+                                    swatchColor,
+                                    preset.resolvedSecondary(prefs.themeMode),
                                   ],
                                 )
                               : null,
                           color: isSelected
                               ? null
-                              : Colors.white.withValues(alpha: 0.04),
-                          borderRadius: BorderRadius.circular(14),
+                              : palette.surfaceElevated.withValues(alpha: 0.45),
+                          borderRadius: BorderRadius.circular(20),
                           border: Border.all(
                             color: isSelected
-                                ? swatchColor
-                                : Colors.white.withValues(alpha: 0.12),
-                            width: isSelected ? 1.5 : 1,
+                                ? Colors.white.withValues(alpha: 0.55)
+                                : palette.glassBorderIdle,
+                            width: isSelected ? 1.4 : 1,
                           ),
                           boxShadow: isSelected
                               ? [
                                   BoxShadow(
-                                    color: swatchColor.withValues(alpha: 0.24),
+                                    color: swatchColor.withValues(alpha: 0.32),
                                     blurRadius: 12,
-                                    offset: const Offset(0, 3),
+                                    offset: const Offset(0, 4),
                                   ),
                                 ]
                               : null,
@@ -4124,20 +4389,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                               width: 14,
                               height: 14,
                               decoration: BoxDecoration(
-                                color: swatchColor,
+                                color: isSelected ? Colors.white : swatchColor,
                                 shape: BoxShape.circle,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: swatchColor.withValues(alpha: 0.55),
+                                    color: swatchColor.withValues(alpha: 0.45),
                                     blurRadius: 6,
                                   ),
                                 ],
                               ),
                               child: isSelected
-                                  ? const Icon(
+                                  ? Icon(
                                       Icons.check_rounded,
                                       size: 10,
-                                      color: Colors.black,
+                                      color: swatchColor,
                                     )
                                   : null,
                             ),
@@ -4145,11 +4410,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                             Text(
                               _formatEnumLabel(preset),
                               style: TextStyle(
-                                color:
-                                    isSelected ? Colors.white : Colors.white70,
+                                color: isSelected
+                                    ? Colors.white
+                                    : palette.textPrimary,
                                 fontWeight: isSelected
-                                    ? FontWeight.bold
-                                    : FontWeight.w500,
+                                    ? FontWeight.w800
+                                    : FontWeight.w600,
                                 fontSize: 12,
                               ),
                             ),
@@ -4162,12 +4428,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               }).toList(),
             ),
             const SizedBox(height: 16),
-            const Text(
-              'Glass Surface Intensity',
+            Text(
+              'Optical Glass Finish',
               style: TextStyle(
-                color: CyberColors.textSecondary,
+                color: palette.textSecondary,
                 fontSize: 11.5,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 8),
@@ -4177,12 +4443,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               children: GlassIntensity.values.map((intensity) {
                 final selected = prefs.glassIntensity == intensity;
                 return ChoiceChip(
-                  label: Text(_formatEnumLabel(intensity)),
+                  label: Text(intensity.label),
                   selected: selected,
-                  selectedColor: primary.withValues(alpha: 0.25),
+                  selectedColor: primary.withValues(alpha: 0.22),
                   labelStyle: TextStyle(
-                    color: selected ? primary : CyberColors.textSecondary,
-                    fontWeight: selected ? FontWeight.bold : FontWeight.w500,
+                    color: selected ? primary : palette.textSecondary,
+                    fontWeight: selected ? FontWeight.bold : FontWeight.w600,
                     fontSize: 12,
                   ),
                   onSelected: (_) {
@@ -4195,7 +4461,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             const SizedBox(height: 12),
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -4203,15 +4469,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                         'Reduced Motion & Animations',
                         style: TextStyle(
                           fontSize: 13,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w700,
+                          color: palette.textPrimary,
                         ),
                       ),
-                      SizedBox(height: 2),
+                      const SizedBox(height: 2),
                       Text(
-                        'Minimizes transition motion and pulse effects for battery savings.',
+                        'Minimizes spring motion and aurora effects for battery savings.',
                         style: TextStyle(
                           fontSize: 11,
-                          color: CyberColors.textSecondary,
+                          color: palette.textSecondary,
                         ),
                       ),
                     ],
@@ -4321,29 +4588,39 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ),
         ),
         Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.all(14),
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
           decoration: BoxDecoration(
-            color: CyberColors.surfaceElevated.withValues(alpha: 0.94),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+            gradient: context.palette.cardBevelGradient(isSelected: false),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: context.palette.glassBorderIdle,
+              width: 1.15,
+            ),
+            boxShadow: context.palette.elevationShadows(isSelected: false),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const FluidSpecularBar(
+                isSelected: false,
+                height: 1.1,
+                margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
+              ),
               Text(
                 'Target Stream Frame Rate',
                 style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: context.fluidFont(12),
+                  fontWeight: FontWeight.w800,
+                  color: context.palette.textPrimary,
+                  fontSize: context.fluidFont(12.5),
                 ),
               ),
               const SizedBox(height: 2),
               Text(
                 'Persisted decode & frame pacing cap for battery/smoothness.',
                 style: TextStyle(
-                  color: CyberColors.textSecondary,
-                  fontSize: context.fluidFont(10),
+                  color: context.palette.textSecondary,
+                  fontSize: context.fluidFont(10.5),
                 ),
               ),
               const SizedBox(height: 10),
@@ -4359,7 +4636,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     labelStyle: TextStyle(
                       fontFamily: 'monospace',
                       fontSize: 11,
-                      color: active ? primary : CyberColors.textSecondary,
+                      fontWeight: active ? FontWeight.bold : FontWeight.w600,
+                      color: active ? primary : context.palette.textSecondary,
                     ),
                     onSelected: (_) => prefsNotifier.setTargetFps(fps),
                   );
@@ -4372,11 +4650,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           icon: Icons.bolt_rounded,
           title: 'Wake-on-LAN Directed Broadcast',
           subtitle: 'Sends Magic Packets to subnet broadcast & 255.255.255.255',
-          trailing: const Text(
+          trailing: Text(
             'UDP 9',
             style: TextStyle(
-              color: CyberColors.warning,
+              color: context.palette.warning,
               fontFamily: 'monospace',
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),
@@ -4419,10 +4698,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           child: _buildSettingsTile(
             icon: Icons.restart_alt_rounded,
             title: 'Reset Theme & Network Preferences',
-            subtitle: 'Restores Cyan Neon theme & defaults (keeps paired hosts).',
-            trailing: const Icon(
+            subtitle:
+                'Restores Bright Daylight & Iridescent Violet defaults (keeps paired hosts).',
+            trailing: Icon(
               Icons.restore_rounded,
-              color: CyberColors.textSecondary,
+              color: context.palette.textSecondary,
             ),
           ),
         ),
@@ -4431,10 +4711,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           title: 'AI NetController Mobile',
           subtitle:
               'Impeller Hardware Engine • AI-NET/3.0-SECURE Protocol',
-          trailing: const Text(
+          trailing: Text(
             'v0.80.0',
             style: TextStyle(
-              color: CyberColors.success,
+              color: context.palette.success,
               fontFamily: 'monospace',
               fontWeight: FontWeight.bold,
             ),
@@ -4471,16 +4751,15 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     required String subtitle,
     required Widget trailing,
   }) {
-    final primary = Theme.of(context).colorScheme.primary;
     final palette = context.palette;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 11),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Container(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+        padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
         decoration: BoxDecoration(
           gradient: palette.cardBevelGradient(isSelected: false),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.13)),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: palette.glassBorderIdle, width: 1.15),
           boxShadow: palette.elevationShadows(isSelected: false),
         ),
         child: Column(
@@ -4488,33 +4767,29 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           children: [
             const FluidSpecularBar(
               isSelected: false,
-              height: 1.0,
-              margin: EdgeInsets.only(left: 6, right: 6, bottom: 9),
+              height: 1.1,
+              margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
             ),
             Row(
               children: [
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: 42,
+                  height: 42,
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(13),
-                    gradient: RadialGradient(
-                      center: const Alignment(-0.25, -0.25),
-                      radius: 1.0,
-                      colors: [
-                        primary.withValues(alpha: 0.22),
-                        primary.withValues(alpha: 0.08),
-                      ],
+                    borderRadius: BorderRadius.circular(14),
+                    gradient: palette.heroGradient,
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.55),
                     ),
-                    border: Border.all(color: primary.withValues(alpha: 0.34)),
                     boxShadow: [
                       BoxShadow(
-                        color: primary.withValues(alpha: 0.18),
+                        color: palette.primary.withValues(alpha: 0.28),
                         blurRadius: 10,
+                        offset: const Offset(0, 3),
                       ),
                     ],
                   ),
-                  child: Icon(icon, color: primary, size: 20),
+                  child: Icon(icon, color: Colors.white, size: 20),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -4524,16 +4799,17 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       Text(
                         title,
                         style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: context.fluidFont(12),
+                          fontWeight: FontWeight.w800,
+                          color: palette.textPrimary,
+                          fontSize: context.fluidFont(12.5),
                         ),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         subtitle,
                         style: TextStyle(
-                          color: CyberColors.textSecondary,
-                          fontSize: context.fluidFont(10),
+                          color: palette.textSecondary,
+                          fontSize: context.fluidFont(10.5),
                         ),
                       ),
                     ],
@@ -4550,7 +4826,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   Widget _buildSectionHeader(String title) {
-    final primary = Theme.of(context).colorScheme.primary;
+    final palette = context.palette;
+    final primary = palette.primary;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -4573,7 +4850,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           child: Text(
             title,
             style: TextStyle(
-              color: CyberColors.textSecondary,
+              color: palette.textSecondary,
               fontSize: context.fluidFont(10),
               fontWeight: FontWeight.bold,
               letterSpacing: 1.5,

@@ -33,6 +33,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     private val keystoreLock = Any()
     private var deeplinkChannel: MethodChannel? = null
+    private var keystoreChannel: MethodChannel? = null
     private var pendingInitialUri: String? = null
 
     private fun extractPairingUri(intent: Intent?): String? {
@@ -57,8 +58,8 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
         }
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, KEYSTORE_CHANNEL)
-            .setMethodCallHandler { call, result ->
+        keystoreChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, KEYSTORE_CHANNEL).also { ch ->
+            ch.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getOrCreateHiveKey" -> {
                         try {
@@ -73,7 +74,7 @@ class MainActivity : FlutterFragmentActivity() {
                             result.error("INVALID_ARGS", "Missing 'plain' byte array", null)
                         } else {
                             try {
-                                result.success(sealWithKeystore(plain))
+                                result.success(synchronized(keystoreLock) { sealWithKeystore(plain) })
                             } catch (e: Exception) {
                                 result.error("KEYSTORE_SEAL_ERROR", "Failed to seal secret", null)
                             }
@@ -85,7 +86,7 @@ class MainActivity : FlutterFragmentActivity() {
                             result.error("INVALID_ARGS", "Missing or malformed sealed blob", null)
                         } else {
                             try {
-                                result.success(unsealWithKeystore(blob))
+                                result.success(synchronized(keystoreLock) { unsealWithKeystore(blob) })
                             } catch (e: Exception) {
                                 result.error("KEYSTORE_UNSEAL_ERROR", "Failed to unseal secret", null)
                             }
@@ -94,6 +95,15 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
+        }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        deeplinkChannel?.setMethodCallHandler(null)
+        deeplinkChannel = null
+        keystoreChannel?.setMethodCallHandler(null)
+        keystoreChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun getOrCreateMasterKey(forceRegenerate: Boolean = false): SecretKey {
@@ -180,9 +190,13 @@ class MainActivity : FlutterFragmentActivity() {
             val freshKey = ByteArray(HIVE_KEY_BYTES)
             SecureRandom().nextBytes(freshKey)
             val sealed = sealWithKeystore(freshKey)
-            prefs.edit()
+            val persisted = prefs.edit()
                 .putString(WRAPPED_KEY_PREF, Base64.encodeToString(sealed, Base64.NO_WRAP))
                 .commit()
+            if (!persisted) {
+                freshKey.fill(0)
+                throw IllegalStateException("Failed to persist wrapped vault key to SharedPreferences")
+            }
             return freshKey
         }
     }

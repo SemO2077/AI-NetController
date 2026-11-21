@@ -12,14 +12,11 @@ Tests the entire system under peak synthetic loads:
 """
 
 import asyncio
-import hashlib
-import hmac
 import os
 import random
 import struct
 import sys
 import time
-from typing import List
 
 # Ensure agent directory is importable
 AGENT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

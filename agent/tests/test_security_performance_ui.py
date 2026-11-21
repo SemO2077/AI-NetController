@@ -64,10 +64,12 @@ class TestDaemonConfigHardening(unittest.TestCase):
     def test_revision_pin_ttl_and_safe_pairing_uri(self):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {"AI_CONFIG_DIR": tmp}, clear=False):
+                self.assertEqual(os.path.abspath(cfg_mod.get_config_dir()), os.path.abspath(tmp))
                 rev0 = cfg_mod.get_config_revision()
                 cfg = cfg_mod.load_config()
                 cfg["port"] = 8777
                 self.assertTrue(cfg_mod.save_config(cfg))
+                self.assertTrue(os.path.isfile(os.path.join(tmp, "config.json")))
                 self.assertGreater(cfg_mod.get_config_revision(), rev0)
 
                 pin1, _, rotated1 = cfg_mod.ensure_fresh_pin(
@@ -345,28 +347,30 @@ class TestCyberGlassUIAndWindowsAVHygiene(unittest.TestCase):
         self.assertEqual(card.size, (160, 160))
 
     def test_gui_state_hitl_queue_pairing_uri_and_blacklist_compat(self):
-        state = gui_mod.HostDaemonState(host="127.0.0.1", port=8765)
-        self.assertTrue(state.av_integrity.get("zero_vbs_dropper"))
-        self.assertTrue(state.av_integrity.get("ntfs_dacl_hardened"))
-        self.assertTrue(state.av_integrity.get("upx_disabled"))
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AI_CONFIG_DIR": tmp}, clear=False):
+                state = gui_mod.HostDaemonState(host="127.0.0.1", port=8765)
+                self.assertTrue(state.av_integrity.get("zero_vbs_dropper"))
+                self.assertTrue(state.av_integrity.get("ntfs_dacl_hardened"))
+                self.assertTrue(state.av_integrity.get("upx_disabled"))
 
-        state.tls_enabled = True
-        state.tls_fingerprint = "0123456789abcdef0123456789abcdef"
-        uri = state.get_pairing_uri()
-        self.assertIn("proto=wss", uri)
-        self.assertNotIn(state.pairing_token, uri)
+                state.tls_enabled = True
+                state.tls_fingerprint = "0123456789abcdef0123456789abcdef"
+                uri = state.get_pairing_uri()
+                self.assertIn("proto=wss", uri)
+                self.assertNotIn(state.pairing_token, uri)
 
-        state.blacklist_client(client_id_or_ip="198.51.100.10", device_name="Probe", reason="Test")
-        self.assertTrue(state.is_ip_blacklisted("198.51.100.10"))
-        state.unban_device("198.51.100.10")
-        self.assertFalse(state.is_ip_blacklisted("198.51.100.10"))
+                state.blacklist_client(client_id_or_ip="198.51.100.10", device_name="Probe", reason="Test")
+                self.assertTrue(state.is_ip_blacklisted("198.51.100.10"))
+                state.unban_device("198.51.100.10")
+                self.assertFalse(state.is_ip_blacklisted("198.51.100.10"))
 
-        resolved = []
-        state.request_local_hitl_approval("ap-1", "dir C:\\", "High risk test", lambda ok: resolved.append(ok))
-        reqs = state.pop_pending_hitl_requests()
-        self.assertEqual(len(reqs), 1)
-        reqs[0]["resolve_cb"](True)
-        self.assertEqual(resolved, [True])
+                resolved = []
+                state.request_local_hitl_approval("ap-1", "dir C:\\", "High risk test", lambda ok: resolved.append(ok))
+                reqs = state.pop_pending_hitl_requests()
+                self.assertEqual(len(reqs), 1)
+                reqs[0]["resolve_cb"](True)
+                self.assertEqual(resolved, [True])
 
     def test_windows_integration_zero_vbs_and_packaging_hygiene(self):
         self.assertIs(wi_mod.create_vbs_shortcut, wi_mod.create_native_shortcut)
@@ -390,27 +394,29 @@ class TestCyberGlassUIAndWindowsAVHygiene(unittest.TestCase):
     def test_desktop_gui_builds_cyber_glass_views_and_cleans_up(self):
         if not gui_mod.HAS_TKINTER:
             self.skipTest("Tkinter unavailable")
-        state = gui_mod.HostDaemonState(host="127.0.0.1", port=8765)
-        state.setup_completed = True
-        try:
-            gui = gui_mod.HostDaemonDesktopGUI(state=state)
-        except Exception as exc:
-            self.skipTest(f"Tkinter display unavailable: {exc}")
-        try:
-            gui.root.withdraw()
-            for tab in ("overview", "security", "console", "system"):
-                gui._select_tab(tab)
-                gui.root.update_idletasks()
-            gui._select_tab("overview")
-            gui._refresh_ui(force_telemetry=True)
-            self.assertEqual(len(gui._views), 4)
-            self.assertEqual(len(gui._orb_frames), 12)
-            self.assertIsNotNone(gui._qr_photo)
-        finally:
-            try:
-                gui.root.destroy()
-            except Exception:
-                pass
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AI_CONFIG_DIR": tmp}, clear=False):
+                state = gui_mod.HostDaemonState(host="127.0.0.1", port=8765)
+                state.setup_completed = True
+                try:
+                    gui = gui_mod.HostDaemonDesktopGUI(state=state)
+                except Exception as exc:
+                    self.skipTest(f"Tkinter display unavailable: {exc}")
+                try:
+                    gui.root.withdraw()
+                    for tab in ("overview", "security", "console", "system"):
+                        gui._select_tab(tab)
+                        gui.root.update_idletasks()
+                    gui._select_tab("overview")
+                    gui._refresh_ui(force_telemetry=True)
+                    self.assertEqual(len(gui._views), 4)
+                    self.assertEqual(len(gui._orb_frames), 12)
+                    self.assertIsNotNone(gui._qr_photo)
+                finally:
+                    try:
+                        gui.root.destroy()
+                    except Exception:
+                        pass
 
     def test_responsive_scaling_across_all_aspect_ratios_and_resolutions(self):
         """
@@ -436,46 +442,209 @@ class TestCyberGlassUIAndWindowsAVHygiene(unittest.TestCase):
 
         if not gui_mod.HAS_TKINTER:
             self.skipTest("Tkinter unavailable")
-        state = gui_mod.HostDaemonState(host="127.0.0.1", port=8765)
-        state.setup_completed = True
-        try:
-            gui = gui_mod.HostDaemonDesktopGUI(state=state)
-        except Exception as exc:
-            self.skipTest(f"Tkinter display unavailable: {exc}")
-        try:
-            gui.root.withdraw()
-            viewports = [
-                (640, 420, 1, 128),
-                (800, 480, 1, 128),
-                (900, 560, 2, 150),
-                (1120, 760, 2, 176),
-                (1600, 900, 2, 176),
-            ]
-            for vw, vh, expected_cols, expected_qr in viewports:
-                gui._apply_responsive_scaling(vw, vh)
-                gui._apply_ambient_backdrop(vw, vh)
-                self.assertEqual(gui._scale.columns, expected_cols)
-                self.assertEqual(gui._scale.qr_size, expected_qr)
-                self.assertEqual(gui._qr_cache_px, expected_qr)
-                for tab in ("overview", "security", "console", "system"):
-                    gui._select_tab(tab)
-                    gui._sync_stage_scrollregion()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AI_CONFIG_DIR": tmp}, clear=False):
+                state = gui_mod.HostDaemonState(host="127.0.0.1", port=8765)
+                state.setup_completed = True
+                try:
+                    gui = gui_mod.HostDaemonDesktopGUI(state=state)
+                except Exception as exc:
+                    self.skipTest(f"Tkinter display unavailable: {exc}")
+                try:
+                    gui.root.withdraw()
+                    viewports = [
+                        (640, 420, 1, 128),
+                        (800, 480, 1, 128),
+                        (900, 560, 2, 150),
+                        (1120, 760, 2, 176),
+                        (1600, 900, 2, 176),
+                    ]
+                    for vw, vh, expected_cols, expected_qr in viewports:
+                        gui._apply_responsive_scaling(vw, vh)
+                        gui._apply_ambient_backdrop(vw, vh)
+                        self.assertEqual(gui._scale.columns, expected_cols)
+                        self.assertEqual(gui._scale.qr_size, expected_qr)
+                        self.assertEqual(gui._qr_cache_px, expected_qr)
+                        for tab in ("overview", "security", "console", "system"):
+                            gui._select_tab(tab)
+                            gui._sync_stage_scrollregion()
+                            gui.root.update_idletasks()
+                        ov_left_info = gui._ov_left_col.grid_info()
+                        ov_right_info = gui._ov_right_col.grid_info()
+                        if expected_cols == 1:
+                            self.assertEqual(int(ov_left_info["row"]), 0)
+                            self.assertEqual(int(ov_right_info["row"]), 1)
+                            self.assertEqual(int(ov_right_info["column"]), 0)
+                        else:
+                            self.assertEqual(int(ov_left_info["row"]), 0)
+                            self.assertEqual(int(ov_right_info["row"]), 0)
+                            self.assertEqual(int(ov_right_info["column"]), 1)
+                finally:
+                    try:
+                        gui.root.destroy()
+                    except Exception:
+                        pass
+
+    def test_liquid_glass_dual_polarity_palette_and_live_theme_swap(self):
+        # Verify default Bright Daylight + Iridescent Violet palette & Vibrant Dark palette
+        day = ui_mod.get_liquid_palette("light", "violet")
+        self.assertTrue(day.is_daylight)
+        self.assertEqual(day.theme_mode, "light")
+        self.assertEqual(day.accent_id, "violet")
+        self.assertEqual(day.PRIMARY, "#7C3AED")
+        self.assertEqual(day.TERMINAL_BG, "#FFFFFF")
+
+        dark = ui_mod.get_liquid_palette("dark", "cobalt")
+        self.assertFalse(dark.is_daylight)
+        self.assertEqual(dark.theme_mode, "dark")
+        self.assertEqual(dark.accent_id, "cobalt")
+        self.assertEqual(dark.PRIMARY, "#60A5FA")
+        self.assertEqual(dark.TERMINAL_BG, "#0D112B")
+
+        # Verify invalid accent/mode safely fall back to Daylight + Violet
+        fallback = ui_mod.get_liquid_palette("unknown", "invalid_accent")
+        self.assertEqual(fallback.theme_mode, "light")
+        self.assertEqual(fallback.accent_id, "violet")
+
+        # Verify ambient backdrop renders cleanly in both polarities
+        bg_light = ui_mod.render_ambient_backdrop(320, 240, theme_mode="light", accent="violet")
+        bg_dark = ui_mod.render_ambient_backdrop(320, 240, theme_mode="dark", accent="rose")
+        self.assertIsNotNone(bg_light)
+        self.assertIsNotNone(bg_dark)
+        self.assertEqual(bg_light.size, (320, 240))
+        self.assertEqual(bg_dark.size, (320, 240))
+
+        # Verify daemon_config schema sanitization accepts valid theme/accent and sanitizes invalid
+        import daemon_config as dc_mod
+
+        defaults = dc_mod._generate_default_config()
+        sanitized_ok = dc_mod._validate_and_sanitize_config(
+            {"ui_theme_mode": "dark", "ui_accent": "emerald"}, defaults
+        )
+        self.assertEqual(sanitized_ok["ui_theme_mode"], "dark")
+        self.assertEqual(sanitized_ok["ui_accent"], "emerald")
+
+        sanitized_bad = dc_mod._validate_and_sanitize_config(
+            {"ui_theme_mode": "neon", "ui_accent": "ultraviolet"}, defaults
+        )
+        self.assertEqual(sanitized_bad["ui_theme_mode"], "light")
+        self.assertEqual(sanitized_bad["ui_accent"], "violet")
+
+        if not gui_mod.HAS_TKINTER:
+            self.skipTest("Tkinter unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AI_CONFIG_DIR": tmp}, clear=False):
+                state = gui_mod.HostDaemonState(host="127.0.0.1", port=8765)
+                state.setup_completed = True
+                state.ui_theme_mode = "light"
+                state.ui_accent = "violet"
+                try:
+                    gui = gui_mod.HostDaemonDesktopGUI(state=state)
+                except Exception as exc:
+                    self.skipTest(f"Tkinter display unavailable: {exc}")
+                try:
+                    gui.root.withdraw()
+                    wheel_bind_before = gui.root.bind_all("<MouseWheel>")
+                    gui._select_tab("system")
                     gui.root.update_idletasks()
-                ov_left_info = gui._ov_left_col.grid_info()
-                ov_right_info = gui._ov_right_col.grid_info()
-                if expected_cols == 1:
-                    self.assertEqual(int(ov_left_info["row"]), 0)
-                    self.assertEqual(int(ov_right_info["row"]), 1)
-                    self.assertEqual(int(ov_right_info["column"]), 0)
-                else:
-                    self.assertEqual(int(ov_left_info["row"]), 0)
-                    self.assertEqual(int(ov_right_info["row"]), 0)
-                    self.assertEqual(int(ov_right_info["column"]), 1)
-        finally:
-            try:
-                gui.root.destroy()
-            except Exception:
-                pass
+                    self.assertEqual(gui._palette.theme_mode, "light")
+                    self.assertEqual(gui._palette.accent_id, "violet")
+
+                    # Live toggle to Vibrant Dark + Bio Mint accent
+                    gui.toggle_theme_mode()
+                    self.assertEqual(gui._palette.theme_mode, "dark")
+                    self.assertEqual(gui._active_tab, "system")
+                    gui.set_accent("emerald")
+                    self.assertEqual(gui._palette.accent_id, "emerald")
+                    self.assertEqual(len(gui._views), 4)
+                    self.assertEqual(len(gui._orb_frames), 12)
+                    # Live theme swaps must not stack duplicate global <MouseWheel> bindings
+                    self.assertEqual(gui.root.bind_all("<MouseWheel>"), wheel_bind_before)
+
+                    # Switch back to overview and verify QR & gauges render cleanly
+                    gui._select_tab("overview")
+                    gui._refresh_ui(force_telemetry=True)
+                    self.assertIsNotNone(gui._qr_photo)
+                finally:
+                    try:
+                        gui.root.destroy()
+                    except Exception:
+                        pass
+
+    def test_audit_regressions_cybercolors_filewriter_tls_shield_and_ws_cleanup(self):
+        # 1. Verify windows_integration only references existing CyberColors attributes
+        wi_tree = ast.parse((AGENT_DIR / "windows_integration.py").read_text(encoding="utf-8"))
+        for node in ast.walk(wi_tree):
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "CyberColors":
+                self.assertTrue(
+                    hasattr(ui_mod.CyberColors, node.attr),
+                    f"windows_integration.py references missing CyberColors.{node.attr}",
+                )
+
+        # 2. HostFileWriter re-initializing an existing transfer_id at full capacity succeeds (no slot leak)
+        with tempfile.TemporaryDirectory() as tmp:
+            fw = writer_mod.HostFileWriter(download_dir=tmp)
+            digest_hex = hashlib.sha256(b"hello").hexdigest().encode("ascii")
+            for tid in range(1, writer_mod.MAX_CONCURRENT_TRANSFERS + 1):
+                pkt = bytes([writer_mod.CMD_INIT]) + struct.pack("!IQ", tid, 5) + digest_hex + f"f{tid}.txt".encode()
+                ack = fw.handle_packet(pkt)
+                self.assertEqual(struct.unpack("!IBQ", ack[12:25])[1], writer_mod.STATUS_OK)
+            # Re-init existing tid=1 while at MAX_CONCURRENT_TRANSFERS must succeed
+            reinit_pkt = bytes([writer_mod.CMD_INIT]) + struct.pack("!IQ", 1, 5) + digest_hex + b"f1_retry.txt"
+            reinit_ack = fw.handle_packet(reinit_pkt)
+            self.assertEqual(struct.unpack("!IBQ", reinit_ack[12:25])[1], writer_mod.STATUS_OK)
+            fw.abort_all()
+
+        # 3. TLS manager self-heals mismatched cert/key pairs
+        with tempfile.TemporaryDirectory() as tmp:
+            cert_p, key_p, fp1 = tls_mod.ensure_tls_certificate(cert_dir=tmp, extra_ips=["127.0.0.1"])
+            with open(key_p, "wb") as kf:
+                kf.write(b"CORRUPTED_KEY_MATERIAL")
+            cert_p2, key_p2, fp2 = tls_mod.ensure_tls_certificate(cert_dir=tmp, extra_ips=["127.0.0.1"])
+            self.assertEqual(cert_p, cert_p2)
+            self.assertEqual(key_p, key_p2)
+            self.assertNotEqual(fp1, fp2)
+            ssl_ctx, _ = tls_mod.build_server_ssl_context(cert_dir=tmp, extra_ips=["127.0.0.1"])
+            self.assertIsNotNone(ssl_ctx)
+
+        # 4. NetworkFuzzerShield disarms watchdog on TERMINATED & drops post-termination jitter packets
+        import network_fuzzer_shield as shield_mod
+
+        async def _check_shield():
+            shield = shield_mod.NetworkFuzzerShield(
+                shield_mod.ChaosProfile(enabled=True, min_loss_pct=0.0, max_loss_pct=0.0, max_jitter_ms=40.0, reorder_prob_pct=0.0, handshake_timeout_sec=0.05)
+            )
+            closed_flag = []
+            shield.register_client("c-term", lambda: closed_flag.append(True))
+            shield.transition_state("c-term", shield_mod.ConnectionState.TERMINATED)
+            await asyncio.sleep(0.08)
+            self.assertEqual(shield.stats["watchdog_timeouts"], 0)
+            self.assertEqual(closed_flag, [])
+
+            shield.register_client("c-jit", lambda: None)
+            shield.transition_state("c-jit", shield_mod.ConnectionState.AUTH_PENDING)
+            shield.transition_state("c-jit", shield_mod.ConnectionState.AUTHENTICATED_STREAMING)
+            pkt = agent_mod.pack_packet(agent_mod.OP_PING, b"PING", seq=1)
+            filter_task = asyncio.create_task(shield.filter_incoming_packet("c-jit", pkt))
+            await asyncio.sleep(0.005)
+            await shield.cleanup_and_scrub("c-jit")
+            res = await filter_task
+            self.assertIsNone(res)
+            self.assertNotIn("c-jit", shield._reorder_buffer)
+
+        asyncio.run(_check_shield())
+
+        # 5. HostAgentDaemon does not leak disconnected sockets into _ws_write_locks / _client_outbound_seq
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AI_CONFIG_DIR": tmp}, clear=False):
+                daemon = agent_mod.HostAgentDaemon(host="127.0.0.1", port=0, enable_tray=False, enable_mdns=False)
+                try:
+                    disconnected_ws = mock.AsyncMock()
+                    asyncio.run(daemon._send_encrypted_or_plain(disconnected_ws, agent_mod.OP_ERR, b"err"))
+                    self.assertNotIn(disconnected_ws, daemon._ws_write_locks)
+                    self.assertNotIn(disconnected_ws, daemon._client_outbound_seq)
+                finally:
+                    daemon.stop()
 
 
 if __name__ == "__main__":

@@ -14,19 +14,19 @@ Mirrors the exact visual design language of the Mobile Companion (`fluid_theme.d
 from __future__ import annotations
 
 import ctypes
+from dataclasses import dataclass
+from functools import lru_cache
 import math
-import os
 import sys
 from typing import Dict, List, Optional, Tuple
 
 try:
-    from PIL import Image, ImageDraw, ImageFilter, ImageTk
+    from PIL import Image, ImageDraw, ImageFilter
     HAS_PIL = True
 except ImportError:
     Image = None
     ImageDraw = None
     ImageFilter = None
-    ImageTk = None
     HAS_PIL = False
 
 try:
@@ -83,6 +83,197 @@ class CyberColors:
     SHADOW_DEEP = "#02050B"
     SURFACE_HEADER_STRIP = "#0E1E36"
     SURFACE_HOVER = "#132642"
+
+
+# ==============================================================================
+# APPLE LIQUID GLASS DUAL-POLARITY PALETTE (1:1 parity with Web & Mobile)
+# Default: Bright Daylight Glass ("light") + Iridescent Violet ("violet")
+# ==============================================================================
+LIQUID_ACCENT_PRESETS: Dict[str, Dict[str, str]] = {
+    "violet": {
+        "label": "Iridescent Violet",
+        "light_primary": "#7C3AED",
+        "light_secondary": "#EC4899",
+        "light_tertiary": "#0EA5E9",
+        "dark_primary": "#C084FC",
+        "dark_secondary": "#F472B6",
+        "dark_tertiary": "#38BDF8",
+    },
+    "cobalt": {
+        "label": "Electric Azure",
+        "light_primary": "#2563EB",
+        "light_secondary": "#0EA5E9",
+        "light_tertiary": "#7C3AED",
+        "dark_primary": "#60A5FA",
+        "dark_secondary": "#38BDF8",
+        "dark_tertiary": "#A78BFA",
+    },
+    "cyan": {
+        "label": "Aqua Cyan",
+        "light_primary": "#0891B2",
+        "light_secondary": "#6366F1",
+        "light_tertiary": "#10B981",
+        "dark_primary": "#22D3EE",
+        "dark_secondary": "#818CF8",
+        "dark_tertiary": "#34D399",
+    },
+    "emerald": {
+        "label": "Bio Mint",
+        "light_primary": "#059669",
+        "light_secondary": "#06B6D4",
+        "light_tertiary": "#84CC16",
+        "dark_primary": "#34D399",
+        "dark_secondary": "#22D3EE",
+        "dark_tertiary": "#A3E635",
+    },
+    "rose": {
+        "label": "Coral Rose",
+        "light_primary": "#E11D48",
+        "light_secondary": "#F97316",
+        "light_tertiary": "#A855F7",
+        "dark_primary": "#FB7185",
+        "dark_secondary": "#FB923C",
+        "dark_tertiary": "#C084FC",
+    },
+    "amber": {
+        "label": "Solar Amber",
+        "light_primary": "#D97706",
+        "light_secondary": "#F97316",
+        "light_tertiary": "#0EA5E9",
+        "dark_primary": "#FBBF24",
+        "dark_secondary": "#FB923C",
+        "dark_tertiary": "#38BDF8",
+    },
+}
+
+
+@dataclass(frozen=True)
+class LiquidThemePalette:
+    theme_mode: str
+    accent_id: str
+    is_daylight: bool
+    BACKGROUND: str
+    SURFACE: str
+    SURFACE_ELEVATED: str
+    SURFACE_CARD: str
+    SURFACE_DOCK: str
+    TERMINAL_BG: str
+    PRIMARY: str
+    PRIMARY_DIM: str
+    PRIMARY_SOFT: str
+    ON_PRIMARY: str
+    SECONDARY: str
+    SECONDARY_SOFT: str
+    TERTIARY: str
+    ACCENT: str
+    ACCENT_SOFT: str
+    SUCCESS: str
+    SUCCESS_SOFT: str
+    WARNING: str
+    WARNING_SOFT: str
+    TEXT_PRIMARY: str
+    TEXT_SECONDARY: str
+    TEXT_TERTIARY: str
+    GLASS_BORDER: str
+    GLASS_BORDER_IDLE: str
+    GLASS_BORDER_BRIGHT: str
+    GLASS_BORDER_CRITICAL: str
+    GLASS_HIGHLIGHT: str
+    SPECULAR_TOP: str
+    SPECULAR_VIOLET: str
+    SHADOW_DEEP: str
+    SURFACE_HEADER_STRIP: str
+    SURFACE_HOVER: str
+
+
+def get_liquid_palette(theme_mode: str = "light", accent: str = "violet") -> LiquidThemePalette:
+    """Returns canonical Apple Liquid Glass tokens for Daylight ('light') or Vibrant Dark ('dark')."""
+    mode = "dark" if str(theme_mode).lower() == "dark" else "light"
+    acc_key = accent if accent in LIQUID_ACCENT_PRESETS else "violet"
+    spec = LIQUID_ACCENT_PRESETS[acc_key]
+
+    if mode == "light":
+        primary = spec["light_primary"]
+        secondary = spec["light_secondary"]
+        tertiary = spec["light_tertiary"]
+        return LiquidThemePalette(
+            theme_mode="light",
+            accent_id=acc_key,
+            is_daylight=True,
+            BACKGROUND="#EEF2FF",
+            SURFACE="#F8F9FF",
+            SURFACE_ELEVATED="#FFFFFF",
+            SURFACE_CARD="#F3F5FF",
+            SURFACE_DOCK="#FFFFFF",
+            TERMINAL_BG="#FFFFFF",
+            PRIMARY=primary,
+            PRIMARY_DIM=mix_hex(primary, "#141530", 0.22),
+            PRIMARY_SOFT=mix_hex("#FFFFFF", primary, 0.13),
+            ON_PRIMARY="#FFFFFF",
+            SECONDARY=secondary,
+            SECONDARY_SOFT=mix_hex("#FFFFFF", secondary, 0.13),
+            TERTIARY=tertiary,
+            ACCENT="#E11D48",
+            ACCENT_SOFT="#FFE4E6",
+            SUCCESS="#059669",
+            SUCCESS_SOFT="#D1FAE5",
+            WARNING="#D97706",
+            WARNING_SOFT="#FEF3C7",
+            TEXT_PRIMARY="#141530",
+            TEXT_SECONDARY="#4B4F75",
+            TEXT_TERTIARY="#7B80A6",
+            GLASS_BORDER=mix_hex("#FFFFFF", primary, 0.34),
+            GLASS_BORDER_IDLE="#DCE2FA",
+            GLASS_BORDER_BRIGHT=mix_hex("#FFFFFF", primary, 0.50),
+            GLASS_BORDER_CRITICAL="#FDA4AF",
+            GLASS_HIGHLIGHT=mix_hex("#FFFFFF", primary, 0.16),
+            SPECULAR_TOP="#FFFFFF",
+            SPECULAR_VIOLET=mix_hex("#FFFFFF", secondary, 0.55),
+            SHADOW_DEEP="#D8DFF7",
+            SURFACE_HEADER_STRIP="#F4F6FF",
+            SURFACE_HOVER=mix_hex("#FFFFFF", primary, 0.10),
+        )
+
+    primary = spec["dark_primary"]
+    secondary = spec["dark_secondary"]
+    tertiary = spec["dark_tertiary"]
+    return LiquidThemePalette(
+        theme_mode="dark",
+        accent_id=acc_key,
+        is_daylight=False,
+        BACKGROUND="#090B1D",
+        SURFACE="#141838",
+        SURFACE_ELEVATED="#1C214A",
+        SURFACE_CARD="#111532",
+        SURFACE_DOCK="#171C42",
+        TERMINAL_BG="#0D112B",
+        PRIMARY=primary,
+        PRIMARY_DIM=mix_hex(primary, "#090B1D", 0.30),
+        PRIMARY_SOFT=mix_hex("#141838", primary, 0.20),
+        ON_PRIMARY="#090B1D",
+        SECONDARY=secondary,
+        SECONDARY_SOFT=mix_hex("#141838", secondary, 0.22),
+        TERTIARY=tertiary,
+        ACCENT="#FB7185",
+        ACCENT_SOFT="#3A1228",
+        SUCCESS="#34D399",
+        SUCCESS_SOFT="#0C3128",
+        WARNING="#FBBF24",
+        WARNING_SOFT="#36280E",
+        TEXT_PRIMARY="#F7F9FF",
+        TEXT_SECONDARY="#B5BFE0",
+        TEXT_TERTIARY="#7C87B2",
+        GLASS_BORDER=mix_hex("#1C214A", primary, 0.42),
+        GLASS_BORDER_IDLE="#2A3160",
+        GLASS_BORDER_BRIGHT=mix_hex("#FFFFFF", primary, 0.65),
+        GLASS_BORDER_CRITICAL="#BE123C",
+        GLASS_HIGHLIGHT=mix_hex("#141838", primary, 0.26),
+        SPECULAR_TOP=mix_hex("#FFFFFF", primary, 0.45),
+        SPECULAR_VIOLET=secondary,
+        SHADOW_DEEP="#050612",
+        SURFACE_HEADER_STRIP="#1A1F46",
+        SURFACE_HOVER="#222857",
+    )
 
 
 class FluidDesktopScale:
@@ -219,19 +410,35 @@ def enable_hidpi_awareness() -> None:
             pass
 
 
-def apply_dark_titlebar(window, caption_hex: str = CyberColors.BACKGROUND) -> None:
-    """Applies Windows 10/11 DWM immersive dark mode & deep abyssal caption bar."""
+def apply_titlebar_theme(
+    window,
+    palette: Optional[LiquidThemePalette] = None,
+    caption_hex: Optional[str] = None,
+) -> None:
+    """Applies Windows 10/11 DWM Daylight or Vibrant Dark caption bar matching the active palette."""
     if sys.platform != "win32" or window is None:
         return
+    pal = palette or get_liquid_palette("light", "violet")
+    cap = caption_hex or pal.BACKGROUND
     try:
         window.update_idletasks()
         hwnd = int(window.winfo_id())
-        parent = ctypes.windll.user32.GetParent(hwnd)
+        user32 = ctypes.windll.user32
+        user32.GetParent.argtypes = [ctypes.c_void_p]
+        user32.GetParent.restype = ctypes.c_void_p
+        parent = user32.GetParent(ctypes.c_void_p(hwnd))
         target_hwnd = parent if parent else hwnd
         dwmapi = ctypes.windll.dwmapi
+        dwmapi.DwmSetWindowAttribute.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint,
+            ctypes.c_void_p,
+            ctypes.c_uint,
+        ]
+        dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
 
         # DWMWA_USE_IMMERSIVE_DARK_MODE (20 and legacy 19)
-        dark_val = ctypes.c_int(1)
+        dark_val = ctypes.c_int(0 if pal.is_daylight else 1)
         for attr in (20, 19):
             dwmapi.DwmSetWindowAttribute(
                 ctypes.c_void_p(target_hwnd),
@@ -241,7 +448,7 @@ def apply_dark_titlebar(window, caption_hex: str = CyberColors.BACKGROUND) -> No
             )
 
         # DWMWA_CAPTION_COLOR = 35, DWMWA_TEXT_COLOR = 36 (COLORREF is 0x00BBGGRR)
-        r, g, b, _ = hex_to_rgba(caption_hex)
+        r, g, b, _ = hex_to_rgba(cap)
         colorref = ctypes.c_uint((b << 16) | (g << 8) | r)
         dwmapi.DwmSetWindowAttribute(
             ctypes.c_void_p(target_hwnd),
@@ -249,7 +456,7 @@ def apply_dark_titlebar(window, caption_hex: str = CyberColors.BACKGROUND) -> No
             ctypes.byref(colorref),
             ctypes.sizeof(colorref),
         )
-        tr, tg, tb, _ = hex_to_rgba(CyberColors.TEXT_PRIMARY)
+        tr, tg, tb, _ = hex_to_rgba(pal.TEXT_PRIMARY)
         text_ref = ctypes.c_uint((tb << 16) | (tg << 8) | tr)
         dwmapi.DwmSetWindowAttribute(
             ctypes.c_void_p(target_hwnd),
@@ -259,6 +466,15 @@ def apply_dark_titlebar(window, caption_hex: str = CyberColors.BACKGROUND) -> No
         )
     except Exception:
         pass
+
+
+def apply_dark_titlebar(window, caption_hex: str = CyberColors.BACKGROUND) -> None:
+    """Applies Windows 10/11 DWM immersive dark mode & deep abyssal caption bar."""
+    apply_titlebar_theme(
+        window,
+        palette=get_liquid_palette("dark", "cyan"),
+        caption_hex=caption_hex,
+    )
 
 
 def resolve_font_families(root: Optional["tk.Tk"] = None) -> Tuple[str, str]:
@@ -283,69 +499,70 @@ def render_ambient_backdrop(
     width: int,
     height: int,
     focal_shift: float = 0.0,
+    theme_mode: str = "light",
+    accent: str = "violet",
 ) -> Optional["Image.Image"]:
     """
-    Renders the deep abyssal #040812 backdrop with top-right Cyan (#00F0FF),
-    bottom-left Electric Violet (#8A2BE2), and top-center specular ice wash
-    radial ambient glows with subtle tab-aware focal parallax.
+    Renders a luminous Apple Liquid Glass aurora backdrop for either Bright Daylight
+    ('light', pastel-prism lavender/sky/blush) or Vibrant Dark ('dark', twilight indigo)
+    with subtle tab-aware focal parallax.
     """
     if not HAS_PIL:
         return None
     w = max(64, int(width))
     h = max(64, int(height))
     shift = max(-1.0, min(1.0, float(focal_shift)))
+    pal = get_liquid_palette(theme_mode, accent)
 
     # Render smooth downscaled glow field then upsample bilinearly (<4ms total)
     sw = max(120, w // 4)
     sh = max(90, h // 4)
-    base = Image.new("RGBA", (sw, sh), hex_to_rgba(CyberColors.BACKGROUND, 255))
+    base = Image.new("RGBA", (sw, sh), hex_to_rgba(pal.BACKGROUND, 255))
 
     glow = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
     draw = ImageDraw.Draw(glow)
 
-    # Top-right cyan aura (mirrors AdaptiveScaffold radial accent #00F0FF @ 16%)
-    cx1 = int(sw * (0.86 - 0.06 * shift))
-    cy1 = int(sh * (0.14 + 0.03 * shift))
-    r1 = int(max(sw, sh) * 0.44)
+    p_r, p_g, p_b, _ = hex_to_rgba(pal.PRIMARY)
+    s_r, s_g, s_b, _ = hex_to_rgba(pal.SECONDARY)
+    t_r, t_g, t_b, _ = hex_to_rgba(pal.TERTIARY)
+
+    # Top-right Hero Accent aurora orb
+    cx1 = int(sw * (0.84 - 0.08 * shift))
+    cy1 = int(sh * (0.14 + 0.04 * shift))
+    r1 = int(max(sw, sh) * 0.48)
+    peak1 = 44 if pal.is_daylight else 48
     for step in range(9, 0, -1):
         frac = step / 9.0
-        alpha = int(38 * (1.0 - frac * 0.85))
+        alpha = int(peak1 * (1.0 - frac * 0.85))
         rad = int(r1 * frac)
-        draw.ellipse((cx1 - rad, cy1 - rad, cx1 + rad, cy1 + rad), fill=(0, 240, 255, alpha))
+        draw.ellipse((cx1 - rad, cy1 - rad, cx1 + rad, cy1 + rad), fill=(p_r, p_g, p_b, alpha))
 
-    # Bottom-left electric violet aura (mirrors AdaptiveScaffold radial accent #8A2BE2 @ 14%)
-    cx2 = int(sw * (0.14 + 0.06 * shift))
-    cy2 = int(sh * (0.86 - 0.03 * shift))
-    r2 = int(max(sw, sh) * 0.46)
+    # Bottom-left Secondary blush/magenta aurora orb
+    cx2 = int(sw * (0.14 + 0.08 * shift))
+    cy2 = int(sh * (0.86 - 0.04 * shift))
+    r2 = int(max(sw, sh) * 0.50)
+    peak2 = 38 if pal.is_daylight else 42
     for step in range(9, 0, -1):
         frac = step / 9.0
-        alpha = int(35 * (1.0 - frac * 0.85))
+        alpha = int(peak2 * (1.0 - frac * 0.85))
         rad = int(r2 * frac)
-        draw.ellipse((cx2 - rad, cy2 - rad, cx2 + rad, cy2 + rad), fill=(138, 43, 226, alpha))
+        draw.ellipse((cx2 - rad, cy2 - rad, cx2 + rad, cy2 + rad), fill=(s_r, s_g, s_b, alpha))
 
-    # Top-center subtle specular ice-cyan horizon wash for 3D atmospheric depth
-    cx3 = int(sw * (0.50 + 0.04 * shift))
-    cy3 = int(sh * 0.04)
-    r3x = int(sw * 0.48)
-    r3y = int(sh * 0.24)
+    # Top-center luminous sky/mint horizon wash for prism glass depth
+    cx3 = int(sw * (0.48 + 0.06 * shift))
+    cy3 = int(sh * 0.10)
+    r3x = int(sw * 0.50)
+    r3y = int(sh * 0.28)
+    peak3 = 34 if pal.is_daylight else 28
     for step in range(6, 0, -1):
         frac = step / 6.0
-        alpha = int(22 * (1.0 - frac * 0.82))
+        alpha = int(peak3 * (1.0 - frac * 0.82))
         rx = int(r3x * frac)
         ry = int(r3y * frac)
-        draw.ellipse((cx3 - rx, cy3 - ry, cx3 + rx, cy3 + ry), fill=(60, 245, 255, alpha))
+        draw.ellipse((cx3 - rx, cy3 - ry, cx3 + rx, cy3 + ry), fill=(t_r, t_g, t_b, alpha))
 
-    glow = glow.filter(ImageFilter.GaussianBlur(radius=max(6, sw // 14)))
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=max(6, sw // 12)))
     composited = Image.alpha_composite(base, glow).resize((w, h), Image.Resampling.BILINEAR)
-
-    # Subtle cyber dot grid (very low alpha so text contrast stays pristine)
-    grid_draw = ImageDraw.Draw(composited)
-    dot_color = (28, 52, 82, 128)
-    step_px = 36
-    for gx in range(24, w, step_px):
-        for gy in range(24, h, step_px):
-            grid_draw.point((gx, gy), fill=dot_color)
-
     return composited.convert("RGB")
 
 
@@ -562,7 +779,8 @@ def _gf_mul(x: int, y: int) -> int:
     return _QR_GF_EXP[_QR_GF_LOG[x] + _QR_GF_LOG[y]]
 
 
-def _rs_generator_poly(degree: int) -> List[int]:
+@lru_cache(maxsize=16)
+def _rs_generator_poly(degree: int) -> Tuple[int, ...]:
     g = [1]
     for i in range(degree):
         ng = [0] * (len(g) + 1)
@@ -571,7 +789,7 @@ def _rs_generator_poly(degree: int) -> List[int]:
             ng[j] ^= coef
             ng[j + 1] ^= _gf_mul(coef, factor)
         g = ng
-    return g
+    return tuple(g)
 
 
 def _rs_remainder(data: List[int], ec_count: int) -> List[int]:
@@ -844,7 +1062,7 @@ def generate_qr_matrix(text: str) -> List[List[bool]]:
                 if grid[r][c + 1] == v and grid[r + 1][c] == v and grid[r + 1][c + 1] == v:
                     score += 3
         # Rule 4: dark ratio balance
-        dark = sum(1 for r in range(size) for c in range(size) if grid[r][c])
+        dark = sum(row.count(True) for row in grid)
         pct = (dark * 100) // (size * size)
         score += (abs(pct - 50) // 5) * 10
         return score

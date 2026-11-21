@@ -31,14 +31,13 @@ import time
 import struct
 import socket
 import hashlib
-import hmac
 import zlib
 import asyncio
 import platform
 import subprocess
 import signal
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional, Set, Any
+from typing import List, Tuple, Dict, Optional, Set
 
 # Ensure agent directory is in Python path for direct or pytest execution
 AGENT_DIR = Path(__file__).resolve().parents[1]
@@ -51,12 +50,7 @@ try:
     from crypto_handshake import (
         PurePythonX25519,
         AuthenticatedCipher,
-        HostCryptoSession,
         derive_session_key,
-        KEY_SIZE,
-        NONCE_SIZE,
-        TAG_SIZE,
-        HANDSHAKE_MAGIC,
         INFO_STRING,
     )
     HAS_CRYPTO_MODULE = True

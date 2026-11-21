@@ -32,6 +32,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { getLatencyConfig, FleetSortMode } from './FleetDashboard';
 import { useTranslation, Language } from '../../i18n/useTranslation';
 import { clampPercentage } from '../../utils/viewportScale';
+import { SPRING_BUBBLY, SPRING_POP } from '../../utils/springPhysics';
 
 export interface HostCardProps {
   host: HostDevice;
@@ -353,44 +354,54 @@ const HostCardComponent: React.FC<HostCardProps> = ({
   return (
     <div className={`${isExpanded ? 'lg:col-span-2' : ''} contain-paint-layout`}>
       <div
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          e.currentTarget.style.setProperty('--glint-x', `${e.clientX - rect.left}px`);
+          e.currentTarget.style.setProperty('--glint-y', `${e.clientY - rect.top}px`);
+        }}
         className={`
-          glass-liquid w-full max-w-full rounded-2xl p-3.5 sm:p-4 text-left select-none relative overflow-hidden
-          ${
-            isSelected
-              ? 'border-cyan-400/60 ring-1 ring-cyan-400/40'
-              : 'border-white/[0.08]'
-          }
-          ${isOffline ? 'opacity-85' : ''}
+          glass-liquid liquid-glint w-full max-w-full rounded-[26px] p-4 sm:p-4.5 text-left select-none relative overflow-hidden
+          ${isSelected ? 'iridescent-active-rim' : ''}
+          ${isOffline ? 'opacity-90' : ''}
         `}
       >
         {/* Main Row */}
-        <div className="flex items-center justify-between gap-2.5">
-          {/* Left: Device Icon + Identity + Status */}
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
-            <button
+        <div className="flex items-center justify-between gap-2.5 relative z-[1]">
+          {/* Left: Glossy Squircle Device Icon + Identity + Status */}
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.08, rotate: -3 }}
+              whileTap={{ scale: 0.9 }}
+              transition={SPRING_POP}
               onClick={() => {
                 triggerHapticFeedback('light');
                 onSelect(host.id);
                 onToggleExpand(host.id);
               }}
               className={`
-                w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border relative cursor-pointer
+                w-11 h-11 squircle-badge flex items-center justify-center shrink-0 relative cursor-pointer
                 ${
                   isOffline
-                    ? 'bg-white/[0.06] text-slate-300 border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]'
-                    : 'bg-gradient-to-br from-cyan-400/25 via-cyan-500/15 to-indigo-500/15 text-cyan-200 border-cyan-300/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_16px_var(--theme-accent-glow)]'
+                    ? remainingWakeSeconds !== undefined
+                      ? 'squircle-amber'
+                      : 'squircle-slate'
+                    : isHighLoadAnomaly
+                    ? 'squircle-rose'
+                    : host.deviceType === 'server'
+                    ? 'squircle-sky'
+                    : 'squircle-hero'
                 }
               `}
               aria-label={host.name || safeId}
             >
               <DeviceIcon className="w-5 h-5" />
               <span
-                className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#0d1527] ${
+                className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white shadow-sm ${
                   isOffline ? 'bg-amber-400' : 'bg-emerald-400'
                 }`}
               />
-            </button>
+            </motion.button>
 
             <div className="flex flex-col min-w-0 flex-1">
               <div className="flex items-center gap-1.5 min-w-0">
@@ -401,16 +412,19 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     onSelect(host.id);
                     onToggleExpand(host.id);
                   }}
-                  className="text-fluid-card-title font-bold text-white tracking-tight truncate text-left hover:text-cyan-200 transition cursor-pointer"
+                  className="text-fluid-card-title font-extrabold ink-primary tracking-tight truncate text-left hover:text-cyan-400 transition cursor-pointer"
                 >
                   {host.name || safeId}
                 </button>
-                <span className="px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/10 text-[10px] font-mono font-medium text-slate-300 shrink-0">
+                <span className="px-2 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono font-semibold ink-secondary shrink-0">
                   {osBadge}
                 </span>
                 {onTogglePin && (
-                  <button
+                  <motion.button
                     type="button"
+                    whileHover={{ scale: 1.2, rotate: 12 }}
+                    whileTap={{ scale: 0.85 }}
+                    transition={SPRING_POP}
                     onClick={(e) => {
                       e.stopPropagation();
                       triggerHapticFeedback('selection');
@@ -418,8 +432,8 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                     }}
                     className={`p-1 rounded-full transition shrink-0 ${
                       isPinned
-                        ? 'text-amber-300'
-                        : 'text-slate-500 hover:text-slate-300'
+                        ? 'text-amber-500'
+                        : 'ink-muted hover:text-amber-500'
                     }`}
                     title={
                       isPinned
@@ -437,16 +451,16 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                         isPinned ? 'fill-amber-400 text-amber-400' : ''
                       }`}
                     />
-                  </button>
+                  </motion.button>
                 )}
                 {isQuarantined && (
-                  <span className="text-[10px] font-mono font-semibold text-rose-400 shrink-0">
-                    · {t('host_quarantined')}
+                  <span className="px-1.5 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/35 text-[10px] font-mono font-bold text-rose-400 shrink-0">
+                    {t('host_quarantined')}
                   </span>
                 )}
                 {isCircuitTripped && (
-                  <span className="text-[10px] font-mono font-semibold text-amber-300 shrink-0">
-                    · {t('host_circuit_tripped')}
+                  <span className="px-1.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/35 text-[10px] font-mono font-bold text-amber-400 shrink-0">
+                    {t('host_circuit_tripped')}
                   </span>
                 )}
               </div>
@@ -456,35 +470,35 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyIp}
-                  className="inline-flex items-center gap-1 font-mono text-cyan-300/90 hover:text-cyan-200 text-[11px] font-medium transition"
+                  className="inline-flex items-center gap-1 font-mono text-cyan-400 hover:underline text-[11px] font-semibold transition"
                   title={currentLang === 'bg' ? 'Копирай IP' : 'Copy IP'}
                 >
                   <span>{host.ip}</span>
                   {copiedIp ? (
-                    <Check className="w-3 h-3 text-emerald-400" />
+                    <Check className="w-3 h-3 text-emerald-500" />
                   ) : (
                     <Copy className="w-2.5 h-2.5 opacity-60" />
                   )}
                 </button>
-                <span className="text-slate-600" aria-hidden="true">•</span>
+                <span className="opacity-35" aria-hidden="true">•</span>
                 {isOffline ? (
-                  <span className="text-amber-300/90 font-medium text-[11px] truncate">
+                  <span className="text-amber-400 font-semibold text-[11px] truncate">
                     {currentLang === 'bg' ? 'Спящ (WoL)' : 'Sleeping (WoL)'}
                   </span>
                 ) : (
                   <>
-                    <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-emerald-300">
+                    <span className="inline-flex items-center gap-1 font-mono text-[11px] font-bold text-emerald-400">
                       {rttMs}ms
                     </span>
                     {isLaptop && safeBatteryPct !== undefined && batteryConfig && (
                       <>
-                        <span className="text-slate-600" aria-hidden="true">•</span>
+                        <span className="opacity-35" aria-hidden="true">•</span>
                         <span
-                          className={`inline-flex items-center gap-0.5 text-[11px] font-mono ${batteryConfig.colorText}`}
+                          className={`inline-flex items-center gap-0.5 text-[11px] font-mono font-semibold ${batteryConfig.colorText}`}
                         >
                           <BatteryIcon className="w-3.5 h-3.5" />
                           <span>{safeBatteryPct}%</span>
-                          {host.isCharging && <Zap className="w-2.5 h-2.5 text-amber-300 fill-current" />}
+                          {host.isCharging && <Zap className="w-2.5 h-2.5 text-amber-400 fill-current" />}
                         </span>
                       </>
                     )}
@@ -494,128 +508,140 @@ const HostCardComponent: React.FC<HostCardProps> = ({
             </div>
           </div>
 
-          {/* Right: Clean 1-Tap Action Buttons */}
+          {/* Right: Glossy Capsule 1-Tap Action Controls */}
           <div className="flex items-center gap-1.5 shrink-0">
             {isOffline ? (
               remainingWakeSeconds !== undefined ? (
-                <div className="h-9 px-2.5 rounded-xl bg-amber-500/15 border border-amber-400/40 flex items-center gap-1.5 text-amber-300 text-[11px] font-mono font-bold">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                <div className="h-9 px-3 rounded-full bg-amber-500/15 border border-amber-400/45 flex items-center gap-1.5 text-amber-400 text-[11px] font-mono font-bold">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                   <span>{remainingWakeSeconds}s</span>
                 </div>
               ) : (
-                <button
+                <motion.button
                   type="button"
+                  whileHover={{ scale: 1.06, y: -1 }}
+                  whileTap={{ scale: 0.9 }}
+                  transition={SPRING_POP}
                   onClick={(e) => onWakeClick(e, host)}
-                  className="h-9 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-200 flex items-center gap-1.5 text-xs font-semibold transition active:scale-95"
+                  className="h-9 px-3.5 rounded-full squircle-amber preserve-white flex items-center gap-1.5 text-xs font-bold cursor-pointer"
                   title={t('host_wake_tooltip')}
                   aria-label={t('host_wake_tooltip')}
                 >
-                  <Power className="w-3.5 h-3.5 text-amber-300" />
+                  <Power className="w-3.5 h-3.5" />
                   <span className="hidden xs:inline">
                     {currentLang === 'bg' ? 'Събуди' : 'Wake'}
                   </span>
-                </button>
+                </motion.button>
               )
             ) : (
               <>
-                <button
+                <motion.button
                   type="button"
+                  whileHover={{ scale: 1.08, y: -1 }}
+                  whileTap={{ scale: 0.88 }}
+                  transition={SPRING_POP}
                   onClick={(e) => {
                     e.stopPropagation();
                     triggerHapticFeedback('light');
                     onSelectForCommand?.(host.id);
                   }}
-                  className="w-9 h-9 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/35 text-cyan-200 flex items-center justify-center transition active:scale-95"
+                  className="w-9 h-9 rounded-full liquid-control-pill text-cyan-400 flex items-center justify-center cursor-pointer"
                   title={t('host_terminal_tooltip')}
                   aria-label={t('host_terminal_tooltip')}
                 >
                   <TerminalSquare className="w-4 h-4" />
-                </button>
+                </motion.button>
 
-                <button
+                <motion.button
                   type="button"
+                  whileHover={{ scale: 1.08, y: -1 }}
+                  whileTap={{ scale: 0.88 }}
+                  transition={SPRING_POP}
                   onClick={(e) => {
                     e.stopPropagation();
                     triggerHapticFeedback('light');
                     onViewScreen(host);
                   }}
-                  className="w-9 h-9 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/35 text-sky-200 flex items-center justify-center transition active:scale-95"
+                  className="w-9 h-9 rounded-full squircle-sky preserve-white flex items-center justify-center cursor-pointer"
                   title={t('host_screen_tooltip')}
                   aria-label={t('host_screen_tooltip')}
                 >
                   <ScanEye className="w-4 h-4" />
-                </button>
+                </motion.button>
               </>
             )}
 
-            <button
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.88 }}
+              transition={SPRING_POP}
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleExpand(host.id);
               }}
               aria-expanded={isExpanded}
-              className={`w-9 h-9 rounded-xl flex items-center justify-center transition border active:scale-95 ${
+              className={`w-9 h-9 rounded-full flex items-center justify-center cursor-pointer ${
                 isExpanded
-                  ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400/40'
-                  : 'bg-white/[0.04] text-slate-400 hover:text-white border-white/10'
+                  ? 'liquid-hero-btn'
+                  : 'liquid-control-pill ink-secondary'
               }`}
               title={isExpanded ? t('host_hide_details_btn') : t('host_details_btn')}
             >
               <ChevronDown
-                className={`w-4 h-4 transition-transform duration-150 ${
+                className={`w-4 h-4 transition-transform duration-200 ${
                   isExpanded ? 'rotate-180' : ''
                 }`}
               />
-            </button>
+            </motion.button>
           </div>
         </div>
 
-        {/* Online Telemetry Bars */}
+        {/* Vivid Glossy Telemetry Bars */}
         {host.isOnline && (
-          <div className="mt-3 pt-2.5 border-t border-white/[0.06] space-y-2">
-            <div className="grid grid-cols-2 gap-3.5 items-center">
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
-                  <span className="text-slate-400">CPU</span>
+          <div className="mt-3.5 pt-3 border-t border-white/[0.08] space-y-2 relative z-[1]">
+            <div className="grid grid-cols-2 gap-4 items-center">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[10.5px] font-mono tabular-nums">
+                  <span className="ink-muted font-semibold">CPU</span>
                   <span
                     className={
-                      cpuVal >= 75 ? 'text-rose-300 font-bold' : 'text-cyan-300 font-semibold'
+                      cpuVal >= 75 ? 'text-rose-400 font-bold' : 'text-sky-400 font-bold'
                     }
                   >
                     {cpuVal}%
                   </span>
                 </div>
-                <div className="h-1.5 w-full rounded-full telemetry-track overflow-hidden">
+                <div className="h-2 w-full rounded-full telemetry-track overflow-hidden">
                   <div
                     style={{ width: `${Math.min(100, Math.max(0, cpuVal))}%` }}
                     className={`h-full rounded-full transition-all duration-300 ${
                       cpuVal >= 75
-                        ? 'bg-gradient-to-r from-rose-500 via-pink-500 to-amber-400 shadow-[0_0_10px_rgba(244,63,94,0.6)]'
-                        : 'bg-gradient-to-r from-cyan-400 via-sky-400 to-indigo-400 telemetry-glow-cyan'
+                        ? 'bg-gradient-to-r from-rose-500 via-pink-500 to-amber-400 telemetry-glow-rose'
+                        : 'bg-gradient-to-r from-sky-400 via-cyan-400 to-violet-500 telemetry-glow-cyan'
                     }`}
                   />
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
-                  <span className="text-slate-400">RAM</span>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[10.5px] font-mono tabular-nums">
+                  <span className="ink-muted font-semibold">RAM</span>
                   <span
                     className={
-                      ramVal >= 75 ? 'text-amber-300 font-bold' : 'text-indigo-300 font-semibold'
+                      ramVal >= 75 ? 'text-amber-400 font-bold' : 'text-violet-400 font-bold'
                     }
                   >
                     {ramVal}%
                   </span>
                 </div>
-                <div className="h-1.5 w-full rounded-full telemetry-track overflow-hidden">
+                <div className="h-2 w-full rounded-full telemetry-track overflow-hidden">
                   <div
                     style={{ width: `${Math.min(100, Math.max(0, ramVal))}%` }}
                     className={`h-full rounded-full transition-all duration-300 ${
                       ramVal >= 75
-                        ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 shadow-[0_0_10px_rgba(251,191,36,0.6)]'
-                        : 'bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 shadow-[0_0_10px_rgba(168,85,247,0.45)]'
+                        ? 'bg-gradient-to-r from-amber-400 via-orange-400 to-rose-500 telemetry-glow-amber'
+                        : 'bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-400 telemetry-glow-violet'
                     }`}
                   />
                 </div>
@@ -623,48 +649,54 @@ const HostCardComponent: React.FC<HostCardProps> = ({
             </div>
 
             {isHighLoadAnomaly && (
-              <div className="flex items-center justify-between gap-2 pt-0.5">
-                <span className="text-[10.5px] font-mono text-rose-300 flex items-center gap-1.5 truncate">
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <span className="text-[10.5px] font-mono text-rose-400 font-semibold flex items-center gap-1.5 truncate">
+                  <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 animate-pulse" />
                   <span className="truncate">
                     {currentLang === 'bg'
                       ? `Високо натоварване (${cpuVal}% / ${ramVal}%)`
                       : `High load (${cpuVal}% CPU / ${ramVal}% RAM)`}
                   </span>
                 </span>
-                <button
+                <motion.button
                   type="button"
+                  whileHover={{ scale: 1.06 }}
+                  whileTap={{ scale: 0.91 }}
+                  transition={SPRING_POP}
                   onClick={(e) => {
                     e.stopPropagation();
                     triggerHapticFeedback('medium');
                     onDiagnoseHost?.(host);
                   }}
-                  className="px-2.5 py-1 rounded-lg bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 text-violet-200 text-[10.5px] font-semibold flex items-center gap-1 transition shrink-0 active:scale-95"
+                  className="px-3 py-1 rounded-full squircle-violet preserve-white text-[10.5px] font-bold flex items-center gap-1 shrink-0 cursor-pointer"
                 >
-                  <Sparkles className="w-3 h-3 text-violet-300" />
+                  <Sparkles className="w-3 h-3" />
                   <span>{currentLang === 'bg' ? 'AI Анализ' : 'AI Diagnose'}</span>
-                </button>
+                </motion.button>
               </div>
             )}
           </div>
         )}
 
-        {/* Expanded Control & Telemetry Drawer (Zero Fake Placeholders) */}
+        {/* Expanded Control & Telemetry Drawer */}
         <AnimatePresence initial={false}>
           {isExpanded && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-              className="overflow-hidden"
+              transition={SPRING_BUBBLY}
+              className="overflow-hidden relative z-[1]"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="mt-3.5 pt-3 border-t border-white/[0.08] space-y-3">
+              <div className="mt-3.5 pt-3.5 border-t border-white/[0.08] space-y-3">
                 {/* Primary Remote Control Actions */}
                 <div className="grid grid-cols-3 gap-2">
-                  <button
+                  <motion.button
                     type="button"
+                    whileHover={{ scale: 1.04, y: -1 }}
+                    whileTap={{ scale: 0.92 }}
+                    transition={SPRING_POP}
                     onClick={(e) => {
                       e.stopPropagation();
                       triggerHapticFeedback('medium');
@@ -674,67 +706,73 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                         onWakeClick(e, host);
                       }
                     }}
-                    className={`min-h-[40px] px-2.5 py-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition active:scale-95 ${
+                    className={`min-h-[40px] px-3 py-2 rounded-full text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer ${
                       host.isOnline
-                        ? 'bg-cyan-500/20 hover:bg-cyan-500/30 border-cyan-400/45 text-cyan-100'
-                        : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400/45 text-amber-100'
+                        ? 'squircle-sky preserve-white'
+                        : 'squircle-amber preserve-white'
                     }`}
                   >
                     {host.isOnline ? (
                       <>
-                        <ScanEye className="w-3.5 h-3.5 text-cyan-300 shrink-0" />
+                        <ScanEye className="w-3.5 h-3.5 shrink-0" />
                         <span className="truncate">
                           {currentLang === 'bg' ? 'Екран' : 'Live Screen'}
                         </span>
                       </>
                     ) : (
                       <>
-                        <Power className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                        <Power className="w-3.5 h-3.5 shrink-0" />
                         <span className="truncate">
                           {currentLang === 'bg' ? 'Събуди' : 'Wake PC'}
                         </span>
                       </>
                     )}
-                  </button>
+                  </motion.button>
 
-                  <button
+                  <motion.button
                     type="button"
+                    whileHover={{ scale: 1.04, y: -1 }}
+                    whileTap={{ scale: 0.92 }}
+                    transition={SPRING_POP}
                     onClick={(e) => {
                       e.stopPropagation();
                       triggerHapticFeedback('light');
                       onSelectForCommand?.(host.id);
                     }}
-                    className="min-h-[40px] px-2.5 py-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition active:scale-95"
+                    className="min-h-[40px] px-3 py-2 rounded-full liquid-control-pill text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <TerminalSquare className="w-3.5 h-3.5 text-cyan-300 shrink-0" />
+                    <TerminalSquare className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                     <span className="truncate">
                       {currentLang === 'bg' ? 'Терминал' : 'Terminal'}
                     </span>
-                  </button>
+                  </motion.button>
 
-                  <button
+                  <motion.button
                     type="button"
+                    whileHover={{ scale: 1.04, y: -1 }}
+                    whileTap={{ scale: 0.92 }}
+                    transition={SPRING_POP}
                     onClick={(e) => {
                       e.stopPropagation();
                       triggerHapticFeedback('light');
                       onOpenDetailsModal(host);
                     }}
-                    className="min-h-[40px] px-2.5 py-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition active:scale-95"
+                    className="min-h-[40px] px-3 py-2 rounded-full liquid-control-pill text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <Info className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
+                    <Info className="w-3.5 h-3.5 text-violet-400 shrink-0" />
                     <span className="truncate">
                       {currentLang === 'bg' ? 'Детайли' : 'Details'}
                     </span>
-                  </button>
+                  </motion.button>
                 </div>
 
                 {/* 1-Tap Quick OS Actions */}
-                <div className="rounded-xl bg-white/[0.04] border border-white/[0.10] border-t-white/[0.18] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]">
+                <div className="rounded-2xl glass-liquid-subtle p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-semibold">
+                    <span className="text-[10px] font-mono uppercase tracking-wider ink-muted font-bold">
                       {currentLang === 'bg' ? 'Бързи OS Команди' : 'Quick OS Actions'}
                     </span>
-                    <span className="text-[10px] font-mono text-cyan-400/80">
+                    <span className="text-[10px] font-mono font-semibold text-cyan-400">
                       {host.os === 'windows' ? 'PowerShell' : 'Systemd'}
                     </span>
                   </div>
@@ -745,21 +783,24 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                       const isDispatched = dispatchedAction === act.id;
                       const isWarning = act.variant === 'warning';
                       return (
-                        <button
+                        <motion.button
                           key={act.id}
                           type="button"
+                          whileHover={{ scale: isOffline ? 1 : 1.04 }}
+                          whileTap={{ scale: isOffline ? 1 : 0.92 }}
+                          transition={SPRING_POP}
                           disabled={isOffline}
                           onClick={(e) => handleQuickAction(e, act.id, act.command)}
-                          className={`min-h-[38px] px-2.5 py-1.5 rounded-lg border text-left transition flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 ${
+                          className={`min-h-[38px] px-2.5 py-1.5 rounded-xl border text-left transition flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
                             isDispatched
-                              ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-200'
+                              ? 'squircle-emerald preserve-white border-white/40'
                               : isWarning
-                              ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-400/30 text-amber-200'
-                              : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.08] text-slate-200'
+                              ? 'bg-amber-500/12 hover:bg-amber-500/20 border-amber-400/35 text-amber-400'
+                              : 'liquid-control-pill'
                           }`}
                         >
                           {isDispatched ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            <Check className="w-3.5 h-3.5 shrink-0" />
                           ) : (
                             <ActIcon
                               className={`w-3.5 h-3.5 shrink-0 ${
@@ -767,29 +808,29 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                               }`}
                             />
                           )}
-                          <span className="font-display text-[11px] font-semibold leading-tight truncate">
+                          <span className="font-display text-[11px] font-bold leading-tight truncate">
                             {isDispatched
                               ? currentLang === 'bg'
                                 ? 'Изпратено'
                                 : 'Sent'
                               : act.label}
                           </span>
-                        </button>
+                        </motion.button>
                       );
                     })}
                   </div>
                 </div>
 
                 {/* Network & Hardware Telemetry Strip */}
-                <div className="rounded-xl bg-white/[0.04] border border-white/[0.10] border-t-white/[0.18] px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]">
+                <div className="rounded-2xl glass-liquid-subtle px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-slate-400">MAC:</span>
-                    <span className="text-slate-200 font-semibold">{host.mac || '—'}</span>
+                    <span className="ink-muted">MAC:</span>
+                    <span className="ink-primary font-semibold">{host.mac || '—'}</span>
                     {host.mac && (
                       <button
                         type="button"
                         onClick={handleCopyMac}
-                        className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-cyan-300 transition"
+                        className="p-1 rounded-full hover:bg-cyan-500/10 ink-muted hover:text-cyan-400 transition"
                         title={currentLang === 'bg' ? 'Копирай MAC' : 'Copy MAC'}
                       >
                         {copiedMac ? (
@@ -803,18 +844,18 @@ const HostCardComponent: React.FC<HostCardProps> = ({
 
                   {host.diskUsage && (
                     <div className="flex items-center gap-1">
-                      <HardDrive className="w-3 h-3 text-cyan-400/80 shrink-0" />
-                      <span className="text-slate-400">
+                      <HardDrive className="w-3 h-3 text-cyan-400 shrink-0" />
+                      <span className="ink-muted">
                         {currentLang === 'bg' ? 'Диск:' : 'Disk:'}
                       </span>
-                      <span className="text-slate-200">{host.diskUsage}</span>
+                      <span className="ink-primary font-semibold">{host.diskUsage}</span>
                     </div>
                   )}
 
                   <button
                     type="button"
                     onClick={handleCopyUri}
-                    className="px-2 py-0.5 rounded bg-white/[0.04] hover:bg-white/[0.1] border border-white/10 text-[10.5px] text-cyan-300 flex items-center gap-1 transition"
+                    className="px-2.5 py-0.5 rounded-full liquid-control-pill text-[10.5px] text-cyan-400 flex items-center gap-1"
                     title={connectionUri}
                   >
                     {copiedUri ? (
@@ -831,7 +872,7 @@ const HostCardComponent: React.FC<HostCardProps> = ({
                       ping={host.ping}
                       isOnline={host.isOnline}
                     />
-                    <span className="text-cyan-300 font-semibold">
+                    <span className="text-emerald-400 font-bold">
                       {host.isOnline
                         ? `${rttMs}ms (±${jitterMs}ms)`
                         : currentLang === 'bg'

@@ -46,12 +46,9 @@ try:
         pack_packet,
         unpack_packet,
         MAGIC,
-        HEADER_SIZE,
         OP_PING,
-        OP_FRAME,
         OP_AUTH,
         OP_INPUT,
-        OP_CLIP,
         OP_VIEWPORT_RESIZE,
     )
     from agent.agent_gui import HostDaemonState
@@ -61,12 +58,9 @@ except (ImportError, ModuleNotFoundError):
     pack_packet = agent_mod.pack_packet
     unpack_packet = agent_mod.unpack_packet
     MAGIC = agent_mod.MAGIC
-    HEADER_SIZE = agent_mod.HEADER_SIZE
     OP_PING = agent_mod.OP_PING
-    OP_FRAME = agent_mod.OP_FRAME
     OP_AUTH = agent_mod.OP_AUTH
     OP_INPUT = agent_mod.OP_INPUT
-    OP_CLIP = agent_mod.OP_CLIP
     OP_VIEWPORT_RESIZE = agent_mod.OP_VIEWPORT_RESIZE
     from agent_gui import HostDaemonState
 

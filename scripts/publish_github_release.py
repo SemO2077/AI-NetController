@@ -93,7 +93,11 @@ def _github_request(
 
 def main():
     parser = argparse.ArgumentParser(description="Publish AI NetController to GitHub Releases")
-    parser.add_argument("--repo", default="SemO2077/AI-NetController", help="GitHub repo (owner/name)")
+    parser.add_argument(
+        "--repo",
+        default=os.environ.get("GITHUB_REPOSITORY", "SemO2077/AI-NetController"),
+        help="GitHub repo (owner/name)",
+    )
     parser.add_argument("--tag", default=None, help="Target release tag (e.g. v0.80.0)")
     parser.add_argument("--title", default=None, help="Release title override")
     parser.add_argument("--prerelease", action="store_true", help="Mark GitHub release as prerelease (beta)")
@@ -113,6 +117,7 @@ def main():
         os.path.join(release_dir, f)
         for f in os.listdir(release_dir)
         if f.endswith((".exe", ".apk", ".zip", ".txt", ".json"))
+        and os.path.isfile(os.path.join(release_dir, f))
     )
     if not artifacts:
         print(f"[!] No release artifacts found in {release_dir}")
@@ -122,8 +127,10 @@ def main():
     print(f"[*] Found {len(artifacts)} release artifacts in {release_dir}")
 
     notes_file = os.path.join(REPO_DIR, "PATCH_NOTES.md")
+    if not os.path.isfile(notes_file):
+        notes_file = os.path.join(release_dir, "PATCH_NOTES.md")
     notes_body = f"# {release_title}\n\nAI NetController {target_tag} binaries and checksums."
-    if os.path.exists(notes_file):
+    if os.path.isfile(notes_file):
         with open(notes_file, "r", encoding="utf-8") as f:
             notes_body = f.read()
 
@@ -166,7 +173,7 @@ def main():
     release_obj: Optional[Dict] = None
 
     try:
-        release_obj = _github_request(f"{api_base}/releases/tags/{urllib.parse.quote(target_tag)}", token)
+        release_obj = _github_request(f"{api_base}/releases/tags/{urllib.parse.quote(target_tag, safe='')}", token)
         print(f"[*] Existing GitHub Release #{release_obj['id']} found for {target_tag}; updating...")
         release_obj = _github_request(
             f"{api_base}/releases/{release_obj['id']}",
@@ -216,7 +223,7 @@ def main():
 
         size_mb = len(blob) / (1024 * 1024)
         print(f"[*] Uploading {fname} ({size_mb:.2f} MB)...")
-        upload_url = f"{upload_base}?name={urllib.parse.quote(fname)}"
+        upload_url = f"{upload_base}?name={urllib.parse.quote(fname, safe='')}"
         uploaded = _github_request(
             upload_url,
             token,

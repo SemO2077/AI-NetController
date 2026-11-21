@@ -10,14 +10,6 @@ import 'package:local_auth/local_auth.dart';
 /// terminal commands (e.g. diskpart, format, rmdir, reboot) cannot be
 /// triggered without explicit FaceID, TouchID, or Device PIN re-authentication.
 
-enum BiometricGateStatus {
-  idle,
-  authenticating,
-  approved,
-  rejected,
-  hardwareUnavailable,
-}
-
 class BiometricAuthResult {
   final bool isApproved;
   final String message;

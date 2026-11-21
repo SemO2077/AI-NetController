@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -37,11 +38,13 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
   }
 
   void _nextPage() {
-    HapticFeedback.selectionClick();
+    unawaited(HapticFeedback.selectionClick().catchError((_) {}));
     if (_currentPage < _totalPages - 1) {
-      _pageController.nextPage(
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOutCubic,
+      unawaited(
+        _pageController.nextPage(
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+        ),
       );
     } else {
       _completeAndClose();
@@ -50,9 +53,11 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
 
   void _prevPage() {
     if (_currentPage > 0) {
-      _pageController.previousPage(
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOutCubic,
+      unawaited(
+        _pageController.previousPage(
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+        ),
       );
     }
   }
@@ -120,8 +125,8 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
             width: 44,
             height: 4.5,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(3),
+              color: palette.textTertiary.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(999),
             ),
           ),
         ),
@@ -147,34 +152,40 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                       width: iconOrbSize,
                       height: iconOrbSize,
                       decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: stepColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(isShort ? 16 : 22),
+                        gradient: palette.squircleGradient(
+                          stepColor,
+                          Color.lerp(stepColor, palette.secondary, 0.45)!,
+                        ),
                         border: Border.all(
-                          color: stepColor.withValues(alpha: 0.4),
-                          width: 1.5,
+                          color: Colors.white.withValues(alpha: 0.45),
+                          width: 1.2,
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: stepColor.withValues(alpha: 0.25),
+                            color: stepColor.withValues(
+                                alpha: palette.isDaylight ? 0.30 : 0.36),
                             blurRadius: 22,
+                            offset: const Offset(0, 8),
                           ),
                         ],
                       ),
                       child: Icon(
                         step['icon'] as IconData,
-                        size: isShort ? 26 : 38,
-                        color: stepColor,
+                        size: isShort ? 26 : 36,
+                        color: Colors.white,
                       ),
                     ),
                     SizedBox(height: isShort ? 8 : 16),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
+                          horizontal: 12, vertical: 4),
                       decoration: BoxDecoration(
-                        color: stepColor.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
+                        color: stepColor.withValues(
+                            alpha: palette.isDaylight ? 0.12 : 0.18),
+                        borderRadius: BorderRadius.circular(999),
                         border: Border.all(
-                          color: stepColor.withValues(alpha: 0.3),
+                          color: stepColor.withValues(alpha: 0.32),
                         ),
                       ),
                       child: Text(
@@ -194,8 +205,8 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                       style: TextStyle(
                         color: palette.textPrimary,
                         fontSize: context.fluidFont(isShort ? 16 : 19),
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.2,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2,
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -203,7 +214,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                       step['subtitle'] as String,
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: stepColor.withValues(alpha: 0.85),
+                        color: stepColor,
                         fontSize: context.fluidFont(12),
                         fontWeight: FontWeight.w600,
                       ),
@@ -215,7 +226,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                       style: TextStyle(
                         color: palette.textSecondary,
                         fontSize: context.fluidFont(13),
-                        height: 1.4,
+                        height: 1.45,
                       ),
                     ),
                   ],
@@ -239,13 +250,13 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                   style: TextButton.styleFrom(
                     visualDensity: VisualDensity.compact,
                     padding: EdgeInsets.symmetric(
-                        horizontal: isUltraCompact ? 6 : 12),
+                        horizontal: isUltraCompact ? 8 : 14),
                   ),
                   onPressed: _prevPage,
                   child: Text(
                     'Back',
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.72),
+                      color: palette.textSecondary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -255,13 +266,14 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                   style: TextButton.styleFrom(
                     visualDensity: VisualDensity.compact,
                     padding: EdgeInsets.symmetric(
-                        horizontal: isUltraCompact ? 6 : 12),
+                        horizontal: isUltraCompact ? 8 : 14),
                   ),
                   onPressed: _completeAndClose,
                   child: Text(
                     'Skip',
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.48),
+                      color: palette.textTertiary,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
@@ -277,8 +289,8 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                     decoration: BoxDecoration(
                       color: active
                           ? palette.primary
-                          : Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(3),
+                          : palette.textTertiary.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(999),
                     ),
                   );
                 }),
@@ -287,13 +299,12 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: palette.primary,
-                    foregroundColor: Colors.black,
+                    foregroundColor:
+                        palette.isDaylight ? Colors.white : const Color(0xFF090B1D),
                     elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+                    shape: const StadiumBorder(),
                     padding: EdgeInsets.symmetric(
-                      horizontal: isUltraCompact ? 12 : 18,
+                      horizontal: isUltraCompact ? 14 : 20,
                       vertical: isShort ? 8 : 12,
                     ),
                   ),
@@ -326,17 +337,21 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
           ),
           margin: EdgeInsets.all(isShort ? 8 : 12),
           decoration: BoxDecoration(
-            color: palette.background.withValues(alpha: 0.96),
+            color: palette.surface
+                .withValues(alpha: palette.isDaylight ? 0.94 : 0.96),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: palette.primary.withValues(alpha: 0.38),
+              color: palette.isDaylight
+                  ? Colors.white.withValues(alpha: 0.9)
+                  : palette.primary.withValues(alpha: 0.36),
               width: 1.2,
             ),
             boxShadow: [
               BoxShadow(
-                color: palette.primary.withValues(alpha: 0.16),
+                color: palette.primary
+                    .withValues(alpha: palette.isDaylight ? 0.14 : 0.22),
                 blurRadius: 32,
-                spreadRadius: 1,
+                offset: const Offset(0, 12),
               ),
             ],
           ),

@@ -31,6 +31,8 @@ import { HostDevice, WolSchedule } from '../../types';
 import { useTranslation } from '../../i18n/useTranslation';
 import { useUIStore } from '../../store/uiStore';
 import { wolHistoryStore } from '../../store/wolHistoryStore';
+import { ThemeQuickControls } from '../ui/ThemeQuickControls';
+import { SPRING_JELLY, SPRING_POP } from '../../utils/springPhysics';
 
 export type BotRole = 'commander' | 'diagnostics' | 'fast_triage';
 export type GeminiModelId =
@@ -510,8 +512,10 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
       let match: RegExpExecArray | null;
       let idx = 0;
       const parseAttr = (attrStr: string, key: string): string | undefined => {
-        const quoted = new RegExp(`${key}="([^"]*)"`, 'i').exec(attrStr);
-        if (quoted) return quoted[1];
+        const dblQuoted = new RegExp(`${key}="([^"]*)"`, 'i').exec(attrStr);
+        if (dblQuoted) return dblQuoted[1];
+        const sglQuoted = new RegExp(`${key}='([^']*)'`, 'i').exec(attrStr);
+        if (sglQuoted) return sglQuoted[1];
         const unquoted = new RegExp(`${key}=([^\\s\\]]+)`, 'i').exec(attrStr);
         return unquoted ? unquoted[1] : undefined;
       };
@@ -1081,9 +1085,33 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         );
       }
 
+      const renderInlineMarkdown = (text: string, blockIdx: number) => {
+        const tokens = text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g);
+        return tokens.map((tok, tIdx) => {
+          if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) {
+            return (
+              <strong key={`${blockIdx}-b-${tIdx}`} className="font-bold ink-primary">
+                {tok.slice(2, -2)}
+              </strong>
+            );
+          }
+          if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) {
+            return (
+              <code
+                key={`${blockIdx}-c-${tIdx}`}
+                className="px-1.5 py-0.5 rounded-md bg-cyan-500/12 border border-cyan-400/25 font-mono text-[0.9em] text-cyan-400 font-semibold"
+              >
+                {tok.slice(1, -1)}
+              </code>
+            );
+          }
+          return <React.Fragment key={`${blockIdx}-t-${tIdx}`}>{tok}</React.Fragment>;
+        });
+      };
+
       return (
         <div key={index} className="space-y-1.5 whitespace-pre-wrap select-text">
-          {part}
+          {renderInlineMarkdown(part, index)}
         </div>
       );
     });
@@ -1118,19 +1146,19 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between w-full max-w-5xl 2xl:max-w-7xl mx-auto pb-1 select-none">
-      {/* 1. Sleek Native Header Bar */}
-      <header className="flex-none py-2 px-3 mb-2 rounded-2xl glass-liquid flex items-center justify-between gap-2 flex-wrap">
+    <div className="flex-1 flex flex-col justify-between w-full max-w-5xl 2xl:max-w-7xl mx-auto pb-1 select-none gap-2.5">
+      {/* 1. Detached Floating Apple Intelligence Liquid Glass Header */}
+      <header className="flex-none py-2.5 px-3.5 rounded-[28px] glass-liquid-elevated liquid-capsule-refract flex items-center justify-between gap-2.5 flex-wrap">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center shrink-0">
-            <Sparkles className="w-4 h-4 text-cyan-300" />
+          <div className="w-10 h-10 squircle-badge squircle-violet flex items-center justify-center shrink-0">
+            <Sparkles className="w-4.5 h-4.5 icon-sparkle-live" />
           </div>
           <div className="flex flex-col min-w-0 flex-1">
-            <h2 className="font-display text-xs sm:text-[13px] font-bold text-white tracking-tight flex items-center gap-1.5 min-w-0">
+            <h2 className="font-display text-xs sm:text-sm font-extrabold ink-primary tracking-tight flex items-center gap-1.5 min-w-0">
               <span className="truncate">AI NetController Copilot</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
             </h2>
-            <span className="text-[10px] font-mono text-cyan-300/80 truncate">
+            <span className="text-[10.5px] font-mono text-cyan-400 font-semibold truncate">
               {selectedModel || activeRoleConfig.model} •{' '}
               {primaryHost ? primaryHost.name : language === 'bg' ? 'Няма хост' : 'No Host'}
             </span>
@@ -1138,13 +1166,18 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0 ml-auto flex-wrap">
-          <button
+          <ThemeQuickControls showAccentDots={false} compact />
+
+          <motion.button
             type="button"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.91 }}
+            transition={SPRING_POP}
             onClick={toggleAutoExecute}
-            className={`px-2.5 h-8 rounded-xl text-[10px] sm:text-[11px] font-semibold border transition flex items-center justify-center gap-1.5 active:scale-95 ${
+            className={`px-3 h-9 rounded-full text-[11px] font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
               autoExecutePcActions
-                ? 'bg-emerald-500/18 text-emerald-300 border-emerald-400/40'
-                : 'bg-[#070d1b] text-slate-400 border-white/10 hover:text-white'
+                ? 'squircle-emerald preserve-white'
+                : 'liquid-control-pill ink-secondary'
             }`}
             title={
               language === 'bg'
@@ -1154,31 +1187,34 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
           >
             <span
               className={`w-2 h-2 rounded-full ${
-                autoExecutePcActions ? 'bg-emerald-400' : 'bg-slate-500'
+                autoExecutePcActions ? 'bg-white' : 'bg-slate-400'
               }`}
             />
             <span className="hidden md:inline">
               {language === 'bg' ? 'Авто-PC' : 'Auto-PC'}
             </span>
-          </button>
+          </motion.button>
 
-          <button
+          <motion.button
             type="button"
+            whileHover={{ scale: 1.06 }}
+            whileTap={{ scale: 0.9 }}
+            transition={SPRING_POP}
             onClick={() => {
               triggerHapticFeedback('light');
               setShowControlDeck((prev) => !prev);
             }}
-            className={`w-8 h-8 rounded-xl border flex items-center justify-center transition active:scale-95 ${
+            className={`w-9 h-9 rounded-full flex items-center justify-center cursor-pointer ${
               showControlDeck
-                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/40'
-                : 'bg-[#070d1b] text-slate-400 border-white/10 hover:text-white'
+                ? 'liquid-hero-btn'
+                : 'liquid-control-pill ink-secondary'
             }`}
             title={language === 'bg' ? 'AI Панел за Бърз Контрол' : 'AI Quick Control Deck'}
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
-          </button>
+          </motion.button>
 
-          <div className="flex items-center bg-[#070d1b] border border-white/10 p-0.5 rounded-xl">
+          <div className="flex items-center glass-liquid-subtle p-1 rounded-full">
             {ROLES.map((r) => {
               const isSelected = activeRole === r.id;
               const Icon = r.icon;
@@ -1187,29 +1223,37 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                   key={r.id}
                   type="button"
                   onClick={() => handleRoleSelect(r.id)}
-                  className={`px-2 sm:px-2.5 h-7 rounded-lg text-[11px] font-semibold transition flex items-center gap-1 whitespace-nowrap ${
-                    isSelected
-                      ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/35'
-                      : 'text-slate-400 hover:text-white'
+                  className={`relative px-2.5 sm:px-3 h-7 rounded-full text-[11px] font-bold transition flex items-center gap-1 whitespace-nowrap cursor-pointer ${
+                    isSelected ? 'preserve-white' : 'ink-secondary hover:ink-primary'
                   }`}
                 >
-                  <Icon className="w-3.5 h-3.5 shrink-0" />
-                  <span className="font-display">{r.label}</span>
+                  {isSelected && (
+                    <motion.span
+                      layoutId="aiActiveRolePill"
+                      transition={SPRING_JELLY}
+                      className="absolute inset-0 rounded-full liquid-hero-btn pointer-events-none"
+                    />
+                  )}
+                  <Icon className="w-3.5 h-3.5 shrink-0 relative z-10" />
+                  <span className="font-display relative z-10">{r.label}</span>
                 </button>
               );
             })}
           </div>
 
           {messages.length > 1 && (
-            <button
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.06 }}
+              whileTap={{ scale: 0.9 }}
+              transition={SPRING_POP}
               onClick={handleClearHistory}
-              className="w-8 h-8 rounded-xl bg-[#070d1b] border border-white/10 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center transition active:scale-95"
+              className="w-9 h-9 rounded-full liquid-control-pill ink-secondary hover:text-rose-400 flex items-center justify-center cursor-pointer"
               title={language === 'bg' ? 'Изчисти чата' : 'Clear chat'}
               aria-label={language === 'bg' ? 'Изчисти чата' : 'Clear chat'}
             >
               <Trash2 className="w-3.5 h-3.5" />
-            </button>
+            </motion.button>
           )}
         </div>
       </header>
@@ -1221,27 +1265,30 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.15 }}
-            className="flex-none overflow-hidden mb-2"
+            transition={{ duration: 0.18 }}
+            className="flex-none overflow-hidden"
           >
-            <div className="px-2.5 py-2 rounded-xl bg-[#0b1326] border border-white/10 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 shrink-0 flex items-center gap-1 pr-1.5 border-r border-white/10">
+            <div className="px-3 py-2.5 rounded-full glass-liquid-subtle flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+              <span className="text-[10px] font-mono uppercase tracking-wider ink-muted shrink-0 flex items-center gap-1 pr-2 border-r border-white/10 font-bold">
                 <Zap className="w-3 h-3 text-cyan-400" />
                 <span>{language === 'bg' ? 'Бързи:' : 'Quick:'}</span>
               </span>
               {quickControlDeck.map((item) => {
                 const Icon = item.icon;
                 return (
-                  <button
+                  <motion.button
                     key={item.id}
                     type="button"
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.91 }}
+                    transition={SPRING_POP}
                     disabled={isLoading}
                     onClick={() => handleSendMessage(item.prompt)}
-                    className={`h-8 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1.5 shrink-0 transition active:scale-95 ${item.color}`}
+                    className="h-8 px-3 rounded-full liquid-control-pill text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
                   >
-                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                    <Icon className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
                     <span>{item.label}</span>
-                  </button>
+                  </motion.button>
                 );
               })}
               {onOpenUpdateCenter && (
@@ -1251,7 +1298,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                     triggerHapticFeedback('light');
                     onOpenUpdateCenter();
                   }}
-                  className="h-8 px-3 rounded-lg border border-white/15 bg-white/[0.04] hover:bg-white/10 text-slate-300 text-xs font-semibold flex items-center gap-1.5 shrink-0 transition ml-auto active:scale-95"
+                  className="h-8 px-3 rounded-full liquid-control-pill text-xs font-semibold flex items-center gap-1.5 shrink-0 ml-auto cursor-pointer"
                 >
                   <RefreshCw className="w-3 h-3 text-emerald-400" />
                   <span>{language === 'bg' ? 'Обновления' : 'Updates'}</span>
@@ -1262,34 +1309,37 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         )}
       </AnimatePresence>
 
-      {/* 2. Scrollable Conversation Thread */}
+      {/* 2. Scrollable Airy Conversation Thread */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto py-2 px-0.5 space-y-3 bouncy-scroll"
+        className="flex-1 overflow-y-auto py-2 px-1 space-y-3.5 bouncy-scroll"
       >
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
           return (
-            <div
+            <motion.div
               key={msg.id}
+              initial={{ opacity: 0, y: 10, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={SPRING_POP}
               className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
             >
               <div
-                className={`text-xs sm:text-[13px] leading-relaxed relative break-words overflow-hidden ${
+                className={`text-xs sm:text-[13.5px] leading-relaxed relative break-words overflow-hidden ${
                   isUser
-                    ? 'bg-cyan-500/20 text-white border border-cyan-400/35 rounded-2xl rounded-tr-xs px-3.5 py-2.5 max-w-[85%] lg:max-w-[75%]'
-                    : 'glass-liquid text-slate-100 rounded-2xl rounded-tl-xs p-3.5 max-w-[96%] sm:max-w-[88%] lg:max-w-[84%]'
+                    ? 'liquid-hero-btn preserve-white rounded-[24px] rounded-tr-md px-4 py-3 max-w-[85%] lg:max-w-[75%]'
+                    : 'glass-liquid ink-primary rounded-[26px] rounded-tl-md p-4 max-w-[96%] sm:max-w-[88%] lg:max-w-[84%]'
                 }`}
               >
                 {!isUser && (
-                  <div className="flex items-center justify-between gap-3 mb-2 text-[10px] text-cyan-300/80 font-mono border-b border-white/[0.06] pb-1.5">
-                    <span className="flex items-center gap-1 font-semibold truncate">
-                      <Bot className="w-3 h-3 shrink-0" />
+                  <div className="flex items-center justify-between gap-3 mb-2.5 text-[10.5px] text-cyan-400 font-mono border-b border-white/[0.08] pb-2">
+                    <span className="flex items-center gap-1.5 font-bold truncate">
+                      <Bot className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">{msg.modelUsed || activeRoleConfig.model}</span>
                     </span>
                     <div className="flex items-center gap-2 shrink-0">
                       {msg.durationMs && (
-                        <span className="flex items-center gap-0.5 text-slate-400 tabular-nums">
+                        <span className="flex items-center gap-0.5 ink-muted tabular-nums">
                           <Clock className="w-2.5 h-2.5" />
                           <span>{msg.durationMs}ms</span>
                         </span>
@@ -1302,7 +1352,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                             msg.content.replace(/\[ACTION:[^\]]+\]/gi, '').trim()
                           )
                         }
-                        className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition flex items-center justify-center"
+                        className="p-1 rounded-full ink-muted hover:text-cyan-400 hover:bg-cyan-500/10 transition flex items-center justify-center"
                         title={language === 'bg' ? 'Копирай отговора' : 'Copy response'}
                       >
                         {copiedId === msg.id ? (
@@ -1318,8 +1368,8 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                 {renderFormattedContent(msg.content)}
 
                 {msg.actions && msg.actions.length > 0 && (
-                  <div className="mt-3 pt-2.5 border-t border-white/10 space-y-2">
-                    <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-cyan-300/80">
+                  <div className="mt-3.5 pt-3 border-t border-white/10 space-y-2">
+                    <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-cyan-400 font-bold">
                       <span>
                         {language === 'bg'
                           ? `AI Действия (${msg.actions.length})`
@@ -1336,29 +1386,29 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                         return (
                           <div
                             key={action.id}
-                            className={`rounded-xl p-2.5 border transition-all ${
+                            className={`rounded-2xl p-3 border transition-all ${
                               exec?.success
-                                ? 'bg-emerald-950/25 border-emerald-500/35'
+                                ? 'bg-emerald-500/10 border-emerald-500/35'
                                 : exec && !exec.success
-                                ? 'bg-amber-950/25 border-amber-500/35'
-                                : 'bg-[#070d1b] border-white/10'
+                                ? 'bg-amber-500/10 border-amber-500/35'
+                                : 'glass-liquid-subtle'
                             }`}
                           >
                             <div className="flex items-center justify-between gap-2 flex-wrap">
                               <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                <div className="w-8 h-8 rounded-lg bg-white/[0.06] border border-white/10 flex items-center justify-center shrink-0">
+                                <div className="w-8 h-8 squircle-badge squircle-hero flex items-center justify-center shrink-0">
                                   {getActionIcon(action.type)}
                                 </div>
                                 <div className="min-w-0 flex-1">
-                                  <div className="text-xs font-bold text-white break-words">
+                                  <div className="text-xs font-bold ink-primary break-words">
                                     {action.label}
                                   </div>
-                                  <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2 flex-wrap">
+                                  <div className="text-[10px] font-mono ink-muted flex items-center gap-2 flex-wrap">
                                     <span>
                                       {exec?.opcode || action.subtitle || action.type.toUpperCase()}
                                     </span>
                                     {exec?.durationMs !== undefined && (
-                                      <span className="text-emerald-400">• {exec.durationMs}ms</span>
+                                      <span className="text-emerald-400 font-semibold">• {exec.durationMs}ms</span>
                                     )}
                                   </div>
                                 </div>
@@ -1367,10 +1417,10 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                               <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                                 {exec && (
                                   <span
-                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold flex items-center gap-1 ${
+                                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold flex items-center gap-1 ${
                                       exec.success
-                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
-                                        : 'bg-amber-500/20 text-amber-300 border border-amber-400/30'
+                                        ? 'bg-emerald-500/18 text-emerald-400 border border-emerald-400/35'
+                                        : 'bg-amber-500/18 text-amber-400 border border-amber-400/35'
                                     }`}
                                   >
                                     {exec.success ? (
@@ -1387,11 +1437,14 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                   </span>
                                 )}
 
-                                <button
+                                <motion.button
                                   type="button"
+                                  whileHover={{ scale: 1.05 }}
+                                  whileTap={{ scale: 0.91 }}
+                                  transition={SPRING_POP}
                                   disabled={isRunning}
                                   onClick={() => handleExecuteActionItem(msg.id, action)}
-                                  className="px-2.5 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/35 text-cyan-200 border border-cyan-400/40 text-[11px] font-semibold flex items-center gap-1 transition active:scale-95"
+                                  className="px-3 py-1.5 rounded-full liquid-hero-btn text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                                 >
                                   <Play className="w-3 h-3 fill-current" />
                                   <span>
@@ -1407,13 +1460,13 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                       ? 'Изпълни'
                                       : 'Execute'}
                                   </span>
-                                </button>
+                                </motion.button>
 
                                 {action.type === 'system_update' && onOpenUpdateCenter && (
                                   <button
                                     type="button"
                                     onClick={() => onOpenUpdateCenter()}
-                                    className="px-2 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/12 text-slate-200 border border-white/15 text-[11px] font-medium flex items-center gap-1"
+                                    className="px-2.5 py-1.5 rounded-full liquid-control-pill text-[11px] font-semibold flex items-center gap-1"
                                   >
                                     <span>{language === 'bg' ? 'Детайли' : 'Details'}</span>
                                     <ChevronRight className="w-3 h-3" />
@@ -1424,7 +1477,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onOpenDaemonGui()}
-                                    className="px-2 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/12 text-slate-200 border border-white/15 text-[11px] font-medium flex items-center gap-1"
+                                    className="px-2.5 py-1.5 rounded-full liquid-control-pill text-[11px] font-semibold flex items-center gap-1"
                                   >
                                     <span>{language === 'bg' ? 'Демон' : 'Daemon'}</span>
                                     <ChevronRight className="w-3 h-3" />
@@ -1434,13 +1487,13 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                             </div>
 
                             {exec?.summary && (
-                              <div className="mt-1.5 text-[11px] text-slate-300 font-medium">
+                              <div className="mt-1.5 text-[11px] ink-secondary font-medium">
                                 {exec.summary}
                               </div>
                             )}
 
                             {exec?.output && (
-                              <pre className="mt-1.5 p-2 rounded-lg bg-black/50 border border-white/10 text-[10px] font-mono text-emerald-300/90 overflow-x-auto max-h-28">
+                              <pre className="mt-1.5 p-2.5 rounded-xl liquid-terminal-entry text-[10.5px] font-mono text-emerald-400 overflow-x-auto max-h-28">
                                 {exec.output}
                               </pre>
                             )}
@@ -1451,13 +1504,13 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                   </div>
                 )}
               </div>
-            </div>
+            </motion.div>
           );
         })}
 
         {isLoading && (
-          <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#0b1326] border border-cyan-400/30 text-cyan-300 text-xs font-mono w-max">
-            <div className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-full glass-liquid-elevated iridescent-active-rim text-cyan-400 text-xs font-mono font-semibold w-max">
+            <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
             <span>
               {language === 'bg'
                 ? 'Gemini анализира и подготвя действия...'
@@ -1467,15 +1520,16 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         )}
       </div>
 
-      {/* 3. Prompt Input Bar */}
+      {/* 3. Apple Intelligence Iridescent Floating Capsule Composer */}
       <footer className="flex-none pt-1">
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleSendMessage();
           }}
-          className="relative bg-[#0b1326] border border-white/15 focus-within:border-cyan-400/60 rounded-2xl p-1.5 flex items-center gap-1.5"
+          className="relative glass-liquid-elevated iridescent-active-rim rounded-full p-2 pl-4 flex items-center gap-2"
         >
+          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
           <textarea
             ref={textareaRef}
             value={inputPrompt}
@@ -1488,30 +1542,36 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             }}
             placeholder={activeRoleConfig.placeholder}
             rows={1}
-            className="flex-1 bg-transparent px-3 py-1.5 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-24 leading-relaxed font-medium"
+            className="flex-1 bg-transparent py-1.5 text-xs sm:text-sm ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80 focus:outline-none resize-none max-h-24 leading-relaxed font-medium"
           />
 
           {isLoading ? (
-            <button
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.88 }}
+              transition={SPRING_POP}
               onClick={handleStopGeneration}
-              className="w-9 h-9 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-400/40 flex items-center justify-center transition shrink-0 active:scale-95"
+              className="w-10 h-10 rounded-full squircle-rose preserve-white flex items-center justify-center shrink-0 cursor-pointer"
               title={language === 'bg' ? 'Спри генерирането' : 'Stop generation'}
             >
               <Square className="w-4 h-4 fill-current" />
-            </button>
+            </motion.button>
           ) : (
-            <button
+            <motion.button
               type="submit"
+              whileHover={{ scale: inputPrompt.trim() ? 1.08 : 1 }}
+              whileTap={{ scale: inputPrompt.trim() ? 0.88 : 1 }}
+              transition={SPRING_POP}
               disabled={!inputPrompt.trim()}
-              className={`w-9 h-9 rounded-xl flex items-center justify-center transition shrink-0 active:scale-95 ${
+              className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
                 inputPrompt.trim()
-                  ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold'
-                  : 'bg-white/5 text-white/20 border border-white/5 cursor-not-allowed'
+                  ? 'liquid-hero-btn cursor-pointer'
+                  : 'liquid-control-pill opacity-40 cursor-not-allowed'
               }`}
             >
-              <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-            </button>
+              <ArrowUp className="w-4 h-4 stroke-[2.6]" />
+            </motion.button>
           )}
         </form>
       </footer>

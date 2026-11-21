@@ -21,6 +21,7 @@ class SecureSecretStore {
   Box<dynamic>? _vaultBox;
   final Map<String, String> _memoryFallback = <String, String>{};
   bool _initialized = false;
+  Future<void>? _initInFlight;
 
   bool get hasOpenVault => _vaultBox != null && _vaultBox!.isOpen;
 
@@ -28,7 +29,22 @@ class SecureSecretStore {
     Future<Uint8List?> Function()? keyProvider,
   }) : _customKeyProvider = keyProvider;
 
-  Future<void> init() async {
+  Future<void> init() {
+    if (_initialized && _vaultBox != null && _vaultBox!.isOpen) {
+      return Future<void>.value();
+    }
+    final existing = _initInFlight;
+    if (existing != null) {
+      return existing;
+    }
+    final future = _initInternal().whenComplete(() {
+      _initInFlight = null;
+    });
+    _initInFlight = future;
+    return future;
+  }
+
+  Future<void> _initInternal() async {
     if (_initialized && _vaultBox != null && _vaultBox!.isOpen) return;
 
     Uint8List? rawMasterKey;
@@ -183,7 +199,16 @@ class SecureSecretStore {
     if (raw == null || raw is! String || raw.isEmpty) {
       return const <Map<String, dynamic>>[];
     }
-    final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+    final List<dynamic> decoded;
+    try {
+      final dynamic parsed = jsonDecode(raw);
+      if (parsed is! List<dynamic>) {
+        return const <Map<String, dynamic>>[];
+      }
+      decoded = parsed;
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
     final List<Map<String, dynamic>> result = <Map<String, dynamic>>[];
     bool scrubbedLegacy = false;
 

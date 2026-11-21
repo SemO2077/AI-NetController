@@ -72,18 +72,18 @@ def build_windows_exe(output_exe_path: str, output_zip_path: str) -> bool:
     if platform.system() == "Windows" and os.path.exists(sign_script):
         try:
             print("[INFO] Applying Authenticode code-signing across all PE binaries & scanning with Defender...")
-            if os.path.isdir(onedir_folder):
-                subprocess.run(
-                    ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-TargetPath", onedir_folder],
-                    cwd=agent_dir,
-                    check=False,
-                )
-            if os.path.exists(standalone_exe):
-                subprocess.run(
-                    ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-TargetPath", standalone_exe],
-                    cwd=agent_dir,
-                    check=False,
-                )
+            sign_extra = []
+            if not os.environ.get("AI_CODESIGN_THUMBPRINT") and os.environ.get("AI_ALLOW_SELFSIGNED", "").strip() == "1":
+                sign_extra = ["-AllowSelfSigned", "-SkipTimestamp"]
+            for target_path in (onedir_folder, standalone_exe):
+                if os.path.exists(target_path):
+                    res = subprocess.run(
+                        ["powershell", "-ExecutionPolicy", "Bypass", "-File", sign_script, "-TargetPath", target_path, *sign_extra],
+                        cwd=agent_dir,
+                        check=False,
+                    )
+                    if res.returncode != 0:
+                        print(f"[WARN] sign_binary.ps1 exited with code {res.returncode} for {target_path}")
         except Exception as e:
             print(f"[WARN] Code-signing / Defender scan notice: {e}")
 
@@ -187,8 +187,10 @@ def build_android_apk(output_arm64_path: str, output_univ_path: str) -> None:
             "Failed to locate or build a valid signed native Android APK; refusing to emit stub APK."
         )
 
-    shutil.copy2(found_apk, output_arm64_path)
-    shutil.copy2(found_apk, output_univ_path)
+    if os.path.abspath(found_apk) != os.path.abspath(output_arm64_path):
+        shutil.copy2(found_apk, output_arm64_path)
+    if os.path.abspath(found_apk) != os.path.abspath(output_univ_path):
+        shutil.copy2(found_apk, output_univ_path)
     apk_size = os.path.getsize(output_arm64_path)
     print(f"[SUCCESS] Packaged Signed Native Android APKs: {output_arm64_path} ({apk_size} bytes)")
 
@@ -258,6 +260,7 @@ def main() -> None:
     manifest_path = os.path.join(RELEASE_DIR, "RELEASE_MANIFEST.json")
     with open(manifest_path, "w", encoding="utf-8") as mf:
         json.dump(manifest_data, mf, indent=2)
+        mf.write("\n")
 
     patch_notes_src = os.path.join(ROOT_DIR, "PATCH_NOTES.md")
     if os.path.isfile(patch_notes_src):

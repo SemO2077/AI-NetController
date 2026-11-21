@@ -95,10 +95,11 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={handleReject}
-            className="fixed inset-0 bg-black/75 backdrop-blur-md"
+            style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+            className="fixed inset-0 backdrop-blur-md modal-backdrop-scrim"
           />
 
-          {/* Drag-to-Dismiss Bottom Sheet */}
+          {/* Drag-to-Dismiss Liquid Glass Bottom Sheet */}
           <motion.div
             drag="y"
             dragConstraints={{ top: 0 }}
@@ -111,40 +112,31 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
               type: 'spring',
               stiffness: 400,
               damping: 35,
-              mass: 0.8
+              mass: 0.8,
             }}
-            className="
-              relative z-10 w-full max-w-xl
-              rounded-t-[2.5rem]
-              bg-[#091020]/96 backdrop-blur-3xl
-              border border-rose-500/40 border-t-rose-400/50
-              shadow-[0_24px_64px_rgba(0,0,0,0.9)]
-              flex flex-col overflow-hidden
-              transform-gpu will-change-transform
-              max-h-[90vh]
-            "
+            className="relative z-10 w-full max-w-xl rounded-t-[2.5rem] glass-liquid-modal border-t-2 border-t-rose-500/70 flex flex-col overflow-hidden transform-gpu will-change-transform max-h-[90vh]"
           >
             {/* Tactile Drag Handle */}
             <div className="pt-3 pb-1 cursor-grab active:cursor-grabbing w-full flex justify-center">
-              <div className="w-12 h-1.5 bg-rose-400/30 rounded-full" />
+              <div className="w-12 h-1.5 bg-rose-400/40 rounded-full" />
             </div>
 
             {/* Warning Header */}
-            <div className="px-6 py-3.5 flex items-center justify-between border-b border-rose-500/20 bg-rose-950/20 shrink-0">
+            <div className="px-6 py-3.5 flex items-center justify-between border-b border-rose-500/20 bg-rose-500/8 shrink-0">
               <div className="flex items-center space-x-3">
-                <div className="w-11 h-11 rounded-2xl bg-rose-500/20 border border-rose-500/40 text-rose-400 flex items-center justify-center shadow-lg shadow-rose-500/25">
+                <div className="w-11 h-11 squircle-badge squircle-rose flex items-center justify-center">
                   <ShieldAlert className="w-6 h-6 animate-pulse" />
                 </div>
                 <div>
                   <div className="flex items-center space-x-2">
-                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-600 text-white">
-                      HITL GATE
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full squircle-rose preserve-white">
+                      HITL Gate
                     </span>
-                    <span className="text-[10px] text-amber-300 font-mono font-semibold">
+                    <span className="text-[10px] text-amber-400 font-mono font-bold">
                       {event.risk_level} {language === 'bg' ? 'РИСК' : 'RISK'}
                     </span>
                   </div>
-                  <h3 className="text-base font-bold text-white mt-0.5 tracking-tight">
+                  <h3 className="text-base font-display font-extrabold ink-primary mt-0.5 tracking-tight">
                     {language === 'bg' ? 'Потвърждение на команда' : 'Command Elevation Approval'}
                   </h3>
                 </div>
@@ -153,30 +145,30 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
               <button
                 type="button"
                 onClick={handleReject}
-                className="min-w-[44px] min-h-[44px] w-11 h-11 rounded-full flex items-center justify-center text-slate-400 hover:text-white bg-white/10 active:scale-90 transition cursor-pointer"
+                className="min-w-[40px] min-h-[40px] w-10 h-10 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
                 aria-label={language === 'bg' ? 'Затвори' : 'Close'}
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Content Body */}
-            <div className="p-6 space-y-4 overflow-y-auto overscroll-contain text-slate-200 pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
-              <div className="flex items-center justify-between text-xs bg-white/5 p-3 rounded-2xl border border-white/10 font-mono text-slate-400">
+            <div className="p-6 space-y-4 overflow-y-auto overscroll-contain ink-primary pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
+              <div className="flex items-center justify-between text-xs liquid-terminal-entry p-3 rounded-2xl font-mono ink-secondary">
                 <span>
                   {language === 'bg' ? 'Цел:' : 'Target:'}{' '}
                   <strong className="text-cyan-400">{event.target_id}</strong>
                 </span>
                 <span>
-                  ID: <strong className="text-slate-300">{event.command_id.slice(0, 10)}...</strong>
+                  ID: <strong className="ink-primary">{event.command_id.slice(0, 10)}...</strong>
                 </span>
               </div>
 
               <div className="space-y-1.5">
-                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
+                <span className="text-xs font-display font-bold ink-secondary block">
                   {language === 'bg' ? 'Анализ на риска' : 'Risk Analysis'}
                 </span>
-                <p className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/25 p-3.5 rounded-2xl leading-relaxed">
+                <p className="text-xs text-amber-400 bg-amber-500/12 border border-amber-500/30 p-3.5 rounded-2xl leading-relaxed font-medium">
                   {event.explanation}
                 </p>
               </div>
@@ -184,13 +176,13 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
               {/* Proposed Command Code Block */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  <span className="text-xs font-display font-bold ink-secondary">
                     {language === 'bg' ? 'Предложена системна команда' : 'Proposed System Command'}
                   </span>
                   <button
                     type="button"
                     onClick={handleCopy}
-                    className="flex items-center space-x-1 text-[11px] text-cyan-400 hover:text-cyan-300 transition min-h-[36px] px-2 py-1 rounded-lg hover:bg-white/5 cursor-pointer"
+                    className="flex items-center space-x-1 text-[11px] font-semibold text-cyan-400 px-3 py-1 rounded-full liquid-control-pill cursor-pointer"
                   >
                     {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>
@@ -205,7 +197,7 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
                   </button>
                 </div>
 
-                <div className="bg-black/70 rounded-2xl border border-rose-500/30 p-3.5 font-mono text-xs text-rose-300 overflow-x-auto whitespace-pre-wrap leading-relaxed">
+                <div className="liquid-terminal-entry rounded-2xl border border-rose-500/35 p-3.5 font-mono text-xs text-rose-400 font-semibold overflow-x-auto whitespace-pre-wrap leading-relaxed">
                   {event.proposed_command}
                 </div>
               </div>
@@ -218,7 +210,7 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
                   whileTap={{ scale: 0.92 }}
                   transition={{ type: 'spring', stiffness: 500, damping: 22 }}
                   onClick={handleReject}
-                  className="w-full min-h-[44px] py-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-semibold text-sm transition flex items-center justify-center cursor-pointer bubble-tap"
+                  className="w-full min-h-[44px] py-3 rounded-full liquid-control-pill font-bold text-sm flex items-center justify-center cursor-pointer"
                 >
                   {language === 'bg' ? 'Блокирай командата' : 'Reject Command'}
                 </motion.button>
@@ -229,7 +221,7 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
                   whileTap={{ scale: 0.92 }}
                   transition={{ type: 'spring', stiffness: 500, damping: 22 }}
                   onClick={handleApprove}
-                  className="w-full min-h-[44px] py-3.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow-[0_4px_20px_rgba(225,29,72,0.4)] transition flex items-center justify-center cursor-pointer bubble-tap"
+                  className="w-full min-h-[44px] py-3 rounded-full squircle-rose preserve-white font-bold text-sm flex items-center justify-center cursor-pointer"
                 >
                   {language === 'bg' ? 'Одобри и изпълни' : 'Approve & Execute'}
                 </motion.button>

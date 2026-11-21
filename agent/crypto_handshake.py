@@ -51,7 +51,10 @@ def _clamp_scalar(k_bytes: bytes) -> int:
     a[0] &= 248
     a[31] &= 127
     a[31] |= 64
-    return int.from_bytes(a, 'little')
+    val = int.from_bytes(a, 'little')
+    for i in range(len(a)):
+        a[i] = 0
+    return val
 
 def _x25519_eval(k: int, u: int) -> int:
     x_1 = u & ((1 << 255) - 1)
@@ -200,15 +203,9 @@ def derive_session_key(shared_secret: bytes, salt: bytes, info: bytes = INFO_STR
 _STRUCT_8I = struct.Struct('<8I')
 _STRUCT_3I = struct.Struct('<3I')
 _STRUCT_16I = struct.Struct('<16I')
-
-def _rotl32(v: int, c: int) -> int:
-    return ((v << c) & 0xFFFFFFFF) | (v >> (32 - c))
-
-def _quarter_round(x: list, a: int, b: int, c: int, d: int):
-    x[a] = (x[a] + x[b]) & 0xFFFFFFFF; x[d] = _rotl32(x[d] ^ x[a], 16)
-    x[c] = (x[c] + x[d]) & 0xFFFFFFFF; x[b] = _rotl32(x[b] ^ x[c], 12)
-    x[a] = (x[a] + x[b]) & 0xFFFFFFFF; x[d] = _rotl32(x[d] ^ x[a], 8)
-    x[c] = (x[c] + x[d]) & 0xFFFFFFFF; x[b] = _rotl32(x[b] ^ x[c], 7)
+_NONCE_STRUCT = struct.Struct('!QI')
+_TS_STRUCT = struct.Struct('!Q')
+_MAX_U64 = 0xFFFFFFFFFFFFFFFF
 
 def _chacha20_block(key: bytes, counter: int, nonce: bytes) -> bytes:
     s0, s1, s2, s3 = 0x61707865, 0x3320646e, 0x79622d32, 0x6b206574
@@ -275,7 +272,10 @@ def _poly1305_clamp(r_bytes: bytes) -> int:
     r = bytearray(r_bytes)
     r[3] &= 15; r[7] &= 15; r[11] &= 15; r[15] &= 15
     r[4] &= 252; r[8] &= 252; r[12] &= 252
-    return int.from_bytes(r, 'little')
+    val = int.from_bytes(r, 'little')
+    for i in range(len(r)):
+        r[i] = 0
+    return val
 
 def _poly1305_mac(msg: bytes, key: bytes) -> bytes:
     r = _poly1305_clamp(key[:16])
@@ -421,7 +421,7 @@ class HostCryptoSession:
             payload.extend(HANDSHAKE_MAGIC)
             payload.extend(self._public_bytes)
             payload.extend(self.salt)
-            payload.extend(struct.pack('!Q', self.handshake_timestamp))
+            payload.extend(_TS_STRUCT.pack(self.handshake_timestamp))
             return bytes(payload)
 
     def process_handshake_response(self, client_response_payload: bytes) -> bool:
@@ -441,7 +441,7 @@ class HostCryptoSession:
             client_auth_tag = client_response_payload[32:64]
 
             # Verify client proved knowledge of Pre-Shared Key (PSK) bound to timestamp
-            ts_bytes = struct.pack('!Q', self.handshake_timestamp)
+            ts_bytes = _TS_STRUCT.pack(self.handshake_timestamp)
             expected_tag = hmac.new(
                 self.psk,
                 HANDSHAKE_MAGIC + self._public_bytes + client_pubkey + self.salt + ts_bytes,
@@ -485,8 +485,10 @@ class HostCryptoSession:
         [8-byte big-endian counter >= 1] + [4-byte fixed host identifier]
         """
         with self._lock:
+            if self._tx_nonce_counter >= _MAX_U64:
+                raise OverflowError("Session TX nonce counter exhausted; rekey required.")
             self._tx_nonce_counter += 1
-            return struct.pack('!QI', self._tx_nonce_counter, self._HOST_SENDER_TAG)
+            return _NONCE_STRUCT.pack(self._tx_nonce_counter, self._HOST_SENDER_TAG)
 
     def encrypt_frame(self, header_aad: bytes, plaintext: bytes) -> Tuple[bytes, bytes]:
         """
@@ -511,7 +513,7 @@ class HostCryptoSession:
             if len(nonce) != NONCE_SIZE:
                 raise ValueError(f"Invalid nonce length: {len(nonce)}")
 
-            rx_counter, sender_tag = struct.unpack('!QI', nonce)
+            rx_counter, sender_tag = _NONCE_STRUCT.unpack(nonce)
             if sender_tag == self._HOST_SENDER_TAG or sender_tag not in self._CLIENT_SENDER_TAGS:
                 raise ValueError("Invalid sender identifier in nonce (possible packet reflection attack)")
             if rx_counter <= 0 or rx_counter <= self._rx_last_nonce_counter:

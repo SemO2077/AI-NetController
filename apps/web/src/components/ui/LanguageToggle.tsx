@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Languages } from 'lucide-react';
 import { useTranslation, Language } from '../../i18n/useTranslation';
 import { triggerHapticFeedback } from '../../services/hapticService';
+import { SPRING_JELLY, SPRING_POP } from '../../utils/springPhysics';
 
 interface LanguageToggleProps {
   className?: string;
@@ -25,22 +26,22 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
   if (variant === 'segmented') {
     return (
       <div
-        className={`glass-liquid-subtle p-1 rounded-full flex items-center border border-white/10 select-none ${className}`}
+        className={`glass-liquid-subtle p-1 rounded-full flex items-center select-none ${className}`}
         role="group"
         aria-label={language === 'bg' ? 'Избор на език' : 'Language selection'}
       >
         <button
           type="button"
           onClick={() => handleSelect('bg')}
-          className={`relative min-h-[38px] px-4 py-2 rounded-full text-xs font-bold transition cursor-pointer flex items-center justify-center ${
-            language === 'bg' ? 'text-cyan-300' : 'text-white/50 hover:text-white'
+          className={`relative min-h-[36px] px-4 py-1.5 rounded-full text-xs font-bold transition cursor-pointer flex items-center justify-center ${
+            language === 'bg' ? 'preserve-white' : 'ink-secondary hover:ink-primary'
           }`}
         >
           {language === 'bg' && (
             <motion.div
               layoutId={segmentLayoutId}
-              className="absolute inset-0 rounded-full bg-cyan-500/25 border border-cyan-400/50 shadow-[0_0_12px_rgba(0,212,255,0.25)]"
-              transition={{ type: 'spring', stiffness: 450, damping: 28 }}
+              className="absolute inset-0 rounded-full liquid-hero-btn"
+              transition={SPRING_JELLY}
             />
           )}
           <span className="relative z-10">Български</span>
@@ -49,15 +50,15 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
         <button
           type="button"
           onClick={() => handleSelect('en')}
-          className={`relative min-h-[38px] px-4 py-2 rounded-full text-xs font-bold transition cursor-pointer flex items-center justify-center ${
-            language === 'en' ? 'text-cyan-300' : 'text-white/50 hover:text-white'
+          className={`relative min-h-[36px] px-4 py-1.5 rounded-full text-xs font-bold transition cursor-pointer flex items-center justify-center ${
+            language === 'en' ? 'preserve-white' : 'ink-secondary hover:ink-primary'
           }`}
         >
           {language === 'en' && (
             <motion.div
               layoutId={segmentLayoutId}
-              className="absolute inset-0 rounded-full bg-cyan-500/25 border border-cyan-400/50 shadow-[0_0_12px_rgba(0,212,255,0.25)]"
-              transition={{ type: 'spring', stiffness: 450, damping: 28 }}
+              className="absolute inset-0 rounded-full liquid-hero-btn"
+              transition={SPRING_JELLY}
             />
           )}
           <span className="relative z-10">English</span>
@@ -70,16 +71,17 @@ export const LanguageToggle: React.FC<LanguageToggleProps> = ({
     <motion.button
       type="button"
       whileTap={{ scale: 0.9 }}
-      whileHover={{ scale: 1.03 }}
+      whileHover={{ scale: 1.05 }}
+      transition={SPRING_POP}
       onClick={() => {
         triggerHapticFeedback('selection');
         toggleLanguage();
       }}
-      className={`glass-liquid min-h-[40px] px-3 py-1.5 rounded-full border border-cyan-400/30 hover:border-cyan-400/50 text-cyan-300 text-xs font-bold flex items-center space-x-1.5 cursor-pointer bubble-tap select-none shadow-[0_0_12px_rgba(0,212,255,0.15)] ${className}`}
+      className={`liquid-control-pill min-h-[38px] px-3.5 py-1.5 rounded-full text-cyan-400 text-xs font-bold flex items-center gap-1.5 cursor-pointer select-none ${className}`}
       title={language === 'bg' ? 'Смени езика на English' : 'Switch language to Български'}
       aria-label="Toggle language"
     >
-      <Languages className="w-3.5 h-3.5 text-cyan-400" />
+      <Languages className="w-3.5 h-3.5" />
       <span className="tracking-wide font-mono uppercase">{language === 'bg' ? 'BG' : 'EN'}</span>
     </motion.button>
   );

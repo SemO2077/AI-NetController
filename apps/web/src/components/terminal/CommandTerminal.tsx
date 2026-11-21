@@ -24,6 +24,8 @@ import { triggerHapticFeedback } from '../../services/hapticService';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useTranslation } from '../../i18n/useTranslation';
 import { useScreenStore } from '../../store/screenStore';
+import { ThemeQuickControls } from '../ui/ThemeQuickControls';
+import { SPRING_POP } from '../../utils/springPhysics';
 
 interface CommandTerminalProps {
   hosts: HostDevice[];
@@ -274,116 +276,138 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
   };
 
   return (
-    <div className="w-full max-w-5xl 2xl:max-w-7xl mx-auto flex-1 flex flex-col justify-between select-none relative pb-1">
-      {/* 1. Target Host Selector Bar */}
-      <div className="py-1 flex items-center justify-between gap-2 mb-2.5 max-w-full overflow-hidden">
+    <div className="w-full max-w-5xl 2xl:max-w-7xl mx-auto flex-1 flex flex-col justify-between select-none relative pb-1 gap-3">
+      {/* 1. Detached Floating Liquid Glass Host Selector & Action Capsule */}
+      <header className="glass-liquid-elevated liquid-capsule-refract rounded-[28px] px-3.5 py-2.5 flex items-center justify-between gap-2 max-w-full flex-wrap sm:flex-nowrap">
         <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none flex-1 min-w-0 py-0.5">
           {hosts.length === 0 ? (
-            <span className="text-xs font-mono text-slate-400 py-1.5 px-3 rounded-xl bg-[#0b1326] border border-white/10">
+            <span className="text-xs font-mono ink-muted py-1.5 px-3.5 rounded-full liquid-control-pill">
               {language === 'bg' ? 'Няма добавени хостове' : 'No hosts registered'}
             </span>
           ) : (
             hosts.map((h) => {
               const isSelected = h.id === selectedTarget;
               return (
-                <button
+                <motion.button
                   key={h.id}
                   type="button"
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.92 }}
+                  transition={SPRING_POP}
                   onClick={() => {
+                    triggerHapticFeedback('selection');
                     onSelectTarget(h.id);
                   }}
-                  className={`h-9 px-3 rounded-xl text-xs font-mono transition flex items-center gap-2 shrink-0 border active:scale-95 ${
+                  className={`h-9 px-3.5 rounded-full text-xs font-mono transition flex items-center gap-2 shrink-0 cursor-pointer ${
                     isSelected
-                      ? 'bg-cyan-500/20 border-cyan-400/50 text-cyan-200 font-bold'
-                      : 'bg-[#0b1326] border-white/10 text-slate-400 hover:text-white'
+                      ? 'liquid-hero-btn font-bold'
+                      : 'liquid-control-pill ink-secondary hover:ink-primary'
                   }`}
                 >
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${
-                      h.isOnline ? 'bg-emerald-400' : 'bg-amber-400'
+                      h.isOnline
+                        ? isSelected
+                          ? 'bg-emerald-200'
+                          : 'bg-emerald-500'
+                        : 'bg-amber-400'
                     }`}
                   />
                   <span className="whitespace-nowrap">{h.name}</span>
-                </button>
+                </motion.button>
               );
             })
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
+        <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+          <ThemeQuickControls showAccentDots={false} compact />
+
+          <motion.button
             type="button"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.91 }}
+            transition={SPRING_POP}
             onClick={() => {
               triggerHapticFeedback('light');
               setIsHistoryDrawerOpen((prev) => !prev);
             }}
-            className={`h-9 px-2.5 sm:px-3 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition active:scale-95 ${
+            className={`h-9 px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 cursor-pointer ${
               isHistoryDrawerOpen
-                ? 'bg-cyan-500/20 border-cyan-400/50 text-cyan-200'
-                : 'bg-[#0b1326] border-white/10 text-slate-300 hover:text-white'
+                ? 'liquid-hero-btn'
+                : 'liquid-control-pill'
             }`}
             title={language === 'bg' ? 'История на командите' : 'Command History'}
           >
-            <Clock className="w-3.5 h-3.5 text-cyan-400" />
+            <Clock className={`w-3.5 h-3.5 ${isHistoryDrawerOpen ? 'text-white' : 'text-cyan-400'}`} />
             <span className="hidden sm:inline">
               {language === 'bg' ? 'История' : 'History'}
             </span>
             {executionLogs.length > 0 && (
-              <span className="text-[10px] font-mono text-cyan-300">
+              <span className="text-[10px] font-mono opacity-85">
                 ({executionLogs.length})
               </span>
             )}
-          </button>
+          </motion.button>
 
           {executionLogs.length > 0 && (
-            <button
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.91 }}
+              transition={SPRING_POP}
               onClick={handleClearConsole}
-              className="h-9 px-2.5 sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-rose-400/35 text-slate-400 hover:text-rose-300 text-xs font-medium flex items-center gap-1.5 transition active:scale-95"
+              className="h-9 px-3 rounded-full liquid-control-pill hover:border-rose-400/45 ink-secondary hover:text-rose-400 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
               title={language === 'bg' ? 'Изчисти конзолата' : 'Clear console output'}
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">
                 {language === 'bg' ? 'Изчисти' : 'Clear'}
               </span>
-            </button>
+            </motion.button>
           )}
 
           {selectedHost && (
             <>
               {onRefreshScreen && (
-                <button
+                <motion.button
                   type="button"
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.91 }}
+                  transition={SPRING_POP}
                   disabled={isCapturingScreen}
                   onClick={() => {
                     triggerHapticFeedback('light');
                     onRefreshScreen(selectedHost.id);
                   }}
-                  className="h-9 px-2.5 sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/40 text-slate-200 text-xs font-medium flex items-center gap-1.5 shrink-0 transition disabled:opacity-50 active:scale-95"
+                  className="h-9 px-3 rounded-full liquid-control-pill text-xs font-semibold flex items-center gap-1.5 shrink-0 disabled:opacity-50 cursor-pointer"
                   title={language === 'bg' ? 'Заснеми екран' : 'Capture Frame'}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isCapturingScreen ? 'animate-spin' : ''}`} />
                   <span className="hidden md:inline">
                     {language === 'bg' ? 'Кадър' : 'Frame'}
                   </span>
-                </button>
+                </motion.button>
               )}
-              <button
+              <motion.button
                 type="button"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.91 }}
+                transition={SPRING_POP}
                 onClick={() => {
                   triggerHapticFeedback('light');
                   onViewScreen(selectedHost);
                 }}
-                className="h-9 px-2.5 sm:px-3 rounded-xl bg-[#0b1326] border border-white/10 hover:border-cyan-400/40 text-cyan-300 text-xs font-medium flex items-center gap-1.5 shrink-0 transition active:scale-95"
+                className="h-9 px-3 rounded-full squircle-sky preserve-white text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
                 title={t('term_view_screen')}
               >
                 <Eye className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">{t('term_view_screen')}</span>
-              </button>
+              </motion.button>
             </>
           )}
         </div>
-      </div>
+      </header>
 
       {/* Collapsible Command History & Pinned Commands Drawer */}
       <AnimatePresence>
@@ -392,30 +416,30 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.15 }}
-            className="overflow-hidden mb-2.5"
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
           >
-            <div className="p-3 rounded-2xl glass-liquid space-y-2">
+            <div className="p-3.5 rounded-[24px] glass-liquid space-y-2">
               <div className="flex items-center justify-between border-b border-white/10 pb-2">
-                <span className="text-xs font-mono font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="text-xs font-display font-bold text-cyan-400 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5" />
                   <span>
                     {language === 'bg'
-                      ? 'Последни команди'
+                      ? 'Последни и закачени команди'
                       : 'Recent & Pinned Commands'}
                   </span>
                 </span>
                 <button
                   type="button"
                   onClick={() => setIsHistoryDrawerOpen(false)}
-                  className="text-slate-400 hover:text-white p-1"
+                  className="w-7 h-7 rounded-full liquid-control-pill flex items-center justify-center"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
 
               {executionLogs.length === 0 ? (
-                <div className="text-xs text-slate-400 py-2 font-mono">
+                <div className="text-xs ink-muted py-2 font-mono">
                   {language === 'bg'
                     ? 'Все още няма изпълнени команди в тази сесия.'
                     : 'No commands executed in this session yet.'}
@@ -432,26 +456,26 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                       return (
                         <div
                           key={`hist-${item.id}`}
-                          className="px-2.5 py-1.5 rounded-xl bg-[#070d1b] border border-white/10 flex items-center justify-between gap-2 text-xs font-mono"
+                          className="px-3 py-1.5 rounded-2xl liquid-terminal-entry flex items-center justify-between gap-2 text-xs font-mono"
                         >
                           <button
                             type="button"
                             onClick={() => dispatchPrompt(cmdText)}
-                            className="text-left text-cyan-200 hover:text-white truncate flex-1"
+                            className="text-left text-cyan-400 hover:underline truncate flex-1 font-semibold"
                           >
                             $ {cmdText}
                           </button>
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[10px] text-emerald-300">
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400">
                               {item.execution_time_ms}ms
                             </span>
                             <button
                               type="button"
                               onClick={() => togglePinCommand(cmdText)}
-                              className={`p-1 rounded hover:bg-white/10 transition ${
+                              className={`p-1 rounded-full transition ${
                                 isPinned
-                                  ? 'text-amber-300'
-                                  : 'text-slate-400 hover:text-white'
+                                  ? 'text-amber-500'
+                                  : 'ink-muted hover:text-amber-500'
                               }`}
                             >
                               <Star
@@ -471,16 +495,18 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
         )}
       </AnimatePresence>
 
-      {/* 2. Main Terminal Output Surface */}
-      <GlassContainer className="flex-1 p-3.5 sm:p-4 flex flex-col justify-between min-h-[220px] sm:min-h-[340px] mb-2.5 overflow-hidden">
-        <div className="flex items-center justify-between gap-2 pb-2.5 text-xs text-slate-400 border-b border-white/[0.08] overflow-hidden">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <Terminal className="w-4 h-4 text-cyan-400 shrink-0" />
-            <span className="font-semibold text-white truncate">
+      {/* 2. Full Bright Daylight / Vibrant Dark Adaptive Liquid Glass Terminal Canvas */}
+      <GlassContainer className="flex-1 p-4 sm:p-5 flex flex-col justify-between min-h-[240px] sm:min-h-[360px] overflow-hidden liquid-terminal-pane">
+        <div className="flex items-center justify-between gap-2 pb-3 text-xs border-b border-white/[0.08] overflow-hidden">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="w-8 h-8 squircle-badge squircle-hero flex items-center justify-center shrink-0">
+              <Terminal className="w-4 h-4" />
+            </div>
+            <span className="font-display font-bold ink-primary truncate">
               {t('term_agent_context')}
             </span>
           </div>
-          <span className="font-mono text-[11px] text-cyan-300/90 tabular-nums shrink-0">
+          <span className="px-2.5 py-1 rounded-full liquid-control-pill font-mono text-[11px] font-semibold text-cyan-400 tabular-nums shrink-0">
             {selectedHost
               ? `${selectedHost.ip}:${selectedHost.port || 8765}`
               : language === 'bg'
@@ -496,38 +522,41 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
               triggerHapticFeedback('light');
               onViewScreen(selectedHost);
             }}
-            className="mt-2.5 flex items-center gap-3 p-2 rounded-xl bg-[#070d1b] border border-white/10 hover:border-cyan-400/45 transition text-left w-full group"
+            className="mt-3 flex items-center gap-3 p-2.5 rounded-2xl liquid-terminal-entry hover:border-cyan-400/50 transition text-left w-full group"
           >
             <img
               src={screenBase64}
               alt={`${selectedHost.name} screen`}
-              className="w-20 h-12 object-cover rounded-lg border border-white/10 shrink-0"
+              className="w-20 h-12 object-cover rounded-xl border border-white/20 shrink-0 shadow-sm"
             />
             <div className="min-w-0 flex-1">
-              <div className="text-[11px] font-semibold text-cyan-200 group-hover:text-white truncate">
+              <div className="text-xs font-display font-bold text-cyan-400 truncate">
                 {language === 'bg' ? `Последен кадър · ${selectedHost.name}` : `Latest Frame · ${selectedHost.name}`}
               </div>
-              <div className="text-[10px] font-mono text-slate-400 truncate">
+              <div className="text-[10.5px] font-mono ink-muted truncate">
                 {language === 'bg' ? 'Натисни за пълен интерактивен екран' : 'Click to open interactive screen viewer'}
               </div>
             </div>
           </button>
         )}
 
-        {/* Scrollable Command Output */}
-        <div className="flex-1 min-h-[160px] max-h-[52dvh] py-3 font-mono text-xs leading-relaxed space-y-2.5 overflow-y-auto">
+        {/* Scrollable Command Output (Full Bright Daylight Frosted Glass + Crisp Dark Ink) */}
+        <div className="flex-1 min-h-[160px] max-h-[54dvh] py-3.5 font-mono text-xs leading-relaxed space-y-3 overflow-y-auto bouncy-scroll">
           {selectedHost ? (
-            <div className="text-slate-400">
-              {t('term_connected_to', {
-                name: selectedHost.name,
-                os: selectedHost.os === 'linux' ? 'Linux' : 'Windows',
-              })}
+            <div className="ink-muted flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+              <span>
+                {t('term_connected_to', {
+                  name: selectedHost.name,
+                  os: selectedHost.os === 'linux' ? 'Linux' : 'Windows',
+                })}
+              </span>
             </div>
           ) : (
-            <div className="text-amber-300/90 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-mono">
+            <div className="text-amber-400 p-3.5 rounded-2xl bg-amber-500/12 border border-amber-500/30 text-xs font-mono font-medium">
               {language === 'bg'
-                ? 'Няма избран компютър. Добавете компютър от таб „Флот“, за да изпращате команди.'
-                : 'No computer selected. Add a PC from the "Fleet" tab to execute commands.'}
+                ? 'Няма избран компютър. Добавете компютър от таб „Устройства“, за да изпращате команди.'
+                : 'No computer selected. Add a PC from the "Devices" tab to execute commands.'}
             </div>
           )}
 
@@ -542,13 +571,13 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
             return (
               <div
                 key={entry.id}
-                className={`p-3 rounded-xl bg-[#070d1b] border space-y-1.5 ${
-                  isError ? 'border-rose-500/35' : 'border-cyan-400/25'
+                className={`p-3.5 rounded-2xl liquid-terminal-entry space-y-2 ${
+                  isError ? 'border-rose-500/40' : 'border-cyan-400/30'
                 }`}
               >
-                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 tabular-nums border-b border-white/[0.06] pb-1.5">
+                <div className="flex items-center justify-between gap-2 text-[11px] ink-muted tabular-nums border-b border-white/[0.08] pb-2">
                   {isError ? (
-                    <span className="text-rose-400 flex items-center gap-1.5 font-semibold truncate">
+                    <span className="px-2 py-0.5 rounded-full bg-rose-500/14 border border-rose-500/30 text-rose-400 flex items-center gap-1.5 font-bold truncate">
                       <XCircle className="w-3.5 h-3.5 shrink-0" />
                       <span>
                         {language === 'bg'
@@ -558,7 +587,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                       </span>
                     </span>
                   ) : (
-                    <span className="text-emerald-400 flex items-center gap-1.5 font-semibold truncate">
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/14 border border-emerald-500/30 text-emerald-400 flex items-center gap-1.5 font-bold truncate">
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                       <span>
                         {t('term_exec_success', { time: entry.execution_time_ms ?? 0 })} • Exit{' '}
@@ -575,13 +604,13 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                           onClick={() => togglePinCommand(entry.commandPrompt!)}
                           className={`transition flex items-center gap-1 ${
                             isPinned
-                              ? 'text-amber-300'
-                              : 'text-slate-400 hover:text-amber-300'
+                              ? 'text-amber-500'
+                              : 'ink-muted hover:text-amber-500'
                           }`}
                           title={language === 'bg' ? 'Закачи команда' : 'Pin command'}
                         >
                           <Star
-                            className={`w-3 h-3 ${
+                            className={`w-3.5 h-3.5 ${
                               isPinned ? 'fill-amber-400 text-amber-400' : ''
                             }`}
                           />
@@ -590,36 +619,36 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                           type="button"
                           onClick={() => dispatchPrompt(entry.commandPrompt!)}
                           disabled={isExecuting}
-                          className="text-slate-400 hover:text-cyan-300 transition flex items-center gap-1 disabled:opacity-40"
+                          className="ink-muted hover:text-cyan-400 transition flex items-center gap-1 disabled:opacity-40"
                           title={language === 'bg' ? 'Изпълни отново' : 'Re-run command'}
                         >
-                          <RotateCcw className="w-3 h-3" />
+                          <RotateCcw className="w-3.5 h-3.5" />
                         </button>
                       </>
                     )}
                     <button
                       type="button"
                       onClick={() => handleCopyOutput(entry.id, entry.output ?? '')}
-                      className="text-slate-400 hover:text-cyan-300 transition flex items-center gap-1"
+                      className="ink-muted hover:text-cyan-400 transition flex items-center gap-1"
                       title={language === 'bg' ? 'Копирай изхода' : 'Copy output'}
                     >
                       {copiedId === entry.id ? (
-                        <Check className="w-3 h-3 text-emerald-400" />
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
                       ) : (
-                        <Copy className="w-3 h-3" />
+                        <Copy className="w-3.5 h-3.5" />
                       )}
                     </button>
-                    <span className="text-slate-500">{entry.timestamp}</span>
+                    <span className="opacity-65">{entry.timestamp}</span>
                   </div>
                 </div>
 
                 {entry.commandPrompt && (
-                  <div className="text-[11px] text-cyan-300 font-semibold truncate">
+                  <div className="text-[11.5px] text-cyan-400 font-bold truncate">
                     $ {entry.commandPrompt}
                   </div>
                 )}
 
-                <pre className="text-slate-100 text-xs whitespace-pre-wrap break-words overflow-x-auto max-w-full font-mono select-text">
+                <pre className="ink-primary text-xs whitespace-pre-wrap break-words overflow-x-auto max-w-full font-mono select-text">
                   {entry.output}
                 </pre>
               </div>
@@ -627,7 +656,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
           })}
 
           {isExecuting && (
-            <div className="flex items-center gap-2 text-cyan-300 py-1">
+            <div className="flex items-center gap-2 text-cyan-400 font-semibold py-1">
               <RefreshCw className="w-3.5 h-3.5 animate-spin" />
               <span>{t('term_executing')}</span>
             </div>
@@ -637,13 +666,13 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
         </div>
       </GlassContainer>
 
-      {/* 3. Preset Chips + Prompt Bar */}
-      <div className="w-full space-y-2">
+      {/* 3. Glossy Preset Pills + Floating Capsule Command Composer */}
+      <div className="w-full space-y-2.5">
         <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-0.5">
           {pinnedCommands.map((pinned, idx) => (
             <div
               key={`pin-${idx}`}
-              className="h-8 pl-2.5 pr-1.5 rounded-lg bg-amber-500/15 border border-amber-400/40 text-xs font-semibold text-amber-200 whitespace-nowrap shrink-0 flex items-center gap-1.5"
+              className="h-8.5 pl-3 pr-1.5 rounded-full bg-amber-500/15 border border-amber-400/40 text-xs font-bold text-amber-400 whitespace-nowrap shrink-0 flex items-center gap-1.5"
             >
               <button
                 type="button"
@@ -657,7 +686,7 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
               <button
                 type="button"
                 onClick={() => togglePinCommand(pinned)}
-                className="p-0.5 rounded hover:bg-white/10 text-amber-300/70 hover:text-white"
+                className="p-0.5 rounded-full hover:bg-amber-500/20"
                 title={language === 'bg' ? 'Премахни' : 'Unpin'}
               >
                 <X className="w-3 h-3" />
@@ -668,22 +697,25 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
           {localizedPresets.map((preset) => {
             const PresetIcon = preset.icon || Sparkles;
             return (
-              <button
+              <motion.button
                 key={preset.id}
                 type="button"
+                whileHover={{ scale: 1.05, y: -1 }}
+                whileTap={{ scale: 0.91 }}
+                transition={SPRING_POP}
                 disabled={isExecuting}
                 onClick={() => dispatchPrompt(preset.prompt, preset.commandType)}
-                className={`h-8 px-3 rounded-lg bg-[#0b1326] border text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition disabled:opacity-40 active:scale-95 ${preset.colorClass}`}
+                className="h-8.5 px-3.5 rounded-full liquid-control-pill text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
               >
                 <PresetIcon className={`w-3.5 h-3.5 shrink-0 ${preset.iconColor}`} />
                 <span className="font-display">{preset.label}</span>
-              </button>
+              </motion.button>
             );
           })}
         </div>
 
         <form onSubmit={handleSubmit} className="w-full relative">
-          <div className="h-12 rounded-2xl bg-[#0b1326] border border-white/15 focus-within:border-cyan-400/60 px-3.5 flex items-center gap-2.5 transition">
+          <div className="h-13 rounded-full glass-liquid-elevated px-4 flex items-center gap-2.5 focus-within:border-cyan-400/70 transition">
             <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
             <input
               type="text"
@@ -692,16 +724,16 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
               onKeyDown={handleInputKeyDown}
               placeholder={t('term_prompt_placeholder')}
               disabled={isExecuting}
-              className="flex-1 bg-transparent border-none outline-none text-xs sm:text-sm text-white placeholder-slate-500 disabled:opacity-50 min-w-0"
+              className="flex-1 bg-transparent border-none outline-none text-xs sm:text-sm ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80 disabled:opacity-50 min-w-0 font-medium"
             />
             {prompt.trim() && (
               <button
                 type="button"
                 onClick={() => togglePinCommand(prompt)}
-                className={`p-1.5 rounded-lg transition shrink-0 ${
+                className={`p-1.5 rounded-full transition shrink-0 ${
                   pinnedCommands.includes(prompt.trim())
-                    ? 'text-amber-300'
-                    : 'text-slate-400 hover:text-amber-300'
+                    ? 'text-amber-500'
+                    : 'ink-muted hover:text-amber-500'
                 }`}
                 title={language === 'bg' ? 'Закачи командата' : 'Pin command'}
               >
@@ -712,18 +744,21 @@ const CommandTerminalComponent: React.FC<CommandTerminalProps> = ({
                 />
               </button>
             )}
-            <button
+            <motion.button
               type="submit"
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.88 }}
+              transition={SPRING_POP}
               disabled={!prompt.trim() || isExecuting}
-              className="w-9 h-9 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-35 text-slate-950 flex items-center justify-center transition shrink-0 active:scale-95"
+              className="w-9 h-9 rounded-full liquid-hero-btn disabled:opacity-35 flex items-center justify-center shrink-0 cursor-pointer"
               aria-label={t('term_send_btn')}
             >
               {isExecuting ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
               ) : (
-                <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                <ArrowUp className="w-4 h-4 stroke-[2.6]" />
               )}
-            </button>
+            </motion.button>
           </div>
         </form>
       </div>

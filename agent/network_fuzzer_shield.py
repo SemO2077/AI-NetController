@@ -122,7 +122,7 @@ class NetworkFuzzerShield:
             "watchdog_timeouts": 0,
             "sync_requests_handled": 0,
         }
-        self._reorder_buffer: Dict[str, list] = {}
+        self._reorder_buffer: Dict[str, deque] = {}
         self._terminated_order: deque = deque()
 
     def register_client(self, client_id: str, close_callback: Callable) -> None:
@@ -135,7 +135,7 @@ class NetworkFuzzerShield:
             scrub_bytes(old_key)
 
         self.client_states[client_id] = ConnectionState.CONNECTED
-        self._reorder_buffer[client_id] = []
+        self._reorder_buffer[client_id] = deque()
         logger.info("Client %s entered %s. Arming %.1fs watchdog.", client_id, ConnectionState.CONNECTED.name, self.profile.handshake_timeout_sec)
 
         watchdog_task = asyncio.create_task(
@@ -173,11 +173,12 @@ class NetworkFuzzerShield:
         self.client_states[client_id] = next_state
         logger.info("Client %s transitioned: %s -> %s", client_id, current.name, next_state.name)
 
-        if next_state == ConnectionState.AUTHENTICATED_STREAMING:
+        if next_state in (ConnectionState.AUTHENTICATED_STREAMING, ConnectionState.TERMINATED):
             wd = self.watchdogs.pop(client_id, None)
             if wd and not wd.done():
                 wd.cancel()
-                logger.info("Handshake complete for %s. Watchdog disarmed.", client_id)
+                if next_state == ConnectionState.AUTHENTICATED_STREAMING:
+                    logger.info("Handshake complete for %s. Watchdog disarmed.", client_id)
 
         return True
 
@@ -186,7 +187,7 @@ class NetworkFuzzerShield:
         try:
             await asyncio.sleep(self.profile.handshake_timeout_sec)
             state = self.client_states.get(client_id, ConnectionState.LISTENING)
-            if state != ConnectionState.AUTHENTICATED_STREAMING:
+            if state not in (ConnectionState.AUTHENTICATED_STREAMING, ConnectionState.TERMINATED):
                 logger.warning(
                     "HANDSHAKE SLA BREACH: Client %s stalled in %s after %.2fs; terminating.",
                     client_id,
@@ -256,7 +257,7 @@ class NetworkFuzzerShield:
         if len(raw_packet) < HEADER_SIZE:
             return None
 
-        magic, opcode, flags, seq, length = HEADER_STRUCT.unpack_from(raw_packet, 0)
+        magic, opcode, _, _, length = HEADER_STRUCT.unpack_from(raw_packet, 0)
         if magic != MAGIC or length > MAX_PAYLOAD_SIZE or len(raw_packet) != HEADER_SIZE + length:
             return None
 
@@ -302,23 +303,34 @@ class NetworkFuzzerShield:
         if delay > 0:
             self.stats["packets_jittered"] += 1
             await asyncio.sleep(delay)
+            if self.client_states.get(client_id) == ConnectionState.TERMINATED:
+                return None
 
-        # Chaos Reordering Simulation (bounded)
-        buf = self._reorder_buffer.setdefault(client_id, [])
+        # Chaos Reordering Simulation (bounded, O(1) deque ops)
+        raw_buf = self._reorder_buffer.get(client_id)
+        if raw_buf is None:
+            buf: deque = deque()
+            self._reorder_buffer[client_id] = buf
+        elif isinstance(raw_buf, deque):
+            buf = raw_buf
+        else:
+            buf = deque(raw_buf)
+            self._reorder_buffer[client_id] = buf
+
         if self.profile.should_reorder():
             self.stats["packets_reordered"] += 1
             buf.append(raw_packet)
             if len(buf) >= _MAX_REORDER_BUFFER:
-                return buf.pop(0)
+                return buf.popleft()
             if len(buf) >= 2:
-                p1 = buf.pop(0)
-                p2 = buf.pop(0)
-                buf.insert(0, p1)
+                p1 = buf.popleft()
+                p2 = buf.popleft()
+                buf.appendleft(p1)
                 return p2
             return None
 
         if buf:
-            delayed = buf.pop(0)
+            delayed = buf.popleft()
             buf.append(raw_packet)
             return delayed
 

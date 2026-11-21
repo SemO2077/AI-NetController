@@ -18,7 +18,6 @@ import signal
 import asyncio
 import logging
 import platform
-import subprocess
 import sys
 import threading
 import unicodedata
@@ -104,6 +103,10 @@ _RE_SEGMENT_SPLIT = re.compile(r"(?:&&|\|\||[;|&()\r\n]+)")
 _RE_REDIRECTION = re.compile(r"(?:^|\s|\S)(?:\d?>>?|<)(?!=)")
 _RE_SENSITIVE_REDIRECT_TARGET = re.compile(r"(?:\\windows\\|system32|syswow64|/etc/|/usr/|/bin/|/sbin/|\.ssh|\\startup\\)", re.IGNORECASE)
 _RE_SAFE_ENV_VARS = re.compile(r"%(COMSPEC|SYSTEMROOT|WINDIR|TEMP|TMP|USERPROFILE|APPDATA|LOCALAPPDATA|PROGRAMFILES)%", flags=re.IGNORECASE)
+_RE_HORIZ_SPACE = re.compile(r"[ \t]+")
+_RE_QUOTE_CARET_STRIP = re.compile(r'["\'`^]')
+_RE_RAW_TOKEN_SPLIT = re.compile(r'[\s/\\;|&(){}<>,=:\r\n"\'`^]+')
+_RE_QUOTED_LITERALS = re.compile(r'"[^"]*"|\'[^\']*\'')
 
 _SAFE_WIN_ENV_MAP = {
     "comspec": "cmd.exe",
@@ -148,7 +151,7 @@ class CommandASTFirewall:
         cleaned = _RE_INTERSTITIAL_QUOTES.sub("", cleaned)
 
         # 3. Collapse runs of spaces/tabs while preserving newlines for multi-line inspection
-        cleaned = re.sub(r"[ \t]+", " ", cleaned)
+        cleaned = _RE_HORIZ_SPACE.sub(" ", cleaned)
 
         return cleaned.strip()
 
@@ -195,7 +198,7 @@ class CommandASTFirewall:
             return False, "BLOCKED", cleaned, "Empty command sequence."
 
         # Strip quotes/backticks/carets for obfuscated keyword scanning (e.g. Remove"-"Item, -`enc)
-        unobfuscated_scan = re.sub(r'["\'`^]', "", cleaned)
+        unobfuscated_scan = _RE_QUOTE_CARET_STRIP.sub("", cleaned)
         single_line_cleaned = _RE_WHITESPACE.sub(" ", cleaned).strip()
 
         try:
@@ -237,9 +240,8 @@ class CommandASTFirewall:
             return True, "REQUIRES_BIOMETRIC", single_line_cleaned, "Command contained character evasion artifacts (^, `, or quotes)."
 
         # Scan all tokens & dequoted sub-tokens (splits parens, braces, redirections, paths, chains)
-        raw_split_re = re.compile(r'[\s/\\;|&(){}<>,=:\r\n"\'`^]+')
         for source_str in (single_line_cleaned, unobfuscated_scan):
-            for sub in raw_split_re.split(source_str.lower()):
+            for sub in _RE_RAW_TOKEN_SPLIT.split(source_str.lower()):
                 if not sub:
                     continue
                 base_cmd = sub.split(".")[0]
@@ -292,7 +294,7 @@ class CommandASTFirewall:
                         return True, "REQUIRES_BIOMETRIC", single_line_cleaned, f"Script execution via interpreter '{base_name}' requires biometric confirmation."
 
         # Redirection check outside quoted literals
-        unquoted_outside = re.sub(r'"[^"]*"|\'[^\']*\'', " ", single_line_cleaned)
+        unquoted_outside = _RE_QUOTED_LITERALS.sub(" ", single_line_cleaned)
         if _RE_REDIRECTION.search(unquoted_outside):
             if _RE_SENSITIVE_REDIRECT_TARGET.search(unobfuscated_scan):
                 return False, "BLOCKED", single_line_cleaned, "Shell redirection to a sensitive system path is prohibited."
@@ -445,8 +447,9 @@ class CommandASTFirewall:
         safe_env = CommandASTFirewall._build_safe_env()
 
         proc = None
+        communicate_task = None
         try:
-            unquoted_outside = re.sub(r'"[^"]*"|\'[^\']*\'', " ", normalized_cmd)
+            unquoted_outside = _RE_QUOTED_LITERALS.sub(" ", normalized_cmd)
             python_match = _RE_PYTHON_CMD.match(normalized_cmd)
             has_shell_meta = bool(_RE_CHAIN_OPERATORS.search(unquoted_outside) or _RE_REDIRECTION.search(unquoted_outside))
 
@@ -466,7 +469,7 @@ class CommandASTFirewall:
                     py_exe = sys.executable
 
                 args = [py_exe]
-                if remainder.startswith("-c"):
+                if remainder == "-c" or remainder.startswith(("-c ", "-c\t", '-c"', "-c'")):
                     script = remainder[2:].lstrip()
                     if len(script) >= 2 and script[0] in {'"', "'"} and script[-1] == script[0]:
                         script = script[1:-1]
@@ -572,8 +575,15 @@ class CommandASTFirewall:
                 "risk_level": risk,
             }
         finally:
+            if communicate_task is not None and not communicate_task.done():
+                communicate_task.cancel()
             if proc and proc.returncode is None:
                 try:
                     CommandASTFirewall._signal_process_tree(proc, getattr(signal, "SIGKILL", signal.SIGTERM))
+                except Exception:
+                    pass
+            if communicate_task is not None and not communicate_task.done():
+                try:
+                    await asyncio.gather(communicate_task, return_exceptions=True)
                 except Exception:
                     pass

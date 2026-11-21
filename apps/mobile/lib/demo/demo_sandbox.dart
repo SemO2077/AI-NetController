@@ -46,6 +46,7 @@ class DemoSandboxEngine {
   void stop() {
     _isRunning = false;
     _telemetryTimer?.cancel();
+    _telemetryTimer = null;
   }
 
   /// Simulates remote execution of terminal and LLM commands
@@ -58,12 +59,14 @@ class DemoSandboxEngine {
         lower.contains('format') ||
         lower.contains('shutdown')) {
       final approvalId = 'demo_${DateTime.now().millisecondsSinceEpoch}';
-      _hitlController.add(HitlApprovalEvent(
-        approvalId: approvalId,
-        command: command,
-        reason: 'Restricted administrative command pattern detected.',
-        timestamp: DateTime.now().millisecondsSinceEpoch / 1000.0,
-      ));
+      if (!_hitlController.isClosed) {
+        _hitlController.add(HitlApprovalEvent(
+          approvalId: approvalId,
+          command: command,
+          reason: 'Restricted administrative command pattern detected.',
+          timestamp: DateTime.now().millisecondsSinceEpoch / 1000.0,
+        ));
+      }
       return;
     }
 
@@ -118,16 +121,19 @@ Virtualization Enabled:    Yes (Hyper-V / WSL2)''';
       output = 'Command executed successfully: $command\nJob Object limit: 256MB RAM / Process group bound.';
     }
 
-    _shellController.add(ShellResult(
-      status: 'success',
-      exitCode: exitCode,
-      output: output,
-      command: command,
-    ));
+    if (!_shellController.isClosed) {
+      _shellController.add(ShellResult(
+        status: 'success',
+        exitCode: exitCode,
+        output: output,
+        command: command,
+      ));
+    }
   }
 
   /// Approves or rejects simulated HITL request
   void resolveHitl(String approvalId, bool approved) {
+    if (_shellController.isClosed) return;
     if (approved) {
       _shellController.add(ShellResult(
         status: 'success',

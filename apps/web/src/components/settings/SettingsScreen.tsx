@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Brain,
   Radio,
@@ -28,16 +28,25 @@ import {
   Code2,
   Trash2,
   AlertTriangle,
+  Sun,
+  Moon,
+  Search,
+  Zap,
+  LayoutGrid,
+  X,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { HostDevice, WolPacketPayload, WolPacketTriggerSource, WolSchedule } from '../../types';
 import { WolEnergyCalculator } from '../wol/WolEnergyCalculator';
 import { WolHistoryLogViewer } from '../wol/WolHistoryLogViewer';
+import { AuditLogViewer, ExecutionAuditEntry } from './AuditLogViewer';
 import { useTranslation } from '../../i18n/useTranslation';
 import { LanguageToggle } from '../ui/LanguageToggle';
+import { ThemeQuickControls } from '../ui/ThemeQuickControls';
 import {
   useUIStore,
+  ThemeMode,
   AccentColorPreset,
   FontFamilyPreset,
   GlassIntensityPreset,
@@ -45,9 +54,52 @@ import {
 } from '../../store/uiStore';
 import {
   SPRING_POP,
+  SPRING_BUBBLY,
+  SPRING_JELLY,
   POPOVER_BUBBLE_VARIANTS,
   MODAL_BUBBLE_VARIANTS,
 } from '../../utils/springPhysics';
+
+type SettingsHubTab = 'overview' | 'appearance' | 'wol' | 'audit' | 'ai_security';
+
+const DEFAULT_BUILTIN_MODEL_IDS = new Set([
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-2.0-flash',
+  'gemini-flash-latest',
+  'deepseek-r1:latest',
+  'qwen2.5-coder:latest',
+]);
+
+const CyberToggle = React.memo(
+  ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
+    <motion.button
+      type="button"
+      whileTap={{ scale: 0.9 }}
+      transition={SPRING_POP}
+      onClick={() => {
+        triggerHapticFeedback('light');
+        onChange(!checked);
+      }}
+      className="p-1.5 min-w-[44px] min-h-[40px] flex items-center justify-center shrink-0 cursor-pointer"
+      aria-label="Toggle setting"
+    >
+      <div
+        className={`w-12 h-7 rounded-full p-0.5 transition-all duration-200 flex items-center relative border ${
+          checked ? 'liquid-hero-btn border-white/45' : 'liquid-control-pill'
+        }`}
+      >
+        <motion.div
+          initial={false}
+          animate={{ x: checked ? 20 : 0, scale: checked ? 1.04 : 0.96 }}
+          transition={SPRING_BUBBLY}
+          className="w-5.5 h-5.5 rounded-full bg-white shadow-[0_2px_8px_rgba(15,23,42,0.28)]"
+        />
+      </div>
+    </motion.button>
+  )
+);
+CyberToggle.displayName = 'CyberToggle';
 
 interface SettingsScreenProps {
   onOpenPersistentInstructions: () => void;
@@ -66,6 +118,7 @@ interface SettingsScreenProps {
     source?: WolPacketTriggerSource,
     customDeviceName?: string
   ) => void;
+  executionLogs?: ExecutionAuditEntry[];
 }
 
 const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
@@ -80,11 +133,17 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
   hostsCount,
   hosts,
   onSendWolPacket,
+  executionLogs = [],
 }) => {
   const { t, language } = useTranslation();
+  const isBg = language === 'bg';
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsHubTab>('overview');
+  const [settingsSearch, setSettingsSearch] = useState('');
 
   const selectedModel = useUIStore((s) => s.selectedModel);
   const setSelectedModel = useUIStore((s) => s.setSelectedModel);
+  const themeMode = useUIStore((s) => s.themeMode);
+  const setThemeMode = useUIStore((s) => s.setThemeMode);
   const accentColor = useUIStore((s) => s.accentColor);
   const setAccentColor = useUIStore((s) => s.setAccentColor);
   const fontFamily = useUIStore((s) => s.fontFamily);
@@ -122,14 +181,6 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
   const [isTestingModel, setIsTestingModel] = useState(false);
   const [settingsSyncError, setSettingsSyncError] = useState<string | null>(null);
   const [biometricNotice, setBiometricNotice] = useState<string | null>(null);
-
-  const DEFAULT_BUILTIN_MODEL_IDS = new Set([
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-2.0-flash',
-    'gemini-flash-latest',
-    'deepseek-r1:latest',
-  ]);
 
   const persistSettingPatch = async (
     patch: Partial<{
@@ -391,160 +442,1004 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
     }
   };
 
-  const CyberToggle = ({
-    checked,
-    onChange,
-  }: {
-    checked: boolean;
-    onChange: (v: boolean) => void;
-  }) => (
-    <button
-      type="button"
-      onClick={() => {
-        triggerHapticFeedback('light');
-        onChange(!checked);
-      }}
-      className="p-1.5 min-w-[44px] min-h-[40px] flex items-center justify-center shrink-0"
-      aria-label="Toggle setting"
-    >
-      <div
-        className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-150 flex items-center relative border ${
-          checked
-            ? 'bg-cyan-500/25 border-cyan-400/55'
-            : 'bg-white/10 border-white/15'
-        }`}
-      >
-        <motion.div
-          initial={false}
-          animate={{ x: checked ? 20 : 0 }}
-          transition={SPRING_POP}
-          className={`w-4.5 h-4.5 rounded-full ${
-            checked ? 'bg-cyan-300' : 'bg-slate-400'
-          }`}
-        />
-      </div>
-    </button>
+  const settingsTabs: Array<{
+    id: SettingsHubTab;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: string | number;
+  }> = useMemo(
+    () => [
+      { id: 'overview', label: isBg ? 'Общ преглед' : 'Overview', icon: LayoutGrid },
+      { id: 'appearance', label: isBg ? 'Облик' : 'Appearance', icon: Palette },
+      {
+        id: 'wol',
+        label: isBg ? 'WoL & Енергия' : 'WoL & Energy',
+        icon: Zap,
+        badge:
+          activeWolSchedulesCount !== undefined && activeWolSchedulesCount > 0
+            ? activeWolSchedulesCount
+            : undefined,
+      },
+      {
+        id: 'audit',
+        label: isBg ? 'Одит & Логове' : 'Audit & Logs',
+        icon: ShieldCheck,
+        badge: executionLogs.length > 0 ? executionLogs.length : undefined,
+      },
+      { id: 'ai_security', label: isBg ? 'AI & Сигурност' : 'AI & Security', icon: Brain },
+    ],
+    [isBg, activeWolSchedulesCount, executionLogs.length]
   );
 
+  const searchableSettings = useMemo(
+    () => [
+      {
+        id: 'pair',
+        title: isBg ? 'Сдвои Телефон & PC (QR / PIN)' : 'Pair Phone & PC (QR / PIN)',
+        keywords: 'qr pin pair setup phone mobile connect',
+        tab: 'overview' as SettingsHubTab,
+        action: () => useUIStore.getState().openModal('quickSetup'),
+      },
+      {
+        id: 'daemon',
+        title: isBg ? 'PC Демон Център' : 'PC Daemon Center',
+        keywords: 'pc daemon host agent ban peers security',
+        tab: 'overview' as SettingsHubTab,
+        action: () => useUIStore.getState().openModal('pcDaemonGui'),
+      },
+      {
+        id: 'ws',
+        title: t('settings_ws_config'),
+        keywords: 'websocket endpoint ws wss lan ip port vault crypto',
+        tab: 'overview' as SettingsHubTab,
+        action: () => onOpenWsConfig(),
+      },
+      {
+        id: 'mdns',
+        title: t('settings_autodiscovery'),
+        keywords: 'mdns discovery network scan zeroconf auto',
+        tab: 'overview' as SettingsHubTab,
+      },
+      {
+        id: 'lang',
+        title: t('settings_language'),
+        keywords: 'language english bulgarian език български',
+        tab: 'overview' as SettingsHubTab,
+      },
+      {
+        id: 'appearance_studio',
+        title: isBg ? 'Apple Liquid Glass Студио (Теми, Акценти, Шрифт)' : 'Apple Liquid Glass Studio (Daylight, Dark, Accent, Font)',
+        keywords: 'theme daylight dark light violet accent glass frosted aurora font appearance',
+        tab: 'appearance' as SettingsHubTab,
+      },
+      {
+        id: 'wol_energy',
+        title: isBg ? 'Зелена WoL Енергийна Ефективност & Седмична Графика' : 'Green WoL Energy Efficiency & Weekly Chart',
+        keywords: 'wol energy calculator efficiency kwh co2 cost savings chart',
+        tab: 'wol' as SettingsHubTab,
+      },
+      {
+        id: 'wol_log',
+        title: isBg ? 'Дневник на Magic пакетите (WoL)' : 'Magic Packet Log (WoL History)',
+        keywords: 'wol magic packet log history mac broadcast secureon export csv json',
+        tab: 'wol' as SettingsHubTab,
+      },
+      {
+        id: 'wol_sched',
+        title: t('settings_wol_scheduler'),
+        keywords: 'wol schedule wake timer cron morning',
+        tab: 'wol' as SettingsHubTab,
+        action: () => onOpenWolScheduler?.(),
+      },
+      {
+        id: 'audit_logs',
+        title: isBg ? 'Одитен дневник за сигурност и команди' : 'Security & Command Audit Log',
+        keywords: 'audit log security shell commands hitl daemon export',
+        tab: 'audit' as SettingsHubTab,
+      },
+      {
+        id: 'ai_model',
+        title: t('settings_ai_model'),
+        keywords: 'ai gemini ollama deepseek model custom copilot llm',
+        tab: 'ai_security' as SettingsHubTab,
+      },
+      {
+        id: 'memory',
+        title: t('settings_memory'),
+        keywords: 'memory rules persistent session instructions ai context',
+        tab: 'ai_security' as SettingsHubTab,
+        action: () => onOpenPersistentInstructions(),
+      },
+      {
+        id: 'hitl_sec',
+        title: t('settings_hitl'),
+        keywords: 'hitl security firewall approval biometric lock alerts notifications',
+        tab: 'ai_security' as SettingsHubTab,
+      },
+      {
+        id: 'releases',
+        title: isBg ? 'Бинарни Релийзи (.APK / .EXE) и Код' : 'Release Binaries (.APK / .EXE) & Source Code',
+        keywords: 'download apk exe binary release source code update',
+        tab: 'ai_security' as SettingsHubTab,
+        action: () => onOpenCodeViewer(),
+      },
+    ],
+    [isBg, t, onOpenWsConfig, onOpenWolScheduler, onOpenPersistentInstructions, onOpenCodeViewer]
+  );
+
+  const searchMatches = useMemo(() => {
+    const q = settingsSearch.trim().toLowerCase();
+    if (!q) return [];
+    return searchableSettings.filter(
+      (item) => item.title.toLowerCase().includes(q) || item.keywords.includes(q)
+    );
+  }, [settingsSearch, searchableSettings]);
+
   return (
-    <div className="w-full max-w-6xl mx-auto pb-6 select-none space-y-5">
+    <div className="w-full max-w-6xl mx-auto pb-6 select-none space-y-4">
       {/* =====================================================================
-          TOP COMMAND BAR: 4 QUICK-LAUNCH CONTROL CENTERS
+          1. DETACHED FLOATING LIQUID GLASS SETTINGS HEADER
          ===================================================================== */}
-      <div className="space-y-2">
-        <span className="text-[11px] font-mono text-cyan-300/80 uppercase tracking-widest px-1 font-semibold">
-          {language === 'bg' ? 'БЪРЗ ДОСТЪП И КОНТРОЛНИ ЦЕНТРОВЕ' : 'QUICK-LAUNCH CONTROL CENTERS'}
-        </span>
+      <header className="glass-liquid-elevated liquid-capsule-refract rounded-[26px] sm:rounded-[28px] px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 squircle-badge squircle-hero flex items-center justify-center shrink-0">
+            <Palette className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-fluid-title font-extrabold font-display ink-primary tracking-tight truncate">
+              {isBg ? 'Настройки и Контролен Хъб' : 'Settings & Control Hub'}
+            </h1>
+            <p className="text-xs ink-muted truncate">
+              {isBg
+                ? 'Облик, WoL Енергия, Одитен дневник, AI и Zero-Trust сигурност'
+                : 'Appearance studio, WoL & Energy, Audit Logs, AI & Zero-Trust'}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0 ml-auto">
+          <ThemeQuickControls showAccentDots />
+        </div>
+      </header>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-          {/* 1. Phone & PC Pairing Setup */}
-          <button
-            type="button"
-            onClick={() => {
-              triggerHapticFeedback('light');
-              useUIStore.getState().openModal('quickSetup');
-            }}
-            className="glass-liquid p-3.5 rounded-2xl text-left flex items-start gap-3 group active:scale-[0.98]"
-          >
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-300 flex items-center justify-center border border-emerald-400/35 shrink-0">
-              <QrCode className="w-5 h-5 icon-bubbly" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="font-display text-xs sm:text-sm font-bold text-white truncate">
-                {language === 'bg' ? 'Сдвои Телефон & PC' : 'Pair Phone & PC'}
-              </div>
-              <div className="text-[11px] text-slate-400 truncate mt-0.5">
-                {language === 'bg' ? '1-клик QR код и LAN' : '1-Tap QR & LAN Setup'}
-              </div>
-            </div>
-          </button>
+      {/* =====================================================================
+          2. PILL-TABBED SETTINGS HUB SUB-NAV + INSTANT LIVE SEARCH
+         ===================================================================== */}
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5">
+        <div className="flex items-center gap-1 p-1.5 rounded-full glass-liquid-subtle overflow-x-auto scrollbar-none">
+          {settingsTabs.map((tab) => {
+            const TabIcon = tab.icon;
+            const active = activeSettingsTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => {
+                  triggerHapticFeedback('selection');
+                  setActiveSettingsTab(tab.id);
+                }}
+                className={`relative h-9 px-3.5 rounded-full text-xs font-display font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition cursor-pointer ${
+                  active ? 'preserve-white' : 'ink-secondary hover:ink-primary'
+                }`}
+              >
+                {active && (
+                  <motion.div
+                    layoutId="settingsHubActiveTab"
+                    transition={SPRING_JELLY}
+                    className="absolute inset-0 rounded-full liquid-hero-btn pointer-events-none"
+                  />
+                )}
+                <TabIcon className="w-3.5 h-3.5 relative z-10 shrink-0" />
+                <span className="relative z-10">{tab.label}</span>
+                {tab.badge !== undefined && (
+                  <span
+                    className={`relative z-10 px-1.5 py-0.5 rounded-full text-[10px] font-mono leading-none ${
+                      active ? 'bg-white/25 text-white' : 'bg-cyan-500/15 text-cyan-400'
+                    }`}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
-          {/* 2. PC Daemon Control Center */}
-          <button
-            type="button"
-            onClick={() => {
-              triggerHapticFeedback('light');
-              useUIStore.getState().openModal('pcDaemonGui');
-            }}
-            className="glass-liquid p-3.5 rounded-2xl text-left flex items-start gap-3 group active:scale-[0.98]"
-          >
-            <div className="w-10 h-10 rounded-xl bg-cyan-500/15 text-cyan-300 flex items-center justify-center border border-cyan-400/35 shrink-0">
-              <Monitor className="w-5 h-5 icon-bubbly" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="font-display text-xs sm:text-sm font-bold text-white truncate flex items-center gap-1.5">
-                <span className="truncate">
-                  {language === 'bg' ? 'PC Демон Център' : 'PC Daemon Center'}
-                </span>
-              </div>
-              <div className="text-[11px] text-emerald-300/90 font-mono truncate mt-0.5 flex items-center gap-1">
-                <ShieldCheck className="w-3 h-3 shrink-0" />
-                <span className="truncate">
-                  {language === 'bg' ? 'Защита и Сесии' : 'Safeguards & Peers'}
-                </span>
-              </div>
-            </div>
-          </button>
-
-          {/* 3. System & AI Update Center */}
-          <button
-            type="button"
-            onClick={() => {
-              triggerHapticFeedback('light');
-              if (onOpenUpdateCenter) onOpenUpdateCenter();
-            }}
-            className="glass-liquid p-3.5 rounded-2xl text-left flex items-start gap-3 group active:scale-[0.98]"
-          >
-            <div className="w-10 h-10 rounded-xl bg-sky-500/15 text-sky-300 flex items-center justify-center border border-sky-400/35 shrink-0">
-              <RefreshCw className="w-5 h-5 icon-spin-bubbly" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="font-display text-xs sm:text-sm font-bold text-white truncate">
-                {language === 'bg' ? 'Системен & AI Център' : 'System & AI Center'}
-              </div>
-              <div className="text-[11px] text-cyan-300 font-mono truncate mt-0.5">
-                Beta v0.80.0 • AI-NET/3.0
-              </div>
-            </div>
-          </button>
-
-          {/* 4. Interactive App Guide */}
-          <button
-            type="button"
-            onClick={() => {
-              triggerHapticFeedback('light');
-              useUIStore.getState().openModal('onboarding');
-            }}
-            className="glass-liquid p-3.5 rounded-2xl text-left flex items-start gap-3 group active:scale-[0.98]"
-          >
-            <div className="w-10 h-10 rounded-xl bg-violet-500/15 text-violet-300 flex items-center justify-center border border-violet-400/35 shrink-0">
-              <Sparkles className="w-5 h-5 icon-sparkle-live" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="font-display text-xs sm:text-sm font-bold text-white truncate">
-                {language === 'bg' ? 'Ръководство' : 'Interactive Guide'}
-              </div>
-              <div className="text-[11px] text-slate-400 truncate mt-0.5">
-                {language === 'bg' ? 'Обиколка на функциите' : 'App Tour & Help'}
-              </div>
-            </div>
-          </button>
+        <div className="relative lg:w-72 shrink-0">
+          <Search className="w-3.5 h-3.5 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={settingsSearch}
+            onChange={(e) => setSettingsSearch(e.target.value)}
+            placeholder={isBg ? 'Търси в настройките...' : 'Search all settings...'}
+            className="w-full h-10 pl-9 pr-8 rounded-full glass-liquid-subtle text-xs ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80 focus:border-cyan-400/65 focus:outline-none"
+          />
+          {settingsSearch && (
+            <button
+              type="button"
+              onClick={() => setSettingsSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer"
+              aria-label="Clear settings search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Instant Live Search Jump Results */}
+      <AnimatePresence>
+        {settingsSearch.trim() && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className="glass-liquid rounded-[24px] p-3.5 space-y-2"
+          >
+            <div className="text-[11px] font-mono font-bold text-cyan-400 px-1">
+              {searchMatches.length > 0
+                ? isBg
+                  ? `Намерени настройки (${searchMatches.length})`
+                  : `Matching settings (${searchMatches.length})`
+                : isBg
+                ? 'Няма намерени настройки за това търсене'
+                : 'No settings match your search'}
+            </div>
+            {searchMatches.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {searchMatches.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      triggerHapticFeedback('light');
+                      setActiveSettingsTab(m.tab);
+                      if (m.action) m.action();
+                      setSettingsSearch('');
+                    }}
+                    className="px-3 py-1.5 rounded-full liquid-control-pill text-xs font-semibold ink-primary flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>{m.title}</span>
+                    <ChevronRight className="w-3 h-3 text-cyan-400" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* =====================================================================
-          MAIN 2-COLUMN ORGANIZED SETTINGS GRID
+          TAB: APPEARANCE — APPLE LIQUID GLASS STUDIO
          ===================================================================== */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-        {/* LEFT COLUMN (6 cols): CONNECTION, AI COPILOT & SECURITY */}
-        <div className="lg:col-span-6 flex flex-col space-y-5">
-          {/* GROUP 1: CONNECTION, NETWORK DISCOVERY & LANGUAGE */}
-          <div className="space-y-2 relative z-20">
-            <span className="text-[11px] font-mono text-cyan-300/80 uppercase tracking-widest px-1 font-semibold">
-              {language === 'bg' ? '1. ВРЪЗКА, МРЕЖА И ЕЗИК' : '1. CONNECTION, NETWORK & LANGUAGE'}
+      {activeSettingsTab === 'appearance' && (
+      <div className="space-y-2 relative z-20">
+        <div className="glass-liquid w-full rounded-[28px] overflow-hidden">
+          <div className="p-4 sm:px-5 flex items-center justify-between gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                triggerHapticFeedback('light');
+                toggleCustomizationOpen();
+              }}
+              className="flex items-center gap-3 min-w-0 flex-1 text-left"
+            >
+              <div className="w-10 h-10 squircle-badge squircle-violet flex items-center justify-center shrink-0">
+                <Sparkles className="w-5 h-5 icon-sparkle-live" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-display text-sm font-extrabold ink-primary tracking-tight">
+                    {language === 'bg'
+                      ? 'Apple Liquid Glass Студио'
+                      : 'Apple Liquid Glass Studio'}
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/14 border border-cyan-400/35 text-[10px] font-mono font-bold text-cyan-400 uppercase">
+                    {themeMode === 'light'
+                      ? language === 'bg'
+                        ? 'Светъл Daylight'
+                        : 'Bright Daylight'
+                      : language === 'bg'
+                      ? 'Тъмен Prism'
+                      : 'Vibrant Dark'}
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono font-semibold ink-secondary uppercase">
+                    {glassIntensity === 'clear'
+                      ? language === 'bg'
+                        ? 'Кристал'
+                        : 'Crystal'
+                      : glassIntensity === 'frosted'
+                      ? language === 'bg'
+                        ? 'Мат'
+                        : 'Frosted'
+                      : language === 'bg'
+                      ? 'Течно Стъкло'
+                      : 'Liquid Glass'}
+                  </span>
+                </div>
+                <p className="text-fluid-meta ink-muted truncate mt-0.5">
+                  {language === 'bg'
+                    ? 'Светъл/Тъмен режим, водещ акцент, оптично стъкло, аврора фон и шрифт'
+                    : 'Daylight/Dark polarity, hero accent, optical glass finish, moving aurora & typography'}
+                </p>
+              </div>
+            </button>
+
+            <div className="flex items-center gap-2 shrink-0 ml-auto">
+              {isCustomizationOpen && (
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.91 }}
+                  transition={SPRING_POP}
+                  onClick={() => {
+                    triggerHapticFeedback('medium');
+                    resetAppearance();
+                  }}
+                  className="h-8.5 px-3 rounded-full liquid-control-pill text-[11px] font-mono font-semibold flex items-center gap-1.5 cursor-pointer"
+                  title={
+                    language === 'bg'
+                      ? 'Възстанови стандартния Daylight + Iridescent Violet облик'
+                      : 'Reset to Daylight + Iridescent Violet defaults'
+                  }
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>{language === 'bg' ? 'Нулирай' : 'Reset'}</span>
+                </motion.button>
+              )}
+
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.91 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  toggleCustomizationOpen();
+                }}
+                className="h-8.5 px-3.5 rounded-full liquid-hero-btn text-[11px] font-mono font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                {isCustomizationOpen ? (
+                  <>
+                    <EyeOff className="w-3.5 h-3.5" />
+                    <span>{language === 'bg' ? 'Скрий' : 'Hide'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>{language === 'bg' ? 'Отвори' : 'Open'}</span>
+                  </>
+                )}
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                    isCustomizationOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </motion.button>
+            </div>
+          </div>
+
+          <AnimatePresence initial={false}>
+            {isCustomizationOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.22 }}
+                className="border-t border-white/[0.08] divide-y divide-white/[0.08] overflow-hidden"
+              >
+                {/* 0. Theme Polarity: Bright Daylight Glass vs Vibrant Dark */}
+                <div className="p-4 sm:px-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-display font-bold ink-primary flex items-center gap-2">
+                      {themeMode === 'light' ? (
+                        <Sun className="w-4 h-4 text-amber-500" />
+                      ) : (
+                        <Moon className="w-4 h-4 text-violet-400" />
+                      )}
+                      <span>
+                        {language === 'bg'
+                          ? '1. Тема и Осветеност (Daylight / Vibrant Dark)'
+                          : '1. Theme Polarity (Daylight Glass vs. Vibrant Dark)'}
+                      </span>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {(
+                      [
+                        {
+                          id: 'light' as ThemeMode,
+                          label: language === 'bg' ? 'Светло Течно Стъкло (Daylight)' : 'Bright Daylight Glass',
+                          desc:
+                            language === 'bg'
+                              ? 'Слънчева iOS 26 пастелна призма и кристален терминал'
+                              : 'Sunlit iOS 26 pastel-prism canvas & bright frosted terminal',
+                          icon: Sun,
+                          previewClass:
+                            'from-[#f5f3ff] via-[#e0f2fe] to-[#fce7f3] text-amber-500 border-white/90',
+                        },
+                        {
+                          id: 'dark' as ThemeMode,
+                          label: language === 'bg' ? 'Тъмен Неон (Vibrant Dark)' : 'Vibrant Dark Glass',
+                          desc:
+                            language === 'bg'
+                              ? 'Дълбок индиго здрач с ярки светещи аврора акценти'
+                              : 'Luminous twilight indigo mesh with glowing jewel refraction',
+                          icon: Moon,
+                          previewClass:
+                            'from-[#0f102e] via-[#1f1247] to-[#2e1042] text-violet-300 border-violet-400/40',
+                        },
+                      ] as const
+                    ).map((mode) => {
+                      const active = themeMode === mode.id;
+                      const ModeIcon = mode.icon;
+                      return (
+                        <motion.button
+                          key={mode.id}
+                          type="button"
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.96 }}
+                          transition={SPRING_POP}
+                          onClick={() => {
+                            triggerHapticFeedback('selection');
+                            setThemeMode(mode.id);
+                          }}
+                          className={`p-3 rounded-2xl border flex items-center gap-3 text-left transition cursor-pointer ${
+                            active
+                              ? 'glass-liquid-elevated iridescent-active-rim'
+                              : 'glass-liquid-subtle hover:border-cyan-400/40'
+                          }`}
+                        >
+                          <div
+                            className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${mode.previewClass} border flex items-center justify-center shrink-0 shadow-md`}
+                          >
+                            <ModeIcon className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs sm:text-sm font-display font-bold ink-primary flex items-center justify-between gap-2">
+                              <span className="truncate">{mode.label}</span>
+                              {active && (
+                                <span className="w-5 h-5 rounded-full liquid-hero-btn flex items-center justify-center shrink-0">
+                                  <Check className="w-3 h-3 stroke-[3]" />
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] ink-muted truncate mt-0.5">{mode.desc}</p>
+                          </div>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2. Hero Accent Color Palette Picker (Iridescent Violet Default) */}
+                <div className="p-4 sm:px-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-display font-bold ink-primary flex items-center gap-2">
+                      <Palette className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>
+                        {language === 'bg'
+                          ? '2. Водещ Цветов Акцент (Hero Accent)'
+                          : '2. Unified Hero Accent Palette'}
+                      </span>
+                    </span>
+                    <span className="text-[11px] font-mono text-cyan-400 font-bold uppercase">
+                      {accentColor}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                    {(
+                      [
+                        {
+                          id: 'violet' as AccentColorPreset,
+                          label: language === 'bg' ? 'Иридесцентно Виолетово' : 'Iridescent Violet',
+                          desc: language === 'bg' ? 'По подразбиране' : 'VisionOS Default',
+                          swatch: 'from-[#7c3aed] via-[#a855f7] to-[#ec4899]',
+                        },
+                        {
+                          id: 'cobalt' as AccentColorPreset,
+                          label: language === 'bg' ? 'Електриково Синьо' : 'Electric Azure',
+                          desc: language === 'bg' ? 'Apple сапфир' : 'Apple Sky & Cobalt',
+                          swatch: 'from-[#2563eb] via-[#0ea5e9] to-[#6366f1]',
+                        },
+                        {
+                          id: 'cyan' as AccentColorPreset,
+                          label: language === 'bg' ? 'Аква Циан' : 'Aqua Cyan',
+                          desc: language === 'bg' ? 'Кристално аква' : 'Ocean Aqua & Indigo',
+                          swatch: 'from-[#06b6d4] via-[#22d3ee] to-[#6366f1]',
+                        },
+                        {
+                          id: 'emerald' as AccentColorPreset,
+                          label: language === 'bg' ? 'Био Мента' : 'Bio Mint',
+                          desc: language === 'bg' ? 'Изумрудена мента' : 'Vibrant Emerald',
+                          swatch: 'from-[#059669] via-[#10b981] to-[#2dd4bf]',
+                        },
+                        {
+                          id: 'rose' as AccentColorPreset,
+                          label: language === 'bg' ? 'Коралова Роза' : 'Coral Rose',
+                          desc: language === 'bg' ? 'Залез и корал' : 'Poppy Rose & Coral',
+                          swatch: 'from-[#e11d48] via-[#f43f5e] to-[#fb923c]',
+                        },
+                        {
+                          id: 'amber' as AccentColorPreset,
+                          label: language === 'bg' ? 'Соларно Злато' : 'Solar Amber',
+                          desc: language === 'bg' ? 'Топъл кехлибар' : 'Sunlit Gold & Flame',
+                          swatch: 'from-[#d97706] via-[#f59e0b] to-[#f97316]',
+                        },
+                      ] as const
+                    ).map((item) => {
+                      const isSelected = accentColor === item.id;
+                      return (
+                        <motion.button
+                          key={item.id}
+                          type="button"
+                          whileHover={{ scale: 1.04, y: -1 }}
+                          whileTap={{ scale: 0.93 }}
+                          transition={SPRING_POP}
+                          onClick={() => {
+                            triggerHapticFeedback('selection');
+                            setAccentColor(item.id);
+                          }}
+                          className={`p-2.5 rounded-2xl border flex items-center gap-2.5 text-left transition cursor-pointer ${
+                            isSelected
+                              ? 'glass-liquid-elevated iridescent-active-rim'
+                              : 'glass-liquid-subtle hover:border-cyan-400/40'
+                          }`}
+                        >
+                          <span
+                            className={`w-7 h-7 rounded-full bg-gradient-to-br ${item.swatch} flex items-center justify-center shadow-md border border-white/60 shrink-0 preserve-white`}
+                          >
+                            {isSelected && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs truncate ink-primary font-bold">
+                              {item.label}
+                            </div>
+                            <div className="text-[10px] ink-muted truncate">{item.desc}</div>
+                          </div>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 3. Surface Material & Moving Fluid Background */}
+                <div className="p-4 sm:px-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="space-y-2.5">
+                    <span className="text-xs font-display font-bold ink-primary flex items-center gap-2">
+                      <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>
+                        {language === 'bg'
+                          ? '3. Повърхност на Стъклото'
+                          : '3. Optical Glass Finish'}
+                      </span>
+                    </span>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          {
+                            id: 'clear' as GlassIntensityPreset,
+                            label: language === 'bg' ? 'Кристал' : 'Crystal',
+                            desc:
+                              language === 'bg'
+                                ? 'Ултра прозрачна призма'
+                                : 'Ultra-clear prism glass',
+                          },
+                          {
+                            id: 'balanced' as GlassIntensityPreset,
+                            label: language === 'bg' ? 'Течно' : 'Liquid',
+                            desc:
+                              language === 'bg'
+                                ? 'Балансирано iOS 26 стъкло'
+                                : 'Signature iOS 26 glass',
+                          },
+                          {
+                            id: 'frosted' as GlassIntensityPreset,
+                            label: language === 'bg' ? 'Мат' : 'Frosted',
+                            desc:
+                              language === 'bg'
+                                ? 'Плътен матов контраст'
+                                : 'Soft high-contrast matte',
+                          },
+                        ] as const
+                      ).map((g) => {
+                        const active = glassIntensity === g.id;
+                        return (
+                          <motion.button
+                            key={g.id}
+                            type="button"
+                            whileHover={{ scale: 1.03 }}
+                            whileTap={{ scale: 0.94 }}
+                            transition={SPRING_POP}
+                            onClick={() => {
+                              triggerHapticFeedback('selection');
+                              setGlassIntensity(g.id);
+                            }}
+                            className={`p-2.5 rounded-2xl border text-left transition flex flex-col justify-between cursor-pointer ${
+                              active
+                                ? 'liquid-hero-btn preserve-white'
+                                : 'glass-liquid-subtle ink-primary'
+                            }`}
+                          >
+                            <div className="text-xs font-bold flex items-center justify-between gap-1">
+                              <span className="truncate">{g.label}</span>
+                              {active && <Check className="w-3 h-3 shrink-0" />}
+                            </div>
+                            <div className={`text-[10px] leading-snug mt-1 ${active ? 'opacity-90' : 'ink-muted'}`}>
+                              {g.desc}
+                            </div>
+                          </motion.button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <span className="text-xs font-display font-bold ink-primary flex items-center gap-2">
+                      <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>
+                        {language === 'bg'
+                          ? '4. Енергичен Аврора Фон'
+                          : '4. Animated Backdrop'}
+                      </span>
+                    </span>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {(
+                        [
+                          {
+                            id: 'aurora' as AmbientModePreset,
+                            label: language === 'bg' ? 'Аврора' : 'Aurora',
+                            desc: language === 'bg' ? 'Живи светлинни вълни' : 'Shifting aurora ribbons',
+                          },
+                          {
+                            id: 'fluid' as AmbientModePreset,
+                            label: language === 'bg' ? 'Плазма' : 'Plasma',
+                            desc: language === 'bg' ? 'Орбитална течност' : 'Orbital fluid mesh',
+                          },
+                          {
+                            id: 'cyber' as AmbientModePreset,
+                            label: language === 'bg' ? 'Призма' : 'Prism Grid',
+                            desc: language === 'bg' ? 'Мрежа и ядро' : 'Grid & breathing core',
+                          },
+                          {
+                            id: 'minimal' as AmbientModePreset,
+                            label: language === 'bg' ? 'Статичен' : 'Static',
+                            desc: language === 'bg' ? 'Изчистен (0% GPU)' : 'Clean static (0% GPU)',
+                          },
+                        ] as const
+                      ).map((m) => {
+                        const active = ambientMode === m.id;
+                        return (
+                          <motion.button
+                            key={m.id}
+                            type="button"
+                            whileHover={{ scale: 1.03 }}
+                            whileTap={{ scale: 0.94 }}
+                            transition={SPRING_POP}
+                            onClick={() => {
+                              triggerHapticFeedback('selection');
+                              setAmbientMode(m.id);
+                            }}
+                            className={`p-2.5 rounded-2xl border text-left transition flex flex-col justify-between cursor-pointer ${
+                              active
+                                ? 'liquid-hero-btn preserve-white'
+                                : 'glass-liquid-subtle ink-primary'
+                            }`}
+                          >
+                            <div className="text-xs font-bold flex items-center justify-between gap-1">
+                              <span className="truncate">{m.label}</span>
+                              {active && <Check className="w-3 h-3 shrink-0" />}
+                            </div>
+                            <div className={`text-[10px] leading-snug mt-1 ${active ? 'opacity-90' : 'ink-muted'}`}>
+                              {m.desc}
+                            </div>
+                          </motion.button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Typography / Font Family Selector */}
+                <div className="p-4 sm:px-5 space-y-2.5">
+                  <span className="text-xs font-display font-bold ink-primary flex items-center gap-2">
+                    <Type className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>
+                      {language === 'bg'
+                        ? '5. Типография и Шрифт (Latin + Кирилица)'
+                        : '5. Interface Typography (Latin + Cyrillic)'}
+                    </span>
+                  </span>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {(
+                      [
+                        {
+                          id: 'geometric' as FontFamilyPreset,
+                          name: 'Apple Geometric',
+                          desc: language === 'bg' ? 'Модерен заоблен sans' : 'Sleek Onest geometric',
+                          sampleStyle: { fontFamily: '"Onest", sans-serif' },
+                        },
+                        {
+                          id: 'jakarta' as FontFamilyPreset,
+                          name: 'Jakarta Display',
+                          desc: language === 'bg' ? 'Изразителен дисплеен' : 'Bold display contrast',
+                          sampleStyle: { fontFamily: '"Plus Jakarta Sans", sans-serif' },
+                        },
+                        {
+                          id: 'system' as FontFamilyPreset,
+                          name: 'Native OS UI',
+                          desc: language === 'bg' ? 'Системен шрифт' : 'SF Pro / System UI',
+                          sampleStyle: {
+                            fontFamily: '-apple-system, BlinkMacSystemFont, system-ui, sans-serif',
+                          },
+                        },
+                        {
+                          id: 'mono' as FontFamilyPreset,
+                          name: 'JetBrains Mono',
+                          desc: language === 'bg' ? 'Пълен моноспейс' : 'Full terminal monospace',
+                          sampleStyle: { fontFamily: '"JetBrains Mono", monospace' },
+                        },
+                      ] as const
+                    ).map((f) => {
+                      const isSelected = fontFamily === f.id;
+                      return (
+                        <motion.button
+                          key={f.id}
+                          type="button"
+                          whileHover={{ scale: 1.03 }}
+                          whileTap={{ scale: 0.94 }}
+                          transition={SPRING_POP}
+                          onClick={() => {
+                            triggerHapticFeedback('selection');
+                            setFontFamily(f.id);
+                          }}
+                          style={f.sampleStyle}
+                          className={`px-3 py-2.5 rounded-2xl border text-left transition flex items-center justify-between gap-2 cursor-pointer ${
+                            isSelected
+                              ? 'liquid-hero-btn preserve-white'
+                              : 'glass-liquid-subtle ink-primary'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold truncate">{f.name}</div>
+                            <div className={`text-[10px] truncate mt-0.5 ${isSelected ? 'opacity-90' : 'ink-muted'}`}>
+                              {f.desc}
+                            </div>
+                          </div>
+                          <span className="text-sm font-extrabold shrink-0">Aa</span>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+      )}
+
+      {/* =====================================================================
+          TAB: OVERVIEW — APPEARANCE BANNER, QUICK-LAUNCH & CONNECTION/LANGUAGE
+         ===================================================================== */}
+      {activeSettingsTab === 'overview' && (
+        <div className="space-y-5">
+          {/* Elevated Compact Liquid Glass Studio Strip */}
+          <div className="glass-liquid rounded-[26px] p-4 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 squircle-badge squircle-violet flex items-center justify-center shrink-0">
+                <Sparkles className="w-5 h-5 icon-sparkle-live" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-display text-sm font-extrabold ink-primary tracking-tight">
+                    {isBg ? 'Apple Liquid Glass Студио' : 'Apple Liquid Glass Studio'}
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/14 border border-cyan-400/35 text-[10px] font-mono font-bold text-cyan-400 uppercase">
+                    {themeMode === 'light'
+                      ? isBg
+                        ? 'Светъл Daylight'
+                        : 'Bright Daylight'
+                      : isBg
+                      ? 'Тъмен Prism'
+                      : 'Vibrant Dark'}
+                  </span>
+                </div>
+                <p className="text-xs ink-muted truncate mt-0.5">
+                  {isBg
+                    ? 'Сменяйте теми, акценти, оптично стъкло, аврора фон и шрифтове'
+                    : 'Customize polarity, 6 hero accents, optical glass finish, aurora & typography'}
+                </p>
+              </div>
+            </div>
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.93 }}
+              transition={SPRING_POP}
+              onClick={() => {
+                triggerHapticFeedback('light');
+                setActiveSettingsTab('appearance');
+              }}
+              className="h-9 px-4 rounded-full liquid-hero-btn text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 ml-auto"
+            >
+              <Palette className="w-3.5 h-3.5" />
+              <span>{isBg ? 'Отвори Студио' : 'Open Studio'}</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </motion.button>
+          </div>
+
+          {/* Quick-Launch Control Centers */}
+          <div className="space-y-2.5">
+            <span className="text-[11px] font-display text-cyan-400 uppercase tracking-wider px-1 font-bold">
+              {isBg ? 'Контролни центрове за бърз достъп' : 'Quick-Launch Control Centers'}
             </span>
 
-            <div className="glass-liquid w-full rounded-2xl divide-y divide-white/[0.06] overflow-hidden">
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+              {/* 1. Pair Phone & PC */}
+              <motion.button
+                type="button"
+                whileHover={{ y: -2, scale: 1.02 }}
+                whileTap={{ scale: 0.95 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  useUIStore.getState().openModal('quickSetup');
+                }}
+                className="glass-liquid p-3.5 rounded-[24px] text-left flex items-start gap-3 cursor-pointer"
+              >
+                <div className="w-10 h-10 squircle-badge squircle-emerald flex items-center justify-center shrink-0">
+                  <QrCode className="w-5 h-5 icon-bubbly" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
+                    {isBg ? 'Сдвои Телефон & PC' : 'Pair Phone & PC'}
+                  </div>
+                  <div className="text-[11px] ink-muted truncate mt-0.5">
+                    {isBg ? '1-клик QR код и 6-цифрен PIN' : '1-Tap QR & 6-Digit PIN Setup'}
+                  </div>
+                </div>
+              </motion.button>
+
+              {/* 2. PC Daemon Control Center */}
+              <motion.button
+                type="button"
+                whileHover={{ y: -2, scale: 1.02 }}
+                whileTap={{ scale: 0.95 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  useUIStore.getState().openModal('pcDaemonGui');
+                }}
+                className="glass-liquid p-3.5 rounded-[24px] text-left flex items-start gap-3 cursor-pointer"
+              >
+                <div className="w-10 h-10 squircle-badge squircle-hero flex items-center justify-center shrink-0">
+                  <Monitor className="w-5 h-5 icon-bubbly" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
+                    {isBg ? 'PC Демон Център' : 'PC Daemon Center'}
+                  </div>
+                  <div className="text-[11px] text-emerald-400 font-mono font-semibold truncate mt-0.5 flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{isBg ? 'Защита и Сесии' : 'Safeguards & Peers'}</span>
+                  </div>
+                </div>
+              </motion.button>
+
+              {/* 3. System & AI Update Center */}
+              <motion.button
+                type="button"
+                whileHover={{ y: -2, scale: 1.02 }}
+                whileTap={{ scale: 0.95 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  if (onOpenUpdateCenter) onOpenUpdateCenter();
+                }}
+                className="glass-liquid p-3.5 rounded-[24px] text-left flex items-start gap-3 cursor-pointer"
+              >
+                <div className="w-10 h-10 squircle-badge squircle-sky flex items-center justify-center shrink-0">
+                  <RefreshCw className="w-5 h-5 icon-spin-bubbly" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
+                    {isBg ? 'Системен & AI Център' : 'System & AI Center'}
+                  </div>
+                  <div className="text-[11px] text-cyan-400 font-mono font-semibold truncate mt-0.5">
+                    Beta v0.80.0 • AI-NET/3.0
+                  </div>
+                </div>
+              </motion.button>
+
+              {/* 4. WoL & Energy Hub Shortcut */}
+              <motion.button
+                type="button"
+                whileHover={{ y: -2, scale: 1.02 }}
+                whileTap={{ scale: 0.95 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  setActiveSettingsTab('wol');
+                }}
+                className="glass-liquid p-3.5 rounded-[24px] text-left flex items-start gap-3 cursor-pointer"
+              >
+                <div className="w-10 h-10 squircle-badge squircle-amber flex items-center justify-center shrink-0">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
+                    {isBg ? 'WoL & Енергия' : 'WoL & Energy'}
+                  </div>
+                  <div className="text-[11px] ink-muted truncate mt-0.5">
+                    {isBg ? 'Magic пакети, графици и CO₂' : 'Magic Packet Log & CO₂ savings'}
+                  </div>
+                </div>
+              </motion.button>
+
+              {/* 5. Security & Command Audit Log Shortcut */}
+              <motion.button
+                type="button"
+                whileHover={{ y: -2, scale: 1.02 }}
+                whileTap={{ scale: 0.95 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  setActiveSettingsTab('audit');
+                }}
+                className="glass-liquid p-3.5 rounded-[24px] text-left flex items-start gap-3 cursor-pointer"
+              >
+                <div className="w-10 h-10 squircle-badge squircle-violet flex items-center justify-center shrink-0">
+                  <Terminal className="w-5 h-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
+                    {isBg ? 'Одитен дневник' : 'Security Audit Log'}
+                  </div>
+                  <div className="text-[11px] ink-muted truncate mt-0.5">
+                    {isBg ? 'Команди, HITL и Демон логове' : 'Commands, HITL & Daemon trail'}
+                  </div>
+                </div>
+              </motion.button>
+
+              {/* 6. Interactive App Guide */}
+              <motion.button
+                type="button"
+                whileHover={{ y: -2, scale: 1.02 }}
+                whileTap={{ scale: 0.95 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  useUIStore.getState().openModal('onboarding');
+                }}
+                className="glass-liquid p-3.5 rounded-[24px] text-left flex items-start gap-3 cursor-pointer"
+              >
+                <div className="w-10 h-10 squircle-badge squircle-rose flex items-center justify-center shrink-0">
+                  <Sparkles className="w-5 h-5 icon-sparkle-live" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
+                    {isBg ? 'Интерактивно ръководство' : 'Interactive Guide'}
+                  </div>
+                  <div className="text-[11px] ink-muted truncate mt-0.5">
+                    {isBg ? 'Обиколка на функциите и помощ' : 'Guided walkthrough & tips'}
+                  </div>
+                </div>
+              </motion.button>
+            </div>
+          </div>
+
+          {/* Connection, Discovery & Language Card */}
+          <div className="space-y-2.5">
+            <span className="text-[11px] font-display text-cyan-400 uppercase tracking-wider px-1 font-bold">
+              {isBg ? 'Връзка, мрежово откриване и език' : 'Connection, Network & Language'}
+            </span>
+
+            <div className="glass-liquid w-full rounded-[26px] divide-y divide-white/[0.08] overflow-hidden">
               {/* WebSocket Endpoint Config */}
               <button
                 type="button"
@@ -552,35 +1447,35 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   triggerHapticFeedback('light');
                   onOpenWsConfig();
                 }}
-                className="w-full p-3.5 flex items-center justify-between gap-3 text-left hover:bg-white/[0.03] transition"
+                className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-white/[0.04] transition cursor-pointer"
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/12 text-emerald-300 flex items-center justify-center border border-emerald-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-emerald flex items-center justify-center shrink-0">
                     <ArrowUpCircle className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_ws_config')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_ws_config_desc')}
                     </span>
                   </div>
                 </div>
-                <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                <ChevronRight className="w-4 h-4 ink-muted shrink-0" />
               </button>
 
               {/* Auto Discovery (mDNS) */}
-              <div className="p-3.5 flex items-center justify-between gap-3">
+              <div className="p-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-cyan-500/12 text-cyan-300 flex items-center justify-center border border-cyan-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-sky flex items-center justify-center shrink-0">
                     <Radio className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_autodiscovery')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_autodiscovery_desc')}
                     </span>
                   </div>
@@ -592,33 +1487,33 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                     triggerHapticFeedback('light');
                     void persistSettingPatch({ isAutoDiscovery: !isAutoDiscovery });
                   }}
-                  className={`px-3 py-1.5 h-8 rounded-lg text-[10px] font-mono font-bold uppercase transition shrink-0 active:scale-95 ${
+                  className={`px-3.5 py-1.5 h-8.5 rounded-full text-[10.5px] font-mono font-bold uppercase transition shrink-0 cursor-pointer ${
                     isAutoDiscovery
-                      ? 'bg-emerald-500/18 text-emerald-300 border border-emerald-500/40'
-                      : 'bg-white/5 text-slate-400 border border-white/10'
+                      ? 'bg-emerald-500/16 text-emerald-400 border border-emerald-500/35'
+                      : 'liquid-control-pill ink-secondary'
                   }`}
                 >
                   {isAutoDiscovery
-                    ? language === 'bg'
-                      ? 'mDNS АКТИВЕН'
-                      : 'mDNS AUTO'
-                    : language === 'bg'
-                    ? 'РЪЧЕН IP'
-                    : 'MANUAL IP'}
+                    ? isBg
+                      ? 'mDNS Активен'
+                      : 'mDNS Auto'
+                    : isBg
+                    ? 'Ръчен IP'
+                    : 'Manual IP'}
                 </button>
               </div>
 
               {/* Language Selector */}
-              <div className="p-3.5 flex items-center justify-between gap-3">
+              <div className="p-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-cyan-500/12 text-cyan-300 flex items-center justify-center border border-cyan-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-violet flex items-center justify-center shrink-0">
                     <Languages className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_language')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_language_desc')}
                     </span>
                   </div>
@@ -627,32 +1522,116 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
 
-          {/* GROUP 2: AI COPILOT ENGINE & AUTOMATION (Elevated z-index when dropdown is open!) */}
+      {/* =====================================================================
+          TAB: WOL & ENERGY HUB
+         ===================================================================== */}
+      {activeSettingsTab === 'wol' && (
+        <div className="space-y-5">
+          {/* Quick Action Ribbon for Schedules & Direct Packet */}
+          <div className="glass-liquid rounded-[26px] p-4 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 squircle-badge squircle-amber flex items-center justify-center shrink-0">
+                <Clock className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="font-display text-sm font-extrabold ink-primary tracking-tight">
+                  {isBg ? 'Wake-on-LAN Автоматизация и Графици' : 'Wake-on-LAN Automation & Schedules'}
+                </h2>
+                <p className="text-xs ink-muted mt-0.5">
+                  {activeWolSchedulesCount !== undefined && activeWolSchedulesCount > 0
+                    ? isBg
+                      ? `${activeWolSchedulesCount} активни графика за автоматично събуждане`
+                      : `${activeWolSchedulesCount} active recurring wake schedules`
+                    : isBg
+                    ? 'Настройте графици за събуждане и спестете енергия автоматично'
+                    : 'Configure automated wake schedules and maximize fleet power efficiency'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 ml-auto flex-wrap">
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.92 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  useUIStore.getState().openModal('wol', { device: hosts?.[0] || null, tab: 'direct' });
+                }}
+                className="h-9 px-3.5 rounded-full squircle-amber preserve-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>{isBg ? 'Директен пакет' : 'Direct Wake'}</span>
+              </motion.button>
+
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.92 }}
+                transition={SPRING_POP}
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  if (onOpenWolScheduler) onOpenWolScheduler();
+                }}
+                className="h-9 px-4 rounded-full liquid-hero-btn text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>{isBg ? 'Управлявай графици' : 'Manage Schedules'}</span>
+              </motion.button>
+            </div>
+          </div>
+
+          <WolEnergyCalculator
+            wolSchedules={wolSchedules}
+            defaultHostCount={hostsCount !== undefined && hostsCount > 0 ? hostsCount : 1}
+          />
+
+          <WolHistoryLogViewer hosts={hosts} onSendWolPacket={onSendWolPacket} />
+        </div>
+      )}
+
+      {/* =====================================================================
+          TAB: AUDIT & LOGS (Shell Commands + Security/HITL + PC Daemon)
+         ===================================================================== */}
+      {activeSettingsTab === 'audit' && (
+        <AuditLogViewer
+          executionLogs={executionLogs}
+          onOpenLiveConsole={onOpenTerminalLogs}
+        />
+      )}
+
+      {/* =====================================================================
+          TAB: AI & ZERO-TRUST SECURITY
+         ===================================================================== */}
+      {activeSettingsTab === 'ai_security' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+          {/* LEFT: AI COPILOT ENGINE & MEMORY */}
           <div
-            className={`space-y-2 relative ${
+            className={`lg:col-span-6 space-y-2.5 relative ${
               isModelDropdownOpen || isAddModelOpen ? 'z-[80]' : 'z-30'
             }`}
           >
-            <span className="text-[11px] font-mono text-cyan-300/80 uppercase tracking-widest px-1 font-semibold">
-              {language === 'bg'
-                ? '2. AI ЯДРО И АВТОМАТИЗАЦИЯ'
-                : '2. AI COPILOT ENGINE & AUTOMATION'}
+            <span className="text-[11px] font-display text-cyan-400 uppercase tracking-wider px-1 font-bold">
+              {isBg ? 'AI Двигател и Контекстна Памет' : 'AI Copilot Engine & Memory'}
             </span>
 
-            <div className="glass-liquid w-full rounded-2xl divide-y divide-white/[0.06] relative overflow-visible">
+            <div className="glass-liquid w-full rounded-[26px] divide-y divide-white/[0.08] relative overflow-visible">
               {/* Row 1: Dynamic AI Model Selector */}
-              <div className="p-3.5 flex flex-col space-y-2.5 relative">
+              <div className="p-4 flex flex-col space-y-2.5 relative">
                 <div className="flex items-center justify-between gap-2.5 flex-wrap sm:flex-nowrap">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="w-9 h-9 rounded-xl bg-cyan-500/12 text-cyan-300 flex items-center justify-center border border-cyan-500/25 shrink-0">
+                    <div className="w-9 h-9 squircle-badge squircle-hero flex items-center justify-center shrink-0">
                       <Brain className="w-4 h-4" />
                     </div>
                     <div className="flex flex-col min-w-0 flex-1">
-                      <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                      <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                         {t('settings_ai_model')}
                       </span>
-                      <span className="text-fluid-meta text-slate-400 truncate">
+                      <span className="text-fluid-meta ink-muted truncate">
                         {t('settings_ai_model_desc')}
                       </span>
                     </div>
@@ -663,20 +1642,20 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                       type="button"
                       onClick={() => handleTestModel(selectedModel)}
                       disabled={isTestingModel}
-                      className="h-9 px-2.5 rounded-xl bg-white/[0.05] hover:bg-white/10 text-cyan-300 text-xs font-mono transition border border-white/10 flex items-center justify-center active:scale-95"
-                      title={language === 'bg' ? 'Тествай модела' : 'Test Model'}
+                      className="h-9 px-3 rounded-full liquid-control-pill text-cyan-400 text-xs font-mono font-semibold flex items-center justify-center cursor-pointer"
+                      title={isBg ? 'Тествай модела' : 'Test Model'}
                     >
                       {isTestingModel ? (
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                       ) : (
-                        testResult || (language === 'bg' ? 'Тест' : 'Test')
+                        testResult || (isBg ? 'Тест' : 'Test')
                       )}
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setIsModelDropdownOpen((prev) => !prev)}
-                      className="h-9 px-3 rounded-xl bg-[#070d1b] hover:bg-[#0d162c] text-cyan-300 text-xs font-mono font-medium flex items-center gap-1.5 transition border border-cyan-400/35 active:scale-95"
+                      className="h-9 px-3.5 rounded-full liquid-control-pill border border-cyan-400/40 text-cyan-400 text-xs font-mono font-semibold flex items-center gap-1.5 cursor-pointer"
                     >
                       <span className="max-w-[125px] sm:max-w-[175px] truncate">
                         {selectedModel}
@@ -690,12 +1669,13 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   </div>
                 </div>
 
-                {/* Solid-Backed High-Contrast Dropdown Menu (Zero Overlap / Zero Bleed-Through) */}
+                {/* High-Contrast Liquid Dropdown Menu */}
                 <AnimatePresence>
                   {isModelDropdownOpen && (
-                    <>
+                    <div key="model-dropdown-layer">
                       <div
-                        className="fixed inset-0 z-[90] bg-black/50"
+                        className="fixed inset-0"
+                        style={{ zIndex: 90, backgroundColor: 'var(--backdrop-scrim)' }}
                         onClick={() => setIsModelDropdownOpen(false)}
                       />
                       <motion.div
@@ -703,31 +1683,30 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                         initial="initial"
                         animate="animate"
                         exit="exit"
-                        className="absolute right-3 top-14 w-80 max-w-[calc(100vw-2rem)] rounded-2xl dropdown-menu-surface p-2 space-y-1 max-h-80 overflow-y-auto"
+                        style={{ zIndex: 95 }}
+                        className="absolute right-3 top-14 w-80 max-w-[calc(100vw-2rem)] rounded-[24px] dropdown-menu-surface p-2.5 space-y-1 max-h-80 overflow-y-auto bouncy-scroll"
                       >
-                        <div className="flex items-center justify-between px-2.5 py-1.5 text-[10px] font-mono text-slate-300 uppercase tracking-wider border-b border-white/15">
-                          <span>
-                            {language === 'bg' ? 'Налични AI Модели' : 'Available AI Models'}
-                          </span>
+                        <div className="flex items-center justify-between px-2.5 py-1.5 text-[10px] font-mono ink-secondary uppercase tracking-wider border-b border-white/[0.10]">
+                          <span>{isBg ? 'Налични AI Модели' : 'Available AI Models'}</span>
                           <button
                             type="button"
                             onClick={() => {
                               setIsModelDropdownOpen(false);
                               setIsAddModelOpen(true);
                             }}
-                            className="text-cyan-400 hover:underline font-bold"
+                            className="text-cyan-400 hover:underline font-bold cursor-pointer"
                           >
-                            {language === 'bg' ? '+ Добави модел' : '+ Add Custom'}
+                            {isBg ? '+ Добави модел' : '+ Add Custom'}
                           </button>
                         </div>
 
                         {modelsList.map((m) => (
                           <div
                             key={m.id}
-                            className={`w-full rounded-xl text-xs font-mono flex items-stretch transition ${
+                            className={`w-full rounded-2xl text-xs font-mono flex items-stretch transition ${
                               selectedModel === m.id
-                                ? 'bg-cyan-500/20 text-cyan-200 font-semibold border border-cyan-400/40'
-                                : 'text-slate-200 hover:bg-white/10 hover:text-white'
+                                ? 'bg-cyan-500/16 text-cyan-400 font-semibold border border-cyan-400/40'
+                                : 'ink-primary hover:bg-white/[0.06]'
                             }`}
                           >
                             <button
@@ -741,25 +1720,23 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <span className="font-bold truncate">
-                                  {language === 'bg' ? m.nameBg || m.name : m.name}
+                                  {isBg ? m.nameBg || m.name : m.name}
                                 </span>
                                 {selectedModel === m.id && (
                                   <Check className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                                 )}
                               </div>
-                              <span className="text-[10px] text-slate-400 line-clamp-2 mt-0.5 leading-snug">
-                                {language === 'bg' ? m.descriptionBg || m.description : m.description}
+                              <span className="text-[10px] ink-muted line-clamp-2 mt-0.5 leading-snug">
+                                {isBg ? m.descriptionBg || m.description : m.description}
                               </span>
                             </button>
                             {!(m.isBuiltIn ?? DEFAULT_BUILTIN_MODEL_IDS.has(m.id)) && (
                               <button
                                 type="button"
                                 onClick={(e) => void handleDeleteCustomModel(m.id, e)}
-                                title={language === 'bg' ? 'Премахни модела' : 'Remove custom model'}
-                                aria-label={
-                                  language === 'bg' ? `Премахни ${m.name}` : `Remove ${m.name}`
-                                }
-                                className="px-2.5 flex items-center justify-center text-slate-400 hover:text-rose-400 transition shrink-0 cursor-pointer"
+                                title={isBg ? 'Премахни модела' : 'Remove custom model'}
+                                aria-label={isBg ? `Премахни ${m.name}` : `Remove ${m.name}`}
+                                className="px-2.5 flex items-center justify-center ink-muted hover:text-rose-400 transition shrink-0 cursor-pointer"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -767,40 +1744,42 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                           </div>
                         ))}
                       </motion.div>
-                    </>
+                    </div>
                   )}
                 </AnimatePresence>
 
+                {/* Add Custom AI Model Liquid Glass Modal */}
                 <AnimatePresence>
                   {isAddModelOpen && (
-                    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/80">
+                    <div
+                      className="fixed inset-0 z-[110] flex items-center justify-center p-4 backdrop-blur-md modal-backdrop-scrim"
+                      style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+                    >
                       <motion.div
                         variants={MODAL_BUBBLE_VARIANTS}
                         initial="initial"
                         animate="animate"
                         exit="exit"
-                        className="w-full max-w-md rounded-2xl dropdown-menu-surface p-5 space-y-4 text-white"
+                        className="w-full max-w-md rounded-[28px] glass-liquid-modal p-5 space-y-4 ink-primary"
                       >
-                        <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                          <h3 className="text-sm sm:text-base font-bold text-cyan-300">
-                            {language === 'bg'
-                              ? 'Добави Персонализиран AI Модел'
-                              : 'Add Custom AI Model'}
+                        <div className="flex items-center justify-between border-b border-white/[0.10] pb-3">
+                          <h3 className="text-sm sm:text-base font-display font-extrabold text-cyan-400">
+                            {isBg ? 'Добави персонализиран AI модел' : 'Add Custom AI Model'}
                           </h3>
                           <button
                             type="button"
                             onClick={() => setIsAddModelOpen(false)}
-                            className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-slate-300 hover:text-white"
-                            aria-label={language === 'bg' ? 'Затвори' : 'Close'}
+                            className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
+                            aria-label={isBg ? 'Затвори' : 'Close'}
                           >
-                            ✕
+                            <X className="w-4 h-4" />
                           </button>
                         </div>
 
                         <form onSubmit={handleAddCustomModel} className="space-y-3 font-mono text-xs">
                           <div>
-                            <label className="block text-[11px] text-slate-400 mb-1">
-                              {language === 'bg' ? 'Идентификатор (ID)' : 'Model Identifier (ID)'}
+                            <label className="block text-[11px] font-sans font-semibold ink-secondary mb-1">
+                              {isBg ? 'Идентификатор (ID)' : 'Model Identifier (ID)'}
                             </label>
                             <input
                               type="text"
@@ -808,13 +1787,13 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                               value={newModelId}
                               onChange={(e) => setNewModelId(e.target.value)}
                               placeholder="e.g. gemini-2.5-flash or ollama/llama3.3"
-                              className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
+                              className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                             />
                           </div>
 
                           <div>
-                            <label className="block text-[11px] text-slate-400 mb-1">
-                              {language === 'bg' ? 'Показвано име' : 'Display Name'}
+                            <label className="block text-[11px] font-sans font-semibold ink-secondary mb-1">
+                              {isBg ? 'Показвано име' : 'Display Name'}
                             </label>
                             <input
                               type="text"
@@ -822,58 +1801,46 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                               value={newModelName}
                               onChange={(e) => setNewModelName(e.target.value)}
                               placeholder="e.g. Custom Gemini Flash"
-                              className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
+                              className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                             />
                           </div>
 
                           <div>
-                            <label className="block text-[11px] text-slate-400 mb-1">
-                              {language === 'bg' ? 'Доставчик' : 'Provider Type'}
+                            <label className="block text-[11px] font-sans font-semibold ink-secondary mb-1">
+                              {isBg ? 'Доставчик' : 'Provider Type'}
                             </label>
                             <select
                               value={newModelProvider}
                               onChange={(e) => setNewModelProvider(e.target.value as any)}
-                              className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
+                              className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                             >
-                              <option value="gemini" className="bg-[#060b16] text-white">
-                                Google Gemini API
-                              </option>
-                              <option value="deepseek" className="bg-[#060b16] text-white">
-                                DeepSeek AI
-                              </option>
-                              <option value="ollama" className="bg-[#060b16] text-white">
-                                Local Ollama
-                              </option>
-                              <option value="custom" className="bg-[#060b16] text-white">
-                                Custom Endpoint
-                              </option>
+                              <option value="gemini">Google Gemini API</option>
+                              <option value="deepseek">DeepSeek AI</option>
+                              <option value="ollama">Local Ollama</option>
+                              <option value="custom">Custom Endpoint</option>
                             </select>
                           </div>
 
                           <div>
-                            <label className="block text-[11px] text-slate-400 mb-1">
-                              {language === 'bg' ? 'Описание' : 'Description'}
+                            <label className="block text-[11px] font-sans font-semibold ink-secondary mb-1">
+                              {isBg ? 'Описание' : 'Description'}
                             </label>
                             <input
                               type="text"
                               value={newModelDesc}
                               onChange={(e) => setNewModelDesc(e.target.value)}
                               placeholder={
-                                language === 'bg'
-                                  ? 'Кратко описание'
-                                  : 'Short description of capabilities'
+                                isBg ? 'Кратко описание' : 'Short description of capabilities'
                               }
-                              className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
+                              className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                             />
                           </div>
 
                           {(newModelProvider === 'custom' || newModelProvider === 'ollama') && (
                             <>
                               <div>
-                                <label className="block text-[11px] text-slate-400 mb-1">
-                                  {language === 'bg'
-                                    ? 'URL на API крайната точка'
-                                    : 'Endpoint URL'}{' '}
+                                <label className="block text-[11px] font-sans font-semibold ink-secondary mb-1">
+                                  {isBg ? 'URL на API крайната точка' : 'Endpoint URL'}{' '}
                                   {newModelProvider === 'custom' && (
                                     <span className="text-cyan-400">*</span>
                                   )}
@@ -888,13 +1855,13 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                                       ? 'http://127.0.0.1:11434'
                                       : 'https://api.example.com/v1/chat/completions'
                                   }
-                                  className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
+                                  className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                                 />
                               </div>
                               {newModelProvider === 'custom' && (
                                 <div>
-                                  <label className="block text-[11px] text-slate-400 mb-1">
-                                    {language === 'bg'
+                                  <label className="block text-[11px] font-sans font-semibold ink-secondary mb-1">
+                                    {isBg
                                       ? 'API ключ (По избор — съхранява се само на сървъра)'
                                       : 'API Key (Optional — stored server-side only)'}
                                   </label>
@@ -904,7 +1871,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                                     value={newModelApiKey}
                                     onChange={(e) => setNewModelApiKey(e.target.value)}
                                     placeholder="sk-..."
-                                    className="w-full px-3 py-2 rounded-xl bg-[#040812] border border-white/15 text-white outline-none focus:border-cyan-400"
+                                    className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                                   />
                                 </div>
                               )}
@@ -915,15 +1882,15 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                             <button
                               type="button"
                               onClick={() => setIsAddModelOpen(false)}
-                              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200"
+                              className="px-4 py-2 rounded-full liquid-control-pill font-sans font-semibold cursor-pointer"
                             >
-                              {language === 'bg' ? 'Отказ' : 'Cancel'}
+                              {isBg ? 'Отказ' : 'Cancel'}
                             </button>
                             <button
                               type="submit"
-                              className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold"
+                              className="px-4 py-2 rounded-full liquid-hero-btn font-sans font-bold cursor-pointer"
                             >
-                              {language === 'bg' ? 'Запази' : 'Save Model'}
+                              {isBg ? 'Запази' : 'Save Model'}
                             </button>
                           </div>
                         </form>
@@ -940,94 +1907,87 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   triggerHapticFeedback('light');
                   onOpenPersistentInstructions();
                 }}
-                className="w-full p-3.5 flex items-center justify-between gap-3 text-left hover:bg-white/[0.03] transition group"
+                className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-white/[0.04] transition cursor-pointer"
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-violet-500/12 text-violet-300 flex items-center justify-center border border-violet-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-violet flex items-center justify-center shrink-0">
                     <FileText className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_memory')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_memory_desc')}
                     </span>
                   </div>
                 </div>
-                <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                <ChevronRight className="w-4 h-4 ink-muted shrink-0" />
               </button>
 
-              {/* Row 3: Automated WoL Scheduler */}
+              {/* Row 3: Release Binaries & Source Code */}
               <button
-                id="settings-wol-scheduler-row"
                 type="button"
                 onClick={() => {
                   triggerHapticFeedback('light');
-                  if (onOpenWolScheduler) onOpenWolScheduler();
+                  onOpenCodeViewer();
                 }}
-                className="w-full p-3.5 flex items-center justify-between gap-3 text-left hover:bg-white/[0.03] transition group"
+                className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-white/[0.04] transition cursor-pointer"
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/12 text-amber-300 flex items-center justify-center border border-amber-500/25 shrink-0">
-                    <Clock className="w-4 h-4" />
+                  <div className="w-9 h-9 squircle-badge squircle-sky flex items-center justify-center shrink-0">
+                    <Code2 className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
-                      {t('settings_wol_scheduler')}
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
+                      {isBg
+                        ? 'Бинарни Релийзи (.APK / .EXE) и Сорс Код'
+                        : 'Release Binaries (.APK / .EXE) & Source Code'}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
-                      {t('settings_wol_scheduler_desc')}
+                    <span className="text-fluid-meta ink-muted truncate">
+                      {isBg
+                        ? 'Изтегли компилирани пакети за Windows и Android'
+                        : 'Download pre-built Windows & Android packages'}
                     </span>
                   </div>
                 </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  {activeWolSchedulesCount !== undefined && activeWolSchedulesCount > 0 && (
-                    <span className="text-[11px] font-mono text-amber-300 px-2 py-0.5 rounded bg-amber-500/15 border border-amber-400/30">
-                      {activeWolSchedulesCount}
-                    </span>
-                  )}
-                  <ChevronRight className="w-4 h-4 text-slate-400" />
-                </div>
+                <ChevronRight className="w-4 h-4 ink-muted shrink-0" />
               </button>
             </div>
           </div>
 
-          {/* GROUP 3: SECURITY, NOTIFICATIONS & DIAGNOSTICS */}
-          <div className="space-y-2 relative z-10">
-            <span className="text-[11px] font-mono text-cyan-300/80 uppercase tracking-widest px-1 font-semibold">
-              {language === 'bg'
-                ? '3. СИГУРНОСТ, ИЗВЕСТИЯ И ДИАГНОСТИКА'
-                : '3. SECURITY, ALERTS & DIAGNOSTICS'}
+          {/* RIGHT: ZERO-TRUST SECURITY, ALERTS & AUDIT SHORTCUT */}
+          <div className="lg:col-span-6 space-y-2.5 relative z-10">
+            <span className="text-[11px] font-display text-cyan-400 uppercase tracking-wider px-1 font-bold">
+              {isBg ? 'Zero-Trust Сигурност и Известия' : 'Zero-Trust Security & Alerts'}
             </span>
 
             {settingsSyncError && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono">
+              <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-rose-500/12 border border-rose-500/35 text-rose-400 text-xs font-mono">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
                 <span>{settingsSyncError}</span>
               </div>
             )}
 
             {biometricNotice && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono">
+              <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-amber-500/12 border border-amber-500/35 text-amber-400 text-xs font-mono">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
                 <span>{biometricNotice}</span>
               </div>
             )}
 
-            <div className="glass-liquid w-full rounded-2xl divide-y divide-white/[0.06] overflow-hidden">
+            <div className="glass-liquid w-full rounded-[26px] divide-y divide-white/[0.08] overflow-hidden">
               {/* HITL Gate */}
-              <div className="p-3.5 flex items-center justify-between gap-3">
+              <div className="p-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-rose-500/12 text-rose-300 flex items-center justify-center border border-rose-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-rose flex items-center justify-center shrink-0">
                     <ShieldAlert className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_hitl')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_hitl_desc')}
                     </span>
                   </div>
@@ -1039,16 +1999,16 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
               </div>
 
               {/* Biometric Hardware Lock */}
-              <div className="p-3.5 flex items-center justify-between gap-3">
+              <div className="p-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-cyan-500/12 text-cyan-300 flex items-center justify-center border border-cyan-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-hero flex items-center justify-center shrink-0">
                     <Fingerprint className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_biometric')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_biometric_desc')}
                     </span>
                   </div>
@@ -1060,16 +2020,16 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
               </div>
 
               {/* Command Confirmations */}
-              <div className="p-3.5 flex items-center justify-between gap-3">
+              <div className="p-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-cyan-500/12 text-cyan-300 flex items-center justify-center border border-cyan-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-amber flex items-center justify-center shrink-0">
                     <Bell className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_confirmations')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_confirmations_desc')}
                     </span>
                   </div>
@@ -1081,16 +2041,16 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
               </div>
 
               {/* Host State Alerts */}
-              <div className="p-3.5 flex items-center justify-between gap-3">
+              <div className="p-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/12 text-emerald-300 flex items-center justify-center border border-emerald-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-emerald flex items-center justify-center shrink-0">
                     <Activity className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_alerts')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_alerts_desc')}
                     </span>
                   </div>
@@ -1101,528 +2061,34 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                 />
               </div>
 
-              {/* Release Binaries (.APK / .EXE) & Source Archive */}
+              {/* Dedicated Security Audit Log Shortcut */}
               <button
                 type="button"
                 onClick={() => {
                   triggerHapticFeedback('light');
-                  onOpenCodeViewer();
+                  setActiveSettingsTab('audit');
                 }}
-                className="w-full p-3.5 flex items-center justify-between gap-3 text-left hover:bg-white/[0.03] transition"
+                className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-white/[0.04] transition cursor-pointer"
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-cyan-500/12 text-cyan-300 flex items-center justify-center border border-cyan-500/25 shrink-0">
-                    <Code2 className="w-4 h-4" />
-                  </div>
-                  <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
-                      {language === 'bg'
-                        ? 'Бинарни Релийзи (.APK / .EXE) и Сорс Код'
-                        : 'Release Binaries (.APK / .EXE) & Source Code'}
-                    </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
-                      {language === 'bg'
-                        ? 'Изтегли компилирани пакети за Windows и Android'
-                        : 'Download pre-built Windows & Android packages'}
-                    </span>
-                  </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-              </button>
-
-              {/* System & Audit Logs */}
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHapticFeedback('light');
-                  onOpenTerminalLogs();
-                }}
-                className="w-full p-3.5 flex items-center justify-between gap-3 text-left hover:bg-white/[0.03] transition"
-              >
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-xl bg-violet-500/12 text-violet-300 flex items-center justify-center border border-violet-500/25 shrink-0">
+                  <div className="w-9 h-9 squircle-badge squircle-violet flex items-center justify-center shrink-0">
                     <Terminal className="w-4 h-4" />
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight truncate">
+                    <span className="font-display text-xs sm:text-sm font-bold ink-primary tracking-tight truncate">
                       {t('settings_system_logs')}
                     </span>
-                    <span className="text-fluid-meta text-slate-400 truncate">
+                    <span className="text-fluid-meta ink-muted truncate">
                       {t('settings_system_logs_desc')}
                     </span>
                   </div>
                 </div>
-                <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                <ChevronRight className="w-4 h-4 ink-muted shrink-0" />
               </button>
             </div>
           </div>
         </div>
-
-        {/* RIGHT COLUMN (6 cols): WAKE-ON-LAN TELEMETRY & ENERGY CALCULATOR */}
-        <div className="lg:col-span-6 flex flex-col space-y-5">
-          <div className="space-y-2">
-            <span className="text-[11px] font-mono text-cyan-300/80 uppercase tracking-widest px-1 font-semibold">
-              {language === 'bg'
-                ? '4. WAKE-ON-LAN ИСТОРИЯ И ЕНЕРГИЙНА ЕФЕКТИВНОСТ'
-                : '4. WAKE-ON-LAN TELEMETRY & FLEET ENERGY'}
-            </span>
-
-            <div className="space-y-5">
-              <WolHistoryLogViewer hosts={hosts} onSendWolPacket={onSendWolPacket} />
-
-              <WolEnergyCalculator
-                wolSchedules={wolSchedules}
-                defaultHostCount={hostsCount !== undefined && hostsCount > 0 ? hostsCount : 1}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* =====================================================================
-          BOTTOM SECTION (HIDEABLE / COLLAPSIBLE): APPEARANCE & FLUID STUDIO
-         ===================================================================== */}
-      <div className="pt-2 space-y-2 relative z-10">
-        <div className="glass-liquid w-full rounded-2xl overflow-hidden">
-          {/* Collapsible Header Bar */}
-          <div className="p-3.5 sm:px-4 flex items-center justify-between gap-3 flex-wrap">
-            <button
-              type="button"
-              onClick={() => {
-                triggerHapticFeedback('light');
-                toggleCustomizationOpen();
-              }}
-              className="flex items-center gap-3 min-w-0 flex-1 text-left"
-            >
-              <div className="w-9 h-9 rounded-xl bg-cyan-500/15 text-cyan-300 flex items-center justify-center border border-cyan-400/35 shrink-0">
-                <Palette className="w-4 h-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-display text-xs sm:text-sm font-bold text-white tracking-tight">
-                    {language === 'bg'
-                      ? 'Персонализация, Течно Стъкло и Течен Фон'
-                      : 'Appearance, Surface Material & Fluid Background'}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-400/30 text-[10px] font-mono text-cyan-200 uppercase">
-                    {glassIntensity === 'clear'
-                      ? language === 'bg'
-                        ? 'Кристал'
-                        : 'Crystal'
-                      : glassIntensity === 'frosted'
-                      ? language === 'bg'
-                        ? 'Пълен Мат'
-                        : 'True Matte'
-                      : language === 'bg'
-                      ? 'Течно Стъкло'
-                      : 'Liquid Glass'}
-                  </span>
-                </div>
-                <p className="text-fluid-meta text-slate-400 truncate mt-0.5">
-                  {language === 'bg'
-                    ? 'Променете цвета, матовия/стъклен ефект, шрифта и движещия се течен фон'
-                    : 'Customize accent colors, Crystal vs True Matte finish, typography & moving fluid background'}
-                </p>
-              </div>
-            </button>
-
-            <div className="flex items-center gap-2 shrink-0 ml-auto">
-              {isCustomizationOpen && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    triggerHapticFeedback('medium');
-                    resetAppearance();
-                  }}
-                  className="h-8 px-2.5 rounded-xl bg-white/[0.05] hover:bg-white/10 border border-white/10 text-[11px] font-mono text-slate-300 hover:text-cyan-300 flex items-center gap-1 transition active:scale-95"
-                  title={
-                    language === 'bg'
-                      ? 'Възстанови стандартния облик'
-                      : 'Reset appearance to defaults'
-                  }
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>{language === 'bg' ? 'Нулирай' : 'Reset'}</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHapticFeedback('light');
-                  toggleCustomizationOpen();
-                }}
-                className="h-8 px-3 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/35 text-[11px] font-mono font-semibold text-cyan-200 flex items-center gap-1.5 transition active:scale-95"
-              >
-                {isCustomizationOpen ? (
-                  <>
-                    <EyeOff className="w-3.5 h-3.5 text-cyan-300" />
-                    <span>{language === 'bg' ? 'Скрий менюто' : 'Hide Studio'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Eye className="w-3.5 h-3.5 text-cyan-300" />
-                    <span>{language === 'bg' ? 'Покажи менюто' : 'Show Studio'}</span>
-                  </>
-                )}
-                <ChevronDown
-                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                    isCustomizationOpen ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-            </div>
-          </div>
-
-          {/* Collapsible Body */}
-          <AnimatePresence initial={false}>
-            {isCustomizationOpen && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="border-t border-white/[0.08] divide-y divide-white/[0.08] overflow-hidden"
-              >
-                {/* 1. Accent Color Palette Picker */}
-                <div className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-display font-bold text-white flex items-center gap-2">
-                      <Palette className="w-3.5 h-3.5 text-cyan-300" />
-                      <span>
-                        {language === 'bg'
-                          ? '1. Цветова Палитра и Акценти'
-                          : '1. Accent Color Palette'}
-                      </span>
-                    </span>
-                    <span className="text-[11px] font-mono text-slate-400 uppercase">
-                      {accentColor}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-                    {(
-                      [
-                        {
-                          id: 'cyan' as AccentColorPreset,
-                          label: language === 'bg' ? 'Кибер Циан' : 'Cyber Cyan',
-                          desc: language === 'bg' ? 'Електриково синьо' : 'Electric Cyan & Indigo',
-                          swatch: 'from-[#22d3ee] via-[#38bdf8] to-[#6366f1]',
-                        },
-                        {
-                          id: 'violet' as AccentColorPreset,
-                          label: language === 'bg' ? 'Ултравиолет' : 'Ultraviolet',
-                          desc: language === 'bg' ? 'Неоново лилаво' : 'Royal Violet & Magenta',
-                          swatch: 'from-[#c084fc] via-[#a855f7] to-[#ec4899]',
-                        },
-                        {
-                          id: 'emerald' as AccentColorPreset,
-                          label: language === 'bg' ? 'Емералд' : 'Bio Mint',
-                          desc: language === 'bg' ? 'Матрично зелено' : 'Neon Emerald & Mint',
-                          swatch: 'from-[#34d399] via-[#10b981] to-[#06b6d4]',
-                        },
-                        {
-                          id: 'rose' as AccentColorPreset,
-                          label: language === 'bg' ? 'Рубин' : 'Crimson Rose',
-                          desc: language === 'bg' ? 'Топъл корал' : 'Sunset Rose & Coral',
-                          swatch: 'from-[#fb7185] via-[#f43f5e] to-[#fb923c]',
-                        },
-                        {
-                          id: 'amber' as AccentColorPreset,
-                          label: language === 'bg' ? 'Соларно Злато' : 'Solar Gold',
-                          desc: language === 'bg' ? 'Златист кехлибар' : 'Warm Amber & Gold',
-                          swatch: 'from-[#fbbf24] via-[#f59e0b] to-[#ef4444]',
-                        },
-                        {
-                          id: 'cobalt' as AccentColorPreset,
-                          label: language === 'bg' ? 'Сапфир' : 'Sapphire Blue',
-                          desc: language === 'bg' ? 'Дълбок кобалт' : 'Deep Cobalt & Teal',
-                          swatch: 'from-[#60a5fa] via-[#3b82f6] to-[#8b5cf6]',
-                        },
-                      ] as const
-                    ).map((item) => {
-                      const isSelected = accentColor === item.id;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => {
-                            triggerHapticFeedback('selection');
-                            setAccentColor(item.id);
-                          }}
-                          className={`p-2.5 rounded-xl border flex items-center gap-2.5 text-left transition active:scale-95 ${
-                            isSelected
-                              ? 'bg-white/[0.12] border-white/45 shadow-[0_0_16px_var(--theme-accent-glow)]'
-                              : 'bg-white/[0.03] border-white/[0.08] hover:bg-white/[0.07]'
-                          }`}
-                        >
-                          <span
-                            className={`w-7 h-7 rounded-full bg-gradient-to-br ${item.swatch} flex items-center justify-center shadow-inner border border-white/30 shrink-0`}
-                          >
-                            {isSelected && (
-                              <Check className="w-3.5 h-3.5 text-slate-950 stroke-[3]" />
-                            )}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div
-                              className={`text-xs truncate ${
-                                isSelected ? 'text-white font-bold' : 'text-slate-200 font-medium'
-                              }`}
-                            >
-                              {item.label}
-                            </div>
-                            <div className="text-[10px] text-slate-400 truncate">{item.desc}</div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* 2. Surface Material (Crystal vs Liquid Glass vs True Matte) & Moving Fluid Background */}
-                <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {/* Surface Finish */}
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-display font-bold text-white flex items-center gap-2">
-                        <Layers className="w-3.5 h-3.5 text-cyan-300" />
-                        <span>
-                          {language === 'bg'
-                            ? '2. Повърхност на Панелите (Кристал / Течно / Пълен Мат)'
-                            : '2. Surface Material (Crystal vs Liquid vs True Matte)'}
-                        </span>
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      {(
-                        [
-                          {
-                            id: 'clear' as GlassIntensityPreset,
-                            label: language === 'bg' ? 'Кристал' : 'Crystal Glass',
-                            desc:
-                              language === 'bg'
-                                ? '20% ултра-прозрачно + призма'
-                                : '20% ultra-clear + prism rim',
-                          },
-                          {
-                            id: 'balanced' as GlassIntensityPreset,
-                            label: language === 'bg' ? 'Течно Стъкло' : 'Liquid Glass',
-                            desc:
-                              language === 'bg'
-                                ? '52% Apple Liquid рефракция'
-                                : '52% Apple Liquid refraction',
-                          },
-                          {
-                            id: 'frosted' as GlassIntensityPreset,
-                            label: language === 'bg' ? 'Пълен Мат' : 'True Matte',
-                            desc:
-                              language === 'bg'
-                                ? '100% плътен мат без отблясък'
-                                : '100% flat stealth, zero gloss',
-                          },
-                        ] as const
-                      ).map((g) => {
-                        const active = glassIntensity === g.id;
-                        return (
-                          <button
-                            key={g.id}
-                            type="button"
-                            onClick={() => {
-                              triggerHapticFeedback('selection');
-                              setGlassIntensity(g.id);
-                            }}
-                            className={`p-2.5 rounded-xl border text-left transition flex flex-col justify-between active:scale-95 ${
-                              active
-                                ? 'bg-cyan-500/22 text-white border-cyan-300/55 shadow-[0_0_16px_var(--theme-accent-glow)]'
-                                : 'bg-white/[0.03] border-white/[0.08] text-slate-300 hover:bg-white/[0.07]'
-                            }`}
-                          >
-                            <div className="text-xs font-bold flex items-center justify-between gap-1">
-                              <span className="truncate">{g.label}</span>
-                              {active && <Check className="w-3 h-3 text-cyan-300 shrink-0" />}
-                            </div>
-                            <div className="text-[10px] text-slate-400 leading-snug mt-1">
-                              {g.desc}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Moving Fluid Background Animation Mode */}
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-display font-bold text-white flex items-center gap-2">
-                        <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
-                        <span>
-                          {language === 'bg'
-                            ? '3. Движещ се Течен Фон (120Hz GPU Анимация)'
-                            : '3. Moving Fluid Background Animation'}
-                        </span>
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {(
-                        [
-                          {
-                            id: 'fluid' as AmbientModePreset,
-                            label: language === 'bg' ? 'Течна Плазма' : 'Liquid Plasma',
-                            desc:
-                              language === 'bg'
-                                ? 'Орбитални флуидни вълни'
-                                : 'Morphing orbital fluid mesh',
-                          },
-                          {
-                            id: 'aurora' as AmbientModePreset,
-                            label: language === 'bg' ? 'Аврора Вълни' : 'Aurora Waves',
-                            desc:
-                              language === 'bg'
-                                ? 'Плаващи светлинни ленти'
-                                : 'Sweeping northern ribbons',
-                          },
-                          {
-                            id: 'cyber' as AmbientModePreset,
-                            label: language === 'bg' ? 'Кибер Мрежа' : 'Cyber Matrix',
-                            desc:
-                              language === 'bg'
-                                ? '3D решетка и пулсиращо ядро'
-                                : 'Grid horizon & pulse core',
-                          },
-                          {
-                            id: 'minimal' as AmbientModePreset,
-                            label: language === 'bg' ? 'Статичен' : 'Static Off',
-                            desc:
-                              language === 'bg'
-                                ? 'Изчистен тъмен фон (0% GPU)'
-                                : 'Pure dark canvas (0% GPU)',
-                          },
-                        ] as const
-                      ).map((m) => {
-                        const active = ambientMode === m.id;
-                        return (
-                          <button
-                            key={m.id}
-                            type="button"
-                            onClick={() => {
-                              triggerHapticFeedback('selection');
-                              setAmbientMode(m.id);
-                            }}
-                            className={`p-2.5 rounded-xl border text-left transition flex flex-col justify-between active:scale-95 ${
-                              active
-                                ? 'bg-cyan-500/22 text-white border-cyan-300/55 shadow-[0_0_16px_var(--theme-accent-glow)]'
-                                : 'bg-white/[0.03] border-white/[0.08] text-slate-300 hover:bg-white/[0.07]'
-                            }`}
-                          >
-                            <div className="text-xs font-bold flex items-center justify-between gap-1">
-                              <span className="truncate">{m.label}</span>
-                              {active && <Check className="w-3 h-3 text-cyan-300 shrink-0" />}
-                            </div>
-                            <div className="text-[10px] text-slate-400 leading-snug mt-1">
-                              {m.desc}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 4. Typography / Font Family Selector */}
-                <div className="p-4 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-display font-bold text-white flex items-center gap-2">
-                      <Type className="w-3.5 h-3.5 text-cyan-300" />
-                      <span>
-                        {language === 'bg'
-                          ? '4. Типография и Шрифт на Интерфейса'
-                          : '4. Interface Typography & Font Style'}
-                      </span>
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {(
-                      [
-                        {
-                          id: 'geometric' as FontFamilyPreset,
-                          name: 'Onest Geometric',
-                          desc:
-                            language === 'bg'
-                              ? 'Заоблен модерен геометричен'
-                              : 'Clean rounded geometric sans',
-                          sampleStyle: { fontFamily: '"Onest", sans-serif' },
-                        },
-                        {
-                          id: 'jakarta' as FontFamilyPreset,
-                          name: 'Jakarta Editorial',
-                          desc:
-                            language === 'bg'
-                              ? 'Широк дисплеен контраст'
-                              : 'Wide tracking display contrast',
-                          sampleStyle: {
-                            fontFamily: '"Plus Jakarta Sans", sans-serif',
-                            letterSpacing: '0.02em',
-                          },
-                        },
-                        {
-                          id: 'system' as FontFamilyPreset,
-                          name: 'Native OS UI',
-                          desc:
-                            language === 'bg'
-                              ? 'Плътен системен шрифт'
-                              : 'Compact native system UI',
-                          sampleStyle: {
-                            fontFamily:
-                              'system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif',
-                          },
-                        },
-                        {
-                          id: 'mono' as FontFamilyPreset,
-                          name: 'JetBrains Mono',
-                          desc:
-                            language === 'bg'
-                              ? 'Пълен терминален моноспейс'
-                              : 'Full cyber terminal monospace',
-                          sampleStyle: { fontFamily: '"JetBrains Mono", monospace' },
-                        },
-                      ] as const
-                    ).map((f) => {
-                      const isSelected = fontFamily === f.id;
-                      return (
-                        <button
-                          key={f.id}
-                          type="button"
-                          onClick={() => {
-                            triggerHapticFeedback('selection');
-                            setFontFamily(f.id);
-                          }}
-                          style={f.sampleStyle}
-                          className={`px-3 py-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 active:scale-95 ${
-                            isSelected
-                              ? 'bg-cyan-500/22 border-cyan-300/55 text-white shadow-[0_0_16px_var(--theme-accent-glow)]'
-                              : 'bg-white/[0.03] border-white/[0.08] text-slate-300 hover:bg-white/[0.07]'
-                          }`}
-                        >
-                          <div className="min-w-0">
-                            <div className="text-xs font-bold truncate">{f.name}</div>
-                            <div className="text-[10px] text-slate-400 truncate mt-0.5">
-                              {f.desc}
-                            </div>
-                          </div>
-                          <span className="text-sm font-extrabold text-cyan-300 shrink-0">Aa</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
+      )}
     </div>
   );
 };

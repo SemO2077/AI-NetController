@@ -195,11 +195,14 @@ class HostConnectionClient {
         return false;
       };
     }
+    bool connected = false;
     try {
-      return await WebSocket.connect(uri.toString(), customClient: httpClient)
+      final ws = await WebSocket.connect(uri.toString(), customClient: httpClient)
           .timeout(timeout);
+      connected = true;
+      return ws;
     } finally {
-      httpClient.close();
+      httpClient.close(force: !connected);
     }
   }
 
@@ -290,6 +293,7 @@ class HostConnectionClient {
             final String event = (decoded['event'] ?? '').toString();
 
             if (event == 'PAIR_CHALLENGE') {
+              if (pairKey != null) return;
               final Uint8List srvPub =
                   base64Decode((decoded['host_pub'] ?? '').toString());
               final Uint8List srvNonce =
@@ -481,9 +485,14 @@ class HostConnectionClient {
         expectedCertFingerprint: certFingerprint,
         timeout: timeout,
       );
-      if (_disposed) {
-        await ws.close();
-        if (!completer.isCompleted) completer.completeError(StateError('Disposed'));
+      if (_disposed ||
+          _manualDisconnect ||
+          _connectCompleter != completer ||
+          completer.isCompleted) {
+        unawaited(ws.close().catchError((_) {}));
+        if (!completer.isCompleted) {
+          completer.completeError(StateError('Connection aborted before handshake'));
+        }
         return await completer.future;
       }
 
@@ -508,14 +517,21 @@ class HostConnectionClient {
         },
       );
     } catch (e) {
-      _isConnecting = false;
-      _isConnected = false;
-      _isAuthenticated = false;
-      _isVaultEstablished = false;
-      _errorMessage = 'Failed to connect: $e';
-      _emitState();
-      _scheduleReconnect();
-      if (!completer.isCompleted) completer.completeError(e);
+      if (_connectCompleter == completer) {
+        _connectCompleter = null;
+      }
+      final bool handledByDisconnect = completer.isCompleted;
+      if (!handledByDisconnect) {
+        _cleanupTransportOnly();
+        if (!_manualDisconnect) {
+          _errorMessage = 'Failed to connect: $e';
+        }
+        _emitState();
+        completer.completeError(e);
+      }
+      if (!_disposed && !_manualDisconnect && !_authRejected) {
+        _scheduleReconnect();
+      }
       return completer.future;
     }
   }
@@ -607,6 +623,9 @@ class HostConnectionClient {
           requestDisplayEnum();
           _emitState();
           if (connectCompleter != null && !connectCompleter.isCompleted) {
+            if (_connectCompleter == connectCompleter) {
+              _connectCompleter = null;
+            }
             connectCompleter.complete();
           }
         } else if (statusStr.isNotEmpty) {
@@ -654,13 +673,11 @@ class HostConnectionClient {
     int dispatchFlags = packet.flags;
     Uint8List dispatchPayload = plaintext;
     if ((packet.flags & ProtocolFlags.isFragmented) != 0) {
-      final ProtocolPacket? completed = _reassembler.ingestBytes(
-        packPacket(
-          packet.opcode,
-          plaintext,
-          flags: packet.flags & ~ProtocolFlags.encrypted,
-          seq: packet.seq,
-        ),
+      final ProtocolPacket? completed = _reassembler.ingestPacket(
+        packet.opcode,
+        packet.flags & ~ProtocolFlags.encrypted,
+        packet.seq,
+        plaintext,
       );
       if (completed == null) return;
       dispatchOpcode = completed.opcode;
@@ -921,14 +938,38 @@ class HostConnectionClient {
       final Completer<ShellResult> completer = Completer<ShellResult>();
       late final StreamSubscription<ShellResult> shellSub;
       late final StreamSubscription<Map<String, dynamic>> hitlSub;
+      late final StreamSubscription<HostConnectionSnapshot> stateSub;
 
-      shellSub = shellResultStream.listen((res) {
-        if (!completer.isCompleted) {
-          completer.complete(res);
-        }
+      shellSub = shellResultStream.listen(
+        (res) {
+          if (!completer.isCompleted) {
+            completer.complete(res);
+          }
+        },
+        onDone: () {
+          if (!completer.isCompleted) {
+            completer.complete(ShellResult(
+              status: 'error',
+              exitCode: -1,
+              output: 'Connection closed while awaiting response from $hostIp:$port.',
+              command: command,
+            ));
+          }
+        },
+      );
+      hitlSub = hitlChallengeStream.listen((chal) {
+        unawaited(respondToHitlChallenge(chal).catchError((_) => false));
       });
-      hitlSub = hitlChallengeStream.listen((chal) async {
-        await respondToHitlChallenge(chal);
+      stateSub = stateStream.listen((snap) {
+        if (!snap.isConnected && !snap.isConnecting && !completer.isCompleted) {
+          completer.complete(ShellResult(
+            status: 'error',
+            exitCode: -1,
+            output: snap.errorMessage ??
+                'Connection lost while awaiting response from $hostIp:$port.',
+            command: command,
+          ));
+        }
       });
 
       try {
@@ -951,6 +992,7 @@ class HostConnectionClient {
       } finally {
         await shellSub.cancel();
         await hitlSub.cancel();
+        await stateSub.cancel();
       }
     });
     _shellQueue = next.then((_) {}, onError: (_) {});
@@ -974,7 +1016,9 @@ class HostConnectionClient {
       _pendingPings[seq] = Stopwatch()..start();
       try {
         _channel?.sink.add(pkt);
-      } catch (_) {}
+      } catch (_) {
+        _pendingPings.remove(seq)?.stop();
+      }
     });
 
     _watchdogTimer = Timer.periodic(const Duration(seconds: 3), (_) {
@@ -998,8 +1042,13 @@ class HostConnectionClient {
     _cleanupTransportOnly();
     _errorMessage = reason;
     _emitState();
-    if (connectCompleter != null && !connectCompleter.isCompleted) {
-      connectCompleter.completeError(StateError(reason));
+    if (connectCompleter != null) {
+      if (_connectCompleter == connectCompleter) {
+        _connectCompleter = null;
+      }
+      if (!connectCompleter.isCompleted) {
+        connectCompleter.completeError(StateError(reason));
+      }
     }
     if (!_disposed &&
         !_manualDisconnect &&
@@ -1109,11 +1158,13 @@ class HostConnectionPool {
     String? certFingerprint,
   }) {
     final String k = _key(hostIp, port);
+    final String normFp = HostConnectionClient._normalizeFp(certFingerprint ?? '');
     final HostConnectionClient? existing = _clients[k];
     if (existing != null &&
+        !existing._disposed &&
         existing.sharedSecret.trim() == sharedSecret.trim() &&
         existing.useTls == useTls &&
-        (existing.certFingerprint ?? '') == (certFingerprint ?? '')) {
+        HostConnectionClient._normalizeFp(existing.certFingerprint ?? '') == normFp) {
       return existing;
     }
     existing?.dispose();

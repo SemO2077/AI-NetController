@@ -32,13 +32,14 @@ import {
   UserCheck,
   UserX,
   Clipboard,
-  Gauge,
   QrCode,
   Trash2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { useTranslation } from '../../i18n/useTranslation';
-import { SPRING_BUBBLY, SPRING_POP } from '../../utils/springPhysics';
+import { MODAL_BUBBLE_VARIANTS, SPRING_BUBBLY, SPRING_POP } from '../../utils/springPhysics';
 import { copyToClipboard } from '../../utils/clipboard';
 
 interface ConnectedPeer {
@@ -189,6 +190,11 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   const [copiedPin, setCopiedPin] = useState(false);
   const [portInput, setPortInput] = useState('8765');
   const [isEditingPort, setIsEditingPort] = useState(false);
+  const [showAvChecks, setShowAvChecks] = useState(false);
+  const [showDaemonLog, setShowDaemonLog] = useState(false);
+  const [confirmPanic, setConfirmPanic] = useState(false);
+  const [confirmClearBans, setConfirmClearBans] = useState(false);
+  const [confirmClearLogs, setConfirmClearLogs] = useState(false);
   const timersRef = useRef<Set<number>>(new Set());
 
   const scheduleTimer = useCallback((fn: () => void, ms: number) => {
@@ -208,20 +214,29 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     };
   }, []);
 
-  // Manual Blacklist Form State
   const [manualBanIp, setManualBanIp] = useState('');
   const [manualBanMac, setManualBanMac] = useState('');
   const [manualBanDevice, setManualBanDevice] = useState('');
   const [manualBanReason, setManualBanReason] = useState('');
 
-  // Setup Wizard State
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [setupCompletedBanner, setSetupCompletedBanner] = useState(false);
 
+  const daemonFetchAbortRef = useRef<AbortController | null>(null);
+  const daemonFetchInFlightRef = useRef(false);
+
   const fetchDaemonState = useCallback(async () => {
+    if (daemonFetchInFlightRef.current) return;
+    daemonFetchInFlightRef.current = true;
+    const controller = new AbortController();
+    daemonFetchAbortRef.current = controller;
     try {
-      const res = await fetch('/api/daemon/state', { credentials: 'include' });
+      const res = await fetch('/api/daemon/state', {
+        credentials: 'include',
+        signal: controller.signal,
+      });
       const data = await res.json();
+      if (controller.signal.aborted) return;
       setServerReachable(res.ok);
       if (res.ok && data.success && data.daemon) {
         setDaemon((prev) => ({
@@ -235,19 +250,28 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
         setDaemon((prev) => ({ ...prev, isRunning: false }));
       }
     } catch {
-      setServerReachable(false);
-      setDaemon((prev) => ({ ...prev, isRunning: false }));
+      if (!controller.signal.aborted) {
+        setServerReachable(false);
+        setDaemon((prev) => ({ ...prev, isRunning: false }));
+      }
+    } finally {
+      daemonFetchInFlightRef.current = false;
     }
   }, [isEditingPort]);
 
   useEffect(() => {
     if (!isOpen) return;
-    fetchDaemonState();
+    void fetchDaemonState();
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
       void fetchDaemonState();
     }, 3000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      daemonFetchAbortRef.current?.abort();
+      daemonFetchAbortRef.current = null;
+      daemonFetchInFlightRef.current = false;
+    };
   }, [isOpen, fetchDaemonState]);
 
   useEffect(() => {
@@ -261,7 +285,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
   const primaryAdapterMac = daemon.activeAdapters?.[0]?.mac || '';
 
-  // Generate QR code for Setup tab only when primitive pairing URI changes
+  // Crisp high-contrast QR on pure white card for Daylight & Dark scanning
   useEffect(() => {
     if (!isOpen) return;
     const baseOrigin =
@@ -281,7 +305,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     QRCode.toDataURL(pairUrl, {
       width: 200,
       margin: 1,
-      color: { dark: '#e0f2fe', light: '#070c18' },
+      color: { dark: '#0f172a', light: '#ffffff' },
     })
       .then((url) => {
         if (!cancelled) setQrDataUrl(url);
@@ -290,7 +314,15 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, daemon.localIp, daemon.port, daemon.hostname, daemon.osName, daemon.pairingPin, primaryAdapterMac]);
+  }, [
+    isOpen,
+    daemon.localIp,
+    daemon.port,
+    daemon.hostname,
+    daemon.osName,
+    daemon.pairingPin,
+    primaryAdapterMac,
+  ]);
 
   if (!isOpen) return null;
 
@@ -375,7 +407,9 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       ip: cleanIp,
       mac: manualBanMac.trim() || '00:00:00:00:00:00',
       device: manualBanDevice.trim() || `Manual IP Ban (${cleanIp})`,
-      reason: manualBanReason.trim() || (isBg ? 'Ръчно блокиран от оператора' : 'Manually blacklisted by operator'),
+      reason:
+        manualBanReason.trim() ||
+        (isBg ? 'Ръчно блокиран от оператора' : 'Manually blacklisted by operator'),
     });
     setManualBanIp('');
     setManualBanMac('');
@@ -399,15 +433,15 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       passed: Boolean(daemon.avIntegrity?.visibleHwnd),
       title: isBg ? 'Видим Desktop GUI прозорец (HWND)' : 'Visible Native GUI Window (HWND)',
       desc: isBg
-        ? 'Прозрачен Tkinter контролен панел вместо скрит фонов процес'
-        : 'Transparent Tkinter control center instead of headless socket listener',
+        ? 'Прозрачен контролен панел вместо скрит фонов процес'
+        : 'Transparent control center instead of headless socket listener',
     },
     {
       key: 'shell',
       passed: Boolean(daemon.avIntegrity?.zeroHiddenShell),
-      title: isBg ? 'Без скрити PowerShell / CMD процеси' : 'Zero Hidden PowerShell / CMD Spawns',
+      title: isBg ? 'Без скрити PowerShell / CMD процеси' : 'Zero Hidden Shell Spawns',
       desc: isBg
-        ? 'Чиста Python psutil & socket NIC диагностика без shell=True'
+        ? 'Чиста Python psutil & socket диагностика без shell=True'
         : 'Pure Python psutil & socket NIC diagnostics without shell=True',
     },
     {
@@ -415,7 +449,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       passed: Boolean(daemon.avIntegrity?.manifestAsInvoker),
       title: isBg ? 'Windows 10/11 Манифест (asInvoker)' : 'Windows 10/11 Manifest (asInvoker)',
       desc: isBg
-        ? 'Без принудителна UAC ескалация + PerMonitorV2 High-DPI скалиране'
+        ? 'Стандартни права без принудителна UAC ескалация'
         : 'Standard user privilege level + PerMonitorV2 High-DPI awareness',
     },
     {
@@ -423,18 +457,19 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
       passed: Boolean(daemon.avIntegrity?.authenticodeReady),
       title: isBg ? 'SHA-256 Authenticode Подпис' : 'SHA-256 Authenticode Signed',
       desc: isBg
-        ? 'Включен sign_binary.ps1 и MpCmdRun.exe Defender верификация'
-        : 'Includes sign_binary.ps1 & MpCmdRun.exe Defender verification',
+        ? 'Включен sign_binary.ps1 и Defender верификация'
+        : 'Includes sign_binary.ps1 & Defender verification',
     },
     {
       key: 'sandbox',
       passed: Boolean(daemon.avIntegrity?.sandboxJobObject),
       title: isBg ? 'Windows Job Object Изолация' : 'Windows Job Object Sandbox',
       desc: isBg
-        ? '256MB RAM лимит и автоматично почистване на дъщерни задачи'
+        ? '256MB RAM лимит и автоматично почистване на задачи'
         : '256MB RAM cap & clean process tree lifecycle governance',
     },
   ];
+  const passedAvCount = avChecks.filter((c) => c.passed).length;
 
   return (
     <div
@@ -444,55 +479,65 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
           onClose();
         }
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-5 bg-black/80 backdrop-blur-md animate-in fade-in duration-200 select-none"
+      style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-5 backdrop-blur-md select-none"
     >
-      <div className="relative w-full max-w-5xl max-h-[93vh] flex flex-col rounded-[24px] bg-[#091020]/96 backdrop-blur-3xl border border-white/15 border-t-white/25 shadow-[0_24px_64px_rgba(0,0,0,0.92)] overflow-hidden">
-        {/* Native Desktop Window Titlebar Chrome */}
-        <div className="px-4 sm:px-6 py-3.5 bg-[#060b16] border-b border-white/10 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center space-x-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-400/40 text-cyan-300 flex items-center justify-center shadow-[0_0_15px_rgba(34,211,238,0.2)] shrink-0">
+      <motion.div
+        variants={MODAL_BUBBLE_VARIANTS}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        className="relative w-full max-w-5xl max-h-[93vh] flex flex-col rounded-[28px] glass-liquid-modal overflow-hidden"
+      >
+        {/* Top Accent Specular Bar */}
+        <div className="h-1 w-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)] shrink-0" />
+
+        {/* Header */}
+        <div className="px-4 sm:px-6 py-4 border-b border-[var(--glass-border)] flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 squircle-badge squircle-hero shrink-0">
               <Monitor className="w-5 h-5" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-sm sm:text-base font-bold text-white font-display tracking-wide truncate">
+                <h2 className="text-sm sm:text-base font-extrabold ink-primary font-display tracking-tight truncate">
                   {isBg
-                    ? `AI NetController PC Демон — ${daemon.hostname}`
-                    : `AI NetController Host Control Center — ${daemon.hostname}`}
+                    ? `PC Демон център — ${daemon.hostname}`
+                    : `Host Control Center — ${daemon.hostname}`}
                 </h2>
                 <span
                   className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
                     !daemon.isRunning
-                      ? 'bg-rose-500/15 text-rose-300 border-rose-400/40'
+                      ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/35'
                       : daemon.isPaused
-                      ? 'bg-amber-500/15 text-amber-300 border-amber-400/40'
-                      : 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
+                      ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/35'
+                      : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
                   }`}
                 >
                   <span
                     className={`w-1.5 h-1.5 rounded-full ${
-                      !daemon.isRunning ? 'bg-rose-400' : daemon.isPaused ? 'bg-amber-400' : 'bg-emerald-400'
+                      !daemon.isRunning
+                        ? 'bg-rose-500'
+                        : daemon.isPaused
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-500'
                     }`}
                   />
                   {!daemon.isRunning
                     ? isBg
-                      ? 'ОФЛАЙН • СПРЯН'
-                      : 'OFFLINE • STOPPED'
+                      ? 'ОФЛАЙН'
+                      : 'OFFLINE'
                     : daemon.isPaused
                     ? isBg
-                      ? 'ПАУЗИРАН'
+                      ? 'ПАУЗА'
                       : 'PAUSED'
                     : isBg
-                    ? 'ОНЛАЙН • СЛУША'
-                    : 'ONLINE • LISTENING'}
-                </span>
-                <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-cyan-500/12 border border-cyan-400/30 text-cyan-300 text-[10px] font-mono font-semibold">
-                  <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                  <span>{isBg ? 'AV-Safe Верифициран' : 'AV-Safe Verified'}</span>
+                    ? 'ОНЛАЙН'
+                    : 'LISTENING'}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 font-mono truncate">
-                {daemon.osName} • {daemon.protocol} • v{daemon.version} • Uptime: {daemon.uptime}
+              <p className="text-[11px] ink-secondary font-mono truncate">
+                {daemon.osName} • {daemon.protocol} • v{daemon.version} • Uptime {daemon.uptime}
               </p>
             </div>
           </div>
@@ -502,10 +547,10 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
               href="/releases/v0.80.0/AI_NetController_HostAgent_v0.80.0_win64.exe"
               download="AI_NetController_HostAgent_v0.80.0_win64.exe"
               onClick={() => triggerHapticFeedback('medium')}
-              className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-mono text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(34,211,238,0.3)] transition"
+              className="min-h-[38px] px-3.5 py-1.5 rounded-full liquid-hero-btn preserve-white font-display text-xs font-bold flex items-center gap-1.5 transition"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>{isBg ? 'Свали .EXE (GUI)' : 'Download .EXE (GUI)'}</span>
+              <span>{isBg ? 'Свали .EXE' : 'Download .EXE'}</span>
             </a>
 
             {onOpenCodeReleases && (
@@ -515,9 +560,9 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   triggerHapticFeedback('light');
                   onOpenCodeReleases();
                 }}
-                className="hidden sm:flex min-h-[40px] px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-xs font-mono text-slate-200 items-center gap-1.5 transition cursor-pointer"
+                className="hidden sm:flex min-h-[38px] px-3 py-1.5 rounded-full liquid-control-pill text-xs font-mono font-semibold ink-primary items-center gap-1.5 transition cursor-pointer"
               >
-                <FileCode className="w-3.5 h-3.5 text-cyan-400" />
+                <FileCode className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
                 <span>agent_gui.py</span>
               </button>
             )}
@@ -528,35 +573,35 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                 triggerHapticFeedback('light');
                 onClose();
               }}
-              className="w-10 h-10 min-w-[40px] min-h-[40px] rounded-xl bg-white/5 hover:bg-rose-500/20 border border-white/10 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 flex items-center justify-center transition cursor-pointer"
+              className="w-10 h-10 min-w-[40px] min-h-[40px] rounded-full liquid-control-pill ink-secondary hover:ink-primary flex items-center justify-center transition cursor-pointer"
               aria-label={isBg ? 'Затвори' : 'Close'}
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* Navigation Sub-Window Bar: [ Overview & Safeguards ] | [ Connected Devices & Blacklist (N) ] | [ Guided Setup Process ] */}
-        <div className="px-4 sm:px-6 py-2.5 bg-[#070c18] border-b border-white/10 flex items-center justify-between gap-2 flex-wrap shrink-0">
-          <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-[#0b1324] border border-white/10 overflow-x-auto scrollbar-none">
+        {/* Sub-Window Pill Tabs + Quick Pairing PIN */}
+        <div className="px-4 sm:px-6 py-2.5 glass-liquid-subtle border-b border-[var(--glass-border)] flex items-center justify-between gap-2 flex-wrap shrink-0">
+          <div className="flex items-center gap-1 p-1 rounded-full liquid-terminal-entry border border-[var(--glass-border)] overflow-x-auto scrollbar-none">
             {[
               {
                 id: 'overview' as const,
-                label: isBg ? 'Табло и Защита' : 'Overview & Safeguards',
+                label: isBg ? 'Табло и защита' : 'Overview & Shields',
                 icon: Monitor,
                 badge: null,
               },
               {
                 id: 'devices' as const,
-                label: isBg ? 'Свързани Устройства и Черен Списък' : 'Connected Devices & Blacklist',
+                label: isBg ? 'Клиенти и банове' : 'Peers & Firewall',
                 icon: Users,
-                badge: `${daemon.connectedClients.length} / ${blacklistedList.length} Ban`,
+                badge: `${daemon.connectedClients.length}/${blacklistedList.length}`,
               },
               {
                 id: 'setup' as const,
-                label: isBg ? 'Процес на Настройка (Wizard)' : 'Guided Setup Process',
+                label: isBg ? 'Настройка и QR' : 'Setup & QR',
                 icon: Sparkles,
-                badge: isBg ? '4 Стъпки' : '4 Steps',
+                badge: null,
               },
             ].map((tab) => {
               const isActive = activeTab === tab.id;
@@ -566,24 +611,24 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   key={tab.id}
                   type="button"
                   onClick={() => {
-
+                    triggerHapticFeedback('light');
                     setActiveTab(tab.id);
                   }}
-                  className={`relative min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-display font-bold flex items-center gap-2 whitespace-nowrap transition cursor-pointer z-10 ${
-                    isActive ? 'text-cyan-200' : 'text-slate-400 hover:text-white'
+                  className={`relative min-h-[34px] px-3.5 py-1.5 rounded-full text-xs font-display font-bold flex items-center gap-1.5 whitespace-nowrap transition cursor-pointer z-10 ${
+                    isActive ? 'preserve-white' : 'ink-secondary hover:ink-primary'
                   }`}
                 >
                   {isActive && (
                     <motion.div
                       layoutId="pcDaemonSubWindowTab"
                       transition={SPRING_BUBBLY}
-                      className="absolute inset-0 rounded-xl bg-cyan-500/20 border border-cyan-400/40 shadow-[0_0_12px_rgba(34,211,238,0.18)] -z-10 transform-gpu"
+                      className="absolute inset-0 rounded-full liquid-hero-btn -z-10 transform-gpu"
                     />
                   )}
-                  <Icon className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
                   <span>{tab.label}</span>
                   {tab.badge && (
-                    <span className="text-[10px] font-mono text-cyan-300/90 tabular-nums ml-0.5">
+                    <span className="text-[10px] font-mono opacity-85 tabular-nums">
                       ({tab.badge})
                     </span>
                   )}
@@ -592,37 +637,37 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
             })}
           </div>
 
-          <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
-            <span>PIN:</span>
+          <div className="flex items-center gap-1.5 text-[11px] font-mono ink-secondary">
+            <span className="hidden sm:inline">PIN:</span>
             <button
               type="button"
               onClick={handleCopyPin}
-              className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-amber-300 font-bold tabular-nums flex items-center gap-1 cursor-pointer"
-              title={isBg ? 'Копирай 6-цифрения ПИН за сдвояване' : 'Copy 6-Digit Pairing PIN'}
+              className="px-3 py-1 rounded-full bg-amber-500/15 hover:bg-amber-500/22 border border-amber-500/35 text-amber-700 dark:text-amber-300 font-bold tabular-nums flex items-center gap-1.5 cursor-pointer"
+              title={isBg ? 'Копирай 6-цифрения ПИН' : 'Copy 6-Digit Pairing PIN'}
             >
               <span>{daemon.pairingPin || '------'}</span>
-              {copiedPin ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              {copiedPin ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
             </button>
             <button
               type="button"
               onClick={() => dispatchAction('rotate_pin')}
-              className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 cursor-pointer"
-              title={isBg ? 'Генерирай нов 6-цифрен ПИН' : 'Generate new 6-digit PIN'}
+              className="w-8 h-8 rounded-full liquid-control-pill ink-secondary hover:ink-primary flex items-center justify-center cursor-pointer"
+              title={isBg ? 'Генерирай нов 6-цифрен ПИН' : 'Rotate 6-digit PIN'}
             >
-              <RefreshCw className="w-3 h-3" />
+              <RefreshCw className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
-        {/* Main Scrollable Desktop GUI Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+        {/* Scrollable Body */}
+        <div className="flex-1 overflow-y-auto bouncy-scroll p-4 sm:p-6 space-y-4">
           {actionError && (
-            <div className="rounded-xl border border-rose-500/40 bg-rose-500/15 px-4 py-2.5 text-xs text-rose-200 flex items-center justify-between gap-3">
+            <div className="rounded-2xl border border-rose-500/40 bg-rose-500/12 px-4 py-2.5 text-xs text-rose-700 dark:text-rose-200 flex items-center justify-between gap-3">
               <span>{actionError}</span>
               <button
                 type="button"
                 onClick={() => setActionError(null)}
-                className="text-rose-300 hover:text-white underline shrink-0"
+                className="font-display font-bold underline shrink-0 cursor-pointer"
               >
                 {isBg ? 'Затвори' : 'Dismiss'}
               </button>
@@ -630,351 +675,291 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
           )}
 
           {!daemon.isRunning && (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="rounded-2xl border border-amber-500/35 bg-amber-500/12 px-4 py-3 text-xs ink-primary flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>
-                <span className="font-bold text-amber-300 uppercase tracking-wider mr-2">
+                <span className="font-display font-bold text-amber-700 dark:text-amber-300 mr-2">
                   {isBg ? 'Хост агентът не е активен' : 'Host Agent Offline'}
                 </span>
-                <span className="text-amber-100/90">
+                <span className="ink-secondary">
                   {isBg
-                    ? 'Няма връзка с локалния Python Daemon (ws://127.0.0.1:8765). Стартирайте HostAgent или използвайте INSTALLERS за настройка.'
-                    : 'No live connection to the local Python HostAgent (ws://127.0.0.1:8765). Start HostAgent on the target PC or open Setup to pair.'}
+                    ? 'Няма връзка с локалния Python Daemon (ws://127.0.0.1:8765). Стартирайте HostAgent или отворете Настройка.'
+                    : 'No live connection to local Python HostAgent (ws://127.0.0.1:8765). Launch HostAgent or open Setup.'}
                 </span>
               </div>
               {serverReachable === false && (
-                <span className="text-[11px] font-mono text-rose-300 shrink-0">
-                  {isBg ? 'Control Server: OFFLINE' : 'Control Server: OFFLINE'}
+                <span className="text-[11px] font-mono font-bold text-rose-600 dark:text-rose-300 shrink-0">
+                  Control Server: OFFLINE
                 </span>
               )}
             </div>
           )}
 
-          {daemon.isRunning && serverReachable === false && !actionError && (
-            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-200 flex items-center justify-between gap-2">
-              <span>
-                {isBg
-                  ? 'Локалният сървър за управление (/api/daemon) не отговаря в момента.'
-                  : 'Local control server (/api/daemon) is currently unreachable.'}
-              </span>
-              <span className="text-[11px] font-mono text-rose-300 shrink-0">
-                Control Server: OFFLINE
-              </span>
-            </div>
-          )}
-
-          {/* =====================================================================
-              TAB 1: OVERVIEW & SAFEGUARDS
-             ===================================================================== */}
+          {/* TAB 1: OVERVIEW & SHIELDS */}
           {activeTab === 'overview' && (
             <>
-              {/* ROW 1: Network & Pairing Endpoint Card + Live Hardware Telemetry Card */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                {/* Left (6 cols): Network & Pairing Endpoint */}
-                <div className="lg:col-span-6 rounded-2xl bg-[#0b1324]/75 border border-white/10 p-4 space-y-3">
-                  <div className="flex items-center justify-between border-b border-white/[0.07] pb-2">
-                    <div className="flex items-center gap-2">
-                      <Wifi className="w-4 h-4 text-cyan-400" />
-                      <span className="text-xs font-mono font-bold text-cyan-300 uppercase tracking-wider">
-                        {isBg ? 'Мрежова точка и сдвояване' : 'Network & Pairing Endpoint'}
-                      </span>
-                    </div>
-                    <span className="text-[11px] font-mono text-emerald-300 tabular-nums">
-                      Uptime: {daemon.uptime}
-                    </span>
+              {/* Quick Telemetry KPI Pills */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                  <div className="text-[11px] ink-muted font-display font-semibold">
+                    CPU ({daemon.cpuCores} {isBg ? 'ядра' : 'cores'})
                   </div>
+                  <div className="text-lg font-mono font-extrabold ink-primary tabular-nums mt-0.5">
+                    {daemon.cpuPercent}%
+                  </div>
+                  <div className="mt-1.5 w-full h-1.5 rounded-full bg-[var(--glass-border)] overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-[var(--accent-primary)] to-[var(--accent-secondary)] transition-all duration-300"
+                      style={{ width: `${Math.min(100, Math.max(3, daemon.cpuPercent))}%` }}
+                    />
+                  </div>
+                </div>
 
-                  {/* WebSocket URI */}
-                  <div className="flex items-center justify-between gap-2 bg-black/40 border border-white/10 rounded-xl px-3 py-2">
-                    <div className="min-w-0">
-                      <div className="text-[10px] font-mono text-slate-400">
-                        {isBg ? 'Локален WebSocket адрес' : 'Local WebSocket URI'}
-                      </div>
-                      <div className="text-xs sm:text-sm font-mono font-bold text-cyan-300 truncate tabular-nums">
-                        {daemon.wsUri}
-                      </div>
-                    </div>
+                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                  <div className="text-[11px] ink-muted font-display font-semibold">
+                    RAM ({daemon.ramUsedGb}/{daemon.ramTotalGb} GB)
+                  </div>
+                  <div className="text-lg font-mono font-extrabold ink-primary tabular-nums mt-0.5">
+                    {daemon.ramPercent}%
+                  </div>
+                  <div className="mt-1.5 w-full h-1.5 rounded-full bg-[var(--glass-border)] overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-violet-500 to-sky-500 transition-all duration-300"
+                      style={{ width: `${Math.min(100, Math.max(3, daemon.ramPercent))}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                  <div className="text-[11px] ink-muted font-display font-semibold">
+                    {isBg ? 'Свързани клиенти' : 'Active Peers'}
+                  </div>
+                  <div className="flex items-baseline justify-between mt-0.5">
+                    <span className="text-lg font-mono font-extrabold ink-primary tabular-nums">
+                      {daemon.connectedClients.length}
+                    </span>
                     <button
                       type="button"
-                      onClick={handleCopyUri}
-                      className="px-3 py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/30 text-cyan-200 text-xs font-mono font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer transition"
+                      onClick={() => setActiveTab('devices')}
+                      className="text-[11px] font-display font-semibold text-[var(--accent-primary)] hover:underline cursor-pointer"
                     >
-                      {copiedUri ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedUri ? (isBg ? 'Копирано' : 'Copied') : isBg ? 'Копирай URI' : 'Copy URI'}</span>
+                      {isBg ? 'Управление →' : 'Manage →'}
                     </button>
                   </div>
+                  <div className="text-[10.5px] font-mono ink-muted mt-1">
+                    {blacklistedList.length} {isBg ? 'блокирани' : 'blacklisted'}
+                  </div>
+                </div>
 
-                  {/* Port & mDNS Info */}
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div className="bg-black/30 border border-white/[0.07] rounded-xl p-2.5 flex items-center justify-between">
-                      <div>
-                        <div className="text-[10px] font-mono text-slate-400">
-                          {isBg ? 'Слушащ Порт' : 'Listening Port'}
-                        </div>
-                        {isEditingPort ? (
-                          <form onSubmit={handleApplyPort} className="flex items-center gap-1 mt-0.5">
-                            <input
-                              type="number"
-                              min={1024}
-                              max={65535}
-                              value={portInput}
-                              onChange={(e) => setPortInput(e.target.value)}
-                              className="w-20 px-1.5 py-0.5 rounded bg-black border border-cyan-400 text-xs font-mono text-white"
-                            />
-                            <button
-                              type="submit"
-                              className="px-2 py-0.5 rounded bg-cyan-400 text-slate-950 text-[10px] font-mono font-bold cursor-pointer"
-                            >
-                              OK
-                            </button>
-                          </form>
-                        ) : (
-                          <div className="text-xs font-mono font-bold text-white tabular-nums">
-                            TCP {daemon.port}
-                          </div>
-                        )}
-                      </div>
-                      {!isEditingPort && (
-                        <button
-                          type="button"
-                          onClick={() => setIsEditingPort(true)}
-                          className="text-[10px] font-mono text-cyan-400 hover:underline cursor-pointer"
-                        >
-                          {isBg ? 'Промени' : 'Change'}
-                        </button>
-                      )}
+                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                  <div className="text-[11px] ink-muted font-display font-semibold">
+                    {isBg ? 'Целеви стрийм FPS' : 'Stream Target FPS'}
+                  </div>
+                  <div className="flex items-center gap-1 mt-2">
+                    {([60, 30, 15] as const).map((fpsOpt) => (
+                      <button
+                        key={fpsOpt}
+                        type="button"
+                        onClick={() => dispatchAction('set_target_fps', { fps: fpsOpt })}
+                        className={`flex-1 py-1 rounded-full text-[11px] font-mono font-bold border cursor-pointer transition ${
+                          (daemon.targetFps || 60) === fpsOpt
+                            ? 'bg-[var(--accent-primary)]/18 text-[var(--accent-primary)] border-[var(--accent-primary)]/45'
+                            : 'liquid-control-pill ink-secondary hover:ink-primary'
+                        }`}
+                      >
+                        {fpsOpt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Endpoint & Pairing Card */}
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 squircle-badge squircle-sky">
+                      <Wifi className="w-4 h-4" />
                     </div>
+                    <span className="text-xs sm:text-sm font-display font-bold ink-primary">
+                      {isBg ? 'Мрежова точка и HMAC ключ' : 'Network Endpoint & Pairing Key'}
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-300 font-semibold tabular-nums">
+                    Uptime {daemon.uptime}
+                  </span>
+                </div>
 
-                    <div className="bg-black/30 border border-white/[0.07] rounded-xl p-2.5 flex items-center justify-between">
-                      <div>
-                        <div className="text-[10px] font-mono text-slate-400">mDNS ZeroConf</div>
-                        <div className="text-xs font-mono font-bold text-white truncate">
-                          {daemon.mdnsEnabled ? '_cst-agent._tcp.local.' : isBg ? 'Изключен' : 'Muted'}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  {/* WS URI + Port + mDNS */}
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 liquid-terminal-entry border border-[var(--glass-border)] rounded-2xl px-3.5 py-2.5">
+                      <div className="min-w-0">
+                        <div className="text-[10px] ink-muted">
+                          {isBg ? 'Локален WebSocket адрес' : 'Local WebSocket URI'}
+                        </div>
+                        <div className="text-xs sm:text-sm font-mono font-bold text-[var(--accent-primary)] truncate tabular-nums">
+                          {daemon.wsUri}
                         </div>
                       </div>
                       <button
                         type="button"
-                        onClick={() => dispatchAction('toggle_mdns')}
-                        className={`px-2 py-1 rounded-lg text-[10px] font-mono font-semibold border cursor-pointer transition ${
-                          daemon.mdnsEnabled
-                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
-                            : 'bg-white/5 text-slate-400 border-white/10'
-                        }`}
+                        onClick={handleCopyUri}
+                        className="px-3 py-1.5 rounded-full liquid-control-pill ink-primary text-xs font-display font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
                       >
-                        {daemon.mdnsEnabled ? 'ON' : 'OFF'}
+                        {copiedUri ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-500" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                        )}
+                        <span>{copiedUri ? (isBg ? 'Копирано' : 'Copied') : isBg ? 'Копирай' : 'Copy'}</span>
                       </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div className="liquid-terminal-entry border border-[var(--glass-border)] rounded-2xl p-2.5 flex items-center justify-between">
+                        <div>
+                          <div className="text-[10px] ink-muted">{isBg ? 'Порт' : 'Port'}</div>
+                          {isEditingPort ? (
+                            <form onSubmit={handleApplyPort} className="flex items-center gap-1 mt-0.5">
+                              <input
+                                type="number"
+                                min={1024}
+                                max={65535}
+                                value={portInput}
+                                onChange={(e) => setPortInput(e.target.value)}
+                                className="w-18 px-2 py-0.5 rounded-lg glass-liquid-subtle border border-[var(--accent-primary)] text-xs font-mono ink-primary"
+                              />
+                              <button
+                                type="submit"
+                                className="px-2 py-0.5 rounded-full liquid-hero-btn preserve-white text-[10px] font-bold cursor-pointer"
+                              >
+                                OK
+                              </button>
+                            </form>
+                          ) : (
+                            <div className="text-xs font-mono font-bold ink-primary tabular-nums">
+                              TCP {daemon.port}
+                            </div>
+                          )}
+                        </div>
+                        {!isEditingPort && (
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingPort(true)}
+                            className="text-[11px] font-display font-semibold text-[var(--accent-primary)] hover:underline cursor-pointer"
+                          >
+                            {isBg ? 'Промени' : 'Edit'}
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="liquid-terminal-entry border border-[var(--glass-border)] rounded-2xl p-2.5 flex items-center justify-between">
+                        <div className="min-w-0">
+                          <div className="text-[10px] ink-muted">mDNS ZeroConf</div>
+                          <div className="text-xs font-mono font-bold ink-primary truncate">
+                            {daemon.mdnsEnabled ? '_cst-agent._tcp' : isBg ? 'Изключен' : 'Muted'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => dispatchAction('toggle_mdns')}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-mono font-bold border cursor-pointer transition shrink-0 ${
+                            daemon.mdnsEnabled
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
+                              : 'liquid-control-pill ink-muted'
+                          }`}
+                        >
+                          {daemon.mdnsEnabled ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Pairing Key Management */}
-                  <div className="bg-black/40 border border-white/10 rounded-xl px-3 py-2 flex items-center justify-between gap-2">
+                  {/* HMAC Key Card */}
+                  <div className="liquid-terminal-entry border border-[var(--glass-border)] rounded-2xl p-3.5 flex flex-col justify-between gap-2.5">
                     <div className="min-w-0">
-                      <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1">
-                        <KeyRound className="w-3 h-3 text-amber-400" />
-                        <span>{isBg ? 'HMAC-SHA256 Ключ за сдвояване' : 'HMAC-SHA256 Pairing Key'}</span>
+                      <div className="text-[11px] font-display font-semibold ink-secondary flex items-center gap-1.5">
+                        <KeyRound className="w-3.5 h-3.5 text-amber-500" />
+                        <span>{isBg ? 'HMAC-SHA256 ключ за сдвояване' : 'HMAC-SHA256 Pairing Key'}</span>
                       </div>
-                      <div className="text-xs font-mono text-slate-200 truncate mt-0.5">
+                      <div className="text-xs font-mono ink-primary truncate mt-1">
                         {showToken
                           ? daemon.pairingToken ||
                             (daemon.hasPairingToken
                               ? isBg
-                                ? 'Скрит (натиснете Ротирай за нов)'
-                                : 'Configured (click Rotate to reveal new key)'
+                                ? 'Конфигуриран (натиснете Ротирай за нов)'
+                                : 'Configured (click Rotate for a fresh key)'
                               : isBg
                               ? 'Не е конфигуриран'
                               : 'Not configured')
                           : '••••••••••••••••••••••••••••'}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <button
                         type="button"
                         onClick={() => setShowToken((v) => !v)}
-                        className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 cursor-pointer"
-                        title={showToken ? 'Hide Key' : 'Show Key'}
+                        className="px-2.5 py-1 rounded-full liquid-control-pill ink-secondary hover:ink-primary text-xs flex items-center gap-1 cursor-pointer"
                       >
                         {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        <span>{showToken ? (isBg ? 'Скрий' : 'Hide') : isBg ? 'Покажи' : 'Reveal'}</span>
                       </button>
                       <button
                         type="button"
                         onClick={handleCopyToken}
                         disabled={!daemon.pairingToken}
-                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-mono text-cyan-300 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="px-2.5 py-1 rounded-full liquid-control-pill ink-primary text-xs font-display font-semibold cursor-pointer disabled:opacity-40"
                       >
                         {copiedToken ? (isBg ? 'Копирано!' : 'Copied!') : isBg ? 'Копирай' : 'Copy'}
                       </button>
                       <button
                         type="button"
                         onClick={() => dispatchAction('rotate_token')}
-                        className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-[11px] font-mono text-amber-300 cursor-pointer"
-                        title={isBg ? 'Генерирай нов криптографски ключ' : 'Rotate pairing key'}
+                        className="px-2.5 py-1 rounded-full bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-amber-700 dark:text-amber-300 text-xs font-display font-bold cursor-pointer"
                       >
                         {isBg ? 'Ротирай' : 'Rotate'}
                       </button>
                     </div>
                   </div>
                 </div>
-
-                {/* Right (6 cols): Live PC Hardware Telemetry & Active Peers Summary */}
-                <div className="lg:col-span-6 rounded-2xl bg-[#0b1324]/75 border border-white/10 p-4 space-y-3">
-                  <div className="flex items-center justify-between border-b border-white/[0.07] pb-2">
-                    <div className="flex items-center gap-2">
-                      <Cpu className="w-4 h-4 text-cyan-400" />
-                      <span className="text-xs font-mono font-bold text-cyan-300 uppercase tracking-wider">
-                        {isBg ? 'Системна телеметрия и стрийминг' : 'System Telemetry & Stream Pipeline'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {([60, 30, 15] as const).map((fpsOpt) => (
-                        <button
-                          key={fpsOpt}
-                          type="button"
-                          onClick={() => dispatchAction('set_target_fps', { fps: fpsOpt })}
-                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border cursor-pointer transition ${
-                            (daemon.targetFps || 60) === fpsOpt
-                              ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400/40'
-                              : 'bg-white/5 text-slate-400 border-white/10 hover:text-white'
-                          }`}
-                        >
-                          {fpsOpt} FPS
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* CPU & RAM Progress Bars */}
-                  <div className="space-y-2.5">
-                    <div>
-                      <div className="flex items-center justify-between text-xs font-mono mb-1">
-                        <span className="text-slate-300">
-                          CPU ({daemon.cpuCores} {isBg ? 'ядра' : 'cores'})
-                        </span>
-                        <span className="text-cyan-300 font-bold tabular-nums">{daemon.cpuPercent}%</span>
-                      </div>
-                      <div className="w-full h-2 rounded-full bg-black/60 overflow-hidden border border-white/10">
-                        <div
-                          className="h-full bg-gradient-to-r from-cyan-400 to-teal-400 transition-all duration-300"
-                          style={{ width: `${Math.min(100, Math.max(2, daemon.cpuPercent))}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between text-xs font-mono mb-1">
-                        <span className="text-slate-300">RAM Memory (Job Limit: 256 MB)</span>
-                        <span className="text-cyan-300 font-bold tabular-nums">
-                          {daemon.ramPercent}% ({daemon.ramUsedGb} / {daemon.ramTotalGb} GB)
-                        </span>
-                      </div>
-                      <div className="w-full h-2 rounded-full bg-black/60 overflow-hidden border border-white/10">
-                        <div
-                          className="h-full bg-gradient-to-r from-indigo-400 to-cyan-400 transition-all duration-300"
-                          style={{ width: `${Math.min(100, Math.max(2, daemon.ramPercent))}%` }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Connected Controllers Quick Summary + Open Devices Window Button */}
-                  <div className="pt-1">
-                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 mb-1.5">
-                      <span>
-                        {isBg
-                          ? `Активни контролери (${daemon.connectedClients.length}) • Блокирани (${blacklistedList.length})`
-                          : `Active Controllers (${daemon.connectedClients.length}) • Blacklisted (${blacklistedList.length})`}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('devices')}
-                        className="text-cyan-400 hover:underline font-bold cursor-pointer"
-                      >
-                        {isBg ? 'Управлявай устройствата →' : 'Manage Devices & Bans →'}
-                      </button>
-                    </div>
-
-                    {daemon.connectedClients.length === 0 ? (
-                      <div className="p-2.5 rounded-xl bg-black/30 border border-white/[0.06] text-xs font-mono text-slate-400">
-                        {isBg
-                          ? `Няма активни сесии (Слуша на порт ${daemon.port})`
-                          : `No active sessions (Listening on port ${daemon.port})`}
-                      </div>
-                    ) : (
-                      <div className="space-y-1.5 max-h-28 overflow-y-auto">
-                        {daemon.connectedClients.map((peer) => (
-                          <div
-                            key={peer.id}
-                            className="px-3 py-1.5 rounded-xl bg-black/40 border border-white/10 flex items-center justify-between gap-2 text-xs font-mono"
-                          >
-                            <div className="min-w-0 truncate">
-                              <span className="text-white font-semibold">{peer.device}</span>
-                              <span className="text-slate-400 ml-2">({peer.ip})</span>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => dispatchAction('disconnect_client', { clientId: peer.id })}
-                                className="px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-[10px] text-amber-300 cursor-pointer"
-                              >
-                                {isBg ? 'Прекъсни' : 'Kick'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  dispatchAction('blacklist_client', {
-                                    clientId: peer.id,
-                                    ip: peer.ip,
-                                    mac: peer.mac,
-                                    device: peer.device,
-                                  })
-                                }
-                                className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-[10px] text-rose-300 cursor-pointer"
-                              >
-                                {isBg ? 'Блокирай' : 'Ban'}
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
 
-              {/* ROW 2: Operator Safeguards & Security Shields */}
-              <div className="rounded-2xl bg-[#0b1324]/85 border border-white/12 p-4 space-y-3">
+              {/* Operator Controls & Local Security Shields */}
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
-                  <span className="text-xs font-mono font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-cyan-400" />
-                    <span>
-                      {isBg
-                        ? 'Управление на демона и защитни щитове на хоста'
-                        : 'Daemon Controls & Local Host Security Shields'}
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 squircle-badge squircle-violet">
+                      <Activity className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs sm:text-sm font-display font-bold ink-primary">
+                      {isBg ? 'Управление и защитни щитове' : 'Daemon Controls & Security Shields'}
                     </span>
-                  </span>
-                  <span className="text-[11px] font-mono text-slate-400">
-                    {isBg ? 'Директен контрол над локалния компютър' : 'Immediate local operator governance'}
+                  </div>
+                  <span className="text-[11px] ink-muted">
+                    {isBg ? 'Директен контрол над хоста' : 'Immediate host operator governance'}
                   </span>
                 </div>
 
-                {/* Primary 4 Controls */}
+                {/* Primary 4 Controls (with inline 2-step Panic Disconnect) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                   <button
                     type="button"
                     onClick={() => dispatchAction('toggle_pause')}
                     disabled={isLoadingAction === 'toggle_pause'}
-                    className={`min-h-[44px] px-3.5 py-2.5 rounded-xl font-mono text-xs font-bold flex items-center justify-center gap-2 border transition cursor-pointer ${
+                    className={`min-h-[42px] px-3.5 py-2 rounded-2xl font-display text-xs font-bold flex items-center justify-center gap-2 border transition cursor-pointer ${
                       daemon.isPaused
-                        ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-400/40'
-                        : 'bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 border-cyan-400/35'
+                        ? 'bg-emerald-500/18 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
+                        : 'bg-[var(--accent-primary)]/14 text-[var(--accent-primary)] border-[var(--accent-primary)]/35'
                     }`}
                   >
                     {daemon.isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
                     <span>
                       {daemon.isPaused
                         ? isBg
-                          ? 'Възобнови Демона'
+                          ? 'Възобнови демона'
                           : 'Resume Daemon'
                         : isBg
-                        ? 'Паузирай Демона'
+                        ? 'Паузирай демона'
                         : 'Pause Daemon'}
                     </span>
                   </button>
@@ -983,21 +968,21 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     type="button"
                     onClick={() => dispatchAction('toggle_view_only')}
                     disabled={isLoadingAction === 'toggle_view_only'}
-                    className={`min-h-[44px] px-3.5 py-2.5 rounded-xl font-mono text-xs font-bold flex items-center justify-center gap-2 border transition cursor-pointer ${
+                    className={`min-h-[42px] px-3.5 py-2 rounded-2xl font-display text-xs font-bold flex items-center justify-center gap-2 border transition cursor-pointer ${
                       daemon.viewOnlyMode
-                        ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border-amber-400/40'
-                        : 'bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 border-white/15'
+                        ? 'bg-amber-500/18 text-amber-700 dark:text-amber-300 border-amber-500/35'
+                        : 'liquid-control-pill ink-primary'
                     }`}
                   >
                     {daemon.viewOnlyMode ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
                     <span>
                       {daemon.viewOnlyMode
                         ? isBg
-                          ? 'Само преглед (Вход заключен)'
-                          : 'View-Only (Input Locked)'
+                          ? 'Вход: Заключен'
+                          : 'Input Locked'
                         : isBg
                         ? 'Вход: Разрешен'
-                        : 'Remote Input: Allowed'}
+                        : 'Input Allowed'}
                     </span>
                   </button>
 
@@ -1005,179 +990,207 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     type="button"
                     onClick={() => dispatchAction('run_diagnostics')}
                     disabled={isLoadingAction === 'run_diagnostics'}
-                    className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 font-mono text-xs font-bold text-cyan-300 flex items-center justify-center gap-2 transition cursor-pointer"
+                    className="min-h-[42px] px-3.5 py-2 rounded-2xl liquid-control-pill font-display text-xs font-bold ink-primary flex items-center justify-center gap-2 transition cursor-pointer"
                   >
                     <RefreshCw
-                      className={`w-4 h-4 ${isLoadingAction === 'run_diagnostics' ? 'animate-spin' : ''}`}
+                      className={`w-4 h-4 text-[var(--accent-primary)] ${
+                        isLoadingAction === 'run_diagnostics' ? 'animate-spin' : ''
+                      }`}
                     />
-                    <span>{isBg ? 'Тест на NIC & WoL' : 'Check NIC & WoL'}</span>
+                    <span>{isBg ? 'Тест NIC & WoL' : 'Check NIC & WoL'}</span>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => dispatchAction('panic_disconnect')}
-                    disabled={isLoadingAction === 'panic_disconnect'}
-                    className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 font-mono text-xs font-bold text-rose-300 flex items-center justify-center gap-2 transition cursor-pointer"
-                  >
-                    <OctagonAlert className="w-4 h-4 text-rose-400" />
-                    <span>{isBg ? 'Прекъсни всички сесии' : 'Panic Disconnect All'}</span>
-                  </button>
+                  {confirmPanic ? (
+                    <div className="min-h-[42px] px-2.5 py-1.5 rounded-2xl bg-rose-500/18 border border-rose-500/45 flex items-center justify-between gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmPanic(false);
+                          dispatchAction('panic_disconnect');
+                        }}
+                        className="flex-1 py-1 rounded-full bg-rose-500 text-white font-display text-[11px] font-bold cursor-pointer"
+                      >
+                        {isBg ? 'Потвърди!' : 'Confirm Drop'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmPanic(false)}
+                        className="px-2.5 py-1 rounded-full liquid-control-pill text-[11px] font-semibold ink-primary cursor-pointer"
+                      >
+                        {isBg ? 'Не' : 'Cancel'}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmPanic(true)}
+                      disabled={isLoadingAction === 'panic_disconnect'}
+                      className="min-h-[42px] px-3.5 py-2 rounded-2xl bg-rose-500/14 hover:bg-rose-500/22 border border-rose-500/35 font-display text-xs font-bold text-rose-700 dark:text-rose-300 flex items-center justify-center gap-2 transition cursor-pointer"
+                    >
+                      <OctagonAlert className="w-4 h-4" />
+                      <span>{isBg ? 'Прекъсни всички' : 'Panic Kill All'}</span>
+                    </button>
+                  )}
                 </div>
 
-                {/* Secondary Advanced Safeguards Row */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => dispatchAction('toggle_clipboard_sync')}
-                    className={`min-h-[40px] px-3 py-2 rounded-xl font-mono text-[11px] flex items-center justify-between border transition cursor-pointer ${
-                      daemon.clipboardSyncAllowed
-                        ? 'bg-emerald-500/12 border-emerald-400/30 text-emerald-200'
-                        : 'bg-white/[0.04] border-white/10 text-slate-400'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5 truncate">
-                      <Clipboard className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{isBg ? 'Клипборд Синхр.' : 'Clipboard Sync'}</span>
-                    </span>
-                    <span className="font-bold">{daemon.clipboardSyncAllowed ? 'ON' : 'LOCKED'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => dispatchAction('toggle_auto_ban')}
-                    className={`min-h-[40px] px-3 py-2 rounded-xl font-mono text-[11px] flex items-center justify-between border transition cursor-pointer ${
-                      daemon.autoBanIntrusion
-                        ? 'bg-emerald-500/12 border-emerald-400/30 text-emerald-200'
-                        : 'bg-white/[0.04] border-white/10 text-slate-400'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5 truncate">
-                      <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{isBg ? 'Авто-Блок (3 опита)' : 'Auto-Ban Shield'}</span>
-                    </span>
-                    <span className="font-bold">{daemon.autoBanIntrusion ? 'ON' : 'OFF'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => dispatchAction('toggle_subnet_geofence')}
-                    className={`min-h-[40px] px-3 py-2 rounded-xl font-mono text-[11px] flex items-center justify-between border transition cursor-pointer ${
-                      daemon.subnetGeofenceOnly
-                        ? 'bg-cyan-500/12 border-cyan-400/30 text-cyan-200'
-                        : 'bg-white/[0.04] border-white/10 text-slate-400'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5 truncate">
-                      <Wifi className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{isBg ? 'Само LAN (Geofence)' : 'LAN Geofence Only'}</span>
-                    </span>
-                    <span className="font-bold">{daemon.subnetGeofenceOnly ? 'ON' : 'WAN OK'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => dispatchAction('toggle_auto_lock')}
-                    className={`min-h-[40px] px-3 py-2 rounded-xl font-mono text-[11px] flex items-center justify-between border transition cursor-pointer ${
-                      daemon.autoLockOnDisconnect
-                        ? 'bg-amber-500/15 border-amber-400/35 text-amber-200'
-                        : 'bg-white/[0.04] border-white/10 text-slate-400'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5 truncate">
-                      <Lock className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{isBg ? 'Авто-Заключване PC' : 'Auto-Lock on Drop'}</span>
-                    </span>
-                    <span className="font-bold">{daemon.autoLockOnDisconnect ? 'ARMED' : 'OFF'}</span>
-                  </button>
+                {/* Secondary Shield Pills */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                  {[
+                    {
+                      action: 'toggle_clipboard_sync',
+                      active: Boolean(daemon.clipboardSyncAllowed),
+                      icon: Clipboard,
+                      label: isBg ? 'Клипборд синхр.' : 'Clipboard Sync',
+                      onText: 'ON',
+                      offText: 'LOCKED',
+                    },
+                    {
+                      action: 'toggle_auto_ban',
+                      active: Boolean(daemon.autoBanIntrusion),
+                      icon: ShieldAlert,
+                      label: isBg ? 'Авто-блок (3 опита)' : 'Auto-Ban Shield',
+                      onText: 'ON',
+                      offText: 'OFF',
+                    },
+                    {
+                      action: 'toggle_subnet_geofence',
+                      active: Boolean(daemon.subnetGeofenceOnly),
+                      icon: Wifi,
+                      label: isBg ? 'Само LAN (Geofence)' : 'LAN Geofence',
+                      onText: 'LAN',
+                      offText: 'WAN',
+                    },
+                    {
+                      action: 'toggle_auto_lock',
+                      active: Boolean(daemon.autoLockOnDisconnect),
+                      icon: Lock,
+                      label: isBg ? 'Авто-заключване PC' : 'Auto-Lock Drop',
+                      onText: 'ARMED',
+                      offText: 'OFF',
+                    },
+                  ].map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        key={item.action}
+                        type="button"
+                        onClick={() => dispatchAction(item.action)}
+                        className={`min-h-[38px] px-3 py-1.5 rounded-2xl text-[11px] font-display font-semibold flex items-center justify-between border transition cursor-pointer ${
+                          item.active
+                            ? 'bg-emerald-500/14 border-emerald-500/35 text-emerald-700 dark:text-emerald-300'
+                            : 'liquid-control-pill ink-secondary'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5 truncate">
+                          <Icon className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{item.label}</span>
+                        </span>
+                        <span className="font-mono font-bold ml-1.5 shrink-0">
+                          {item.active ? item.onText : item.offText}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* ROW 3: Antivirus False-Positive Prevention & Binary Integrity Architecture */}
-              <div className="rounded-2xl bg-[#0b1324]/75 border border-emerald-500/25 p-4 space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.07] pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    <span className="text-xs font-mono font-bold text-emerald-300 uppercase tracking-wider">
+              {/* Collapsible Progressive Disclosure: AV-Safe Binary Integrity */}
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback('light');
+                    setShowAvChecks((v) => !v);
+                  }}
+                  className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--glass-surface-hover)] transition cursor-pointer"
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+                    <span className="truncate">
                       {isBg
-                        ? 'Защита срещу фалшиви антивирусни сигнали (AV-Safe Architecture)'
-                        : 'Antivirus False-Positive Prevention & Clean Binary Architecture'}
+                        ? 'AV-Safe интегритет и защита от фалшиви детекции'
+                        : 'AV-Safe Binary Integrity & SmartScreen Posture'}
                     </span>
-                  </div>
-                  <span className="text-[11px] font-mono text-slate-400">
-                    Windows Defender • SmartScreen • CrowdStrike • Malwarebytes
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 shrink-0">
+                      {passedAvCount}/{avChecks.length}
+                    </span>
                   </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                  {avChecks.map((chk) => (
-                    <div
-                      key={chk.key}
-                      className="p-2.5 rounded-xl bg-black/35 border border-white/[0.07] flex items-start gap-2.5"
+                  {showAvChecks ? (
+                    <ChevronUp className="w-4 h-4 ink-muted shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 ink-muted shrink-0" />
+                  )}
+                </button>
+                <AnimatePresence initial={false}>
+                  {showAvChecks && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden border-t border-[var(--glass-border)]"
                     >
-                      {chk.passed ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                      ) : (
-                        <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                      )}
-                      <div className="min-w-0">
-                        <div className="text-xs font-mono font-bold text-white">{chk.title}</div>
-                        <p className="text-[11px] text-slate-400 leading-snug mt-0.5">{chk.desc}</p>
+                      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                        {avChecks.map((chk) => (
+                          <div
+                            key={chk.key}
+                            className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-start gap-2.5"
+                          >
+                            {chk.passed ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                            ) : (
+                              <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                            )}
+                            <div className="min-w-0">
+                              <div className="text-xs font-display font-bold ink-primary">
+                                {chk.title}
+                              </div>
+                              <p className="text-[11px] ink-secondary leading-snug mt-0.5">
+                                {chk.desc}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </>
           )}
 
-          {/* =====================================================================
-              TAB 2: ALL CONNECTED DEVICES & BLACKLIST MANAGER WINDOW
-             ===================================================================== */}
+          {/* TAB 2: PEERS & FIREWALL BLACKLIST */}
           {activeTab === 'devices' && (
             <div className="space-y-4">
-              {/* Top Action Header for Connected Devices */}
-              <div className="rounded-2xl bg-[#0b1324]/85 border border-white/12 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="font-display text-sm sm:text-base font-bold text-white flex items-center gap-2">
-                    <Users className="w-4.5 h-4.5 text-cyan-400" />
-                    <span>
-                      {isBg
-                        ? `Всички Свързани Устройства (${daemon.connectedClients.length})`
-                        : `All Connected Devices & Active Sessions (${daemon.connectedClients.length})`}
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {isBg
-                      ? 'Управлявайте достъпа на всяко устройство поотделно: заключете мишка/клавиатура, прекъснете връзката или го добавете в черния списък.'
-                      : 'Control each connected device individually: lock mouse/keyboard input, disconnect session, or permanently blacklist its IP & MAC.'}
-                  </p>
-                </div>
-
-                {daemon.connectedClients.length > 0 && (
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => dispatchAction('panic_disconnect')}
-                      className="min-h-[40px] px-3.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 font-mono text-xs font-bold flex items-center gap-1.5 cursor-pointer transition"
-                    >
-                      <OctagonAlert className="w-3.5 h-3.5" />
-                      <span>{isBg ? 'Прекъсни всички' : 'Disconnect All'}</span>
-                    </button>
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 squircle-badge squircle-sky shrink-0">
+                    <Users className="w-4.5 h-4.5" />
                   </div>
-                )}
+                  <div>
+                    <h3 className="font-display text-sm font-extrabold ink-primary">
+                      {isBg
+                        ? `Свързани контролери (${daemon.connectedClients.length})`
+                        : `Connected Controllers (${daemon.connectedClients.length})`}
+                    </h3>
+                    <p className="text-xs ink-secondary">
+                      {isBg
+                        ? 'Заключете вход, прекъснете сесия или блокирайте IP/MAC на ниво сокет.'
+                        : 'Lock remote input, disconnect a session, or blacklist IP/MAC at the socket layer.'}
+                    </p>
+                  </div>
+                </div>
               </div>
 
-              {/* Connected Devices List */}
               {daemon.connectedClients.length === 0 ? (
-                <div className="rounded-2xl bg-[#0b1324]/60 border border-white/10 p-8 text-center space-y-2">
-                  <Users className="w-8 h-8 text-slate-500 mx-auto" />
-                  <div className="text-sm font-bold text-white">
-                    {isBg ? 'Няма свързани устройства в момента' : 'No Connected Devices Currently'}
+                <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-8 text-center space-y-2">
+                  <Users className="w-8 h-8 ink-muted mx-auto" />
+                  <div className="text-sm font-display font-bold ink-primary">
+                    {isBg ? 'Няма активни сесии в момента' : 'No Active Sessions Currently'}
                   </div>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  <p className="text-xs ink-secondary max-w-md mx-auto">
                     {isBg
-                      ? `Демонът е конфигуриран за ${daemon.wsUri}. Свържете телефона или браузъра си чрез QR кода / One-Tap Pairing в секция Бърза Настройка.`
-                      : `Daemon endpoint is configured at ${daemon.wsUri}. Pair your mobile or browser controller via QR / One-Tap Pairing to manage active sessions.`}
+                      ? `Демонът слуша на ${daemon.wsUri}. Свържете мобилния или уеб клиента чрез QR кода.`
+                      : `Daemon listening on ${daemon.wsUri}. Pair your mobile or browser client via QR code.`}
                   </p>
                 </div>
               ) : (
@@ -1190,31 +1203,27 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     return (
                       <div
                         key={peer.id}
-                        className="rounded-2xl bg-[#0b1324]/85 border border-white/12 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5"
+                        className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
                       >
                         <div className="flex items-start gap-3 min-w-0">
-                          <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-400/30 flex items-center justify-center text-cyan-300 shrink-0 mt-0.5">
+                          <div className="w-10 h-10 squircle-badge squircle-sky shrink-0">
                             <PeerIcon className="w-5 h-5" />
                           </div>
-                          <div className="min-w-0 space-y-1">
+                          <div className="min-w-0 space-y-0.5">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-display text-sm font-bold text-white">
+                              <span className="font-display text-sm font-bold ink-primary">
                                 {peer.device}
                               </span>
-                              <span className="text-xs font-mono text-cyan-300 tabular-nums">
+                              <span className="text-xs font-mono font-semibold text-[var(--accent-primary)] tabular-nums">
                                 {peer.ip}
                               </span>
                               {peer.mac && (
-                                <span className="text-[11px] font-mono text-slate-400">
-                                  · MAC {peer.mac}
-                                </span>
+                                <span className="text-[11px] font-mono ink-muted">· {peer.mac}</span>
                               )}
                             </div>
-                            <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 flex-wrap tabular-nums">
-                              <span className="text-emerald-300">{peer.auth}</span>
-                              <span>·</span>
-                              <span>
-                                {isBg ? 'Свързан в' : 'Since'} {peer.connectedAt}
+                            <div className="flex items-center gap-2 text-[11px] font-mono ink-secondary flex-wrap tabular-nums">
+                              <span className="text-emerald-600 dark:text-emerald-300 font-semibold">
+                                {peer.auth}
                               </span>
                               <span>·</span>
                               <span>RTT {peer.latencyMs ?? 5} ms</span>
@@ -1226,22 +1235,15 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                           </div>
                         </div>
 
-                        {/* Per-Device Granular Controls */}
-                        <div className="flex flex-wrap items-center gap-2 shrink-0">
-                          {/* 1. Trust / Guest Toggle */}
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                           <button
                             type="button"
                             onClick={() => dispatchAction('toggle_client_trust', { clientId: peer.id })}
-                            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-mono text-xs font-semibold flex items-center gap-1.5 border transition cursor-pointer ${
+                            className={`min-h-[34px] px-3 py-1 rounded-full font-display text-xs font-semibold flex items-center gap-1 border transition cursor-pointer ${
                               peer.isTrusted
-                                ? 'bg-emerald-500/15 border-emerald-400/35 text-emerald-300'
-                                : 'bg-white/[0.05] border-white/10 text-slate-300 hover:text-white'
+                                ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-700 dark:text-emerald-300'
+                                : 'liquid-control-pill ink-secondary'
                             }`}
-                            title={
-                              isBg
-                                ? 'Маркирай устройството като Доверено (Whitelist)'
-                                : 'Toggle Trusted Device status'
-                            }
                           >
                             <UserCheck className="w-3.5 h-3.5" />
                             <span>
@@ -1255,53 +1257,32 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                             </span>
                           </button>
 
-                          {/* 2. Per-Device Input Lock Toggle */}
                           <button
                             type="button"
                             onClick={() => dispatchAction('toggle_client_input', { clientId: peer.id })}
-                            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-mono text-xs font-semibold flex items-center gap-1.5 border transition cursor-pointer ${
+                            className={`min-h-[34px] px-3 py-1 rounded-full font-display text-xs font-semibold flex items-center gap-1 border transition cursor-pointer ${
                               inputAllowed
-                                ? 'bg-cyan-500/15 border-cyan-400/35 text-cyan-200'
-                                : 'bg-amber-500/20 border-amber-400/40 text-amber-300'
+                                ? 'bg-[var(--accent-primary)]/14 border-[var(--accent-primary)]/35 text-[var(--accent-primary)]'
+                                : 'bg-amber-500/15 border-amber-500/35 text-amber-700 dark:text-amber-300'
                             }`}
-                            title={
-                              isBg
-                                ? 'Разреши или заключи мишката и клавиатурата за това устройство'
-                                : 'Allow or lock remote mouse & keyboard input for this specific device'
-                            }
                           >
                             {inputAllowed ? (
                               <Unlock className="w-3.5 h-3.5" />
                             ) : (
                               <Lock className="w-3.5 h-3.5" />
                             )}
-                            <span>
-                              {inputAllowed
-                                ? isBg
-                                  ? 'Вход: Активен'
-                                  : 'Input: Allowed'
-                                : isBg
-                                ? 'Само Изглед'
-                                : 'View-Only'}
-                            </span>
+                            <span>{inputAllowed ? (isBg ? 'Вход' : 'Input') : isBg ? 'Изглед' : 'View'}</span>
                           </button>
 
-                          {/* 3. Disconnect Session */}
                           <button
                             type="button"
                             onClick={() => dispatchAction('disconnect_client', { clientId: peer.id })}
-                            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 text-amber-300 font-mono text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-                            title={
-                              isBg
-                                ? 'Прекъсни текущата сесия на това устройство'
-                                : 'Disconnect this device immediately'
-                            }
+                            className="min-h-[34px] px-3 py-1 rounded-full bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-amber-700 dark:text-amber-300 font-display text-xs font-bold flex items-center gap-1 cursor-pointer"
                           >
                             <UserX className="w-3.5 h-3.5" />
-                            <span>{isBg ? 'Прекъсни' : 'Disconnect'}</span>
+                            <span>{isBg ? 'Прекъсни' : 'Kick'}</span>
                           </button>
 
-                          {/* 4. Completely Disconnect & Blacklist */}
                           <button
                             type="button"
                             onClick={() =>
@@ -1311,19 +1292,14 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                                 mac: peer.mac,
                                 device: peer.device,
                                 reason: isBg
-                                  ? 'Прекъснат и блокиран от оператора чрез Daemon GUI'
-                                  : 'Disconnected & blacklisted by operator via Daemon GUI',
+                                  ? 'Блокиран от оператора'
+                                  : 'Blacklisted by operator',
                               })
                             }
-                            className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 border border-rose-500/45 text-rose-200 font-mono text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-[0_0_12px_rgba(244,63,94,0.2)]"
-                            title={
-                              isBg
-                                ? 'Прекъсни незабавно и добави IP/MAC адреса в черния списък (Blacklist)'
-                                : 'Disconnect immediately and permanently blacklist IP & MAC address'
-                            }
+                            className="min-h-[34px] px-3 py-1 rounded-full bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-700 dark:text-rose-300 font-display text-xs font-bold flex items-center gap-1 cursor-pointer"
                           >
-                            <Ban className="w-3.5 h-3.5 text-rose-400" />
-                            <span>{isBg ? 'Блокирай (Blacklist)' : 'Blacklist & Ban'}</span>
+                            <Ban className="w-3.5 h-3.5" />
+                            <span>{isBg ? 'Блокирай' : 'Ban'}</span>
                           </button>
                         </div>
                       </div>
@@ -1332,104 +1308,123 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                 </div>
               )}
 
-              {/* FIREWALL BLACKLIST & MANUAL BAN SECTION */}
-              <div className="rounded-2xl bg-[#0b1324]/90 border border-rose-500/30 p-4 space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Ban className="w-4.5 h-4.5 text-rose-400" />
+              {/* Firewall Blacklist */}
+              <div className="rounded-3xl glass-liquid-subtle border border-rose-500/30 p-4 space-y-3.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-[var(--glass-border)]">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 squircle-badge squircle-rose shrink-0">
+                      <Ban className="w-4 h-4" />
+                    </div>
                     <div>
-                      <h4 className="font-display text-sm font-bold text-rose-200">
+                      <h4 className="font-display text-sm font-bold ink-primary">
                         {isBg
-                          ? `Черен списък на защитната стена (${blacklistedList.length} блокирани)`
-                          : `Daemon Firewall Blacklist (${blacklistedList.length} Banned)`}
+                          ? `Черен списък на защитната стена (${blacklistedList.length})`
+                          : `Firewall Blacklist (${blacklistedList.length})`}
                       </h4>
-                      <p className="text-[11px] text-slate-400">
+                      <p className="text-[11px] ink-secondary">
                         {isBg
-                          ? 'Устройствата в този списък са напълно блокирани на ниво сокет и не могат да се свързват към PC демона.'
-                          : 'Devices on this blacklist are dropped immediately at the TCP/WebSocket socket layer.'}
+                          ? 'Блокирани на ниво TCP/WebSocket сокет.'
+                          : 'Dropped immediately at the TCP/WebSocket socket layer.'}
                       </p>
                     </div>
                   </div>
 
-                  {blacklistedList.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => dispatchAction('clear_blacklist')}
-                      className="min-h-[36px] px-3 py-1 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono text-slate-300 flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                      <span>{isBg ? 'Изчисти всички банове' : 'Clear All Bans'}</span>
-                    </button>
-                  )}
+                  {blacklistedList.length > 0 &&
+                    (confirmClearBans ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setConfirmClearBans(false);
+                            dispatchAction('clear_blacklist');
+                          }}
+                          className="px-3 py-1 rounded-full bg-rose-500 text-white text-xs font-display font-bold cursor-pointer"
+                        >
+                          {isBg ? 'Потвърди изчистване' : 'Confirm Clear All'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmClearBans(false)}
+                          className="px-2.5 py-1 rounded-full liquid-control-pill text-xs font-display font-semibold ink-primary cursor-pointer"
+                        >
+                          {isBg ? 'Отказ' : 'Cancel'}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearBans(true)}
+                        className="min-h-[34px] px-3 py-1 rounded-full liquid-control-pill text-xs font-display font-semibold ink-primary flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                        <span>{isBg ? 'Изчисти всички' : 'Clear All Bans'}</span>
+                      </button>
+                    ))}
                 </div>
 
-                {/* Manual IP / MAC Ban Form */}
                 <form
                   onSubmit={handleManualBanSubmit}
-                  className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 bg-black/35 p-3 rounded-xl border border-white/10"
+                  className="grid grid-cols-1 sm:grid-cols-12 gap-2"
                 >
                   <input
                     type="text"
                     required
                     value={manualBanIp}
                     onChange={(e) => setManualBanIp(e.target.value)}
-                    placeholder={isBg ? 'IP адрес (напр. 192.168.1.205)' : 'IP Address (e.g. 192.168.1.205)'}
-                    className="sm:col-span-3 px-3 py-2 rounded-xl bg-[#070c18] border border-white/15 text-xs font-mono text-white outline-none focus:border-rose-400"
+                    placeholder={isBg ? 'IP адрес (192.168.1.205)' : 'IP Address (192.168.1.205)'}
+                    className="sm:col-span-3 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--glass-border)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
                   />
                   <input
                     type="text"
                     value={manualBanMac}
                     onChange={(e) => setManualBanMac(e.target.value)}
-                    placeholder={isBg ? 'MAC адрес (по избор)' : 'MAC Address (optional)'}
-                    className="sm:col-span-3 px-3 py-2 rounded-xl bg-[#070c18] border border-white/15 text-xs font-mono text-white outline-none focus:border-rose-400"
+                    placeholder={isBg ? 'MAC (по избор)' : 'MAC (optional)'}
+                    className="sm:col-span-3 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--glass-border)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
                   />
                   <input
                     type="text"
                     value={manualBanReason}
                     onChange={(e) => setManualBanReason(e.target.value)}
-                    placeholder={isBg ? 'Причина за блокиране' : 'Reason for ban'}
-                    className="sm:col-span-4 px-3 py-2 rounded-xl bg-[#070c18] border border-white/15 text-xs font-mono text-white outline-none focus:border-rose-400"
+                    placeholder={isBg ? 'Причина за блокиране' : 'Ban reason'}
+                    className="sm:col-span-4 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--glass-border)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
                   />
                   <button
                     type="submit"
-                    className="sm:col-span-2 min-h-[38px] px-3 py-2 rounded-xl bg-rose-500/25 hover:bg-rose-500/35 border border-rose-500/50 text-rose-200 font-mono text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="sm:col-span-2 min-h-[36px] px-3 py-2 rounded-full bg-rose-500 hover:bg-rose-400 text-white font-display text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition"
                   >
                     <Ban className="w-3.5 h-3.5" />
-                    <span>{isBg ? 'Блокирай IP' : 'Ban IP'}</span>
+                    <span>{isBg ? 'Блокирай' : 'Ban IP'}</span>
                   </button>
                 </form>
 
-                {/* Blacklisted Entries List */}
                 {blacklistedList.length === 0 ? (
-                  <div className="p-4 rounded-xl bg-black/25 border border-white/5 text-xs font-mono text-slate-400 text-center">
-                    {isBg
-                      ? 'Няма блокирани IP/MAC адреси в черния списък.'
-                      : 'No IPs or MAC addresses are currently blacklisted.'}
+                  <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] text-xs ink-muted text-center">
+                    {isBg ? 'Няма блокирани IP/MAC адреси.' : 'No blacklisted IP or MAC addresses.'}
                   </div>
                 ) : (
-                  <div className="space-y-2 max-h-52 overflow-y-auto">
+                  <div className="space-y-2 max-h-52 overflow-y-auto bouncy-scroll">
                     {blacklistedList.map((ban) => (
                       <div
                         key={ban.id}
-                        className="p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs font-mono"
+                        className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-mono"
                       >
                         <div className="space-y-0.5 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-rose-200">{ban.device}</span>
-                            <span className="text-rose-300 tabular-nums">{ban.ip}</span>
-                            <span className="text-slate-400">· MAC {ban.mac}</span>
-                            <span className="text-slate-500">· {ban.bannedAt}</span>
+                            <span className="font-bold ink-primary">{ban.device}</span>
+                            <span className="text-rose-600 dark:text-rose-300 tabular-nums">
+                              {ban.ip}
+                            </span>
+                            <span className="ink-muted">· {ban.mac}</span>
                           </div>
-                          <div className="text-[11px] text-rose-300/80 truncate">{ban.reason}</div>
+                          <div className="text-[11px] ink-secondary truncate">{ban.reason}</div>
                         </div>
-
                         <button
                           type="button"
                           onClick={() => dispatchAction('unban_device', { banId: ban.id, ip: ban.ip })}
-                          className="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/35 text-emerald-300 font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer self-start sm:self-auto"
+                          className="min-h-[34px] px-3 py-1 rounded-full bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 text-emerald-700 dark:text-emerald-300 font-display font-bold flex items-center gap-1.5 shrink-0 cursor-pointer self-start sm:self-auto"
                         >
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>{isBg ? 'Премахни бан (Unban)' : 'Unban & Restore'}</span>
+                          <span>{isBg ? 'Отблокирай' : 'Unban'}</span>
                         </button>
                       </div>
                     ))}
@@ -1439,118 +1434,110 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
             </div>
           )}
 
-          {/* =====================================================================
-              TAB 3: GUIDED DAEMON SETUP WIZARD
-             ===================================================================== */}
+          {/* TAB 3: SETUP & QR */}
           {activeTab === 'setup' && (
             <div className="space-y-4">
               {setupCompletedBanner && (
-                <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 text-xs font-mono flex items-center justify-between">
-                  <span className="flex items-center gap-2 font-bold">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>
-                      {isBg
-                        ? 'Конфигурацията на PC Демона е запазена и активирана успешно!'
-                        : 'PC Daemon Setup & Security Profile saved and activated!'}
-                    </span>
+                <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-700 dark:text-emerald-300 text-xs font-display font-bold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>
+                    {isBg
+                      ? 'Конфигурацията на PC демона е запазена успешно!'
+                      : 'PC Daemon Setup & Security Profile saved and activated!'}
                   </span>
                 </div>
               )}
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                {/* Step 1 & Step 2 (Left 7 cols) */}
                 <div className="lg:col-span-7 space-y-4">
-                  {/* Step 1: Network & Firewall Auto-Config */}
-                  <div className="rounded-2xl bg-[#0b1324]/85 border border-white/12 p-4 space-y-3">
+                  {/* Adapters & Startup */}
+                  <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 space-y-3">
                     <div className="flex items-center justify-between">
-                      <h3 className="font-display text-sm font-bold text-white">
-                        {isBg
-                          ? '1. Мрежов адаптер и защитна стена (Firewall)'
-                          : '1. Network Adapter & Firewall Configuration'}
+                      <h3 className="font-display text-sm font-bold ink-primary">
+                        {isBg ? '1. Мрежови адаптери и стартиране' : '1. Network Adapters & Startup'}
                       </h3>
-                      <span className="text-[11px] font-mono text-emerald-300">UDP 9 + TCP {daemon.port}</span>
+                      <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-300 font-semibold">
+                        UDP 9 + TCP {daemon.port}
+                      </span>
                     </div>
 
                     <div className="space-y-2">
                       {daemon.activeAdapters.map((nic, i) => (
                         <div
                           key={i}
-                          className="p-3 rounded-xl bg-black/40 border border-cyan-400/30 flex items-center justify-between text-xs font-mono"
+                          className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center justify-between text-xs font-mono"
                         >
                           <div>
-                            <div className="text-white font-bold">{nic.name}</div>
-                            <div className="text-[11px] text-slate-400">
-                              IPv4: <span className="text-cyan-300">{nic.ipv4}</span> · MAC:{' '}
-                              <span className="text-emerald-300">{nic.mac}</span>
+                            <div className="ink-primary font-bold">{nic.name}</div>
+                            <div className="text-[11px] ink-secondary">
+                              IPv4: <span className="text-[var(--accent-primary)]">{nic.ipv4}</span> ·
+                              MAC: <span className="text-emerald-600 dark:text-emerald-300">{nic.mac}</span>
                             </div>
                           </div>
-                          <span className="text-[11px] text-emerald-300 font-bold">ACTIVE</span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                            ACTIVE
+                          </span>
                         </div>
                       ))}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={() => dispatchAction('run_diagnostics')}
-                        className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/35 text-cyan-200 font-mono text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                        className="min-h-[36px] px-3.5 py-1.5 rounded-full liquid-control-pill ink-primary font-display text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>
-                          {isBg ? 'Авто-проверка на Портове и WoL' : 'Verify Ports & Wake-on-LAN'}
-                        </span>
+                        <RefreshCw className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                        <span>{isBg ? 'Провери портове и WoL' : 'Verify Ports & WoL'}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => dispatchAction('toggle_autostart')}
-                        className={`min-h-[38px] px-3.5 py-1.5 rounded-xl font-mono text-xs font-semibold border cursor-pointer ${
+                        className={`min-h-[36px] px-3.5 py-1.5 rounded-full font-display text-xs font-semibold border cursor-pointer ${
                           daemon.autoStartOnBoot
-                            ? 'bg-emerald-500/15 border-emerald-400/35 text-emerald-300'
-                            : 'bg-white/5 border-white/10 text-slate-400'
+                            ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-700 dark:text-emerald-300'
+                            : 'liquid-control-pill ink-secondary'
                         }`}
                       >
                         {daemon.autoStartOnBoot
                           ? isBg
                             ? '✓ Стартиране с Windows: ВКЛ'
-                            : '✓ Run on Windows Startup: ON'
+                            : '✓ Run on Startup: ON'
                           : isBg
                           ? 'Стартиране с Windows: ИЗКЛ'
-                          : 'Run on Windows Startup: OFF'}
+                          : 'Run on Startup: OFF'}
                       </button>
                     </div>
                   </div>
 
-                  {/* Step 2: Security & Access Profile */}
-                  <div className="rounded-2xl bg-[#0b1324]/85 border border-white/12 p-4 space-y-3">
-                    <h3 className="font-display text-sm font-bold text-white">
-                      {isBg
-                        ? '2. Изберете профил за сигурност и достъп'
-                        : '2. Choose Security & Remote Access Profile'}
+                  {/* Security Profiles */}
+                  <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 space-y-3">
+                    <h3 className="font-display text-sm font-bold ink-primary">
+                      {isBg ? '2. Профил за сигурност' : '2. Security & Remote Access Profile'}
                     </h3>
-
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                       {[
                         {
                           id: 'zero_trust' as const,
                           title: isBg ? 'Zero-Trust Стриктен' : 'Zero-Trust Strict',
                           desc: isBg
-                            ? 'HITL одобрение + Авто-бан + Заключен клипборд'
-                            : 'HITL required + Auto-Ban + Clipboard locked',
+                            ? 'HITL + Авто-бан + Заключен клипборд'
+                            : 'HITL + Auto-Ban + Clipboard locked',
                         },
                         {
                           id: 'balanced' as const,
-                          title: isBg ? 'Домашна LAN (Препоръчан)' : 'Balanced LAN (Default)',
+                          title: isBg ? 'Балансиран LAN' : 'Balanced LAN',
                           desc: isBg
-                            ? 'HMAC-SHA256 + HITL за критични команди + Клипборд'
-                            : 'HMAC-SHA256 + HITL for admin cmds + Clipboard sync',
+                            ? 'HMAC-SHA256 + HITL за критични команди'
+                            : 'HMAC-SHA256 + HITL for admin cmds',
                         },
                         {
                           id: 'view_only' as const,
-                          title: isBg ? 'Само за преглед' : 'Presentation View-Only',
+                          title: isBg ? 'Само преглед' : 'View-Only',
                           desc: isBg
-                            ? 'Само видео стрийм; мишка и клавиатура са заключени'
-                            : 'Screen stream only; mouse & keyboard locked',
+                            ? 'Само видео поток; входът е заключен'
+                            : 'Screen stream only; input locked',
                         },
                       ].map((prof) => {
                         const isSelected = (daemon.securityProfile || 'balanced') === prof.id;
@@ -1561,17 +1548,19 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                             onClick={() =>
                               dispatchAction('apply_security_profile', { profile: prof.id })
                             }
-                            className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                            className={`p-3 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
                               isSelected
-                                ? 'bg-cyan-500/20 border-cyan-400/50 text-white'
-                                : 'bg-black/35 border-white/10 text-slate-300 hover:border-white/25'
+                                ? 'bg-[var(--accent-primary)]/14 border-[var(--accent-primary)]/50'
+                                : 'liquid-terminal-entry border-[var(--glass-border)] hover:border-[var(--accent-primary)]/35'
                             }`}
                           >
-                            <div className="text-xs font-display font-bold flex items-center justify-between">
+                            <div className="text-xs font-display font-bold ink-primary flex items-center justify-between gap-1">
                               <span>{prof.title}</span>
-                              {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-cyan-300 shrink-0" />}
+                              {isSelected && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
+                              )}
                             </div>
-                            <p className="text-[11px] text-slate-400 mt-1.5 leading-snug">{prof.desc}</p>
+                            <p className="text-[11px] ink-secondary mt-1.5 leading-snug">{prof.desc}</p>
                           </button>
                         );
                       })}
@@ -1579,105 +1568,162 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   </div>
                 </div>
 
-                {/* Step 3 & Step 4: Instant Phone QR + PIN Pairing (Right 5 cols) */}
-                <div className="lg:col-span-5 rounded-2xl bg-[#0b1324]/90 border border-cyan-400/30 p-4 flex flex-col justify-between space-y-4">
+                {/* White-Framed QR + Complete Setup */}
+                <div className="lg:col-span-5 rounded-3xl glass-liquid-subtle border border-[var(--accent-primary)]/30 p-4 flex flex-col justify-between space-y-4">
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <h3 className="font-display text-sm font-bold text-white flex items-center gap-2">
-                        <QrCode className="w-4 h-4 text-cyan-400" />
-                        <span>
-                          {isBg ? '3. Сдвояване с Телефон (QR + PIN)' : '3. Instant Phone Pairing (QR + PIN)'}
-                        </span>
+                      <h3 className="font-display text-sm font-bold ink-primary flex items-center gap-2">
+                        <QrCode className="w-4 h-4 text-[var(--accent-primary)]" />
+                        <span>{isBg ? '3. Сдвояване с QR + PIN' : '3. Phone QR + PIN'}</span>
                       </h3>
-                      <span className="text-xs font-mono font-bold text-amber-300">
+                      <span className="text-xs font-mono font-bold text-amber-600 dark:text-amber-300">
                         PIN: {daemon.pairingPin || '------'}
                       </span>
                     </div>
 
-                    <div className="flex flex-col items-center text-center p-3 rounded-xl bg-[#070c18] border border-white/10 space-y-2.5">
+                    <div className="flex flex-col items-center text-center p-4 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] space-y-3">
                       {qrDataUrl && (
-                        <img
-                          src={qrDataUrl}
-                          alt="Daemon Setup Pairing QR"
-                          referrerPolicy="no-referrer"
-                          className="w-36 h-36 rounded-xl border border-cyan-400/40 p-1.5 bg-[#070c18]"
-                        />
+                        <div className="w-36 h-36 rounded-2xl bg-white p-2.5 shadow-md border border-black/10 flex items-center justify-center">
+                          <img
+                            src={qrDataUrl}
+                            alt="Daemon Setup Pairing QR"
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-contain rounded-lg"
+                          />
+                        </div>
                       )}
-                      <p className="text-[11px] text-slate-300 max-w-xs leading-snug">
+                      <p className="text-[11px] ink-secondary max-w-xs leading-snug">
                         {isBg
-                          ? 'Сканирайте QR кода с телефона си за автоматично добавяне на този компютър без въвеждане на IP адрес.'
-                          : 'Scan this QR code with your phone camera to auto-pair this PC with zero manual typing.'}
+                          ? 'Сканирайте QR кода с телефона си за автоматично добавяне на този компютър.'
+                          : 'Scan this QR code with your phone camera to auto-pair this PC.'}
                       </p>
                     </div>
                   </div>
 
-                  <button
+                  <motion.button
                     type="button"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.96 }}
+                    transition={SPRING_POP}
                     onClick={() => {
                       dispatchAction('complete_setup');
                       setSetupCompletedBanner(true);
                       scheduleTimer(() => setSetupCompletedBanner(false), 3500);
                     }}
-                    className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-display font-bold text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer transition shadow-lg shadow-emerald-500/20"
+                    className="w-full min-h-[42px] py-2.5 px-4 rounded-full liquid-hero-btn preserve-white font-display font-bold text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
+                    <CheckCircle2 className="w-4 h-4" />
                     <span>
-                      {isBg
-                        ? 'Завърши настройката и активирай защитата'
-                        : 'Complete Setup & Activate Daemon'}
+                      {isBg ? 'Завърши и активирай защитата' : 'Complete Setup & Activate'}
                     </span>
-                  </button>
+                  </motion.button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* LIVE DAEMON EVENT & SECURITY AUDIT LOG (Always visible at bottom) */}
-          <div className="rounded-2xl bg-[#060b16] border border-white/10 p-3.5 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono font-bold text-cyan-300 flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                <span>
-                  {isBg
-                    ? 'Журнал на събитията и сигурността на PC демона'
-                    : 'Live PC Daemon Event & Security Audit Log'}
-                </span>
-              </span>
+          {/* Collapsible Progressive Disclosure: Live Daemon Event Log */}
+          <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+            <div className="px-4 py-3 flex items-center justify-between gap-2">
               <button
                 type="button"
-                onClick={() => dispatchAction('clear_logs')}
-                className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-mono text-slate-400 hover:text-white cursor-pointer transition"
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  setShowDaemonLog((v) => !v);
+                }}
+                className="flex items-center gap-2 text-xs font-display font-bold ink-primary cursor-pointer"
               >
-                {isBg ? 'Изчисти лога' : 'Clear Log'}
+                <Terminal className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                <span>
+                  {isBg ? 'Журнал на събитията на PC демона' : 'Live PC Daemon Event Log'}
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono liquid-control-pill ink-muted tabular-nums">
+                  {daemon.logs.length}
+                </span>
+                {showDaemonLog ? (
+                  <ChevronUp className="w-4 h-4 ink-muted" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 ink-muted" />
+                )}
               </button>
+
+              {daemon.logs.length > 0 &&
+                (confirmClearLogs ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfirmClearLogs(false);
+                        dispatchAction('clear_logs');
+                      }}
+                      className="px-2.5 py-1 rounded-full bg-rose-500 text-white text-[11px] font-display font-bold cursor-pointer"
+                    >
+                      {isBg ? 'Потвърди' : 'Confirm'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearLogs(false)}
+                      className="px-2.5 py-1 rounded-full liquid-control-pill text-[11px] font-display font-semibold ink-primary cursor-pointer"
+                    >
+                      {isBg ? 'Отказ' : 'Cancel'}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmClearLogs(true)}
+                    className="px-2.5 py-1 rounded-full liquid-control-pill text-[11px] font-display font-semibold ink-secondary hover:ink-primary cursor-pointer"
+                  >
+                    {isBg ? 'Изчисти' : 'Clear Log'}
+                  </button>
+                ))}
             </div>
 
-            <div className="p-3 rounded-xl bg-black/70 border border-white/5 font-mono text-[11px] max-h-36 overflow-y-auto space-y-1">
-              {daemon.logs.map((entry, idx) => (
-                <div key={idx} className="leading-relaxed flex items-start gap-2">
-                  <span className="text-slate-500 shrink-0 tabular-nums">[{entry.time}]</span>
-                  <span
-                    className={`shrink-0 font-bold ${
-                      entry.level === 'ALERT'
-                        ? 'text-rose-400'
-                        : entry.level === 'WARN'
-                        ? 'text-amber-400'
-                        : entry.level === 'SECURITY'
-                        ? 'text-emerald-400'
-                        : entry.level === 'DIAG'
-                        ? 'text-cyan-300'
-                        : 'text-slate-400'
-                    }`}
-                  >
-                    [{entry.level}]
-                  </span>
-                  <span className="text-slate-200 break-words">{entry.message}</span>
-                </div>
-              ))}
-            </div>
+            <AnimatePresence initial={false}>
+              {showDaemonLog && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden border-t border-[var(--glass-border)]"
+                >
+                  <div className="p-3">
+                    <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] font-mono text-[11px] max-h-40 overflow-y-auto bouncy-scroll space-y-1">
+                      {daemon.logs.length === 0 ? (
+                        <div className="ink-muted text-center py-2">
+                          {isBg ? 'Няма записани събития.' : 'No daemon log entries yet.'}
+                        </div>
+                      ) : (
+                        daemon.logs.map((entry, idx) => (
+                          <div key={idx} className="leading-relaxed flex items-start gap-2">
+                            <span className="ink-muted shrink-0 tabular-nums">[{entry.time}]</span>
+                            <span
+                              className={`shrink-0 font-bold ${
+                                entry.level === 'ALERT'
+                                  ? 'text-rose-600 dark:text-rose-400'
+                                  : entry.level === 'WARN'
+                                  ? 'text-amber-600 dark:text-amber-400'
+                                  : entry.level === 'SECURITY'
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : entry.level === 'DIAG'
+                                  ? 'text-[var(--accent-primary)]'
+                                  : 'ink-secondary'
+                              }`}
+                            >
+                              [{entry.level}]
+                            </span>
+                            <span className="ink-primary break-words">{entry.message}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };

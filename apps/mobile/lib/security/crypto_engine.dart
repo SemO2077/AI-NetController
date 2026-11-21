@@ -3,8 +3,6 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto_pkg;
 
-// Add for compute()
-
 /// Zero-Trust Hardened Cryptographic Engine (Mobile / Flutter Client)
 /// ============================================================================
 /// RFC 7748 (Curve25519 / X25519 Ephemeral ECDH Key Exchange)
@@ -496,6 +494,11 @@ class ChaCha20Poly1305 {
     if (key.length != 32 || nonce.length != 12) {
       throw ArgumentError('ChaCha20-Poly1305 requires a 32-byte key and 12-byte nonce');
     }
+    if (outOffset < 0 || outOffset + plaintext.length + 16 > out.length) {
+      throw RangeError(
+        'Output buffer too small for ciphertext + 16-byte tag at offset $outOffset',
+      );
+    }
     final Uint8List aadData = aad ?? Uint8List(0);
     try {
       _prepareKeyState(key, nonce);
@@ -576,24 +579,34 @@ Uint8List hkdfExtract(Uint8List salt, Uint8List ikm) {
 
 /// RFC 5869 HKDF-SHA256 Expand step without per-iteration builder churn.
 Uint8List hkdfExpand(Uint8List prk, List<int> info, int length) {
+  if (length < 0 || length > 255 * 32) {
+    throw RangeError.range(length, 0, 255 * 32, 'length');
+  }
+  if (length == 0) return Uint8List(0);
+
   final crypto_pkg.Hmac hmacOkm = crypto_pkg.Hmac(crypto_pkg.sha256, prk);
   final int blocks = (length + 31) ~/ 32;
   final Uint8List okm = Uint8List(blocks * 32);
   final Uint8List stepBuf = Uint8List(32 + info.length + 1);
-  if (info.isNotEmpty) {
-    stepBuf.setRange(32, 32 + info.length, info);
-  }
+  try {
+    if (info.isNotEmpty) {
+      stepBuf.setRange(32, 32 + info.length, info);
+    }
 
-  for (int i = 1; i <= blocks; i++) {
-    final int inputStart = (i == 1) ? 32 : 0;
-    stepBuf[32 + info.length] = i;
-    final List<int> digest =
-        hmacOkm.convert(Uint8List.sublistView(stepBuf, inputStart)).bytes;
-    stepBuf.setRange(0, 32, digest);
-    okm.setRange((i - 1) * 32, i * 32, digest);
-  }
+    for (int i = 1; i <= blocks; i++) {
+      final int inputStart = (i == 1) ? 32 : 0;
+      stepBuf[32 + info.length] = i;
+      final List<int> digest =
+          hmacOkm.convert(Uint8List.sublistView(stepBuf, inputStart)).bytes;
+      stepBuf.setRange(0, 32, digest);
+      okm.setRange((i - 1) * 32, i * 32, digest);
+    }
 
-  return Uint8List.sublistView(okm, 0, length);
+    return Uint8List.fromList(Uint8List.sublistView(okm, 0, length));
+  } finally {
+    zeroize(stepBuf);
+    zeroize(okm);
+  }
 }
 
 /// RFC 5869 HKDF-SHA256 Extract + Expand Implementation.
@@ -667,11 +680,14 @@ class CryptoEngine {
     msg.setRange(tagPrefix.length, tagPrefix.length + _mutualClientChallenge.length, _mutualClientChallenge);
     msg.setRange(tagPrefix.length + _mutualClientChallenge.length, msg.length, core59);
 
-    final List<int> pskBytes = utf8.encode(preSharedKey.trim());
+    final Uint8List pskBytes = utf8.encode(preSharedKey.trim());
     final crypto_pkg.Hmac hmac = crypto_pkg.Hmac(crypto_pkg.sha256, pskBytes);
     final Uint8List expectedMac = Uint8List.fromList(hmac.convert(msg).bytes);
     zeroize(msg);
-    if (!constantTimeEquals(hostMac, expectedMac)) {
+    zeroize(pskBytes);
+    final bool macValid = constantTimeEquals(hostMac, expectedMac);
+    zeroize(expectedMac);
+    if (!macValid) {
       return null;
     }
     return processHostChallenge(core59);
@@ -714,9 +730,10 @@ class CryptoEngine {
     proofData.add(_clientNonceN1);
     proofData.add(hostNonceN2);
 
-    final List<int> pskBytes = utf8.encode(preSharedKey.trim());
+    final Uint8List pskBytes = utf8.encode(preSharedKey.trim());
     final crypto_pkg.Hmac hmac = crypto_pkg.Hmac(crypto_pkg.sha256, pskBytes);
     final List<int> hmacDigest = hmac.convert(proofData.toBytes()).bytes;
+    zeroize(pskBytes);
 
     // Derive Twin Keys via HKDF-SHA256
     final Uint8List salt = Uint8List(_clientNonceN1.length + hostNonceN2.length);

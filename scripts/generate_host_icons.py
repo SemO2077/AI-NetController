@@ -5,9 +5,7 @@ Generates pixel-perfect icons matching the Android application icon
 in multi-resolution Windows ICO and PNG formats.
 """
 
-import math
 import os
-import sys
 from PIL import Image, ImageDraw, ImageFilter
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -26,16 +24,26 @@ def generate_icons() -> None:
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 
     # 1. Gradient background rounded rectangle (#0e172a -> #050811)
-    grad = Image.new("RGBA", (W, H))
-    c1 = (14, 23, 42, 255)
-    c2 = (5, 8, 17, 255)
+    c1 = (14, 23, 42)
+    c2 = (5, 8, 17)
+    diag_steps = 2 * W
+    lut = [
+        bytes((
+            int(c1[0] + (c2[0] - c1[0]) * (k / diag_steps)),
+            int(c1[1] + (c2[1] - c1[1]) * (k / diag_steps)),
+            int(c1[2] + (c2[2] - c1[2]) * (k / diag_steps)),
+            255,
+        ))
+        for k in range(W + H)
+    ]
+    full_strip = b"".join(lut)
+    grad_buf = bytearray(W * H * 4)
+    row_bytes = W * 4
     for y in range(H):
-        for x in range(W):
-            dt = (x + y) / (2.0 * W)
-            dr = int(c1[0] + (c2[0] - c1[0]) * dt)
-            dg = int(c1[1] + (c2[1] - c1[1]) * dt)
-            db = int(c1[2] + (c2[2] - c1[2]) * dt)
-            grad.putpixel((x, y), (dr, dg, db, 255))
+        src_start = y * 4
+        dst_start = y * row_bytes
+        grad_buf[dst_start:dst_start + row_bytes] = full_strip[src_start:src_start + row_bytes]
+    grad = Image.frombytes("RGBA", (W, H), bytes(grad_buf))
 
     mask = Image.new("L", (W, H), 0)
     dmask = ImageDraw.Draw(mask)
@@ -136,7 +144,6 @@ def generate_icons() -> None:
     img_256 = img.resize((256, 256), Image.Resampling.LANCZOS)
     img_64 = img.resize((64, 64), Image.Resampling.LANCZOS)
     img_32 = img.resize((32, 32), Image.Resampling.LANCZOS)
-    img_16 = img.resize((16, 16), Image.Resampling.LANCZOS)
 
     # Save PNG files
     png_assets = os.path.join(ASSETS_DIR, "icon.png")

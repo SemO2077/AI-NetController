@@ -84,14 +84,14 @@ flutter build apk --release --split-per-abi
 All three subsystems ship automated verification suites:
 
 ```bash
-# Web TypeScript check, architecture verification (40 checks), stress benchmarks (23 checks), and crypto/security tests (8 checks)
+# Web TypeScript check, architecture verification, stress benchmarks, and crypto/security tests
 npm run lint
 npm test
 
-# Python Host Agent unit, crypto, firewall, loopback, and integration tests (128 tests)
+# Python Host Agent unit, crypto, firewall, loopback, and integration tests
 python -m unittest discover -s agent/tests -v
 
-# Flutter static analysis and mobile unit/E2E daemon tests (41 tests; invokes Python host agent)
+# Flutter static analysis and mobile unit/E2E daemon tests (invokes Python host agent on PATH)
 cd apps/mobile
 flutter analyze
 flutter test test/
@@ -120,7 +120,7 @@ AI-NetController/
 │   ├── SETUP_GUIDE.md          # Installation, daemon configuration & pairing walkthrough
 │   └── COMPILATION_GUIDE.md    # Building web dist, Windows agent binaries, and Android APKs
 ├── scripts/                    # Release build, packaging, checksum & release publishing utilities
-├── .github/                    # GitHub Actions CI & issue/PR templates
+├── .github/                    # GitHub Actions CI/Release workflows, Dependabot & templates
 ├── .gitlab/                    # GitLab issue/MR templates
 ├── .gitlab-ci.yml              # GitLab CI/CD pipeline
 ├── PATCH_NOTES.md              # v0.80.0 (Beta 0.80.00) changelog

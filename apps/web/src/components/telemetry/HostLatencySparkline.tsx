@@ -1,7 +1,8 @@
 import React, { useId, useState, useMemo, useRef, useCallback } from 'react';
 import { LatencyDataPoint } from '../../types';
-import { Activity, Clock, ShieldCheck, Zap } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { useTranslation } from '../../i18n/useTranslation';
+import { useUIStore } from '../../store/uiStore';
 
 export interface HostLatencySparklineProps {
   history?: LatencyDataPoint[] | number[];
@@ -39,6 +40,8 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
   interactive = true,
 }) => {
   const { t, language } = useTranslation();
+  const themeMode = useUIStore((s) => s.themeMode);
+  const isLight = themeMode === 'light';
   const safeUid = useId().replace(/:/g, '');
   const sanitizedHostId = hostId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const gradId = `grad-${sanitizedHostId}-${safeUid}`;
@@ -198,64 +201,54 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
     return { pathD, areaD, pointCoords, minVal, maxVal };
   }, [points, timeWindowSeconds, chartWidth, chartHeight, paddingLeft, paddingTop]);
 
-  // Color configurations based on status
+  // Adaptive Daylight / Vibrant Dark colors
   const colors = useMemo(() => {
     if (!isOnline) {
       return {
-        stroke: 'rgba(255, 255, 255, 0.25)',
-        fillGradStart: 'rgba(255, 255, 255, 0.05)',
-        fillGradEnd: 'rgba(255, 255, 255, 0.0)',
-        dot: 'bg-white/30',
-        text: 'text-white/40',
-        badge: 'bg-white/5 text-white/50 border-white/10',
-        glow: 'none',
+        stroke: isLight ? 'rgba(99, 102, 241, 0.30)' : 'rgba(255, 255, 255, 0.25)',
+        fillGradStart: 'rgba(148, 163, 184, 0.08)',
+        fillGradEnd: 'rgba(148, 163, 184, 0.0)',
+        text: 'ink-muted',
+        badge: 'liquid-control-pill ink-muted',
       };
     }
 
     switch (statusLevel) {
       case 'high':
         return {
-          stroke: '#f43f5e',
-          fillGradStart: 'rgba(244, 63, 94, 0.35)',
+          stroke: isLight ? '#e11d48' : '#fb7185',
+          fillGradStart: 'rgba(244, 63, 94, 0.32)',
           fillGradEnd: 'rgba(244, 63, 94, 0.0)',
-          dot: 'bg-rose-400 shadow-[0_0_10px_#f43f5e]',
           text: 'text-rose-400',
-          badge: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
-          glow: 'rgba(244, 63, 94, 0.3)',
+          badge: 'bg-rose-500/14 text-rose-400 border-rose-500/35',
         };
       case 'moderate':
         return {
-          stroke: '#fbbf24',
-          fillGradStart: 'rgba(251, 191, 36, 0.3)',
-          fillGradEnd: 'rgba(251, 191, 36, 0.0)',
-          dot: 'bg-amber-400 shadow-[0_0_10px_#fbbf24]',
+          stroke: isLight ? '#d97706' : '#fbbf24',
+          fillGradStart: 'rgba(245, 158, 11, 0.28)',
+          fillGradEnd: 'rgba(245, 158, 11, 0.0)',
           text: 'text-amber-400',
-          badge: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-          glow: 'rgba(251, 191, 36, 0.25)',
+          badge: 'bg-amber-500/14 text-amber-400 border-amber-500/35',
         };
       case 'good':
         return {
-          stroke: '#22d3ee',
-          fillGradStart: 'rgba(34, 211, 238, 0.32)',
-          fillGradEnd: 'rgba(34, 211, 238, 0.0)',
-          dot: 'bg-cyan-400 shadow-[0_0_10px_#22d3ee]',
-          text: 'text-cyan-300',
-          badge: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
-          glow: 'rgba(34, 211, 238, 0.25)',
+          stroke: isLight ? '#0284c7' : '#22d3ee',
+          fillGradStart: 'rgba(14, 165, 233, 0.30)',
+          fillGradEnd: 'rgba(14, 165, 233, 0.0)',
+          text: 'text-sky-400',
+          badge: 'bg-sky-500/14 text-sky-400 border-sky-500/35',
         };
       case 'optimal':
       default:
         return {
-          stroke: '#34d399',
-          fillGradStart: 'rgba(52, 211, 153, 0.32)',
-          fillGradEnd: 'rgba(52, 211, 153, 0.0)',
-          dot: 'bg-emerald-400 shadow-[0_0_10px_#34d399]',
+          stroke: isLight ? '#059669' : '#34d399',
+          fillGradStart: 'rgba(16, 185, 129, 0.30)',
+          fillGradEnd: 'rgba(16, 185, 129, 0.0)',
           text: 'text-emerald-400',
-          badge: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-          glow: 'rgba(52, 211, 153, 0.25)',
+          badge: 'bg-emerald-500/14 text-emerald-400 border-emerald-500/35',
         };
     }
-  }, [isOnline, statusLevel]);
+  }, [isOnline, statusLevel, isLight]);
 
   // Pointer scrubbing interaction
   const handlePointerMove = useCallback(
@@ -292,70 +285,69 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
   }, []);
 
   const lastPoint = pointCoords.length > 0 ? pointCoords[pointCoords.length - 1] : null;
+  const axisFill = isLight ? '#5a6085' : 'rgba(226, 232, 255, 0.55)';
+  const nowFill = isLight ? '#7c3aed' : '#c084fc';
+  const guideStroke = isLight ? 'rgba(99, 102, 241, 0.22)' : 'rgba(196, 181, 253, 0.22)';
 
   return (
     <div
       ref={containerRef}
-      className={`w-full flex flex-col space-y-2 select-none ${className}`}
+      className={`w-full flex flex-col space-y-2.5 select-none ${className}`}
       id={`latency-sparkline-${hostId}`}
     >
-      {/* Chart Header with Live Indicator & Window Size */}
+      {/* Chart Header with Live Indicator */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
         <div className="flex items-center space-x-2">
           <div className="flex items-center space-x-1.5">
             <span
               className={`w-2 h-2 rounded-full shrink-0 ${
-                isOnline ? 'bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]' : 'bg-rose-400/60'
+                isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400/70'
               }`}
             />
-            <span className="text-xs font-semibold text-white/90 uppercase tracking-wider font-mono">
-              {language === 'bg' ? 'Латентност (последните 30 сек)' : 'Latency (Last 30 sec)'}
+            <span className="text-xs font-display font-bold ink-primary tracking-tight">
+              {language === 'bg' ? 'Латентност (30 сек)' : 'Latency (Last 30s)'}
             </span>
           </div>
-          <span className="glass-liquid px-2 py-0.5 rounded-full text-[10px] font-mono text-cyan-300/90 border border-cyan-400/20 shrink-0">
-            {language === 'bg' ? '1 Hz телеметрия' : '1 Hz telemetry'}
+          <span className="liquid-control-pill px-2.5 py-0.5 rounded-full text-[10px] font-mono text-cyan-400 font-semibold shrink-0">
+            {language === 'bg' ? '1 Hz телеметрия' : '1 Hz live'}
           </span>
         </div>
 
         {isOnline && stats.current !== null && (
           <div className="flex items-center space-x-1.5 font-mono text-xs">
-            <span className="text-white/40 text-[11px]">
+            <span className="ink-muted text-[11px]">
               {language === 'bg' ? 'Текущ RTT:' : 'Current RTT:'}
             </span>
-            <span
-              className={`font-bold px-2 py-0.5 rounded-md border ${colors.badge}`}
-            >
+            <span className={`font-bold px-2.5 py-0.5 rounded-full border ${colors.badge}`}>
               {stats.current} ms
             </span>
           </div>
         )}
       </div>
 
-      {/* SVG Canvas Area */}
-      <div className="relative w-full rounded-xl bg-slate-950/60 border border-white/10 p-2 overflow-hidden shadow-inner">
-        {/* Subtle Horizontal Threshold Guides */}
-        <div className="absolute inset-x-2 top-2 bottom-6 pointer-events-none flex flex-col justify-between opacity-15">
-          <div className="w-full border-b border-cyan-300 border-dashed" />
-          <div className="w-full border-b border-cyan-300 border-dashed" />
-          <div className="w-full border-b border-cyan-300 border-dashed" />
+      {/* Adaptive SVG Canvas Area */}
+      <div className="relative w-full rounded-2xl liquid-terminal-entry p-2.5 overflow-hidden">
+        <div className="absolute inset-x-3 top-2.5 bottom-6 pointer-events-none flex flex-col justify-between opacity-30">
+          <div className="w-full border-b border-dashed" style={{ borderColor: guideStroke }} />
+          <div className="w-full border-b border-dashed" style={{ borderColor: guideStroke }} />
+          <div className="w-full border-b border-dashed" style={{ borderColor: guideStroke }} />
         </div>
 
-        {/* Hover scrub tooltip pill */}
         {hoveredPoint && (
           <div
-            className="absolute z-30 pointer-events-none -top-1 transform -translate-x-1/2 -translate-y-full transition-all duration-75"
+            className="absolute z-30 pointer-events-none top-1.5 transform -translate-x-1/2 transition-all duration-75"
             style={{
-              left: `${(hoveredPoint.x / width) * 100}%`,
+              left: `${Math.min(86, Math.max(14, (hoveredPoint.x / width) * 100))}%`,
             }}
           >
-            <div className="glass-liquid px-2.5 py-1 rounded-lg border border-cyan-400/40 text-[11px] font-mono shadow-[0_4px_16px_rgba(0,0,0,0.6)] flex items-center space-x-2 bg-slate-950/95 text-white whitespace-nowrap">
-              <span className={`font-bold ${colors.text}`}>
-                {hoveredPoint.latency} ms
-              </span>
-              <span className="text-white/30">•</span>
-              <span className="text-white/60 text-[10px]">
+            <div className="glass-liquid-modal px-2.5 py-1 rounded-full text-[11px] font-mono flex items-center space-x-1.5 ink-primary whitespace-nowrap">
+              <span className={`font-bold ${colors.text}`}>{hoveredPoint.latency} ms</span>
+              <span className="ink-muted">•</span>
+              <span className="ink-secondary text-[10px]">
                 {hoveredPoint.relativeSeconds <= 0.5
-                  ? language === 'bg' ? 'сега' : 'now'
+                  ? language === 'bg'
+                    ? 'сега'
+                    : 'now'
                   : language === 'bg'
                   ? `преди ${hoveredPoint.relativeSeconds}с`
                   : `${hoveredPoint.relativeSeconds}s ago`}
@@ -379,42 +371,35 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
               <stop offset="100%" stopColor={colors.fillGradEnd} />
             </linearGradient>
 
-            {/* Glowing filter for sparkline line */}
             <filter id={glowId} x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="0" stdDeviation="2" floodColor={colors.stroke} floodOpacity="0.4" />
+              <feDropShadow dx="0" dy="0" stdDeviation="2" floodColor={colors.stroke} floodOpacity={isLight ? '0.25' : '0.45'} />
             </filter>
           </defs>
 
-          {/* Area Fill */}
-          {areaD && isOnline && (
-            <path d={areaD} fill={`url(#${gradId})`} />
-          )}
+          {areaD && isOnline && <path d={areaD} fill={`url(#${gradId})`} />}
 
-          {/* Stroke Path */}
           {pathD ? (
             <path
               d={pathD}
               fill="none"
               stroke={colors.stroke}
-              strokeWidth="2"
+              strokeWidth="2.2"
               strokeLinecap="round"
               strokeLinejoin="round"
               filter={`url(#${glowId})`}
             />
           ) : (
-            /* Offline dashed baseline */
             <line
               x1={paddingLeft}
               y1={paddingTop + chartHeight / 2}
               x2={width - paddingRight}
               y2={paddingTop + chartHeight / 2}
-              stroke="rgba(255, 255, 255, 0.2)"
+              stroke={guideStroke}
               strokeWidth="1.5"
               strokeDasharray="4 4"
             />
           )}
 
-          {/* Interactive Scrub Line */}
           {hoveredPoint && (
             <g>
               <line
@@ -422,9 +407,9 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
                 y1={paddingTop}
                 x2={hoveredPoint.x}
                 y2={paddingTop + chartHeight}
-                stroke="#ffffff"
-                strokeOpacity="0.4"
-                strokeWidth="1"
+                stroke={colors.stroke}
+                strokeOpacity="0.45"
+                strokeWidth="1.2"
                 strokeDasharray="2 2"
               />
               <circle
@@ -438,7 +423,6 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
             </g>
           )}
 
-          {/* Active Latest Reading Pulse Dot */}
           {isOnline && lastPoint && !hoveredPoint && (
             <g>
               <circle
@@ -447,7 +431,7 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
                 r="3.5"
                 fill={colors.stroke}
                 className="animate-ping origin-center"
-                opacity="0.75"
+                opacity="0.7"
               />
               <circle
                 cx={lastPoint.x}
@@ -455,14 +439,13 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
                 r="3"
                 fill="#ffffff"
                 stroke={colors.stroke}
-                strokeWidth="1.5"
+                strokeWidth="1.75"
               />
             </g>
           )}
 
-          {/* Time Axis Labels: -30s, -20s, -10s, Now */}
           {showTimeAxis && (
-            <g className="text-[10px] font-mono fill-white/40 select-none">
+            <g className="text-[10px] font-mono select-none" fill={axisFill}>
               <text x={paddingLeft} y={height - 4} textAnchor="start">
                 {language === 'bg' ? '-30с' : '-30s'}
               </text>
@@ -472,16 +455,15 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
               <text x={paddingLeft + chartWidth * 0.66} y={height - 4} textAnchor="middle">
                 {language === 'bg' ? '-10с' : '-10s'}
               </text>
-              <text x={width - paddingRight} y={height - 4} textAnchor="end" className="fill-cyan-300 font-bold">
+              <text x={width - paddingRight} y={height - 4} textAnchor="end" fill={nowFill} fontWeight={700}>
                 {t('spark_now')}
               </text>
             </g>
           )}
         </svg>
 
-        {/* Offline overlay notice */}
         {!isOnline && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[1px] rounded-xl text-white/50 text-xs font-mono">
+          <div className="absolute inset-0 flex items-center justify-center backdrop-blur-[2px] rounded-2xl ink-muted text-xs font-mono font-semibold">
             <span>{t('spark_sleeping_host')}</span>
           </div>
         )}
@@ -489,28 +471,28 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
 
       {/* Latency Summary Stats Strip */}
       {showSummaryStats && isOnline && stats.current !== null && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-0.5 text-xs font-mono">
-          <div className="glass-liquid p-2 rounded-lg flex flex-col justify-between border border-white/5">
-            <span className="text-white/40 text-[10px]">{t('spark_avg_30s')}</span>
-            <span className="text-white font-bold text-[13px]">{stats.avg} ms</span>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-0.5 text-xs font-mono">
+          <div className="glass-liquid-subtle p-2.5 rounded-2xl flex flex-col justify-between">
+            <span className="ink-muted text-[10px]">{t('spark_avg_30s')}</span>
+            <span className="ink-primary font-extrabold text-[13px] mt-0.5">{stats.avg} ms</span>
           </div>
-          <div className="glass-liquid p-2 rounded-lg flex flex-col justify-between border border-white/5">
-            <span className="text-white/40 text-[10px]">{t('spark_min_max')}</span>
-            <span className="text-white/90 font-semibold text-[12px]">
+          <div className="glass-liquid-subtle p-2.5 rounded-2xl flex flex-col justify-between">
+            <span className="ink-muted text-[10px]">{t('spark_min_max')}</span>
+            <span className="ink-primary font-bold text-[12px] mt-0.5">
               {stats.min} / {stats.max} ms
             </span>
           </div>
-          <div className="glass-liquid p-2 rounded-lg flex flex-col justify-between border border-white/5">
-            <span className="text-white/40 text-[10px]">{t('spark_jitter')}</span>
-            <span className="text-amber-300/90 font-semibold text-[12px]">
+          <div className="glass-liquid-subtle p-2.5 rounded-2xl flex flex-col justify-between">
+            <span className="ink-muted text-[10px]">{t('spark_jitter')}</span>
+            <span className="text-amber-400 font-bold text-[12px] mt-0.5">
               ±{stats.jitter} ms
             </span>
           </div>
-          <div className="glass-liquid p-2 rounded-lg flex flex-col justify-between border border-white/5">
-            <span className="text-white/40 text-[10px]">{t('spark_stability')}</span>
-            <span className="text-emerald-400 font-bold text-[12px] flex items-center space-x-1">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>{stats.jitter <= 2.0 ? t('spark_excellent') : t('spark_stable')}</span>
+          <div className="glass-liquid-subtle p-2.5 rounded-2xl flex flex-col justify-between">
+            <span className="ink-muted text-[10px]">{t('spark_stability')}</span>
+            <span className="text-emerald-400 font-bold text-[12px] flex items-center space-x-1 mt-0.5">
+              <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{stats.jitter <= 2.0 ? t('spark_excellent') : t('spark_stable')}</span>
             </span>
           </div>
         </div>

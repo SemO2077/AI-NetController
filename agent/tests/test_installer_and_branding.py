@@ -23,7 +23,6 @@ from icon_assets import (
     get_icon_ico_path,
     get_icon_png_path,
     get_icon_image,
-    apply_window_icon,
 )
 from windows_integration import (
     APP_NAME,
@@ -34,9 +33,6 @@ from windows_integration import (
     get_default_install_dir,
     perform_full_install,
     perform_full_uninstall,
-    create_desktop_shortcut,
-    create_start_menu_shortcut,
-    remove_shortcuts,
 )
 
 

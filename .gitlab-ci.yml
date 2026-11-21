@@ -21,11 +21,13 @@ web:test:
   image: node:22-bookworm
   timeout: 10m
   cache:
-    key: npm-$CI_COMMIT_REF_SLUG
+    key:
+      files:
+        - package-lock.json
     paths:
-      - node_modules/
+      - .npm/
   before_script:
-    - npm ci || npm install --no-audit --no-fund
+    - npm ci --cache .npm --prefer-offline || npm install --no-audit --no-fund
   script:
     - npm run lint
     - npm test
@@ -43,13 +45,16 @@ agent:test:
   variables:
     PYTHONFAULTHANDLER: "1"
   cache:
-    key: pip-agent-$CI_COMMIT_REF_SLUG
+    key:
+      files:
+        - agent/requirements.txt
     paths:
       - .cache/pip/
   before_script:
     - apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0
     - pip install --cache-dir .cache/pip -r agent/requirements.txt
   script:
+    - python -c "import glob, py_compile; [py_compile.compile(p, doraise=True) for p in sorted(glob.glob('scripts/*.py'))]"
     - python -m unittest discover -s agent/tests -v
 
 mobile:test:
@@ -79,7 +84,37 @@ android:build:
     - if: $CI_PIPELINE_SOURCE == "web"
       when: manual
   script:
-    - python3 -c 'import os, pathlib; p = pathlib.Path.home() / ".gradle" / "init.d"; p.mkdir(parents=True, exist_ok=True); (p / "flutter-plugin-repos.init.gradle").write_text("beforeSettings { s -> s.pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } } }\n")'
+    - |
+      set -euo pipefail
+      mkdir -p "$HOME/.gradle/init.d"
+      cat <<'EOF' > "$HOME/.gradle/init.d/flutter-plugin-repos.init.gradle"
+      beforeSettings { s ->
+          s.pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+      }
+      EOF
+      FLUTTER_ROOT_DIR="${FLUTTER_ROOT:-$(dirname "$(dirname "$(command -v flutter)")")}"
+      SETTINGS_KTS="$FLUTTER_ROOT_DIR/packages/flutter_tools/gradle/settings.gradle.kts"
+      if [ -f "$SETTINGS_KTS" ] && ! grep -q "pluginManagement" "$SETTINGS_KTS"; then
+        TMP_SETTINGS="$(mktemp)"
+        cat <<'EOF' > "$TMP_SETTINGS"
+      pluginManagement {
+          repositories {
+              google()
+              mavenCentral()
+              gradlePluginPortal()
+          }
+      }
+
+      EOF
+        cat "$SETTINGS_KTS" >> "$TMP_SETTINGS"
+        mv "$TMP_SETTINGS" "$SETTINGS_KTS"
+      fi
     - cd apps/mobile
     - flutter pub get
     - flutter build apk --release --split-per-abi
@@ -101,16 +136,17 @@ package:upload:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v/
   script:
-    - mkdir -p "public/releases/$CI_COMMIT_TAG"
     - |
+      set -euo pipefail
+      mkdir -p "public/releases/$CI_COMMIT_TAG"
       if [ -f "apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" ]; then
         cp -f "apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" "public/releases/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}_arm64-v8a.apk"
       fi
       if [ -f "apps/mobile/build/app/outputs/flutter-apk/app-release.apk" ]; then
         cp -f "apps/mobile/build/app/outputs/flutter-apk/app-release.apk" "public/releases/$CI_COMMIT_TAG/AI_NetController_${CI_COMMIT_TAG}.apk"
       fi
-    - python3 scripts/update_release_manifest.py --tag "$CI_COMMIT_TAG"
-    - python3 scripts/publish_gitlab_release.py --tag "$CI_COMMIT_TAG" --packages-only
+      python3 scripts/update_release_manifest.py --tag "$CI_COMMIT_TAG"
+      python3 scripts/publish_gitlab_release.py --tag "$CI_COMMIT_TAG" --packages-only
 
 release:publish:
   stage: release

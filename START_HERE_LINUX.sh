@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# AI NetController — Linux Setup Launcher (Beta 0.80.00 / v0.80.0)
+# AI NetController — Linux / macOS Setup Launcher (Beta 0.80.00 / v0.80.0)
 # ==============================================================================
 set -e
 
 echo "============================================================================"
-echo "  AI NetController v0.80.0 (Beta 0.80.00) — Linux Setup Launcher"
+echo "  AI NetController v0.80.0 (Beta 0.80.00) — Linux / macOS Setup Launcher"
 echo "============================================================================"
 echo ""
 
@@ -13,26 +13,35 @@ cd "$SCRIPT_DIR"
 
 echo "[1/4] Checking Python 3 & Node.js environment..."
 if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-    echo "[ERROR] Node.js / npm not found. Please install Node.js 20+ before running."
+    echo "[ERROR] Node.js / npm not found. Please install Node.js 22+ before running."
     exit 1
 fi
 
-PYTHON_BIN="python3"
-if command -v python3 >/dev/null 2>&1; then
+PYTHON_BIN=""
+if [ -x ".venv/bin/python" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+elif [ -x "agent/.venv/bin/python" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/agent/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
     if [ ! -d "agent/.venv" ]; then
         python3 -m venv agent/.venv 2>/dev/null || true
     fi
     if [ -x "agent/.venv/bin/python" ]; then
-        PYTHON_BIN="agent/.venv/bin/python"
+        PYTHON_BIN="$SCRIPT_DIR/agent/.venv/bin/python"
+    else
+        PYTHON_BIN="$(command -v python3)"
     fi
+fi
+
+if [ -n "$PYTHON_BIN" ]; then
     if [ -f "agent/requirements.txt" ]; then
-        if ! "$PYTHON_BIN" -c "import websockets, psutil, mss, PIL" >/dev/null 2>&1; then
+        if ! "$PYTHON_BIN" -c "import websockets, psutil, mss, PIL, cryptography" >/dev/null 2>&1; then
             echo "      Installing Python requirements..."
             "$PYTHON_BIN" -m pip install -r agent/requirements.txt --quiet || echo "[!] Warning: pip install had errors; continuing with available packages."
         fi
     fi
 else
-    echo "[!] python3 not found. Please install Python 3.10+ (sudo apt install python3 python3-venv python3-pip)."
+    echo "[!] python3 not found. Please install Python 3.11+ (e.g. sudo apt install python3 python3-venv python3-pip)."
 fi
 
 echo "[2/4] Verifying LAN-scoped Linux firewall rules (RFC1918 only)..."
@@ -44,7 +53,11 @@ if command -v ufw >/dev/null 2>&1 && sudo -n ufw status 2>/dev/null | grep -q "S
 fi
 
 DAEMON_PID=""
+BROWSER_WAITER_PID=""
 cleanup() {
+    if [ -n "$BROWSER_WAITER_PID" ]; then
+        kill "$BROWSER_WAITER_PID" 2>/dev/null || true
+    fi
     if [ -n "$DAEMON_PID" ]; then
         kill "$DAEMON_PID" 2>/dev/null || true
     fi
@@ -52,10 +65,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "[3/4] Launching AI NetController Host Agent Daemon..."
-if [ -f "agent/agent.py" ]; then
-    "$PYTHON_BIN" agent/agent.py &
+if [ -n "$PYTHON_BIN" ] && [ -f "agent/agent.py" ]; then
+    PYTHONPATH="$SCRIPT_DIR:$SCRIPT_DIR/agent${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" agent/agent.py &
     DAEMON_PID=$!
     echo "      Daemon started (PID: $DAEMON_PID)"
+else
+    echo "[!] Host Agent skipped: Python 3 or agent/agent.py unavailable."
 fi
 
 echo "[4/4] Starting Web & Phone Controller Server on Port 3000..."
@@ -66,16 +81,24 @@ fi
 
 echo ""
 echo "[READY] Waiting for Web Server on http://localhost:3000 before opening browser..."
+OPEN_CMD=""
 if command -v xdg-open >/dev/null 2>&1; then
+    OPEN_CMD="xdg-open"
+elif command -v open >/dev/null 2>&1; then
+    OPEN_CMD="open"
+fi
+
+if [ -n "$OPEN_CMD" ]; then
     (
         for _ in $(seq 1 40); do
-            if "$PYTHON_BIN" -c "import socket; s=socket.create_connection(('127.0.0.1',3000),0.4); s.close()" 2>/dev/null; then
-                xdg-open "http://localhost:3000/?setup=1" 2>/dev/null || true
+            if node -e "const net=require('net');const s=net.createConnection({host:'127.0.0.1',port:3000},()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),400)" 2>/dev/null; then
+                "$OPEN_CMD" "http://localhost:3000/?setup=1" 2>/dev/null || true
                 break
             fi
             sleep 0.5
         done
     ) &
+    BROWSER_WAITER_PID=$!
 fi
 
 npm run dev

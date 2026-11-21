@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -10,6 +10,7 @@ const String kVaultSecretsBoxName = 'vault_secrets';
 
 @immutable
 class AppPreferencesState {
+  final AppThemeMode themeMode;
   final CyberAccentPreset accent;
   final GlassIntensity glassIntensity;
   final bool reducedMotion;
@@ -24,7 +25,8 @@ class AppPreferencesState {
   final List<String> terminalHistory;
 
   const AppPreferencesState({
-    this.accent = CyberAccentPreset.cyan,
+    this.themeMode = AppThemeMode.daylight,
+    this.accent = CyberAccentPreset.violet,
     this.glassIntensity = GlassIntensity.balanced,
     this.reducedMotion = false,
     this.targetFps = 30,
@@ -39,6 +41,7 @@ class AppPreferencesState {
   });
 
   AppPreferencesState copyWith({
+    AppThemeMode? themeMode,
     CyberAccentPreset? accent,
     GlassIntensity? glassIntensity,
     bool? reducedMotion,
@@ -53,6 +56,7 @@ class AppPreferencesState {
     List<String>? terminalHistory,
   }) {
     return AppPreferencesState(
+      themeMode: themeMode ?? this.themeMode,
       accent: accent ?? this.accent,
       glassIntensity: glassIntensity ?? this.glassIntensity,
       reducedMotion: reducedMotion ?? this.reducedMotion,
@@ -91,22 +95,43 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
     final box = _box;
     if (box == null) return;
 
-    final accentName = box.get('accent') as String?;
-    final accent = CyberAccentPreset.values.firstWhere(
-      (e) => e.name == accentName,
-      orElse: () => CyberAccentPreset.cyan,
+    String? readString(String key) {
+      final raw = box.get(key);
+      return raw is String ? raw : null;
+    }
+
+    bool readBool(String key, bool fallback) {
+      final raw = box.get(key);
+      return raw is bool ? raw : fallback;
+    }
+
+    int readInt(String key, int fallback) {
+      final raw = box.get(key);
+      return raw is int ? raw : (raw is num ? raw.toInt() : fallback);
+    }
+
+    final modeName = readString('themeMode');
+    final themeMode = AppThemeMode.values.firstWhere(
+      (e) => e.name == modeName,
+      orElse: () => AppThemeMode.daylight,
     );
 
-    final glassName = box.get('glassIntensity') as String?;
+    final accentName = readString('accent');
+    final accent = CyberAccentPreset.values.firstWhere(
+      (e) => e.name == accentName,
+      orElse: () => CyberAccentPreset.violet,
+    );
+
+    final glassName = readString('glassIntensity');
     final glass = GlassIntensity.values.firstWhere(
       (e) => e.name == glassName,
       orElse: () => GlassIntensity.balanced,
     );
 
-    final fpsRaw = box.get('targetFps') as int? ?? 30;
+    final fpsRaw = readInt('targetFps', 30);
     final fps = (fpsRaw == 15 || fpsRaw == 30 || fpsRaw == 60) ? fpsRaw : 30;
 
-    final portRaw = box.get('customScanPort') as int? ?? 8765;
+    final portRaw = readInt('customScanPort', 8765);
     final port = (portRaw >= 1 && portRaw <= 65535) ? portRaw : 8765;
 
     final historyRaw = box.get('terminalHistory');
@@ -120,17 +145,17 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
         : const [];
 
     state = AppPreferencesState(
+      themeMode: themeMode,
       accent: accent,
       glassIntensity: glass,
-      reducedMotion: box.get('reducedMotion') as bool? ?? false,
+      reducedMotion: readBool('reducedMotion', false),
       targetFps: fps,
-      biometricLockEnabled: box.get('biometricLockEnabled') as bool? ?? false,
-      preferTls: box.get('preferTls') as bool? ?? false,
-      enableE2eVault: box.get('enableE2eVault') as bool? ?? true,
-      hapticsEnabled: box.get('hapticsEnabled') as bool? ?? true,
-      keepScreenAwake: box.get('keepScreenAwake') as bool? ?? true,
-      hasCompletedOnboarding:
-          box.get('hasCompletedOnboarding') as bool? ?? false,
+      biometricLockEnabled: readBool('biometricLockEnabled', false),
+      preferTls: readBool('preferTls', false),
+      enableE2eVault: readBool('enableE2eVault', true),
+      hapticsEnabled: readBool('hapticsEnabled', true),
+      keepScreenAwake: readBool('keepScreenAwake', true),
+      hasCompletedOnboarding: readBool('hasCompletedOnboarding', false),
       customScanPort: port,
       terminalHistory: history,
     );
@@ -141,6 +166,18 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
     if (box != null) {
       await box.put(key, value);
     }
+  }
+
+  Future<void> setThemeMode(AppThemeMode mode) async {
+    state = state.copyWith(themeMode: mode);
+    await _write('themeMode', mode.name);
+  }
+
+  Future<void> toggleThemeMode() async {
+    final next = state.themeMode == AppThemeMode.daylight
+        ? AppThemeMode.dark
+        : AppThemeMode.daylight;
+    await setThemeMode(next);
   }
 
   Future<void> setAccent(CyberAccentPreset accent) async {
@@ -222,6 +259,7 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
     final box = _box;
     if (box != null) {
       await box.putAll({
+        'themeMode': defaults.themeMode.name,
         'accent': defaults.accent.name,
         'glassIntensity': defaults.glassIntensity.name,
         'reducedMotion': defaults.reducedMotion,
@@ -231,7 +269,9 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
         'enableE2eVault': defaults.enableE2eVault,
         'hapticsEnabled': defaults.hapticsEnabled,
         'keepScreenAwake': defaults.keepScreenAwake,
+        'hasCompletedOnboarding': defaults.hasCompletedOnboarding,
         'customScanPort': defaults.customScanPort,
+        'terminalHistory': defaults.terminalHistory,
       });
     }
   }
@@ -243,6 +283,14 @@ final appPreferencesProvider =
     });
 
 final cyberPaletteProvider = Provider<CyberPalette>((ref) {
-  final prefs = ref.watch(appPreferencesProvider);
-  return CyberPalette.fromPreset(prefs.accent, glass: prefs.glassIntensity);
+  final (accent, glass, themeMode) = ref.watch(
+    appPreferencesProvider.select(
+      (p) => (p.accent, p.glassIntensity, p.themeMode),
+    ),
+  );
+  return CyberPalette.fromPreset(
+    accent,
+    glass: glass,
+    themeMode: themeMode,
+  );
 });

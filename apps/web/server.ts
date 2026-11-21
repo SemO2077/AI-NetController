@@ -415,9 +415,15 @@ async function loadDaemonConfig(forceRefresh = false): Promise<DaemonConfigData>
   return loaded;
 }
 
-function saveDaemonConfigPatch(patch: Partial<DaemonConfigData>): Promise<DaemonConfigData> {
+function updateDaemonConfig(
+  updater: (current: DaemonConfigData) => Partial<DaemonConfigData> | null
+): Promise<DaemonConfigData> {
   const op = configWriteQueue.then(async () => {
     const current = await loadDaemonConfig(true);
+    const patch = updater(current);
+    if (!patch || Object.keys(patch).length === 0) {
+      return current;
+    }
     const merged = { ...current, ...patch };
     const ok = await new Promise<boolean>((resolve) => {
       const pyScript =
@@ -444,6 +450,7 @@ function saveDaemonConfigPatch(patch: Partial<DaemonConfigData>): Promise<Daemon
       child.stdout.on('data', (chunk) => {
         stdout += String(chunk);
       });
+      child.stdin.on('error', () => done(false));
       child.on('error', () => done(false));
       child.on('close', (code) => {
         done(code === 0 && stdout.trim().endsWith('OK'));
@@ -469,6 +476,10 @@ function saveDaemonConfigPatch(patch: Partial<DaemonConfigData>): Promise<Daemon
   });
   configWriteQueue = op.catch(() => {});
   return op;
+}
+
+function saveDaemonConfigPatch(patch: Partial<DaemonConfigData>): Promise<DaemonConfigData> {
+  return updateDaemonConfig(() => patch);
 }
 
 // =====================================================================
@@ -611,7 +622,7 @@ app.post('/api/auth/session', async (req: Request, res: Response) => {
   if (rec && now < rec.lockedUntil) {
     return res.status(429).json({ error: 'Too many failed sign-in attempts. Please wait and try again.' });
   }
-  const candidate = String(req.body?.token || req.body?.pin || '').trim();
+  const candidate = String(req.body?.token || req.body?.secret || req.body?.pin || '').trim();
   const secret = await getControlSecret();
   const cfg = await loadDaemonConfig();
   const pin = cfg.pairing_pin ? String(cfg.pairing_pin).trim() : '';
@@ -649,9 +660,20 @@ app.post('/api/auth/logout', (req: Request, res: Response) => {
 // SSRF VALIDATION SHIELD (DNS Resolution + Private CIDR Blocking)
 // =====================================================================
 function isPrivateOrSpecialIp(ip: string): boolean {
-  const clean = ip.toLowerCase().replace(/^\[|\]$/g, '');
+  const clean = ip.toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
   if (clean.startsWith('::ffff:')) {
-    return isPrivateOrSpecialIp(clean.slice(7));
+    const mapped = clean.slice(7);
+    if (net.isIPv4(mapped)) {
+      return isPrivateOrSpecialIp(mapped);
+    }
+    const hexMatch = mapped.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hexMatch) {
+      const hi = parseInt(hexMatch[1], 16);
+      const lo = parseInt(hexMatch[2], 16);
+      const v4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+      return isPrivateOrSpecialIp(v4);
+    }
+    return true;
   }
   if (net.isIPv4(clean)) {
     const parts = clean.split('.').map(Number);
@@ -663,16 +685,38 @@ function isPrivateOrSpecialIp(ip: string): boolean {
     if (a === 192 && b === 168) return true;
     if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // IETF protocol / TEST-NET-1
     if (a === 198 && (b === 18 || b === 19)) return true; // Benchmarking 198.18.0.0/15
+    if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+    if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
     if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
     if (a >= 224) return true; // Multicast & reserved
     return false;
   }
   if (net.isIPv6(clean)) {
-    if (clean === '::' || clean === '::1') return true;
-    if (clean.startsWith('fc') || clean.startsWith('fd')) return true; // Unique local fc00::/7
-    if (/^fe[89ab]/.test(clean)) return true; // Link-local fe80::/10
-    if (clean.startsWith('ff')) return true; // Multicast
-    if (clean.startsWith('64:ff9b:') || clean.startsWith('2002:') || clean.startsWith('2001:0:') || clean.startsWith('2001:0000:')) return true; // NAT64, 6to4, Teredo
+    // Allowlist only global unicast 2000::/3 (first hextet 0x2000..0x3fff),
+    // rejecting Teredo (2001:0::/32), ORCHID (2001:10::/28, 2001:20::/28),
+    // Documentation (2001:db8::/32), 6to4 (2002::/16), and all non-global
+    // spaces (::, ::1, ::7f00:1, ::ffff:0:*, 64:ff9b::, 100::, fc00::/7, fe80::/10, fec0::/10, ff00::/8).
+    const firstSep = clean.indexOf(':');
+    if (firstSep <= 0) return true;
+    const firstHextet = parseInt(clean.slice(0, firstSep), 16);
+    if (Number.isNaN(firstHextet) || firstHextet < 0x2000 || firstHextet > 0x3fff) {
+      return true;
+    }
+    if (firstHextet === 0x2002) return true; // 6to4
+    if (firstHextet === 0x2001) {
+      const rest = clean.slice(firstSep + 1);
+      const secondSep = rest.indexOf(':');
+      const secondHextetStr = secondSep >= 0 ? rest.slice(0, secondSep) : rest;
+      const secondHextet = secondHextetStr === '' ? 0 : parseInt(secondHextetStr, 16);
+      if (
+        Number.isNaN(secondHextet) ||
+        secondHextet === 0x0000 || // Teredo 2001:0::/32
+        secondHextet === 0x0db8 || // Documentation 2001:db8::/32
+        (secondHextet >= 0x0010 && secondHextet <= 0x002f) // ORCHID / ORCHIDv2
+      ) {
+        return true;
+      }
+    }
     return false;
   }
   return true;
@@ -1016,6 +1060,7 @@ async function dispatchLiveAgentCommand(
     let vault: WebCryptoVault | null = null;
     let vaultReady = false;
     let commandSent = false;
+    let dispatchTimer: ReturnType<typeof setTimeout> | null = null;
 
     const packPlainFrame = (opcode: number, seq: number, payloadBytes: Uint8Array): Uint8Array<ArrayBuffer> => {
       const out = new Uint8Array(12 + payloadBytes.length);
@@ -1034,12 +1079,16 @@ async function dispatchLiveAgentCommand(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (dispatchTimer !== null) {
+        clearTimeout(dispatchTimer);
+        dispatchTimer = null;
+      }
       try {
         vault?.close();
       } catch {}
       vault = null;
       try {
-        if (ws && ws.readyState === WebSocket.OPEN) {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
           ws.close(1000, 'Control request complete');
         }
       } catch {}
@@ -1072,7 +1121,7 @@ async function dispatchLiveAgentCommand(
       }
       ws.send(vault.encryptWirePacket(opcode, payloadBytes));
       if (!awaitEvent) {
-        setTimeout(() => finish({ ok: true, response: { event: 'DISPATCHED_AEAD' } }), 50);
+        dispatchTimer = setTimeout(() => finish({ ok: true, response: { event: 'DISPATCHED_AEAD' } }), 50);
       }
     };
 
@@ -1217,7 +1266,7 @@ async function dispatchLiveAgentCommand(
           outboundSeq += 1;
           ws.send(JSON.stringify({ ...messagePayload, _seq: outboundSeq }));
           if (!awaitEvent) {
-            setTimeout(() => finish({ ok: true, response: parsed }), 40);
+            dispatchTimer = setTimeout(() => finish({ ok: true, response: parsed }), 40);
           }
         } else if (parsed.event === 'ERROR') {
           finish({ ok: false, error: parsed.error || 'Agent authentication rejected' });
@@ -1256,6 +1305,25 @@ async function dispatchLiveAgentCommand(
   });
 }
 
+let cachedManifestCheck: { hasAsInvoker: boolean; checkedAt: number } | null = null;
+
+function hasAsInvokerManifestCached(): boolean {
+  const now = Date.now();
+  if (cachedManifestCheck && now - cachedManifestCheck.checkedAt < 60_000) {
+    return cachedManifestCheck.hasAsInvoker;
+  }
+  const manifestFile = path.join(ROOT_DIR, 'agent', 'app_manifest.xml');
+  let hasAsInvoker = false;
+  try {
+    hasAsInvoker =
+      fs.existsSync(manifestFile) && fs.readFileSync(manifestFile, 'utf-8').includes('level="asInvoker"');
+  } catch {
+    hasAsInvoker = false;
+  }
+  cachedManifestCheck = { hasAsInvoker, checkedAt: now };
+  return hasAsInvoker;
+}
+
 async function getRealDaemonSnapshot() {
   const cfg = await loadDaemonConfig();
   const port = Number(cfg.port || process.env.CST_AGENT_PORT || 8765);
@@ -1275,9 +1343,7 @@ async function getRealDaemonSnapshot() {
   const mins = String(Math.floor((elapsedSec % 3600) / 60)).padStart(2, '0');
   const secs = String(elapsedSec % 60).padStart(2, '0');
 
-  const manifestFile = path.join(ROOT_DIR, 'agent', 'app_manifest.xml');
-  const hasManifest =
-    fs.existsSync(manifestFile) && fs.readFileSync(manifestFile, 'utf-8').includes('level="asInvoker"');
+  const hasManifest = hasAsInvokerManifestCached();
 
   const blacklistedDevices = Array.isArray(cfg.blacklisted_devices) ? cfg.blacklisted_devices : [];
 
@@ -1532,20 +1598,32 @@ app.get('/api/ai/models', requireControlAuth, (_req: Request, res: Response) => 
   });
 });
 
+const ALLOWED_AI_PROVIDERS = new Set<AIModelDescriptor['provider']>([
+  'gemini',
+  'ollama',
+  'deepseek',
+  'openai',
+  'custom',
+]);
+
 app.post('/api/ai/models', requireControlAuth, async (req: Request, res: Response) => {
   try {
     const { id, name, provider = 'custom', description = '', contextWindow = '128k', endpointUrl, apiKeyUrl, apiKey } = req.body || {};
     if (!id || !name) {
       return res.status(400).json({ error: 'Model ID and Name are required' });
     }
-    if (provider === 'custom' && !String(endpointUrl || '').trim()) {
-      return res.status(400).json({ error: 'Endpoint URL is required for custom AI model providers' });
+    const cleanProvider = String(provider || 'custom').trim().toLowerCase() as AIModelDescriptor['provider'];
+    if (!ALLOWED_AI_PROVIDERS.has(cleanProvider)) {
+      return res.status(400).json({ error: `Unsupported AI provider: ${cleanProvider}` });
+    }
+    if ((cleanProvider === 'custom' || cleanProvider === 'deepseek' || cleanProvider === 'openai') && !String(endpointUrl || '').trim()) {
+      return res.status(400).json({ error: 'Endpoint URL is required for custom/OpenAI-compatible AI model providers' });
     }
 
     let validatedEndpointUrl: string | undefined;
     if (endpointUrl) {
       const check = await validateExternalHttpUrl(String(endpointUrl), {
-        allowLoopback: provider === 'ollama',
+        allowLoopback: cleanProvider === 'ollama',
       });
       if (!check.valid) {
         return res.status(400).json({ error: check.error });
@@ -1569,6 +1647,9 @@ app.post('/api/ai/models', requireControlAuth, async (req: Request, res: Respons
     if (!cleanId) {
       return res.status(400).json({ error: 'Invalid model identifier' });
     }
+    if (BUILTIN_MODEL_IDS.has(cleanId)) {
+      return res.status(400).json({ error: 'Built-in AI models cannot be overwritten' });
+    }
     const existingIndex = DYNAMIC_MODELS.findIndex((m) => m.id === cleanId);
     if (existingIndex < 0 && DYNAMIC_MODELS.length >= 32) {
       return res.status(400).json({ error: 'Maximum custom model registry limit (32) reached' });
@@ -1577,7 +1658,7 @@ app.post('/api/ai/models', requireControlAuth, async (req: Request, res: Respons
     const newDescriptor: AIModelDescriptor = {
       id: cleanId,
       name: String(name).trim().slice(0, 120),
-      provider: provider as AIModelDescriptor['provider'],
+      provider: cleanProvider,
       description: String(description).trim().slice(0, 300) || 'Custom AI Model Endpoint',
       contextWindow: String(contextWindow).trim().slice(0, 40) || '128k tokens',
       isCustom: true,
@@ -1859,63 +1940,87 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
 
     switch (action) {
       case 'toggle_view_only': {
-        const nextVal = !Boolean(cfg.view_only_mode);
-        await saveDaemonConfigPatch({ view_only_mode: nextVal });
+        let nextVal = false;
+        await updateDaemonConfig((cur) => {
+          nextVal = !Boolean(cur.view_only_mode);
+          return { view_only_mode: nextVal };
+        });
         addServerLog('SECURITY', `View-Only Mode ${nextVal ? 'ENABLED' : 'DISABLED'} in host config.`);
         break;
       }
       case 'toggle_hitl': {
-        const nextVal =
-          typeof req.body?.enabled === 'boolean'
-            ? req.body.enabled
-            : !(cfg.require_hitl_approval !== false);
-        await saveDaemonConfigPatch({ require_hitl_approval: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal =
+            typeof req.body?.enabled === 'boolean'
+              ? req.body.enabled
+              : !(cur.require_hitl_approval !== false);
+          return { require_hitl_approval: nextVal };
+        });
         const curUi = readPersistedUiSettings();
         writePersistedUiSettings({ ...curUi, isHitlEnabled: nextVal });
         addServerLog('SECURITY', `HITL approval gate ${nextVal ? 'ENABLED' : 'DISABLED'} in host config.`);
         break;
       }
       case 'toggle_mdns': {
-        const nextVal =
-          typeof req.body?.enabled === 'boolean'
-            ? req.body.enabled
-            : !(cfg.mdns_enabled !== false);
-        await saveDaemonConfigPatch({ mdns_enabled: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal =
+            typeof req.body?.enabled === 'boolean'
+              ? req.body.enabled
+              : !(cur.mdns_enabled !== false);
+          return { mdns_enabled: nextVal };
+        });
         const curUi = readPersistedUiSettings();
         writePersistedUiSettings({ ...curUi, isAutoDiscovery: nextVal });
         addServerLog('INFO', `mDNS advertisement ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
       case 'toggle_clipboard_sync': {
-        const nextVal = !(cfg.clipboard_sync_allowed !== false);
-        await saveDaemonConfigPatch({ clipboard_sync_allowed: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal = !(cur.clipboard_sync_allowed !== false);
+          return { clipboard_sync_allowed: nextVal };
+        });
         addServerLog('SECURITY', `Clipboard sync ${nextVal ? 'ENABLED' : 'LOCKED'}.`);
         break;
       }
       case 'toggle_auto_lock': {
-        const nextVal = !Boolean(cfg.auto_lock_on_disconnect);
-        await saveDaemonConfigPatch({ auto_lock_on_disconnect: nextVal });
+        let nextVal = false;
+        await updateDaemonConfig((cur) => {
+          nextVal = !Boolean(cur.auto_lock_on_disconnect);
+          return { auto_lock_on_disconnect: nextVal };
+        });
         addServerLog('SECURITY', `Auto-Lock on disconnect ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
       case 'toggle_auto_ban': {
-        const nextVal = !(cfg.auto_ban_intrusion !== false);
-        await saveDaemonConfigPatch({ auto_ban_intrusion: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal = !(cur.auto_ban_intrusion !== false);
+          return { auto_ban_intrusion: nextVal };
+        });
         addServerLog('SECURITY', `Auto-Ban Intrusion Shield ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
       case 'toggle_subnet_geofence': {
-        const nextVal = !(cfg.subnet_geofence_only !== false);
-        await saveDaemonConfigPatch({ subnet_geofence_only: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal = !(cur.subnet_geofence_only !== false);
+          return { subnet_geofence_only: nextVal };
+        });
         addServerLog('SECURITY', `RFC1918 Subnet Geofence ${nextVal ? 'ENABLED' : 'RELAXED'}.`);
         break;
       }
       case 'toggle_autostart': {
-        const nextVal =
-          typeof req.body?.enabled === 'boolean'
-            ? req.body.enabled
-            : !Boolean(cfg.autostart_on_boot);
-        await saveDaemonConfigPatch({ autostart_on_boot: nextVal });
+        let nextVal = false;
+        await updateDaemonConfig((cur) => {
+          nextVal =
+            typeof req.body?.enabled === 'boolean'
+              ? req.body.enabled
+              : !Boolean(cur.autostart_on_boot);
+          return { autostart_on_boot: nextVal };
+        });
         if (process.platform === 'win32') {
           await new Promise<void>((resolve) => {
             const pyScript =
@@ -1932,39 +2037,57 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         break;
       }
       case 'toggle_pause': {
-        const nextPaused =
-          typeof req.body?.paused === 'boolean' ? req.body.paused : !Boolean(cfg.paused);
-        await saveDaemonConfigPatch({ paused: nextPaused });
+        let nextPaused = false;
+        await updateDaemonConfig((cur) => {
+          nextPaused =
+            typeof req.body?.paused === 'boolean' ? req.body.paused : !Boolean(cur.paused);
+          return { paused: nextPaused };
+        });
         addServerLog('WARN', `Daemon packet intake ${nextPaused ? 'PAUSED' : 'RESUMED'}.`);
         break;
       }
       case 'toggle_file_transfer': {
-        const nextVal = !(cfg.file_transfer_enabled !== false);
-        await saveDaemonConfigPatch({ file_transfer_enabled: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal = !(cur.file_transfer_enabled !== false);
+          return { file_transfer_enabled: nextVal };
+        });
         addServerLog('INFO', `Chunked File Transfer ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
       case 'toggle_audio_control': {
-        const nextVal = !(cfg.audio_control_enabled !== false);
-        await saveDaemonConfigPatch({ audio_control_enabled: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal = !(cur.audio_control_enabled !== false);
+          return { audio_control_enabled: nextVal };
+        });
         addServerLog('INFO', `Remote System Audio Control ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
       case 'toggle_ollama_bridge': {
-        const nextVal = !(cfg.ollama_bridge_enabled !== false);
-        await saveDaemonConfigPatch({ ollama_bridge_enabled: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal = !(cur.ollama_bridge_enabled !== false);
+          return { ollama_bridge_enabled: nextVal };
+        });
         addServerLog('INFO', `Local Ollama AI Bridge ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
       case 'toggle_start_minimized': {
-        const nextVal = !Boolean(cfg.start_minimized);
-        await saveDaemonConfigPatch({ start_minimized: nextVal });
+        let nextVal = false;
+        await updateDaemonConfig((cur) => {
+          nextVal = !Boolean(cur.start_minimized);
+          return { start_minimized: nextVal };
+        });
         addServerLog('INFO', `Start minimized to system tray ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
       case 'toggle_close_to_tray': {
-        const nextVal = !(cfg.close_to_tray !== false);
-        await saveDaemonConfigPatch({ close_to_tray: nextVal });
+        let nextVal = true;
+        await updateDaemonConfig((cur) => {
+          nextVal = !(cur.close_to_tray !== false);
+          return { close_to_tray: nextVal };
+        });
         addServerLog('INFO', `Close window to system tray ${nextVal ? 'ENABLED' : 'DISABLED'}.`);
         break;
       }
@@ -1973,14 +2096,16 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         if (!targetId) {
           return res.status(400).json({ error: 'clientId is required to toggle trust' });
         }
-        const currentClients = Array.isArray(cfg.paired_clients) ? [...cfg.paired_clients] : [];
-        const idx = currentClients.findIndex((c: any) => c.id === targetId || c.ip === targetId);
-        if (idx >= 0) {
-          currentClients[idx] = { ...currentClients[idx], isTrusted: !Boolean(currentClients[idx].isTrusted) };
-        } else {
-          currentClients.push({ id: targetId, ip: String(ip || ''), device: targetId, isTrusted: true, inputAllowed: true });
-        }
-        await saveDaemonConfigPatch({ paired_clients: currentClients });
+        await updateDaemonConfig((cur) => {
+          const currentClients = Array.isArray(cur.paired_clients) ? [...cur.paired_clients] : [];
+          const idx = currentClients.findIndex((c: any) => c.id === targetId || c.ip === targetId);
+          if (idx >= 0) {
+            currentClients[idx] = { ...currentClients[idx], isTrusted: !Boolean(currentClients[idx].isTrusted) };
+          } else {
+            currentClients.push({ id: targetId, ip: String(ip || ''), device: targetId, isTrusted: true, inputAllowed: true });
+          }
+          return { paired_clients: currentClients };
+        });
         addServerLog('SECURITY', `Updated trusted policy for client ${targetId}.`);
         break;
       }
@@ -1989,15 +2114,17 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         if (!targetId) {
           return res.status(400).json({ error: 'clientId is required to toggle client input' });
         }
-        const currentClients = Array.isArray(cfg.paired_clients) ? [...cfg.paired_clients] : [];
-        const idx = currentClients.findIndex((c: any) => c.id === targetId || c.ip === targetId);
-        if (idx >= 0) {
-          const prevInput = currentClients[idx].inputAllowed !== false;
-          currentClients[idx] = { ...currentClients[idx], inputAllowed: !prevInput };
-        } else {
-          currentClients.push({ id: targetId, ip: String(ip || ''), device: targetId, isTrusted: false, inputAllowed: false });
-        }
-        await saveDaemonConfigPatch({ paired_clients: currentClients });
+        await updateDaemonConfig((cur) => {
+          const currentClients = Array.isArray(cur.paired_clients) ? [...cur.paired_clients] : [];
+          const idx = currentClients.findIndex((c: any) => c.id === targetId || c.ip === targetId);
+          if (idx >= 0) {
+            const prevInput = currentClients[idx].inputAllowed !== false;
+            currentClients[idx] = { ...currentClients[idx], inputAllowed: !prevInput };
+          } else {
+            currentClients.push({ id: targetId, ip: String(ip || ''), device: targetId, isTrusted: false, inputAllowed: false });
+          }
+          return { paired_clients: currentClients };
+        });
         addServerLog('SECURITY', `Updated remote input lock for client ${targetId}.`);
         break;
       }
@@ -2006,9 +2133,12 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         if (!targetId) {
           return res.status(400).json({ error: 'clientId is required to disconnect client' });
         }
-        const currentClients = Array.isArray(cfg.paired_clients) ? cfg.paired_clients : [];
-        const filtered = currentClients.filter((c: any) => c.id !== targetId && c.ip !== targetId);
-        await saveDaemonConfigPatch({ paired_clients: filtered });
+        await updateDaemonConfig((cur) => {
+          const currentClients = Array.isArray(cur.paired_clients) ? cur.paired_clients : [];
+          return {
+            paired_clients: currentClients.filter((c: any) => c.id !== targetId && c.ip !== targetId),
+          };
+        });
         const disRes = await dispatchLiveAgentCommand('127.0.0.1', daemonPort, {
           action: 'DISCONNECT_CLIENT',
           clientId: targetId,
@@ -2068,8 +2198,11 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
         }
         const rawMac = String(req.body?.mac || '').trim();
         const cleanMac = /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(rawMac) ? rawMac.toUpperCase() : '00:00:00:00:00:00';
-        const currentBans = Array.isArray(cfg.blacklisted_devices) ? [...cfg.blacklisted_devices] : [];
-        if (!currentBans.some((b: any) => (typeof b === 'string' ? b === banIp : b.ip === banIp))) {
+        await updateDaemonConfig((cur) => {
+          const currentBans = Array.isArray(cur.blacklisted_devices) ? [...cur.blacklisted_devices] : [];
+          if (currentBans.some((b: any) => (typeof b === 'string' ? b === banIp : b.ip === banIp))) {
+            return null;
+          }
           currentBans.unshift({
             id: `BAN-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
             ip: banIp,
@@ -2078,20 +2211,23 @@ app.post('/api/daemon/action', requireControlAuth, async (req: Request, res: Res
             reason: String(req.body?.reason || 'Blacklisted via Web Control Console').slice(0, 180),
             bannedAt: new Date().toLocaleTimeString('en-GB', { hour12: false }),
           });
-          await saveDaemonConfigPatch({ blacklisted_devices: currentBans });
-        }
-        void dispatchLiveAgentCommand('127.0.0.1', daemonPort, { action: 'DISCONNECT_CLIENT', ip: banIp }, 'DISCONNECT_ACK', 2500);
+          return { blacklisted_devices: currentBans };
+        });
+        void dispatchLiveAgentCommand('127.0.0.1', daemonPort, { action: 'DISCONNECT_CLIENT', ip: banIp }, 'DISCONNECT_ACK', 2500).catch(() => {});
         addServerLog('ALERT', `Blacklisted peer IP ${banIp} in host daemon firewall config.`);
         break;
       }
       case 'unban_device': {
         const banId = String(req.body?.banId || '');
         const banIp = String(ip || '');
-        const currentBans = Array.isArray(cfg.blacklisted_devices) ? cfg.blacklisted_devices : [];
-        const filtered = currentBans.filter((b: any) =>
-          typeof b === 'string' ? b !== banIp && b !== banId : b.id !== banId && b.ip !== banIp
-        );
-        await saveDaemonConfigPatch({ blacklisted_devices: filtered });
+        await updateDaemonConfig((cur) => {
+          const currentBans = Array.isArray(cur.blacklisted_devices) ? cur.blacklisted_devices : [];
+          return {
+            blacklisted_devices: currentBans.filter((b: any) =>
+              typeof b === 'string' ? b !== banIp && b !== banId : b.id !== banId && b.ip !== banIp
+            ),
+          };
+        });
         addServerLog('SECURITY', `Removed firewall blacklist entry (${banId || banIp}).`);
         break;
       }
@@ -2608,12 +2744,17 @@ function sendRealWolPacket(mac: string, broadcastIp = '255.255.255.255', port = 
     const finish = (err?: Error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       try {
         client.close();
       } catch {}
       if (err) reject(err);
       else resolve();
     };
+
+    const timeout = setTimeout(() => {
+      finish(new Error('UDP Wake-on-LAN socket send timed out'));
+    }, 3000);
 
     client.on('error', (err) => finish(err));
     client.bind(0, () => {
@@ -2690,57 +2831,66 @@ function writePersistedWolSchedules(list: PersistedWolSchedule[]): void {
 
 const firedScheduleMinuteKey = new Map<string, string>();
 const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+let wolSchedulerRunning = false;
 
 setInterval(async () => {
-  const schedules = readPersistedWolSchedules();
-  if (schedules.length === 0) return;
-  const now = new Date();
-  const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  const dayKey = WEEKDAY_KEYS[now.getDay()];
-  const minuteStamp = `${now.toDateString()} ${hhmm}`;
+  if (wolSchedulerRunning) return;
+  wolSchedulerRunning = true;
+  try {
+    const schedules = readPersistedWolSchedules();
+    if (schedules.length === 0) return;
+    const now = new Date();
+    const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const dayKey = WEEKDAY_KEYS[now.getDay()];
+    const minuteStamp = `${now.toDateString()} ${hhmm}`;
 
-  if (firedScheduleMinuteKey.size > 200) {
-    for (const [k, v] of firedScheduleMinuteKey.entries()) {
-      if (v !== minuteStamp) firedScheduleMinuteKey.delete(k);
-    }
-  }
-
-  for (const sched of schedules) {
-    if (!sched.enabled || sched.time !== hhmm) continue;
-    const normalizedDays = Array.isArray(sched.days)
-      ? sched.days.map((d) => String(d).trim().toLowerCase().slice(0, 3))
-      : [];
-    if (normalizedDays.length > 0 && !normalizedDays.includes(dayKey)) continue;
-    if (firedScheduleMinuteKey.get(sched.id) === minuteStamp) continue;
-
-    const rawList: unknown[] = [
-      ...(Array.isArray(sched.targetMacs) ? sched.targetMacs : []),
-      ...(sched.mac ? [sched.mac] : []),
-      ...((sched as any).targetMac ? [(sched as any).targetMac] : []),
-    ];
-    const macTargets = Array.from(
-      new Set(
-        rawList
-          .map((m) => (typeof m === 'string' ? m.trim() : typeof m === 'object' && m !== null ? String((m as any).mac || '').trim() : ''))
-          .filter((m) => m.replace(/[^a-fA-F0-9]/g, '').length === 12)
-      )
-    );
-    if (macTargets.length === 0) continue;
-
-    firedScheduleMinuteKey.set(sched.id, minuteStamp);
-    const broadcastIp = sched.broadcastIp && validateBroadcastIpv4(sched.broadcastIp) ? sched.broadcastIp : '255.255.255.255';
-    const rawPort = Number(sched.port || 9);
-    const port = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65535 ? rawPort : 9;
-    const secureOn = String(sched.secureOn || '');
-
-    for (const targetMac of macTargets) {
-      try {
-        await sendRealWolPacket(targetMac, broadcastIp, port, secureOn);
-        addServerLog('INFO', `[WoL Scheduler] Triggered scheduled wake "${sched.name}" (${targetMac}) at ${hhmm}`);
-      } catch (err: any) {
-        addServerLog('WARN', `[WoL Scheduler] Failed scheduled wake "${sched.name}" (${targetMac}): ${err?.message}`);
+    if (firedScheduleMinuteKey.size > 200) {
+      for (const [k, v] of firedScheduleMinuteKey.entries()) {
+        if (v !== minuteStamp) firedScheduleMinuteKey.delete(k);
       }
     }
+
+    for (const sched of schedules) {
+      if (!sched.enabled || sched.time !== hhmm) continue;
+      const normalizedDays = Array.isArray(sched.days)
+        ? sched.days.map((d) => String(d).trim().toLowerCase().slice(0, 3))
+        : [];
+      if (normalizedDays.length > 0 && !normalizedDays.includes(dayKey)) continue;
+      if (firedScheduleMinuteKey.get(sched.id) === minuteStamp) continue;
+
+      const rawList: unknown[] = [
+        ...(Array.isArray(sched.targetMacs) ? sched.targetMacs : []),
+        ...(sched.mac ? [sched.mac] : []),
+        ...((sched as any).targetMac ? [(sched as any).targetMac] : []),
+      ];
+      const macTargets = Array.from(
+        new Set(
+          rawList
+            .map((m) => (typeof m === 'string' ? m.trim() : typeof m === 'object' && m !== null ? String((m as any).mac || '').trim() : ''))
+            .filter((m) => m.replace(/[^a-fA-F0-9]/g, '').length === 12)
+        )
+      );
+      if (macTargets.length === 0) continue;
+
+      firedScheduleMinuteKey.set(sched.id, minuteStamp);
+      const broadcastIp = sched.broadcastIp && validateBroadcastIpv4(sched.broadcastIp) ? sched.broadcastIp : '255.255.255.255';
+      const rawPort = Number(sched.port || 9);
+      const port = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65535 ? rawPort : 9;
+      const secureOn = String(sched.secureOn || '');
+
+      for (const targetMac of macTargets) {
+        try {
+          await sendRealWolPacket(targetMac, broadcastIp, port, secureOn);
+          addServerLog('INFO', `[WoL Scheduler] Triggered scheduled wake "${sched.name}" (${targetMac}) at ${hhmm}`);
+        } catch (err: any) {
+          addServerLog('WARN', `[WoL Scheduler] Failed scheduled wake "${sched.name}" (${targetMac}): ${err?.message}`);
+        }
+      }
+    }
+  } catch (err: any) {
+    addServerLog('WARN', `[WoL Scheduler] Tick error: ${err?.message || 'Unknown error'}`);
+  } finally {
+    wolSchedulerRunning = false;
   }
 }, 20_000).unref();
 
@@ -2760,16 +2910,34 @@ app.post('/api/wol/schedules', requireControlAuth, (req: Request, res: Response)
       typeof item?.broadcastIp === 'string' && validateBroadcastIpv4(item.broadcastIp)
         ? item.broadcastIp.trim()
         : '255.255.255.255';
-    return {
-      ...item,
+    const cleanSchedule: Record<string, unknown> = {
       id: String(item?.id || `wol-${crypto.randomBytes(4).toString('hex')}`).slice(0, 64),
       name: String(item?.name || 'Wake Schedule').slice(0, 100),
       time: /^\d{2}:\d{2}$/.test(String(item?.time || '')) ? String(item.time) : '08:00',
       days: Array.isArray(item?.days) ? item.days.map((d: any) => String(d).slice(0, 12)).slice(0, 7) : [],
+      targetType: typeof item?.targetType === 'string' ? item.targetType.slice(0, 32) : 'all_lab',
       port: safePort,
       broadcastIp: safeBroadcast,
       enabled: Boolean(item?.enabled),
     };
+    if (typeof item?.targetDeviceId === 'string') cleanSchedule.targetDeviceId = item.targetDeviceId.slice(0, 64);
+    if (typeof item?.targetHostId === 'string') cleanSchedule.targetHostId = item.targetHostId.slice(0, 64);
+    if (typeof item?.targetMac === 'string') cleanSchedule.targetMac = item.targetMac.slice(0, 32);
+    if (typeof item?.mac === 'string') cleanSchedule.mac = item.mac.slice(0, 32);
+    if (Array.isArray(item?.targetMacs)) {
+      cleanSchedule.targetMacs = item.targetMacs
+        .filter((m: unknown) => typeof m === 'string')
+        .map((m: string) => m.trim().slice(0, 32))
+        .slice(0, 64);
+    }
+    if (typeof item?.targetName === 'string') cleanSchedule.targetName = item.targetName.slice(0, 120);
+    if (typeof item?.secureOn === 'string') cleanSchedule.secureOn = item.secureOn.slice(0, 32);
+    if (typeof item?.notes === 'string') cleanSchedule.notes = item.notes.slice(0, 300);
+    if (typeof item?.lastTriggered === 'string') cleanSchedule.lastTriggered = item.lastTriggered.slice(0, 64);
+    if (typeof item?.createdTimestamp === 'number' && Number.isFinite(item.createdTimestamp)) {
+      cleanSchedule.createdTimestamp = item.createdTimestamp;
+    }
+    return cleanSchedule as unknown as PersistedWolSchedule;
   });
   writePersistedWolSchedules(sanitized);
   return res.json({ success: true, schedules: sanitized });
@@ -2838,21 +3006,51 @@ app.post('/api/hosts/scan', requireControlAuth, async (_req: Request, res: Respo
         if (!match) continue;
         const ip = match[1];
         const mac = match[2].replace(/-/g, ':').toUpperCase();
-        if (seenIps.has(ip) || ip.endsWith('.255') || isPrivateOrSpecialIp(ip) === false) continue;
-        if (ip.startsWith('224.') || ip.startsWith('239.') || mac === 'FF:FF:FF:FF:FF:FF') continue;
+        if (seenIps.has(ip) || ip.endsWith('.255') || !isAllowedAgentTargetIp(ip)) continue;
+        if (mac === 'FF:FF:FF:FF:FF:FF') continue;
         seenIps.add(ip);
         candidates.push({ ip, mac });
       }
 
-      await Promise.allSettled(
-        candidates.map(async ({ ip, mac }) => {
+      const reverseDnsWithTimeout = (ip: string, ms: number): Promise<string[]> =>
+        new Promise((resolve) => {
+          let settled = false;
+          const timer = setTimeout(() => {
+            if (!settled) {
+              settled = true;
+              resolve([]);
+            }
+          }, ms);
+          dns
+            .reverse(ip)
+            .then((names) => {
+              if (!settled) {
+                settled = true;
+                clearTimeout(timer);
+                resolve(names);
+              }
+            })
+            .catch(() => {
+              if (!settled) {
+                settled = true;
+                clearTimeout(timer);
+                resolve([]);
+              }
+            });
+        });
+
+      const MAX_PROBE_CONCURRENCY = 16;
+      let cursor = 0;
+      const runProbeWorker = async () => {
+        while (cursor < candidates.length) {
+          const item = candidates[cursor++];
+          if (!item) break;
+          const { ip, mac } = item;
           const probe = await probeTcpPortWithRtt(ip, port, 350);
-          if (!probe.open) return;
+          if (!probe.open) continue;
           let resolvedName = `Peer (${ip})`;
-          try {
-            const names = await dns.reverse(ip);
-            if (names && names[0]) resolvedName = names[0];
-          } catch {}
+          const names = await reverseDnsWithTimeout(ip, 500);
+          if (names && names[0]) resolvedName = names[0];
           discovered.push({
             id: `PC-${ip.replace(/\./g, '-')}`,
             name: resolvedName,
@@ -2862,8 +3060,11 @@ app.post('/api/hosts/scan', requireControlAuth, async (_req: Request, res: Respo
             isOnline: true,
             ping: probe.rttMs,
           });
-        })
-      );
+        }
+      };
+
+      const workerCount = Math.min(MAX_PROBE_CONCURRENCY, candidates.length);
+      await Promise.allSettled(Array.from({ length: workerCount }, () => runProbeWorker()));
     }
 
     return res.json({
@@ -3641,7 +3842,18 @@ app.post('/api/chat', requireControlAuth, async (req: Request, res: Response) =>
     let reply = '';
     let actualModelUsed = String(model || 'gemini-2.5-flash');
 
-    if (requestedModel?.provider === 'ollama' || String(model || '').includes(':')) {
+    const isOllamaModel = requestedModel
+      ? requestedModel.provider === 'ollama'
+      : String(model || '').includes(':');
+    const isOpenAiCompatibleCustom = Boolean(
+      requestedModel &&
+        (requestedModel.provider === 'custom' ||
+          requestedModel.provider === 'deepseek' ||
+          requestedModel.provider === 'openai') &&
+        requestedModel.endpointUrl
+    );
+
+    if (isOllamaModel) {
       const ollamaBase = (requestedModel?.endpointUrl || DEFAULT_OLLAMA_BASE).replace(/\/+$/, '');
       const check = await validateExternalHttpUrl(`${ollamaBase}/api/chat`, { allowLoopback: true });
       if (!check.valid) {
@@ -3670,7 +3882,7 @@ app.post('/api/chat', requireControlAuth, async (req: Request, res: Response) =>
       const data: any = await ollamaRes.json();
       reply = String(data?.message?.content || '');
       actualModelUsed = requestedModel?.id || String(model);
-    } else if (requestedModel?.provider === 'custom' && requestedModel.endpointUrl) {
+    } else if (isOpenAiCompatibleCustom && requestedModel?.endpointUrl) {
       const check = await validateExternalHttpUrl(requestedModel.endpointUrl, { allowLoopback: false });
       if (!check.valid) {
         return res.status(400).json({ error: check.error });
@@ -3768,9 +3980,31 @@ app.post('/api/chat', requireControlAuth, async (req: Request, res: Response) =>
   }
 });
 
-// JSON 404 Catch-All for unknown API routes BEFORE SPA HTML fallback
+// JSON 404 Catch-All & JSON error middleware for API routes BEFORE SPA HTML fallback
 app.use('/api', (_req: Request, res: Response) => {
   res.status(404).json({ error: 'API endpoint not found' });
+});
+
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  if (!req.path.startsWith('/api')) {
+    return next(err);
+  }
+  if (res.headersSent) {
+    return next(err);
+  }
+  const status =
+    typeof err?.status === 'number' && err.status >= 400 && err.status < 600
+      ? err.status
+      : typeof err?.statusCode === 'number' && err.statusCode >= 400 && err.statusCode < 600
+      ? err.statusCode
+      : 500;
+  const message =
+    err?.type === 'entity.too.large'
+      ? 'Request payload exceeds maximum allowed size'
+      : err instanceof SyntaxError && status === 400
+      ? 'Malformed JSON request payload'
+      : err?.message || 'Internal server error';
+  return res.status(status).json({ error: message });
 });
 
 async function startServer() {

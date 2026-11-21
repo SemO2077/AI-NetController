@@ -251,35 +251,34 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
     <AnimatePresence>
       {isOpen && (
         <div className="fixed inset-0 z-[100] flex flex-col justify-start select-none">
-          {/* Tier 3 Dimming Backdrop */}
+          {/* Adaptive Dimming Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
+            transition={{ duration: 0.16 }}
             onClick={() => setOmnibarOpen(false)}
-            className="fixed inset-0 bg-black/75 backdrop-blur-md transform-gpu"
+            style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+            className="fixed inset-0 backdrop-blur-md transform-gpu modal-backdrop-scrim"
           />
 
-          {/* Tier 3 Spotlight Surface */}
+          {/* Apple Liquid Glass Spotlight Surface */}
           <motion.div
-            initial={{ opacity: 0, y: -28, scale: 0.94 }}
+            initial={{ opacity: 0, y: -28, scale: 0.92 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -18, scale: 0.96, transition: { duration: 0.13 } }}
-            transition={{ type: 'spring', stiffness: 520, damping: 36, mass: 0.7 }}
+            exit={{ opacity: 0, y: -18, scale: 0.95, transition: { duration: 0.13 } }}
+            transition={{ type: 'spring', stiffness: 460, damping: 22, mass: 0.7 }}
             className="
               relative z-10 w-full max-w-2xl mx-auto
               glass-liquid-modal
-              border border-white/15 border-t-white/25
-              shadow-[0_24px_64px_rgba(0,0,0,0.85)]
               transform-gpu
               flex flex-col pt-[calc(env(safe-area-inset-top,12px)+0.5rem)]
-              sm:rounded-b-[2rem]
+              sm:mt-6 sm:rounded-[2rem]
             "
           >
             {/* Top Drag Indicator */}
             <div className="w-full flex justify-center pb-1">
-              <div className="w-10 h-1 rounded-full bg-white/20" />
+              <div className="w-10 h-1 rounded-full bg-current opacity-20" />
             </div>
 
             {/* Search Input Bar */}
@@ -291,16 +290,16 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t('omni_placeholder')}
-                className="flex-1 bg-transparent border-none outline-none text-white text-base px-3 placeholder-white/40 font-sans"
+                className="flex-1 bg-transparent border-none outline-none ink-primary text-base px-3 placeholder:opacity-50 font-sans"
               />
               {query ? (
                 <button
                   type="button"
                   onClick={() => setQuery('')}
-                  className="min-w-[44px] min-h-[44px] flex items-center justify-center text-white/50 hover:text-white transition cursor-pointer"
+                  className="min-w-[44px] min-h-[44px] flex items-center justify-center ink-muted hover:ink-primary transition cursor-pointer"
                   aria-label={t('omni_clear')}
                 >
-                  <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center">
+                  <div className="w-7 h-7 rounded-full liquid-control-pill flex items-center justify-center">
                     <X className="w-3.5 h-3.5" />
                   </div>
                 </button>
@@ -308,10 +307,10 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
                 <button
                   type="button"
                   onClick={() => setOmnibarOpen(false)}
-                  className="min-w-[44px] min-h-[44px] flex items-center justify-center text-white/50 hover:text-white transition cursor-pointer"
+                  className="min-w-[44px] min-h-[44px] flex items-center justify-center ink-muted hover:ink-primary transition cursor-pointer"
                   aria-label="Close search"
                 >
-                  <kbd className="inline-block px-2 py-0.5 rounded bg-white/[0.06] text-[10px] font-mono text-white/50 border border-white/[0.08]">
+                  <kbd className="inline-block px-2.5 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono">
                     ESC
                   </kbd>
                 </button>
@@ -319,43 +318,43 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
             </div>
 
             {/* Context Mode Badges & Keyboard Navigation Hint */}
-            <div className="flex items-center justify-between px-4 pb-2 text-[11px] text-white/50 border-b border-white/[0.08]">
-              <div className="flex items-center space-x-1.5">
+            <div className="flex items-center justify-between px-4 pb-2.5 text-[11px] ink-muted border-b border-white/[0.08]">
+              <div className="flex items-center gap-1.5">
                 <span
-                  className={`px-2 py-0.5 rounded-full transition ${
+                  className={`px-2.5 py-0.5 rounded-full transition ${
                     isActionMode
-                      ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-400/30'
-                      : 'bg-white/5'
+                      ? 'liquid-hero-btn preserve-white font-semibold'
+                      : 'liquid-control-pill'
                   }`}
                 >
                   {t('omni_actions')}
                 </span>
                 <span
-                  className={`px-2 py-0.5 rounded-full transition ${
+                  className={`px-2.5 py-0.5 rounded-full transition ${
                     isHostMode
-                      ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-400/30'
-                      : 'bg-white/5'
+                      ? 'liquid-hero-btn preserve-white font-semibold'
+                      : 'liquid-control-pill'
                   }`}
                 >
                   {t('omni_hosts')}
                 </span>
                 <span
-                  className={`px-2 py-0.5 rounded-full transition ${
+                  className={`px-2.5 py-0.5 rounded-full transition ${
                     isAiMode
-                      ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-400/30'
-                      : 'bg-white/5'
+                      ? 'liquid-hero-btn preserve-white font-semibold'
+                      : 'liquid-control-pill'
                   }`}
                 >
                   {t('omni_ai')}
                 </span>
               </div>
-              <span className="hidden sm:inline font-mono text-[10px] text-white/35">
+              <span className="hidden sm:inline font-mono text-[10px] opacity-65">
                 {isBg ? '↑↓ Навигация • ↵ Избор' : '↑↓ Navigate • ↵ Select'}
               </span>
             </div>
 
             {/* Results List */}
-            <div className="max-h-[58dvh] overflow-y-auto p-2 scrollbar-none space-y-1">
+            <div className="max-h-[58dvh] overflow-y-auto p-2.5 scrollbar-none space-y-1">
               {selectableItems.map((item, idx) => {
                 const Icon = item.icon;
                 const isHighlighted = idx === selectedIndex;
@@ -367,39 +366,39 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
                     onClick={item.onTrigger}
                     className={`w-full min-h-[52px] flex items-center justify-between p-3 rounded-2xl transition cursor-pointer border ${
                       isHighlighted
-                        ? 'bg-cyan-500/15 border-cyan-400/35 shadow-[0_0_16px_rgba(56,189,248,0.12)]'
-                        : 'border-transparent hover:bg-white/[0.06] hover:border-white/10'
+                        ? 'glass-liquid-elevated border-cyan-400/45 shadow-[0_6px_18px_var(--theme-accent-glow)]'
+                        : 'border-transparent hover:bg-cyan-500/8'
                     }`}
                   >
                     <div className="flex items-center space-x-3 min-w-0 flex-1">
                       <div
-                        className={`w-10 h-10 rounded-xl flex items-center justify-center border shrink-0 ${
+                        className={`w-10 h-10 squircle-badge flex items-center justify-center shrink-0 ${
                           item.kind === 'host'
-                            ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                            ? 'squircle-hero'
                             : item.kind === 'action'
-                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                            : 'bg-violet-500/10 text-violet-400 border-violet-500/20'
+                            ? 'squircle-amber'
+                            : 'squircle-violet'
                         }`}
                       >
                         <Icon className="w-4 h-4" />
                       </div>
                       <div className="flex flex-col text-left min-w-0 flex-1">
                         <div className="flex items-center space-x-2">
-                          <span className="text-sm font-semibold text-white truncate">
+                          <span className="text-sm font-bold ink-primary truncate">
                             {item.title}
                           </span>
                           {item.kind === 'host' && (
                             <span
-                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                              className={`w-2 h-2 rounded-full shrink-0 ${
                                 item.isOnline
-                                  ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
-                                  : 'bg-slate-500'
+                                  ? 'bg-emerald-500 shadow-[0_0_6px_#10b981]'
+                                  : 'bg-amber-400'
                               }`}
                             />
                           )}
                         </div>
                         {item.subtitle && (
-                          <span className="text-xs text-white/50 font-mono truncate">
+                          <span className="text-xs ink-muted font-mono truncate">
                             {item.subtitle}
                           </span>
                         )}
@@ -408,13 +407,13 @@ export const CommandOmnibar: React.FC<CommandOmnibarProps> = ({
 
                     <div className="flex items-center space-x-2 shrink-0 pl-2">
                       {item.badge && (
-                        <span className="text-[10px] bg-white/5 px-2 py-1 rounded border border-white/10 text-white/60 font-mono">
+                        <span className="text-[10px] liquid-control-pill px-2.5 py-0.5 rounded-full font-mono font-semibold">
                           {item.badge}
                         </span>
                       )}
                       <ChevronRight
                         className={`w-4 h-4 transition-transform ${
-                          isHighlighted ? 'text-cyan-300 translate-x-0.5' : 'text-white/35'
+                          isHighlighted ? 'text-cyan-400 translate-x-0.5' : 'ink-muted'
                         }`}
                       />
                     </div>

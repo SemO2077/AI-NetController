@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   RefreshCw,
   CheckCircle2,
@@ -13,9 +14,13 @@ import {
   Search,
   GitCompare,
   Server,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
 } from 'lucide-react';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { useTranslation } from '../../i18n/useTranslation';
+import { MODAL_BUBBLE_VARIANTS, SPRING_BUBBLY, SPRING_POP } from '../../utils/springPhysics';
 
 export type ComponentCategory = 'ai_model' | 'core_system' | 'security_rule' | 'network_engine';
 export type EngineType = 'ai_engine' | 'host_daemon';
@@ -235,6 +240,8 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
   const [filterCategory, setFilterCategory] = useState<
     'all' | 'ai_model' | 'core_system' | 'security_rule' | 'network_engine'
   >('all');
+  const [expandedCompId, setExpandedCompId] = useState<string | null>(null);
+  const [showAuditLog, setShowAuditLog] = useState(false);
   const [lastSystemAuditTime, setLastSystemAuditTime] = useState<string>('Pending');
   const [isRunningAiAdvisor, setIsRunningAiAdvisor] = useState(false);
   const [aiAdvisory, setAiAdvisory] = useState<{
@@ -258,11 +265,11 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    let cancelled = false;
-    fetch('/api/update/status', { credentials: 'include' })
+    const controller = new AbortController();
+    fetch('/api/update/status', { credentials: 'include', signal: controller.signal })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data) => {
-        if (cancelled || !data?.components || !Array.isArray(data.components)) return;
+        if (controller.signal.aborted || !data?.components || !Array.isArray(data.components)) return;
         setComponents((prev) => {
           const updatedExisting = prev.map((comp) => {
             const srv = data.components.find((s: any) => s.id === comp.id);
@@ -305,21 +312,19 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
         });
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
           appendLog('[WARN] /api/update/status unreachable; start Control Server for live status.');
         }
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [isOpen]);
 
   const handleRunAiAdvisor = async () => {
     triggerHapticFeedback('medium');
     setIsRunningAiAdvisor(true);
-    appendLog(
-      '[AI ADVISOR] Requesting Gemini 2.5 Flash version drift & compatibility analysis...'
-    );
+    appendLog('[AI ADVISOR] Requesting Gemini 2.5 Flash version drift & compatibility analysis...');
     try {
       const res = await fetch('/api/update/ai-analyze', {
         method: 'POST',
@@ -367,31 +372,29 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     const hasDrift = components.some((c) => c.status === 'available');
 
     let status: 'compatible' | 'drift_warning' | 'incompatible' = 'compatible';
-    let label = isBg ? 'СЪВМЕСТИМО (Няма разминаване)' : 'COMPATIBLE (No Version Drift)';
     let summary = isBg
       ? 'Хост демонът и AI двигателите са синхронизирани без протоколно разминаване.'
       : 'Host Daemon and AI Model Engine are synchronized with zero protocol drift.';
-    let badgeColor = 'bg-emerald-950/70 text-emerald-300 border-emerald-500/40';
+    let badgeColor =
+      'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30';
 
     if (hasCriticalConflict) {
       status = 'incompatible';
-      label = isBg ? 'ПРЕДУПРЕЖДЕНИЕ ЗА СЪВМЕСТИМОСТ' : 'VERSION DRIFT & COMPATIBILITY WARNING';
       summary = isBg
         ? `Хост демонът (${daemonVersion}) изостава спрямо изискванията на AI моделите.`
         : `Host Daemon (${daemonVersion}) is behind minimum required AI bridge version.`;
-      badgeColor = 'bg-amber-950/80 text-amber-300 border-amber-500/50';
+      badgeColor = 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/35';
     } else if (hasDrift) {
       status = 'drift_warning';
-      label = isBg ? 'НАЛИЧНИ АКТУАЛИЗАЦИИ' : 'MINOR VERSION DRIFT DETECTED';
       summary = isBg
         ? `Налични са ${availableAiUpdates} AI актуализации и ${availableDaemonUpdates} обновления за хост демона.`
-        : `${availableAiUpdates} AI Model updates and ${availableDaemonUpdates} Host Daemon component updates available.`;
-      badgeColor = 'bg-cyan-950/80 text-cyan-300 border-cyan-500/50';
+        : `${availableAiUpdates} AI Model updates and ${availableDaemonUpdates} Host Daemon updates available.`;
+      badgeColor =
+        'bg-[var(--accent-primary)]/15 text-[var(--accent-primary)] border-[var(--accent-primary)]/35';
     }
 
     return {
       status,
-      label,
       summary,
       badgeColor,
       daemonVersion,
@@ -417,7 +420,10 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
   if (!isOpen) return null;
 
-  const runServerCheck = async (scope: 'all' | 'ai_engine' | 'host_daemon', targetComponentId?: string) => {
+  const runServerCheck = async (
+    scope: 'all' | 'ai_engine' | 'host_daemon',
+    targetComponentId?: string
+  ) => {
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const res = await fetch('/api/update/check', {
       method: 'POST',
@@ -435,13 +441,12 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
       );
     }
     setLastSystemAuditTime(nowStr);
-    setComponents((prev) =>
-      prev.map((c) => {
+    const checkedList = Array.isArray(data.checkedComponents) ? data.checkedComponents : [];
+    setComponents((prev) => {
+      const updatedExisting = prev.map((c) => {
         if (targetComponentId && c.id !== targetComponentId) return c;
         if (!targetComponentId && scope !== 'all' && c.engineType !== scope) return c;
-        const srv = Array.isArray(data.checkedComponents)
-          ? data.checkedComponents.find((s: any) => s.id === c.id)
-          : undefined;
+        const srv = checkedList.find((s: any) => s.id === c.id);
         const isUpToDate = srv
           ? srv.status === 'up_to_date'
           : c.status === 'completed' || c.status === 'up_to_date';
@@ -450,10 +455,35 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
           currentVersion: srv?.currentVersion || c.currentVersion,
           latestVersion: srv?.latestVersion || c.latestVersion,
           lastCheckedAt: nowStr,
-          status: isUpToDate ? 'up_to_date' : 'available',
+          status: isUpToDate ? ('up_to_date' as const) : ('available' as const),
+          driftSeverity: isUpToDate ? ('none' as const) : c.driftSeverity,
+          driftDescription: isUpToDate ? 'No version drift (Up to date)' : c.driftDescription,
         };
-      })
-    );
+      });
+      const existingIds = new Set(updatedExisting.map((c) => c.id));
+      const extraFromServer: UpdatableComponent[] = checkedList
+        .filter((s: any) => s?.id && !existingIds.has(s.id))
+        .map((s: any) => {
+          const isUpToDate = s.status === 'up_to_date';
+          return {
+            id: String(s.id),
+            name: String(s.name || s.id),
+            category: (s.category || 'ai_model') as ComponentCategory,
+            engineType: (s.category === 'ai_model' ? 'ai_engine' : 'host_daemon') as EngineType,
+            currentVersion: String(s.currentVersion || 'installed'),
+            latestVersion: String(s.latestVersion || s.currentVersion || 'latest'),
+            description: String(s.description || 'Server-reported runtime component'),
+            size: String(s.size || '—'),
+            status: isUpToDate ? 'up_to_date' : 'available',
+            progress: isUpToDate ? 100 : 0,
+            driftSeverity: isUpToDate ? 'none' : 'minor',
+            driftDescription: isUpToDate ? 'No version drift (Up to date)' : 'Update available',
+            compatibilityRequirement: 'Verified by Control Server',
+            lastCheckedAt: nowStr,
+          };
+        });
+      return [...updatedExisting, ...extraFromServer];
+    });
     return data;
   };
 
@@ -465,14 +495,10 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     try {
       await runServerCheck('all');
       appendLog('[CHECK COMPLETE] System audit finished via control server.');
-      if (onNotify) {
-        onNotify(
-          isBg
-            ? 'Системната проверка завърши успешно.'
-            : 'System update check completed.',
-          'success'
-        );
-      }
+      onNotify?.(
+        isBg ? 'Системната проверка завърши успешно.' : 'System update check completed.',
+        'success'
+      );
     } catch (err: any) {
       appendLog(`[CHECK ERROR] ${err?.message || err}`);
     } finally {
@@ -488,18 +514,14 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     try {
       const data = await runServerCheck('ai_engine');
       const checked = Array.isArray(data?.checkedComponents) ? data.checkedComponents : [];
-      const aiPending = checked.filter(
-        (c: any) => c.status && c.status !== 'up_to_date'
-      ).length;
+      const aiPending = checked.filter((c: any) => c.status && c.status !== 'up_to_date').length;
       appendLog(`[AI ENGINE CHECK] Completed (${aiPending} update(s) available).`);
-      if (onNotify) {
-        onNotify(
-          isBg
-            ? `AI двигател: ${aiPending} модела имат налични актуализации.`
-            : `AI Model Engine: ${aiPending} model(s) have updates available.`,
-          aiPending > 0 ? 'info' : 'success'
-        );
-      }
+      onNotify?.(
+        isBg
+          ? `AI двигател: ${aiPending} модела имат налични актуализации.`
+          : `AI Model Engine: ${aiPending} model(s) have updates available.`,
+        aiPending > 0 ? 'info' : 'success'
+      );
     } catch (err: any) {
       appendLog(`[AI CHECK ERROR] ${err?.message || err}`);
     } finally {
@@ -515,18 +537,12 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     try {
       const data = await runServerCheck('host_daemon');
       const checked = Array.isArray(data?.checkedComponents) ? data.checkedComponents : [];
-      const daemonPending = checked.filter(
-        (c: any) => c.status && c.status !== 'up_to_date'
-      ).length;
+      const daemonPending = checked.filter((c: any) => c.status && c.status !== 'up_to_date').length;
       appendLog(`[HOST DAEMON CHECK] Completed (${daemonPending} update(s) available).`);
-      if (onNotify) {
-        onNotify(
-          isBg
-            ? 'Проверката на хост демона завърши.'
-            : 'Host Daemon check completed.',
-          daemonPending > 0 ? 'info' : 'success'
-        );
-      }
+      onNotify?.(
+        isBg ? 'Проверката на хост демона завърши.' : 'Host Daemon check completed.',
+        daemonPending > 0 ? 'info' : 'success'
+      );
     } catch (err: any) {
       appendLog(`[DAEMON CHECK ERROR] ${err?.message || err}`);
     } finally {
@@ -543,17 +559,26 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     setCheckingComponentId(componentId);
     appendLog(`[COMPONENT AUDIT] Checking manifest for ${item.name}...`);
     try {
-      await runServerCheck(item.engineType, componentId);
-      appendLog(`[AUDIT FINISHED] ${item.name}: Current ${item.currentVersion} | Target ${item.latestVersion}.`);
-      if (onNotify) {
-        const bgInfo = COMPONENT_BG_MAP[item.id];
-        onNotify(
-          isBg
-            ? `Проверка за ${item.name}: ${bgInfo?.driftDescription || item.driftDescription}`
-            : `Check for ${item.name}: ${item.driftDescription}`,
-          'info'
-        );
-      }
+      const data = await runServerCheck(item.engineType, componentId);
+      const refreshed = Array.isArray(data?.checkedComponents)
+        ? data.checkedComponents.find((s: any) => s.id === componentId)
+        : undefined;
+      const curVer = refreshed?.currentVersion || item.currentVersion;
+      const latVer = refreshed?.latestVersion || item.latestVersion;
+      const isFreshUpToDate = refreshed ? refreshed.status === 'up_to_date' : item.status === 'up_to_date';
+      appendLog(`[AUDIT FINISHED] ${item.name}: Current ${curVer} | Target ${latVer}.`);
+      const bgInfo = COMPONENT_BG_MAP[item.id];
+      const statusText = isFreshUpToDate
+        ? isBg
+          ? 'Актуална версия'
+          : 'Up to date'
+        : isBg
+        ? bgInfo?.driftDescription || item.driftDescription
+        : item.driftDescription;
+      onNotify?.(
+        isBg ? `Проверка за ${item.name}: ${statusText}` : `Check for ${item.name}: ${statusText}`,
+        'info'
+      );
     } catch (err: any) {
       appendLog(`[AUDIT ERROR] ${item.name}: ${err?.message || err}`);
     } finally {
@@ -626,18 +651,16 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
     setIsUpdatingAll(false);
     triggerHapticFeedback('medium');
-    if (onNotify) {
-      onNotify(
-        failedCount === 0
-          ? isBg
-            ? 'Компонентите бяха обновени успешно!'
-            : 'Components updated successfully!'
-          : isBg
-          ? `${failedCount} компонента не можаха да се обновят. Вижте дневника.`
-          : `${failedCount} component update(s) failed. Check logs for details.`,
-        failedCount === 0 ? 'success' : 'warning'
-      );
-    }
+    onNotify?.(
+      failedCount === 0
+        ? isBg
+          ? 'Компонентите бяха обновени успешно!'
+          : 'Components updated successfully!'
+        : isBg
+        ? `${failedCount} компонента не можаха да се обновят. Вижте дневника.`
+        : `${failedCount} component update(s) failed. Check logs for details.`,
+      failedCount === 0 ? 'success' : 'warning'
+    );
   };
 
   const handleUpdateSingle = async (componentId: string) => {
@@ -669,14 +692,12 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
       );
 
       appendLog(`[SUCCESS] ${item.name} updated to ${item.latestVersion}.`);
-      if (onNotify) {
-        onNotify(
-          isBg
-            ? `Компонентът ${item.name} беше успешно обновен!`
-            : `Component ${item.name} was updated successfully!`,
-          'success'
-        );
-      }
+      onNotify?.(
+        isBg
+          ? `Компонентът ${item.name} беше успешно обновен!`
+          : `Component ${item.name} was updated successfully!`,
+        'success'
+      );
     } catch (err: any) {
       appendLog(`[UPDATE FAILED] ${item.name}: ${err?.message || err}`);
       setComponents((prev) =>
@@ -684,14 +705,12 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
           c.id === componentId ? { ...c, status: 'error', progress: 0 } : c
         )
       );
-      if (onNotify) {
-        onNotify(
-          isBg
-            ? `Неуспешно обновяване на ${item.name}: ${err?.message || 'Грешка'}`
-            : `Failed to update ${item.name}: ${err?.message || 'Error'}`,
-          'warning'
-        );
-      }
+      onNotify?.(
+        isBg
+          ? `Неуспешно обновяване на ${item.name}: ${err?.message || 'Грешка'}`
+          : `Failed to update ${item.name}: ${err?.message || 'Error'}`,
+        'warning'
+      );
     }
   };
 
@@ -700,6 +719,8 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     filterCategory === 'all'
       ? components
       : components.filter((c) => c.category === filterCategory);
+
+  const aiModelsCount = components.filter((c) => c.category === 'ai_model').length;
 
   return (
     <div
@@ -710,41 +731,44 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
           onClose();
         }
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-5 bg-black/80 backdrop-blur-md animate-in fade-in select-none"
+      style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-5 backdrop-blur-md select-none"
     >
-      <div
+      <motion.div
         id="system-update-modal"
-        className="w-full max-w-5xl bg-[#091020]/96 backdrop-blur-3xl border border-white/15 border-t-white/25 rounded-[24px] shadow-[0_24px_64px_rgba(0,0,0,0.92)] flex flex-col max-h-[92dvh] overflow-hidden"
+        variants={MODAL_BUBBLE_VARIANTS}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        className="w-full max-w-5xl glass-liquid-modal rounded-[28px] flex flex-col max-h-[92dvh] overflow-hidden"
       >
-        {/* =====================================================================
-            COMPACT TOP HEADER (Never overflows or clips on mobile)
-           ===================================================================== */}
-        <div className="p-3.5 sm:p-5 bg-[#060b16] border-b border-white/10 flex flex-col gap-3 shrink-0">
-          {/* Top Row: Icon + Title + Close Button */}
+        {/* Top Accent Specular Bar */}
+        <div className="h-1 w-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)] shrink-0" />
+
+        {/* Header */}
+        <div className="p-4 sm:p-5 border-b border-[var(--glass-border)] flex flex-col gap-3 shrink-0">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3 min-w-0 flex-1">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500/20 to-purple-600/30 border border-cyan-400/40 flex items-center justify-center shadow-[0_0_12px_rgba(0,240,255,0.25)] shrink-0 mt-0.5">
+              <div className="w-10 h-10 squircle-badge squircle-hero shrink-0 mt-0.5">
                 <RefreshCw
-                  className={`w-5 h-5 text-cyan-400 ${
-                    isUpdatingAll || isCheckingAll ? 'animate-spin' : ''
-                  }`}
+                  className={`w-5 h-5 ${isUpdatingAll || isCheckingAll ? 'animate-spin' : ''}`}
                 />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-sm sm:text-base lg:text-lg font-bold font-display tracking-tight text-white break-words">
+                  <h2 className="text-sm sm:text-base lg:text-lg font-extrabold font-display tracking-tight ink-primary break-words">
                     {isBg
-                      ? 'Център за Системни и AI Обновления'
-                      : 'System & AI Model Update Center'}
+                      ? 'Център за системни и AI обновления'
+                      : 'System & AI Update Center'}
                   </h2>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 shrink-0">
-                    Beta v0.80.0 OTA
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--accent-primary)]/14 text-[var(--accent-primary)] border border-[var(--accent-primary)]/30 shrink-0">
+                    v0.80.0 OTA
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5 break-words leading-snug">
+                <p className="text-xs ink-secondary mt-0.5 break-words leading-snug">
                   {isBg
-                    ? 'Автоматични и ръчни проверки за AI модели и Хост Демон с анализ на съвместимостта'
-                    : 'Automated & manual update checks for AI Model Engine and Host Daemon with version drift analysis'}
+                    ? 'Проверки за AI модели и хост демон с анализ на съвместимостта и версиите'
+                    : 'Automated & manual update checks for AI engines and Host Daemon with version drift telemetry'}
                 </p>
               </div>
             </div>
@@ -753,27 +777,24 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
               id="close-update-modal-btn"
               type="button"
               onClick={onClose}
-              className="w-10 h-10 min-w-[40px] min-h-[40px] rounded-xl flex items-center justify-center text-slate-400 hover:text-white bg-white/5 hover:bg-rose-500/20 border border-white/10 transition cursor-pointer shrink-0"
+              className="w-10 h-10 min-w-[40px] min-h-[40px] rounded-full liquid-control-pill flex items-center justify-center ink-secondary hover:ink-primary transition cursor-pointer shrink-0"
               aria-label={isBg ? 'Затвори' : 'Close'}
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Action Buttons Row (Wraps cleanly on mobile and desktop) */}
+          {/* Action Buttons Row */}
           <div className="flex items-center gap-2 flex-wrap">
-            {/* GEMINI AI DRIFT & UPGRADE ADVISOR BUTTON */}
             <button
               id="ai-advisor-btn"
               type="button"
               onClick={handleRunAiAdvisor}
               disabled={isRunningAiAdvisor || isUpdatingAll}
-              className="min-h-[38px] flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs font-semibold bg-purple-950/60 hover:bg-purple-900/60 text-purple-200 border border-purple-400/40 hover:border-purple-300 transition shadow-sm cursor-pointer disabled:opacity-50"
+              className="min-h-[38px] flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full bg-violet-500/15 hover:bg-violet-500/22 text-violet-700 dark:text-violet-300 border border-violet-500/35 font-display text-xs font-bold transition cursor-pointer disabled:opacity-50"
             >
-              <Brain
-                className={`w-3.5 h-3.5 text-purple-300 shrink-0 ${
-                  isRunningAiAdvisor ? 'animate-pulse' : ''
-                }`}
+              <Sparkles
+                className={`w-3.5 h-3.5 shrink-0 ${isRunningAiAdvisor ? 'animate-pulse' : ''}`}
               />
               <span className="truncate">
                 {isRunningAiAdvisor
@@ -781,21 +802,20 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                     ? 'AI Анализ...'
                     : 'AI Analyzing...'
                   : isBg
-                  ? '✨ AI Одит'
-                  : '✨ AI Drift Advisor'}
+                  ? 'AI Одит на версиите'
+                  : 'AI Drift Advisor'}
               </span>
             </button>
 
-            {/* Check All Updates Action */}
             <button
               id="check-all-updates-btn"
               type="button"
               onClick={handleCheckAllUpdates}
               disabled={isCheckingAll || isUpdatingAll}
-              className="min-h-[38px] flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs font-semibold bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-500/40 hover:border-cyan-400 transition shadow-sm cursor-pointer disabled:opacity-50"
+              className="min-h-[38px] flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full liquid-control-pill ink-primary font-display text-xs font-bold transition cursor-pointer disabled:opacity-50"
             >
               <Search
-                className={`w-3.5 h-3.5 text-cyan-400 shrink-0 ${
+                className={`w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0 ${
                   isCheckingAll ? 'animate-spin' : ''
                 }`}
               />
@@ -810,214 +830,231 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
               </span>
             </button>
 
-            {/* Update All Action */}
-            <button
+            <motion.button
               id="update-all-btn"
               type="button"
+              whileHover={availableCount > 0 ? { scale: 1.02 } : undefined}
+              whileTap={availableCount > 0 ? { scale: 0.96 } : undefined}
+              transition={SPRING_POP}
               onClick={handleUpdateAll}
               disabled={isUpdatingAll || isCheckingAll || availableCount === 0}
-              className={`min-h-[38px] w-full sm:w-auto sm:ml-auto flex items-center justify-center gap-2 px-4 py-1.5 rounded-xl font-mono text-xs font-bold transition-all shadow-md ${
+              className={`min-h-[38px] w-full sm:w-auto sm:ml-auto flex items-center justify-center gap-2 px-4 py-1.5 rounded-full font-display text-xs font-bold transition-all ${
                 availableCount > 0
-                  ? 'bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 hover:brightness-110 shadow-[0_0_15px_rgba(0,240,255,0.35)] cursor-pointer'
-                  : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                  ? 'liquid-hero-btn preserve-white cursor-pointer'
+                  : 'liquid-control-pill ink-muted opacity-70 cursor-not-allowed'
               }`}
             >
               {isUpdatingAll ? (
                 <>
-                  <RefreshCw className="w-4 h-4 animate-spin text-slate-950 shrink-0" />
+                  <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
                   <span>{isBg ? 'Обновяване...' : 'Updating...'}</span>
                 </>
               ) : (
                 <>
-                  <Zap className="w-4 h-4 fill-current shrink-0" />
+                  <Zap className="w-4 h-4 shrink-0" />
                   <span>
                     {availableCount > 0
                       ? isBg
                         ? `Обнови всички (${availableCount})`
                         : `Update All (${availableCount})`
                       : isBg
-                      ? 'Всички са обновени ✓'
-                      : 'All Up to Date ✓'}
+                      ? 'Всички са актуални'
+                      : 'All Up to Date'}
                   </span>
                 </>
               )}
-            </button>
+            </motion.button>
           </div>
         </div>
 
-        {/* =====================================================================
-            UNIFIED SCROLLABLE BODY (Prevents vertical cramping & text overlap)
-           ===================================================================== */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3.5 sm:p-5 space-y-4 bouncy-scroll">
+        {/* Scrollable Body */}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-5 space-y-4 bouncy-scroll">
           {/* AI Drift & Compatibility Report Banner */}
-          {aiAdvisory && (
-            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-purple-950/60 via-indigo-950/50 to-cyan-950/50 border border-purple-400/35 flex items-start justify-between gap-3">
-              <div className="space-y-1.5 text-xs text-slate-200 leading-relaxed whitespace-pre-wrap break-words min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap font-mono text-[11px] text-purple-300 font-bold">
-                  <Brain className="w-3.5 h-3.5 text-purple-300 shrink-0" />
-                  <span>
-                    {isBg ? 'GEMINI AI ИНЖЕНЕРЕН ДОКЛАД' : 'GEMINI AI ENGINEERING DRIFT REPORT'} (
-                    {aiAdvisory.modelUsed})
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                    {isBg
-                      ? `Сигурност: ${aiAdvisory.securityScore}/100`
-                      : `Security Score: ${aiAdvisory.securityScore}/100`}
-                  </span>
-                </div>
-                <div className="break-words">{aiAdvisory.analysis}</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAiAdvisory(null)}
-                className="text-slate-400 hover:text-white p-1 cursor-pointer shrink-0"
+          <AnimatePresence>
+            {aiAdvisory && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="p-4 rounded-3xl glass-liquid-subtle border border-violet-500/35 flex items-start justify-between gap-3"
               >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
+                <div className="space-y-1.5 text-xs ink-primary leading-relaxed whitespace-pre-wrap break-words min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap font-display text-xs font-bold text-violet-700 dark:text-violet-300">
+                    <Brain className="w-4 h-4 shrink-0" />
+                    <span>
+                      {isBg ? 'Gemini AI Доклад' : 'Gemini AI Drift Report'} ({aiAdvisory.modelUsed})
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 font-mono text-[10.5px]">
+                      {isBg
+                        ? `Сигурност: ${aiAdvisory.securityScore}/100`
+                        : `Score: ${aiAdvisory.securityScore}/100`}
+                    </span>
+                  </div>
+                  <div className="break-words ink-secondary">{aiAdvisory.analysis}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAiAdvisory(null)}
+                  className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center ink-secondary hover:ink-primary cursor-pointer shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-          {/* Compatibility Status & Version Drift Dashboard Deck */}
+          {/* 3 Hero KPI Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {/* Card 1: System Compatibility & Drift Banner */}
-            <div className="p-3.5 rounded-2xl bg-[#081224]/90 border border-cyan-500/30 flex flex-col justify-between gap-2.5 min-w-0">
-              <div className="space-y-1.5 min-w-0">
+            {/* Card 1: Compatibility */}
+            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] flex flex-col justify-between gap-3 min-w-0">
+              <div className="space-y-2 min-w-0">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-xs font-mono text-slate-300 flex items-center gap-1.5 font-semibold">
-                    <GitCompare className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                    <span>{isBg ? 'Съвместимост и версии' : 'Compatibility & Drift'}</span>
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 squircle-badge squircle-emerald shrink-0">
+                      <GitCompare className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-display font-bold ink-primary">
+                      {isBg ? 'Съвместимост' : 'Compatibility'}
+                    </span>
+                  </div>
                   <span
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded-full border shrink-0 ${systemCompatibility.badgeColor}`}
+                    className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border shrink-0 ${systemCompatibility.badgeColor}`}
                   >
                     {systemCompatibility.status === 'compatible'
                       ? isBg
                         ? 'СЪВМЕСТИМО'
-                        : 'COMPATIBLE'
+                        : 'SYNCED'
                       : systemCompatibility.status === 'incompatible'
                       ? isBg
-                        ? 'РИСК ОТ РАЗМИНАВАНЕ'
-                        : 'DRIFT WARNING'
+                        ? 'РИСК'
+                        : 'DRIFT WARN'
                       : isBg
-                      ? 'НАЛИЧНИ ОБНОВЛЕНИЯ'
-                      : 'MINOR DRIFT'}
+                      ? 'ОБНОВЛЕНИЯ'
+                      : 'UPDATES'}
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-300 leading-snug break-words">
+                <p className="text-[11.5px] ink-secondary leading-snug break-words">
                   {systemCompatibility.summary}
                 </p>
               </div>
-              <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 text-[10px] font-mono text-slate-400">
+              <div className="pt-2 border-t border-[var(--glass-border)] flex items-center justify-between gap-2 text-[10.5px] font-mono ink-muted">
                 <span>{isBg ? 'Последна проверка:' : 'Last checked:'}</span>
-                <span className="text-cyan-400 tabular-nums">
-                  {lastSystemAuditTime.split(' ')[1] || '14:20'}
+                <span className="text-[var(--accent-primary)] font-semibold tabular-nums">
+                  {lastSystemAuditTime.split(' ')[1] || lastSystemAuditTime}
                 </span>
               </div>
             </div>
 
-            {/* Card 2: AI Model Engine Hub */}
-            {(() => {
-              const aiModelsCount = components.filter((c) => c.category === 'ai_model').length;
-              return (
-                <div className="p-3.5 rounded-2xl bg-[#081224]/90 border border-purple-500/30 flex flex-col justify-between gap-2.5 min-w-0">
-                  <div className="space-y-1.5 min-w-0">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <span className="text-xs font-mono text-purple-300 flex items-center gap-1.5 font-semibold">
-                        <Brain className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                        <span>{isBg ? 'AI Моделен Двигател' : 'AI Model Engine'}</span>
-                      </span>
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-950/70 text-purple-300 border border-purple-500/40 shrink-0">
-                        Gemini + Ollama
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-300 leading-snug break-words">
-                      {systemCompatibility.availableAiUpdates > 0
-                        ? isBg
-                          ? `${systemCompatibility.availableAiUpdates} модела имат налични актуализации.`
-                          : `${systemCompatibility.availableAiUpdates} model(s) have available updates.`
-                        : aiModelsCount > 0
-                        ? isBg
-                          ? `Всички ${aiModelsCount} локални AI модела са синхронизирани.`
-                          : `All ${aiModelsCount} local AI model(s) are synchronized.`
-                        : isBg
-                        ? 'Използвайте „Провери AI“, за да инспектирате локални Ollama модели.'
-                        : 'Click "Check AI" to query local Ollama models and cloud runtime status.'}
-                    </p>
-                  </div>
-                  <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 flex-wrap">
-                    <span className="text-[10px] font-mono text-slate-400">
-                      {aiModelsCount > 0
-                        ? isBg
-                          ? `${aiModelsCount} локални модела`
-                          : `${aiModelsCount} local model(s)`
-                        : isBg
-                        ? 'Облачен / Локален режим'
-                        : 'Cloud / Local runtime'}
-                    </span>
-                    <button
-                      id="check-ai-engine-btn"
-                      type="button"
-                      onClick={handleCheckAiEngine}
-                      disabled={isCheckingAiEngine || isUpdatingAll}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-semibold bg-purple-950/60 hover:bg-purple-900/60 text-purple-300 border border-purple-500/40 hover:border-purple-400 transition cursor-pointer"
-                    >
-                      <Search className={`w-3 h-3 ${isCheckingAiEngine ? 'animate-spin' : ''}`} />
-                      <span>
-                        {isCheckingAiEngine
-                          ? isBg
-                            ? 'Проверка...'
-                            : 'Checking...'
-                          : isBg
-                          ? 'Провери AI'
-                          : 'Check AI'}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Card 3: Host Daemon & Kernel Bridge Hub */}
-            <div className="p-3.5 rounded-2xl bg-[#081224]/90 border border-cyan-500/30 flex flex-col justify-between gap-2.5 min-w-0">
-              <div className="space-y-1.5 min-w-0">
+            {/* Card 2: AI Model Engine */}
+            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] flex flex-col justify-between gap-3 min-w-0">
+              <div className="space-y-2 min-w-0">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-xs font-mono text-cyan-300 flex items-center gap-1.5 font-semibold">
-                    <Server className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                    <span>{isBg ? 'Хост Демон и Ядро' : 'Host Daemon & Core'}</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 squircle-badge squircle-violet shrink-0">
+                      <Brain className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-display font-bold ink-primary">
+                      {isBg ? 'AI Двигател' : 'AI Model Engine'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/30 shrink-0">
+                    Gemini + Ollama
                   </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/70 text-cyan-300 border border-cyan-500/40 shrink-0">
+                </div>
+                <p className="text-[11.5px] ink-secondary leading-snug break-words">
+                  {systemCompatibility.availableAiUpdates > 0
+                    ? isBg
+                      ? `${systemCompatibility.availableAiUpdates} модела имат налични актуализации.`
+                      : `${systemCompatibility.availableAiUpdates} model(s) have available updates.`
+                    : aiModelsCount > 0
+                    ? isBg
+                      ? `Всички ${aiModelsCount} локални AI модела са синхронизирани.`
+                      : `All ${aiModelsCount} local AI model(s) are synchronized.`
+                    : isBg
+                    ? 'Използвайте „Провери AI“, за да инспектирате локални Ollama модели.'
+                    : 'Click "Check AI" to query local Ollama models and cloud runtime status.'}
+                </p>
+              </div>
+              <div className="pt-2 border-t border-[var(--glass-border)] flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[10.5px] font-mono ink-muted">
+                  {aiModelsCount > 0
+                    ? isBg
+                      ? `${aiModelsCount} модела`
+                      : `${aiModelsCount} local model(s)`
+                    : isBg
+                    ? 'Облачен / Локален'
+                    : 'Cloud / Local'}
+                </span>
+                <button
+                  id="check-ai-engine-btn"
+                  type="button"
+                  onClick={handleCheckAiEngine}
+                  disabled={isCheckingAiEngine || isUpdatingAll}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-display font-bold liquid-control-pill ink-primary transition cursor-pointer"
+                >
+                  <Search
+                    className={`w-3 h-3 text-violet-500 ${isCheckingAiEngine ? 'animate-spin' : ''}`}
+                  />
+                  <span>
+                    {isCheckingAiEngine
+                      ? isBg
+                        ? 'Проверка...'
+                        : 'Checking...'
+                      : isBg
+                      ? 'Провери AI'
+                      : 'Check AI'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Card 3: Host Daemon */}
+            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] flex flex-col justify-between gap-3 min-w-0">
+              <div className="space-y-2 min-w-0">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 squircle-badge squircle-sky shrink-0">
+                      <Server className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-display font-bold ink-primary">
+                      {isBg ? 'Хост демон' : 'Host Daemon'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30 shrink-0">
                     {systemCompatibility.daemonVersion}
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-300 leading-snug break-words">
+                <p className="text-[11.5px] ink-secondary leading-snug break-words">
                   {systemCompatibility.availableDaemonUpdates > 0
                     ? isBg
-                      ? 'Налична е актуализация за Beta v0.80.0 хост агента.'
-                      : 'Host Agent update available for Beta v0.80.0.'
+                      ? 'Налична е актуализация за v0.80.0 хост агента.'
+                      : 'Host Agent update available for v0.80.0.'
                     : isBg
-                    ? 'Хост демонът е актуален с протокол Beta v0.80.0 (AI-NET/3.0).'
-                    : 'Host Daemon is up to date with Beta v0.80.0 (AI-NET/3.0).'}
+                    ? 'Хост демонът е синхронизиран с протокол AI-NET/3.0.'
+                    : 'Host Daemon is up to date with protocol AI-NET/3.0.'}
                 </p>
               </div>
-              <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-[10px] font-mono text-slate-400">
-                  {isBg ? 'Изолирани процеси' : 'Job Objects & AEAD'}
+              <div className="pt-2 border-t border-[var(--glass-border)] flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[10.5px] font-mono ink-muted">
+                  {isBg ? 'Job Objects & AEAD' : 'Job Objects & AEAD'}
                 </span>
                 <button
                   id="check-host-daemon-btn"
                   type="button"
                   onClick={handleCheckHostDaemon}
                   disabled={isCheckingHostDaemon || isUpdatingAll}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-semibold bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-500/40 hover:border-cyan-400 transition cursor-pointer"
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-display font-bold liquid-control-pill ink-primary transition cursor-pointer"
                 >
-                  <Search className={`w-3 h-3 ${isCheckingHostDaemon ? 'animate-spin' : ''}`} />
+                  <Search
+                    className={`w-3 h-3 text-sky-500 ${isCheckingHostDaemon ? 'animate-spin' : ''}`}
+                  />
                   <span>
                     {isCheckingHostDaemon
                       ? isBg
                         ? 'Проверка...'
                         : 'Checking...'
                       : isBg
-                      ? 'Провери Демон'
+                      ? 'Провери демон'
                       : 'Check Daemon'}
                   </span>
                 </button>
@@ -1025,42 +1062,51 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
             </div>
           </div>
 
-          {/* Category Filters */}
-          <div className="p-2 rounded-2xl bg-[#050914] border border-white/10 flex items-center gap-1.5 overflow-x-auto scrollbar-none text-xs font-mono">
-            <span className="text-slate-400 px-2 text-[11px] shrink-0">
-              {isBg ? 'Филтър:' : 'Filter:'}
-            </span>
+          {/* Sliding Pill Category Filters */}
+          <div className="p-1.5 rounded-full glass-liquid-subtle border border-[var(--glass-border)] flex items-center gap-1 overflow-x-auto scrollbar-none">
             {[
               {
                 id: 'all',
                 label: isBg ? `Всички (${components.length})` : `All (${components.length})`,
               },
-              { id: 'ai_model', label: isBg ? 'AI Модели (Ollama)' : 'AI Models (Ollama)' },
-              { id: 'core_system', label: isBg ? 'Системни Демони' : 'System Daemons' },
-              { id: 'security_rule', label: isBg ? 'AST & HITL Правила' : 'AST & HITL Rules' },
-              { id: 'network_engine', label: isBg ? 'Мрежови Модули' : 'Network Modules' },
-            ].map((cat) => (
-              <button
-                key={cat.id}
-                type="button"
-                onClick={() => setFilterCategory(cat.id as any)}
-                className={`px-3 py-1.5 rounded-xl transition-colors whitespace-nowrap text-xs cursor-pointer shrink-0 ${
-                  filterCategory === cat.id
-                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 font-bold'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
-                }`}
-              >
-                {cat.label}
-              </button>
-            ))}
+              { id: 'ai_model', label: isBg ? 'AI Модели' : 'AI Models' },
+              { id: 'core_system', label: isBg ? 'Системни демони' : 'System Daemons' },
+              { id: 'security_rule', label: isBg ? 'AST & HITL' : 'AST & HITL Rules' },
+              { id: 'network_engine', label: isBg ? 'Мрежови модули' : 'Network Modules' },
+            ].map((cat) => {
+              const active = filterCategory === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback('light');
+                    setFilterCategory(cat.id as any);
+                  }}
+                  className={`relative px-3.5 py-1.5 rounded-full transition-colors whitespace-nowrap text-xs font-display font-semibold cursor-pointer shrink-0 z-10 ${
+                    active ? 'preserve-white' : 'ink-secondary hover:ink-primary'
+                  }`}
+                >
+                  {active && (
+                    <motion.div
+                      layoutId="systemUpdateCategoryPill"
+                      transition={SPRING_BUBBLY}
+                      className="absolute inset-0 rounded-full liquid-hero-btn -z-10 transform-gpu"
+                    />
+                  )}
+                  <span>{cat.label}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* Component List with Structured Wrapping Metadata Chips */}
-          <div className="space-y-3">
+          {/* Component Cards List with Collapsible Release Notes */}
+          <div className="space-y-2.5">
             {filteredList.map((comp) => {
               const isUpToDate = comp.status === 'up_to_date' || comp.status === 'completed';
               const isUpdating = comp.status === 'updating';
               const isTargetChecking = checkingComponentId === comp.id;
+              const isExpanded = expandedCompId === comp.id;
               const localizedDesc = isBg
                 ? COMPONENT_BG_MAP[comp.id]?.description || comp.description
                 : comp.description;
@@ -1076,102 +1122,98 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                   comp.compatibilityRequirement
                 : comp.compatibilityRequirement;
 
+              const badgeVariant =
+                comp.category === 'ai_model'
+                  ? 'squircle-violet'
+                  : comp.category === 'core_system'
+                  ? 'squircle-sky'
+                  : comp.category === 'security_rule'
+                  ? 'squircle-amber'
+                  : 'squircle-emerald';
+
               return (
                 <div
                   key={comp.id}
                   id={`update-comp-${comp.id}`}
-                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all ${
+                  className={`p-3.5 sm:p-4 rounded-3xl glass-liquid-subtle border transition-all ${
                     isUpdating
-                      ? 'bg-cyan-950/30 border-cyan-400/50 shadow-[0_0_15px_rgba(0,240,255,0.15)]'
-                      : isUpToDate
-                      ? 'bg-[#081224]/60 border-emerald-500/25'
-                      : 'bg-[#09152B]/85 border-cyan-500/30 hover:border-cyan-400/50'
+                      ? 'border-[var(--accent-primary)]/60 shadow-md'
+                      : 'border-[var(--glass-border)] hover:border-[var(--accent-primary)]/40'
                   }`}
                 >
-                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-3.5">
+                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0 flex-1">
-                      <div className="p-2.5 rounded-xl bg-black/40 border border-cyan-500/20 text-cyan-400 shrink-0 mt-0.5">
-                        {comp.category === 'ai_model' && (
-                          <Brain className="w-4 h-4 text-purple-400" />
-                        )}
-                        {comp.category === 'core_system' && (
-                          <Cpu className="w-4 h-4 text-cyan-400" />
-                        )}
-                        {comp.category === 'security_rule' && (
-                          <ShieldCheck className="w-4 h-4 text-amber-400" />
-                        )}
-                        {comp.category === 'network_engine' && (
-                          <Radio className="w-4 h-4 text-emerald-400" />
-                        )}
+                      <div className={`w-9 h-9 squircle-badge ${badgeVariant} shrink-0 mt-0.5`}>
+                        {comp.category === 'ai_model' && <Brain className="w-4 h-4" />}
+                        {comp.category === 'core_system' && <Cpu className="w-4 h-4" />}
+                        {comp.category === 'security_rule' && <ShieldCheck className="w-4 h-4" />}
+                        {comp.category === 'network_engine' && <Radio className="w-4 h-4" />}
                       </div>
 
                       <div className="min-w-0 flex-1 space-y-1.5">
-                        {/* Component Title & Status Badges */}
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-xs sm:text-sm font-bold text-white break-all">
+                          <span className="font-display text-xs sm:text-sm font-bold ink-primary break-words">
                             {comp.name}
                           </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-black/50 text-slate-300 border border-white/10 shrink-0">
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full liquid-control-pill ink-muted shrink-0">
                             {comp.size}
                           </span>
 
                           {isUpToDate ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-950/70 text-emerald-300 border border-emerald-500/40 shrink-0">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 shrink-0">
                               <CheckCircle2 className="w-3 h-3 shrink-0" />
-                              <span>
-                                {isBg
-                                  ? `Актуална (${comp.currentVersion})`
-                                  : `Up to date (${comp.currentVersion})`}
-                              </span>
+                              <span>{comp.currentVersion}</span>
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-950/60 text-amber-300 border border-amber-500/40 shrink-0">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
                               <ArrowDownCircle className="w-3 h-3 shrink-0" />
                               <span>
-                                {isBg
-                                  ? `Налична ${comp.latestVersion}`
-                                  : `Available ${comp.latestVersion}`}
+                                {comp.currentVersion} → {comp.latestVersion}
                               </span>
                             </span>
                           )}
                         </div>
 
-                        {/* Component Description */}
-                        <p className="text-xs text-slate-300 font-sans leading-relaxed break-words">
+                        <p className="text-xs ink-secondary leading-relaxed break-words">
                           {localizedDesc}
                         </p>
 
-                        {/* Structured Metadata Chips (Never overflows horizontally!) */}
-                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[10.5px] font-mono">
-                          <span className="px-2 py-0.5 rounded-md bg-black/40 border border-white/[0.07] text-slate-400">
-                            {isBg ? 'Текуща:' : 'Current:'}{' '}
-                            <strong className="text-slate-200">{comp.currentVersion}</strong>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedCompId((prev) => (prev === comp.id ? null : comp.id))
+                          }
+                          className="inline-flex items-center gap-1 text-[11px] font-display font-semibold text-[var(--accent-primary)] hover:underline cursor-pointer"
+                        >
+                          <span>
+                            {isExpanded
+                              ? isBg
+                                ? 'Скрий детайли и бележки'
+                                : 'Hide release notes & compatibility'
+                              : isBg
+                              ? 'Бележки и съвместимост'
+                              : 'Release notes & compatibility'}
                           </span>
-                          <span className="px-2 py-0.5 rounded-md bg-black/40 border border-white/[0.07] text-slate-400">
-                            {isBg ? 'Нова:' : 'Latest:'}{' '}
-                            <strong className="text-cyan-300">{comp.latestVersion}</strong>
-                          </span>
-                          <span className="px-2 py-0.5 rounded-md bg-black/40 border border-white/[0.07] text-slate-300 break-words">
-                            {localizedDrift}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-md bg-cyan-950/35 border border-cyan-500/20 text-cyan-300/90 break-words">
-                            {localizedReq}
-                          </span>
-                        </div>
+                          {isExpanded ? (
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          )}
+                        </button>
                       </div>
                     </div>
 
-                    {/* Actions: Manual Component Check + Update */}
-                    <div className="flex items-center justify-end gap-2 shrink-0 pt-1 md:pt-0 border-t md:border-t-0 border-white/[0.06]">
+                    {/* Actions */}
+                    <div className="flex items-center justify-end gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[var(--glass-border)]">
                       <button
                         type="button"
                         onClick={() => handleCheckSingleComponent(comp.id)}
                         disabled={isTargetChecking || isUpdating}
-                        className="min-h-[36px] flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-[11px] text-slate-300 hover:text-white bg-black/40 border border-white/10 hover:border-cyan-500/30 transition cursor-pointer"
+                        className="min-h-[34px] flex items-center gap-1.5 px-3 py-1 rounded-full liquid-control-pill font-display text-[11px] font-semibold ink-primary transition cursor-pointer"
                       >
                         <Search
                           className={`w-3 h-3 shrink-0 ${
-                            isTargetChecking ? 'animate-spin text-cyan-400' : 'text-slate-400'
+                            isTargetChecking ? 'animate-spin text-[var(--accent-primary)]' : 'ink-muted'
                           }`}
                         />
                         <span>
@@ -1189,9 +1231,10 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                         <button
                           type="button"
                           onClick={() => handleUpdateSingle(comp.id)}
-                          className="min-h-[36px] flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs text-slate-300 hover:text-white bg-black/40 border border-white/10 hover:border-cyan-500/30 transition cursor-pointer"
+                          disabled={isUpdating || isUpdatingAll}
+                          className="min-h-[34px] flex items-center gap-1.5 px-3 py-1 rounded-full liquid-control-pill font-display text-[11px] font-semibold ink-secondary hover:ink-primary transition cursor-pointer disabled:opacity-50"
                         >
-                          <RefreshCw className="w-3 h-3 text-slate-400 shrink-0" />
+                          <RefreshCw className="w-3 h-3 shrink-0" />
                           <span>{isBg ? 'Преинсталирай' : 'Reinstall'}</span>
                         </button>
                       ) : (
@@ -1199,18 +1242,16 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                           type="button"
                           onClick={() => handleUpdateSingle(comp.id)}
                           disabled={isUpdating || isUpdatingAll}
-                          className="min-h-[36px] flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-mono text-xs font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-400/40 hover:border-cyan-400 shadow-[0_0_10px_rgba(0,240,255,0.2)] transition cursor-pointer disabled:opacity-50"
+                          className="min-h-[34px] flex items-center gap-1.5 px-3.5 py-1 rounded-full liquid-hero-btn preserve-white font-display text-[11px] font-bold transition cursor-pointer disabled:opacity-50"
                         >
                           {isUpdating ? (
                             <>
                               <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
-                              <span>
-                                {comp.progress}% {isBg ? 'Сваляне...' : 'Downloading...'}
-                              </span>
+                              <span>{comp.progress}%</span>
                             </>
                           ) : (
                             <>
-                              <ArrowDownCircle className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                              <ArrowDownCircle className="w-3.5 h-3.5 shrink-0" />
                               <span>{isBg ? 'Обнови' : 'Update'}</span>
                             </>
                           )}
@@ -1219,10 +1260,46 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                     </div>
                   </div>
 
+                  {/* Collapsible Release Notes & Compatibility Metadata */}
+                  <AnimatePresence initial={false}>
+                    {isExpanded && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="mt-3 pt-3 border-t border-[var(--glass-border)] space-y-2 text-[11px]">
+                          <div className="flex flex-wrap items-center gap-1.5 font-mono">
+                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--glass-border)] ink-secondary">
+                              {isBg ? 'Текуща:' : 'Current:'}{' '}
+                              <strong className="ink-primary">{comp.currentVersion}</strong>
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--glass-border)] ink-secondary">
+                              {isBg ? 'Нова:' : 'Latest:'}{' '}
+                              <strong className="text-[var(--accent-primary)]">
+                                {comp.latestVersion}
+                              </strong>
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--glass-border)] ink-secondary">
+                              {localizedDrift}
+                            </span>
+                          </div>
+                          <p className="ink-secondary">{localizedReq}</p>
+                          {comp.releaseNotes && (
+                            <div className="p-2.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] ink-secondary leading-relaxed">
+                              {comp.releaseNotes}
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
                   {isUpdating && (
-                    <div className="mt-3 w-full bg-black/50 rounded-full h-1.5 overflow-hidden border border-cyan-500/30">
+                    <div className="mt-3 w-full bg-[var(--glass-border)] rounded-full h-2 overflow-hidden">
                       <div
-                        className="bg-gradient-to-r from-cyan-400 to-blue-500 h-1.5 rounded-full transition-all duration-150"
+                        className="bg-gradient-to-r from-[var(--accent-primary)] to-[var(--accent-secondary)] h-2 rounded-full transition-all duration-200"
                         style={{ width: `${comp.progress}%` }}
                       />
                     </div>
@@ -1232,31 +1309,56 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
             })}
           </div>
 
-          {/* Live Console Update Logs Drawer */}
-          <div className="p-3.5 rounded-2xl bg-[#040812] border border-cyan-500/20 font-mono text-[11px] space-y-2">
-            <div className="flex items-center justify-between gap-2 flex-wrap text-slate-400">
-              <span className="flex items-center gap-1.5 text-cyan-400 font-semibold">
-                <Terminal className="w-3.5 h-3.5 shrink-0" />
+          {/* Collapsible Orchestration Audit Log Drawer */}
+          <div className="rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => {
+                triggerHapticFeedback('light');
+                setShowAuditLog((v) => !v);
+              }}
+              className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--glass-surface-hover)] transition cursor-pointer"
+            >
+              <span className="flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
                 <span>
                   {isBg
-                    ? 'Конзолен одит на обновленията и Drift анализа'
-                    : 'Update Orchestration & Version Drift Audit Log'}
+                    ? 'Журнал на обновленията и Drift анализа'
+                    : 'Update Orchestration & Drift Log'}
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono liquid-control-pill ink-muted tabular-nums">
+                  {updateLogs.length}
                 </span>
               </span>
-              <span className="text-[10px] text-slate-500 tabular-nums">
-                {updateLogs.length} {isBg ? 'събития' : 'events'}
-              </span>
-            </div>
-            <div className="bg-black/60 rounded-xl p-2.5 max-h-28 overflow-y-auto space-y-1 border border-white/5 text-slate-300 font-mono text-[10.5px]">
-              {updateLogs.slice(-8).map((entry) => (
-                <div key={entry.id} className="leading-snug break-words">
-                  {entry.text}
-                </div>
-              ))}
-            </div>
+              {showAuditLog ? (
+                <ChevronUp className="w-4 h-4 ink-muted shrink-0" />
+              ) : (
+                <ChevronDown className="w-4 h-4 ink-muted shrink-0" />
+              )}
+            </button>
+            <AnimatePresence initial={false}>
+              {showAuditLog && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden border-t border-[var(--glass-border)]"
+                >
+                  <div className="p-3">
+                    <div className="liquid-terminal-entry rounded-xl p-3 max-h-36 overflow-y-auto bouncy-scroll space-y-1 border border-[var(--glass-border)] ink-secondary font-mono text-[10.5px]">
+                      {updateLogs.slice(-16).map((entry) => (
+                        <div key={entry.id} className="leading-snug break-words">
+                          {entry.text}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };

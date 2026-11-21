@@ -311,6 +311,12 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             : 'Invalid PIN or host agent is unreachable.'
         );
       }
+    } catch {
+      setInlinePairError(
+        isBg
+          ? 'Грешка при връзка с хост агента.'
+          : 'Error communicating with host agent.'
+      );
     } finally {
       setIsPairingInline(false);
     }
@@ -885,6 +891,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     };
   }, [isOpen, device?.id, isDeviceOnline, isWsReady]);
 
+  // Reset transient AI proposals & context menu when switching target host
+  useEffect(() => {
+    setPendingAiActions([]);
+    setAiStatusReply(null);
+    setContextMenu(null);
+  }, [device?.id]);
+
   // Trigger initial push-stream sync, display enumeration, and single 2.5s recovery keyframe request
   useEffect(() => {
     if (!isOpen || !device || !isDeviceOnline || !isWsReady) return;
@@ -900,6 +913,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     }, 2500);
     return () => window.clearTimeout(recoveryTimer);
   }, [isOpen, device?.id, isDeviceOnline, isWsReady, isPaused]);
+
+  // Stop the remote host's 60 FPS video capture stream immediately when closing or unmounting
+  useEffect(() => {
+    if (!isOpen || !device || !isDeviceOnline || !isWsReady) return;
+    return () => {
+      onSendInputOpcodeRef.current?.(0x0a, { stream_enabled: false });
+    };
+  }, [isOpen, device?.id, isDeviceOnline, isWsReady]);
 
   // Negotiate optimal viewport dimensions, quality & FPS with 180ms debounce
   useEffect(() => {
@@ -1047,7 +1068,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Покажи работния плот' : 'Show Desktop',
       shortcut: 'Win+D',
       icon: Layers,
-      color: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20',
+      color: 'text-sky-700 dark:text-sky-300 border-sky-500/30 bg-sky-500/12 hover:bg-sky-500/20',
       onClick: () => {
         triggerHapticFeedback('light');
         setContextMenu(null);
@@ -1062,7 +1083,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Смени прозорец' : 'Switch Window',
       shortcut: 'Alt+Tab',
       icon: AppWindow,
-      color: 'text-indigo-400 border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20',
+      color: 'text-indigo-700 dark:text-indigo-300 border-indigo-500/30 bg-indigo-500/12 hover:bg-indigo-500/20',
       onClick: () => {
         triggerHapticFeedback('light');
         setContextMenu(null);
@@ -1077,7 +1098,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Файлов мениджър' : 'File Explorer',
       shortcut: 'Win+E',
       icon: FolderOpen,
-      color: 'text-amber-400 border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20',
+      color: 'text-amber-700 dark:text-amber-300 border-amber-500/30 bg-amber-500/12 hover:bg-amber-500/20',
       onClick: () => {
         triggerHapticFeedback('light');
         setContextMenu(null);
@@ -1092,7 +1113,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Уеб браузър' : 'Web Browser',
       shortcut: 'HTTPS',
       icon: Globe,
-      color: 'text-sky-400 border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20',
+      color: 'text-sky-700 dark:text-sky-300 border-sky-500/30 bg-sky-500/12 hover:bg-sky-500/20',
       onClick: () => {
         triggerHapticFeedback('light');
         setContextMenu(null);
@@ -1113,7 +1134,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Затвори приложение' : 'Close Window',
       shortcut: 'Alt+F4',
       icon: XCircle,
-      color: 'text-rose-400 border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20',
+      color: 'text-rose-700 dark:text-rose-300 border-rose-500/30 bg-rose-500/12 hover:bg-rose-500/20',
       onClick: () => {
         triggerHapticFeedback('medium');
         setContextMenu(null);
@@ -1128,7 +1149,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Скрол нагоре' : 'Scroll Up',
       shortcut: '+300',
       icon: ArrowUp,
-      color: 'text-slate-300 border-white/15 bg-white/5 hover:bg-white/10',
+      color: 'liquid-control-pill ink-primary',
       onClick: () => {
         triggerHapticFeedback('light');
         dispatchPcAction(
@@ -1142,7 +1163,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Скрол надолу' : 'Scroll Down',
       shortcut: '-300',
       icon: ArrowDown,
-      color: 'text-slate-300 border-white/15 bg-white/5 hover:bg-white/10',
+      color: 'liquid-control-pill ink-primary',
       onClick: () => {
         triggerHapticFeedback('light');
         dispatchPcAction(
@@ -1156,7 +1177,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Медия Пауза/Пусни' : 'Play / Pause',
       shortcut: 'Media',
       icon: Play,
-      color: 'text-purple-400 border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/20',
+      color: 'text-violet-700 dark:text-violet-300 border-violet-500/30 bg-violet-500/12 hover:bg-violet-500/20',
       onClick: () => {
         triggerHapticFeedback('light');
         dispatchPcAction(
@@ -1170,7 +1191,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Заглуши звука' : 'Mute Audio',
       shortcut: 'Mute',
       icon: VolumeX,
-      color: 'text-slate-300 border-white/15 bg-white/5 hover:bg-white/10',
+      color: 'liquid-control-pill ink-primary',
       onClick: () => {
         triggerHapticFeedback('light');
         dispatchPcAction(
@@ -1184,7 +1205,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Увеличи звука' : 'Volume +',
       shortcut: 'Vol+',
       icon: Volume2,
-      color: 'text-slate-300 border-white/15 bg-white/5 hover:bg-white/10',
+      color: 'liquid-control-pill ink-primary',
       onClick: () => {
         triggerHapticFeedback('light');
         dispatchPcAction(
@@ -1198,7 +1219,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Заключи компютъра' : 'Lock PC',
       shortcut: 'Win+L',
       icon: Lock,
-      color: 'text-amber-300 border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20',
+      color: 'text-amber-700 dark:text-amber-300 border-amber-500/30 bg-amber-500/12 hover:bg-amber-500/20',
       onClick: () => {
         triggerHapticFeedback('heavy');
         dispatchPcAction(
@@ -1234,35 +1255,36 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-2 sm:p-4"
+        style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+        className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-md p-2 sm:p-4 modal-backdrop-scrim"
       >
         <motion.div
-          initial={{ scale: 0.96, y: 16 }}
+          initial={{ scale: 0.94, y: 18 }}
           animate={{ scale: 1, y: 0 }}
-          exit={{ scale: 0.96, y: 16 }}
-          transition={{ type: 'spring', stiffness: 360, damping: 30 }}
-          className={`bg-[#090d16] border border-white/10 rounded-2xl overflow-hidden flex flex-col shadow-2xl transition-all duration-300 ${
-            isFullscreen ? 'w-full h-full rounded-none' : 'w-full max-w-6xl max-h-[96vh]'
+          exit={{ scale: 0.95, y: 16 }}
+          transition={{ type: 'spring', stiffness: 380, damping: 22 }}
+          className={`glass-liquid-modal overflow-hidden flex flex-col shadow-2xl transition-all duration-300 ${
+            isFullscreen ? 'w-full h-full rounded-none' : 'w-full max-w-6xl max-h-[96vh] rounded-[28px]'
           }`}
         >
           {/* Header */}
-          <div className="flex items-center justify-between gap-2 px-3.5 sm:px-4 py-3 bg-[#111726] border-b border-white/10 shrink-0">
+          <div className="flex items-center justify-between gap-2 px-4 py-3 glass-liquid-subtle border-b border-[var(--glass-border)] shrink-0">
             <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
-              <div className="relative shrink-0">
-                <Monitor className="w-5 h-5 text-cyan-400" />
+              <div className="relative w-9 h-9 squircle-badge squircle-sky shrink-0">
+                <Monitor className="w-4.5 h-4.5" />
                 {isDeviceOnline && (
-                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
+                  <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full ring-2 ring-white/80 dark:ring-slate-900" />
                 )}
               </div>
               <div className="min-w-0">
-                <h3 className="text-white font-bold text-sm flex items-center gap-2 truncate">
+                <h3 className="ink-primary font-display font-extrabold text-sm flex items-center gap-2 truncate">
                   {device.name}
-                  <span className="text-[11px] font-mono text-slate-400 bg-white/5 px-2 py-0.5 rounded border border-white/10 hidden sm:inline">
+                  <span className="text-[11px] font-mono ink-secondary liquid-control-pill px-2 py-0.5 rounded-full hidden sm:inline">
                     {device.ip}
                   </span>
                 </h3>
-                <div className="flex items-center gap-2 text-[11px] text-slate-400 min-w-0 truncate">
-                  <span className="flex items-center gap-1 text-cyan-300 font-medium truncate">
+                <div className="flex items-center gap-2 text-[11px] ink-secondary min-w-0 truncate">
+                  <span className="flex items-center gap-1 text-[var(--accent-primary)] font-medium truncate">
                     <Hand className="w-3 h-3" />
                     {isBg
                       ? '1 клик = Ляв бутон • Задръж 1 сек = Десен бутон'
@@ -1270,16 +1292,16 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   </span>
                   {typeof device.ping === 'number' && device.ping > 0 && (
                     <span className="hidden md:flex items-center gap-1">
-                      <Activity className="w-3 h-3 text-emerald-400" />
+                      <Activity className="w-3 h-3 text-emerald-500" />
                       {device.ping}ms
                     </span>
                   )}
                   {hasFrame ? (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 tabular-nums">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/18 text-emerald-700 dark:text-emerald-300 border border-emerald-500/35 tabular-nums">
                       LIVE · {liveFps} FPS
                     </span>
                   ) : (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/20 hidden lg:inline">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono text-amber-700 dark:text-amber-300 bg-amber-500/14 border border-amber-500/30 hidden lg:inline">
                       AWAITING STREAM
                     </span>
                   )}
@@ -1289,7 +1311,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
             <div className="flex items-center gap-1.5 sm:gap-2">
               {availableDisplays.length > 1 && onSendInputOpcode && isWsReady && (
-                <div className="hidden sm:flex items-center gap-1 bg-black/40 border border-white/10 rounded-lg p-0.5">
+                <div className="hidden sm:flex items-center gap-1 liquid-terminal-entry border border-[var(--glass-border)] rounded-full p-0.5">
                   {availableDisplays.map((disp, idx) => {
                     const dispIdx = disp.index ?? disp.id ?? idx + 1;
                     const active = activeDisplayIndex === dispIdx;
@@ -1304,10 +1326,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                             isBg ? `Монитор ${dispIdx}` : `Switched to Display ${dispIdx}`
                           );
                         }}
-                        className={`px-2 py-1 rounded text-[11px] font-mono font-bold transition cursor-pointer ${
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-mono font-bold transition cursor-pointer ${
                           active
-                            ? 'bg-cyan-500/25 text-cyan-200 border border-cyan-400/40'
-                            : 'text-slate-400 hover:text-white'
+                            ? 'liquid-hero-btn preserve-white'
+                            : 'ink-secondary hover:ink-primary'
                         }`}
                         title={disp.label || disp.name || `Display ${dispIdx}`}
                       >
@@ -1342,19 +1364,19 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                         : 'Pulling PC clipboard...'
                     );
                   }}
-                  className="p-2 rounded-lg bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+                  className="p-2 rounded-full liquid-control-pill ink-primary transition-colors cursor-pointer"
                   title={isBg ? 'Синхронизирай клипборд (Pull/Push)' : 'Sync Clipboard (Pull/Push)'}
                 >
-                  <Clipboard className="w-4 h-4 text-cyan-300" />
+                  <Clipboard className="w-4 h-4 text-[var(--accent-primary)]" />
                 </button>
               )}
 
               <button
                 onClick={() => setShowQuickActions(!showQuickActions)}
-                className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-colors ${
+                className={`px-3 py-1.5 rounded-full border text-xs font-display font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
                   showQuickActions
-                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                    : 'bg-white/5 text-slate-400 border-white/10 hover:text-white'
+                    ? 'bg-[var(--accent-primary)]/16 text-[var(--accent-primary)] border-[var(--accent-primary)]/40'
+                    : 'liquid-control-pill ink-secondary hover:ink-primary'
                 }`}
                 title={isBg ? 'Бързи контроли за ПК' : 'PC Quick Actions'}
               >
@@ -1367,7 +1389,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
               <select
                 value={aspectPreset}
                 onChange={(e) => setAspectPreset(e.target.value as ScreenAspectPreset)}
-                className="bg-black/40 border border-white/10 text-white text-xs rounded-lg px-2 py-1.5 outline-none focus:border-cyan-500 cursor-pointer hidden md:block"
+                className="liquid-control-pill ink-primary text-xs font-medium rounded-full px-2.5 py-1.5 outline-none focus:border-[var(--accent-primary)] cursor-pointer hidden md:block"
                 title={isBg ? 'Съотношение на екрана' : 'Aspect Ratio Preset'}
               >
                 <option value="fit">{isBg ? 'Адаптивно (Fit)' : 'Auto Fit'}</option>
@@ -1378,16 +1400,16 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 <option value="fill">{isBg ? 'Запълване (Fill)' : 'Stretch Fill'}</option>
               </select>
 
-              <div className="hidden lg:flex items-center gap-1 bg-black/40 border border-white/10 rounded-lg p-0.5">
+              <div className="hidden lg:flex items-center gap-0.5 liquid-terminal-entry border border-[var(--glass-border)] rounded-full p-0.5">
                 {[1, 1.5, 2].map((z) => (
                   <button
                     key={z}
                     type="button"
                     onClick={() => setZoomFactor(z)}
-                    className={`px-2 py-1 rounded text-[11px] font-mono font-bold transition cursor-pointer ${
+                    className={`px-2 py-1 rounded-full text-[11px] font-mono font-bold transition cursor-pointer ${
                       zoomFactor === z
-                        ? 'bg-cyan-500/25 text-cyan-200 border border-cyan-400/40'
-                        : 'text-slate-400 hover:text-white'
+                        ? 'liquid-hero-btn preserve-white'
+                        : 'ink-secondary hover:ink-primary'
                     }`}
                   >
                     {z}x
@@ -1412,7 +1434,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     );
                   }
                 }}
-                className="bg-black/40 border border-white/10 text-white text-xs rounded-lg px-2.5 py-1.5 outline-none focus:border-cyan-500 hidden md:block"
+                className="liquid-control-pill ink-primary text-xs font-medium rounded-full px-2.5 py-1.5 outline-none focus:border-[var(--accent-primary)] hidden md:block cursor-pointer"
               >
                 <option value="High">{isBg ? 'Високо (1080p)' : 'High (1080p)'}</option>
                 <option value="Medium">{isBg ? 'Средно (720p)' : 'Medium (720p)'}</option>
@@ -1427,10 +1449,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     onRefreshFrame?.(undefined, true);
                   }
                 }}
-                className={`p-2 rounded-lg border transition-colors ${
+                className={`p-2 rounded-full border transition-colors cursor-pointer ${
                   isPaused
-                    ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                    : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+                    ? 'bg-amber-500/18 text-amber-700 dark:text-amber-300 border-amber-500/35'
+                    : 'liquid-control-pill ink-primary'
                 }`}
                 title={isPaused ? (isBg ? 'Продължи потока' : 'Resume Stream') : (isBg ? 'Пауза на потока' : 'Pause Stream')}
               >
@@ -1443,7 +1465,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
               <button
                 onClick={handleCapture}
                 disabled={isCapturing || !isDeviceOnline || !hasFrame}
-                className="p-2 rounded-lg bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors disabled:opacity-50 hidden sm:flex"
+                className="p-2 rounded-full liquid-control-pill ink-primary transition-colors disabled:opacity-45 hidden sm:flex cursor-pointer"
                 title={isBg ? 'Снимка на екрана' : 'Take Screenshot'}
               >
                 <Camera className="w-4 h-4" />
@@ -1451,7 +1473,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
               <button
                 onClick={toggleFullscreen}
-                className="p-2 rounded-lg bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors"
+                className="p-2 rounded-full liquid-control-pill ink-primary transition-colors cursor-pointer"
                 title={isBg ? 'Цял екран' : 'Toggle Fullscreen'}
               >
                 {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -1459,7 +1481,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
               <button
                 onClick={onClose}
-                className="p-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20 transition-colors"
+                className="p-2 rounded-full bg-rose-500/14 text-rose-600 dark:text-rose-300 border border-rose-500/30 hover:bg-rose-500/24 transition-colors cursor-pointer"
                 title={isBg ? 'Затвори' : 'Close'}
               >
                 <X className="w-4 h-4" />
@@ -1479,7 +1501,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
               // Prevent mobile browser native long-press menu
               e.preventDefault();
             }}
-            className="relative flex-1 min-h-[250px] sm:min-h-[380px] bg-black flex items-center justify-center overflow-hidden select-none touch-none cursor-crosshair"
+            className="dark-video-stage relative flex-1 min-h-[250px] sm:min-h-[380px] bg-black flex items-center justify-center overflow-hidden select-none touch-none cursor-crosshair"
           >
             {isDeviceOnline ? (
               <>
@@ -1885,12 +1907,12 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                className="bg-[#0e1422] border-t border-white/10 px-3 py-2.5 shrink-0 overflow-hidden"
+                className="glass-liquid-subtle border-t border-[var(--glass-border)] px-3.5 py-2.5 shrink-0 overflow-hidden"
               >
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                    <Cpu className="w-3 h-3 text-cyan-400" />
-                    {isBg ? 'Бързи действия за компютър (1 докосване)' : 'Common PC Quick Actions (1-Tap)'}
+                  <span className="text-[11px] font-display font-bold ink-secondary flex items-center gap-1.5">
+                    <Cpu className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                    {isBg ? 'Бързи действия (1 докосване)' : 'PC Quick Actions (1-Tap)'}
                   </span>
                   <div className="flex items-center gap-1.5">
                     <button
@@ -1900,7 +1922,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                           isBg ? 'Клавиш Enter' : 'Sent Enter Key'
                         )
                       }
-                      className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-mono text-slate-300"
+                      className="px-2.5 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-primary cursor-pointer"
                     >
                       Enter
                     </button>
@@ -1911,7 +1933,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                           isBg ? 'Клавиш Escape' : 'Sent Escape Key'
                         )
                       }
-                      className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-mono text-slate-300"
+                      className="px-2.5 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-primary cursor-pointer"
                     >
                       Esc
                     </button>
@@ -1922,7 +1944,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                           isBg ? 'Клавиш Backspace' : 'Sent Backspace'
                         )
                       }
-                      className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-mono text-slate-300"
+                      className="px-2.5 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-primary cursor-pointer"
                     >
                       Backspace
                     </button>
@@ -1936,7 +1958,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                       <button
                         key={item.id}
                         onClick={item.onClick}
-                        className={`shrink-0 px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-all active:scale-95 ${item.color}`}
+                        className={`shrink-0 px-3 py-1.5 rounded-full border text-xs font-display font-semibold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${item.color}`}
                       >
                         <IconComponent className="w-3.5 h-3.5 shrink-0" />
                         <span className="whitespace-nowrap">{item.label}</span>
@@ -1953,7 +1975,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
           {/* Built-in AI PC Command Text Box & Direct Keyboard Bar */}
           {isDeviceOnline && (
-            <div className="bg-[#12192b] border-t border-white/10 px-3 sm:px-4 py-3 shrink-0 space-y-2">
+            <div className="glass-liquid-subtle border-t border-[var(--glass-border)] px-3 sm:px-4 py-3 shrink-0 space-y-2">
               {/* AI Status Reply Banner + Explicit 1-Tap Approval for Proposed Actions */}
               <AnimatePresence>
                 {(aiStatusReply || pendingAiActions.length > 0) && (
@@ -1961,10 +1983,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 6 }}
-                    className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-xs text-cyan-200"
+                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-1.5 rounded-2xl bg-[var(--accent-primary)]/12 border border-[var(--accent-primary)]/30 text-xs ink-primary"
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <Sparkles className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
                       <span className="truncate">{aiStatusReply}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -1984,7 +2006,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                               );
                             }
                           }}
-                          className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold cursor-pointer"
+                          className="px-3 py-1 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/35 text-emerald-700 dark:text-emerald-300 text-[11px] font-display font-bold cursor-pointer"
                         >
                           {isBg
                             ? `Потвърди (${pendingAiActions.length})`
@@ -1997,7 +2019,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                           setAiStatusReply(null);
                           setPendingAiActions([]);
                         }}
-                        className="text-slate-400 hover:text-white shrink-0 p-0.5 cursor-pointer"
+                        className="ink-secondary hover:ink-primary shrink-0 p-1 cursor-pointer"
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -2008,14 +2030,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
               {/* Mode Switcher + Input Form */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <div className="flex items-center bg-black/40 p-1 rounded-xl border border-white/10 shrink-0">
+                <div className="flex items-center liquid-terminal-entry p-1 rounded-full border border-[var(--glass-border)] shrink-0">
                   <button
                     type="button"
                     onClick={() => setInputMode('ai')}
-                    className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-full text-xs font-display font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                       inputMode === 'ai'
-                        ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
+                        ? 'liquid-hero-btn preserve-white'
+                        : 'ink-secondary hover:ink-primary'
                     }`}
                   >
                     <Sparkles className="w-3.5 h-3.5" />
@@ -2024,10 +2046,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setInputMode('keyboard')}
-                    className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-full text-xs font-display font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                       inputMode === 'keyboard'
-                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                        : 'text-slate-400 hover:text-white'
+                        ? 'liquid-hero-btn preserve-white'
+                        : 'ink-secondary hover:ink-primary'
                     }`}
                   >
                     <Keyboard className="w-3.5 h-3.5" />
@@ -2044,7 +2066,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     className="flex-1 flex items-center gap-2"
                   >
                     <div className="relative flex-1">
-                      <Sparkles className="w-4 h-4 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <Sparkles className="w-4 h-4 text-[var(--accent-primary)] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
                         ref={aiInputRef}
                         type="text"
@@ -2052,16 +2074,16 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                         onChange={(e) => setAiPrompt(e.target.value)}
                         placeholder={
                           isBg
-                            ? 'Кажете на ИИ какво да направи на ПК (напр. "Отвори Task Manager", "Пусни youtube.com")...'
-                            : 'Tell AI what to do on your PC (e.g. "Open Task Manager", "Open youtube.com", "Show desktop")...'
+                            ? 'Кажете на ИИ какво да направи на ПК (напр. "Отвори Task Manager")...'
+                            : 'Tell AI what to do on your PC (e.g. "Open Task Manager", "Show desktop")...'
                         }
-                        className="w-full bg-black/50 border border-cyan-500/30 rounded-xl pl-10 pr-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
+                        className="w-full liquid-terminal-entry border border-[var(--glass-border)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--accent-primary)]"
                       />
                     </div>
                     <button
                       type="submit"
                       disabled={isAiBusy || !aiPrompt.trim()}
-                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 hover:opacity-95 disabled:opacity-40 transition-all shrink-0 shadow-lg shadow-cyan-500/20"
+                      className="px-4 py-2 rounded-full liquid-hero-btn preserve-white text-xs sm:text-sm font-display font-bold flex items-center gap-1.5 disabled:opacity-45 transition-all shrink-0 cursor-pointer"
                     >
                       {isAiBusy ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -2074,7 +2096,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 ) : (
                   <form onSubmit={handleSendKeyboardText} className="flex-1 flex items-center gap-2">
                     <div className="relative flex-1">
-                      <Keyboard className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <Keyboard className="w-4 h-4 ink-muted absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
                         ref={keyboardInputRef}
                         type="text"
@@ -2085,13 +2107,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                             ? 'Въведете текст директно към активния прозорец на компютъра...'
                             : 'Type text directly into the active window on the PC...'
                         }
-                        className="w-full bg-black/50 border border-white/15 rounded-xl pl-10 pr-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
+                        className="w-full liquid-terminal-entry border border-[var(--glass-border)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--accent-primary)]"
                       />
                     </div>
                     <button
                       type="submit"
                       disabled={!keyboardText.trim()}
-                      className="px-4 py-2 rounded-xl bg-cyan-500 text-black text-xs sm:text-sm font-bold flex items-center gap-1.5 hover:bg-cyan-400 disabled:opacity-40 transition-colors shrink-0"
+                      className="px-4 py-2 rounded-full liquid-hero-btn preserve-white text-xs sm:text-sm font-display font-bold flex items-center gap-1.5 disabled:opacity-45 transition-colors shrink-0 cursor-pointer"
                     >
                       <CornerDownLeft className="w-3.5 h-3.5" />
                       <span>{isBg ? 'Напиши' : 'Type'}</span>
@@ -2103,8 +2125,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
               {/* Quick AI Prompt Chips */}
               {inputMode === 'ai' && (
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-0.5">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500 shrink-0 mr-1">
-                    {isBg ? 'ИИ Команди:' : 'Try AI:'}
+                  <span className="text-[10.5px] font-display font-semibold ink-muted shrink-0 mr-1">
+                    {isBg ? 'Опитайте:' : 'Try AI:'}
                   </span>
                   {aiSuggestions.map((suggestion) => (
                     <button
@@ -2112,7 +2134,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                       type="button"
                       disabled={isAiBusy}
                       onClick={() => handleSendAiCommand(suggestion)}
-                      className="shrink-0 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-cyan-500/15 border border-white/10 hover:border-cyan-500/30 text-[11px] text-slate-300 hover:text-cyan-300 transition-colors"
+                      className="shrink-0 px-2.5 py-1 rounded-full liquid-control-pill text-[11px] ink-secondary hover:ink-primary transition-colors cursor-pointer"
                     >
                       {suggestion}
                     </button>
@@ -2123,7 +2145,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           )}
 
           {/* Footer Status */}
-          <div className="px-4 py-2 bg-[#0b0f19] border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 shrink-0">
+          <div className="px-4 py-2 glass-liquid-subtle border-t border-[var(--glass-border)] flex flex-wrap items-center justify-between gap-2 text-[11px] ink-muted shrink-0">
             <div className="flex items-center gap-4">
               {(() => {
                 const isEncryptedWs = wsUrl
@@ -2144,19 +2166,19 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   ? 'HMAC-SHA256 Локален Поток (LAN)'
                   : 'HMAC-Authenticated LAN Stream';
                 return (
-                  <span className={`flex items-center gap-1.5 ${isVaultEncrypted ? 'text-emerald-300' : ''}`}>
-                    <Shield className={`w-3.5 h-3.5 ${secureShield ? 'text-emerald-400' : 'text-cyan-400'}`} />
+                  <span className={`flex items-center gap-1.5 ${isVaultEncrypted ? 'text-emerald-600 dark:text-emerald-300 font-semibold' : ''}`}>
+                    <Shield className={`w-3.5 h-3.5 ${secureShield ? 'text-emerald-500' : 'text-[var(--accent-primary)]'}`} />
                     {badgeText}
                   </span>
                 );
               })()}
               <span className="hidden sm:flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-cyan-500" />
+                <Terminal className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
                 {isBg ? 'Протокол: AI-NET/3.0' : 'Protocol: AI-NET/3.0'}
               </span>
             </div>
             <div className="flex items-center gap-3 font-mono">
-              <span className="text-cyan-400">
+              <span className="text-[var(--accent-primary)] font-semibold">
                 {isBg ? 'Курсор' : 'Cursor'}:{' '}
                 {Math.round((cursorPos.x / 100) * (canvasNatSizeRef.current.width || 1920))}x
                 {Math.round((cursorPos.y / 100) * (canvasNatSizeRef.current.height || 1080))}

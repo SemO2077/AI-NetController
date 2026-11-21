@@ -116,6 +116,7 @@ class ViewportStreamWidget extends StatefulWidget {
 class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   static int _wakelockRefCount = 0;
 
+  bool _holdsWakelock = false;
   HostConnectionClient? _client;
   HostConnectionClient? _retainedClient;
   StreamSubscription<Uint8List>? _frameSub;
@@ -163,15 +164,28 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   Timer? _fpsTimer;
   Timer? _frameRecoveryTimer;
 
+  void _syncWakelock(bool shouldHold) {
+    if (shouldHold == _holdsWakelock) return;
+    _holdsWakelock = shouldHold;
+    if (shouldHold) {
+      _wakelockRefCount++;
+      unawaited(WakelockPlus.enable().catchError((_) {}));
+    } else {
+      if (_wakelockRefCount > 0) {
+        _wakelockRefCount--;
+      }
+      if (_wakelockRefCount == 0) {
+        unawaited(WakelockPlus.disable().catchError((_) {}));
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    if (widget.keepScreenAwake) {
-      _wakelockRefCount++;
-      unawaited(WakelockPlus.enable().catchError((_) {}));
-    }
+    _syncWakelock(widget.keepScreenAwake);
     ThermalGovernor.instance.addListener(_onThermalConfigChanged);
-    _connect();
+    _connect(notify: false);
 
     _fpsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
@@ -184,6 +198,9 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
   @override
   void didUpdateWidget(covariant ViewportStreamWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.keepScreenAwake != widget.keepScreenAwake) {
+      _syncWakelock(widget.keepScreenAwake);
+    }
     if (oldWidget.hostIp != widget.hostIp ||
         oldWidget.wsPort != widget.wsPort ||
         oldWidget.sharedSecret.trim() != widget.sharedSecret.trim() ||
@@ -192,7 +209,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       _hasReceivedFrame = false;
       _lastSentPhysicalWidth = 0;
       _lastSentPhysicalHeight = 0;
-      _connect();
+      _connect(notify: false);
     } else if (oldWidget.targetFps != widget.targetFps &&
         _isAuthenticated &&
         _lastPhysicalWidth > 0 &&
@@ -237,12 +254,20 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     }
   }
 
-  void _connect() {
+  void _connect({bool notify = true}) {
+    void applyState(VoidCallback fn) {
+      if (notify && mounted) {
+        setState(fn);
+      } else {
+        fn();
+      }
+    }
+
     _cleanupSocket();
     final secret = widget.sharedSecret.trim();
     if (!NetworkValidators.isValidIpOrHost(widget.hostIp) ||
         !NetworkValidators.isValidPort(widget.wsPort)) {
-      setState(() {
+      applyState(() {
         _isConnected = false;
         _isAuthenticated = false;
         _isConnecting = false;
@@ -251,7 +276,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       return;
     }
     if (secret.isEmpty) {
-      setState(() {
+      applyState(() {
         _isConnected = false;
         _isAuthenticated = false;
         _isConnecting = false;
@@ -276,7 +301,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     final Uint8List? cachedFrame = client.lastFrame;
     final bool hasCachedFrame = cachedFrame != null && cachedFrame.isNotEmpty;
     _latencyNotifier.value = initialSnap.latencyMs;
-    setState(() {
+    applyState(() {
       _isConnecting = initialSnap.isConnecting || !initialSnap.isVaultEstablished;
       _isConnected = initialSnap.isConnected;
       _isAuthenticated = initialSnap.isVaultEstablished;
@@ -580,20 +605,20 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
 
   void _showKeyboardDialog() {
     final textCtrl = TextEditingController();
-    final palette = context.palette;
     showDialog<void>(
       context: context,
       builder: (ctx) {
+        final dlgPalette = ctx.palette;
         return AlertDialog(
-          backgroundColor: palette.surfaceElevated,
+          backgroundColor: dlgPalette.surfaceElevated,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: dlgPalette.dividerColor),
           ),
-          title: const Text(
+          title: Text(
             'Type on Remote PC',
             style: TextStyle(
-              color: Colors.white,
+              color: dlgPalette.textPrimary,
               fontSize: 15,
               fontWeight: FontWeight.bold,
             ),
@@ -605,16 +630,16 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                 TextField(
                   controller: textCtrl,
                   autofocus: true,
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  style: TextStyle(color: dlgPalette.textPrimary, fontSize: 13),
                   decoration: InputDecoration(
                     hintText: 'Enter text, commands or shortcuts...',
                     hintStyle: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.35),
+                      color: dlgPalette.textTertiary,
                       fontSize: 12,
                     ),
                   ),
                   onSubmitted: (val) {
-                    if (val.isNotEmpty) {
+                    if (val.isNotEmpty && mounted) {
                       _sendKeyboardText(val, pressEnter: true);
                       Navigator.of(ctx).pop();
                     }
@@ -625,14 +650,18 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    _buildQuickKeyChip('Enter', () {
-                      _sendKey('enter');
+                    _buildQuickKeyChip(dlgPalette, 'Enter', () {
+                      if (mounted) _sendKey('enter');
                       Navigator.of(ctx).pop();
                     }),
-                    _buildQuickKeyChip('Backspace', () => _sendKey('backspace')),
-                    _buildQuickKeyChip('Tab', () => _sendKey('tab')),
-                    _buildQuickKeyChip('Esc', () {
-                      _sendKey('esc');
+                    _buildQuickKeyChip(dlgPalette, 'Backspace', () {
+                      if (mounted) _sendKey('backspace');
+                    }),
+                    _buildQuickKeyChip(dlgPalette, 'Tab', () {
+                      if (mounted) _sendKey('tab');
+                    }),
+                    _buildQuickKeyChip(dlgPalette, 'Esc', () {
+                      if (mounted) _sendKey('esc');
                       Navigator.of(ctx).pop();
                     }),
                   ],
@@ -644,26 +673,27 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: Text('Cancel',
-                  style: TextStyle(color: palette.textSecondary)),
+                  style: TextStyle(color: dlgPalette.textSecondary)),
             ),
             TextButton(
               onPressed: () {
                 final val = textCtrl.text;
-                if (val.isNotEmpty) {
+                if (val.isNotEmpty && mounted) {
                   _sendKeyboardText(val, pressEnter: false);
                 }
                 Navigator.of(ctx).pop();
               },
-              child: Text('Send', style: TextStyle(color: palette.primary)),
+              child: Text('Send', style: TextStyle(color: dlgPalette.primary)),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: palette.primary,
-                foregroundColor: Colors.black,
+                backgroundColor: dlgPalette.primary,
+                foregroundColor:
+                    dlgPalette.isDaylight ? Colors.white : const Color(0xFF090B1D),
               ),
               onPressed: () {
                 final val = textCtrl.text;
-                if (val.isNotEmpty) {
+                if (val.isNotEmpty && mounted) {
                   _sendKeyboardText(val, pressEnter: true);
                 }
                 Navigator.of(ctx).pop();
@@ -679,21 +709,27 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     });
   }
 
-  Widget _buildQuickKeyChip(String label, VoidCallback onTap) {
+  Widget _buildQuickKeyChip(
+    CyberPalette palette,
+    String label,
+    VoidCallback onTap,
+  ) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.08),
+          color: palette.isDaylight
+              ? palette.primary.withValues(alpha: 0.08)
+              : Colors.white.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+          border: Border.all(color: palette.dividerColor),
         ),
         child: Text(
           label,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: palette.textPrimary,
             fontSize: 11,
             fontFamily: 'monospace',
           ),
@@ -735,14 +771,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     _fpsNotifier.dispose();
     _latencyNotifier.dispose();
     unawaited(_frameController.close());
-    if (widget.keepScreenAwake) {
-      if (_wakelockRefCount > 0) {
-        _wakelockRefCount--;
-      }
-      if (_wakelockRefCount == 0) {
-        unawaited(WakelockPlus.disable().catchError((_) {}));
-      }
-    }
+    _syncWakelock(false);
     super.dispose();
   }
 
@@ -836,13 +865,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                         frameStream: _frameController.stream,
                         initialFrame: _client?.lastFrame,
                         fit: BoxFit.contain,
-                        onRequestKeyframe: (opcode) {
+                        onRequestKeyframe: (_) {
                           final client = _client;
                           if (client != null && client.isVaultEstablished) {
-                            client.sendEncrypted(
-                              BinaryOpcode.frameSync,
-                              Uint8List(0),
-                            );
+                            client.requestKeyframe();
                           }
                         },
                       ),
@@ -909,9 +935,16 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
                           final palette = ctx.palette;
                           return Container(
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.6),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.white24),
+                              color: palette.surfaceElevated.withValues(
+                                  alpha: palette.isDaylight ? 0.90 : 0.82),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: palette.glassBorderIdle),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.18),
+                                  blurRadius: 12,
+                                ),
+                              ],
                             ),
                             child: IconButton(
                               constraints: const BoxConstraints(
@@ -951,12 +984,16 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
         final showResolution = _lastPhysicalWidth > 0 && maxW >= 300;
         final showLatency = maxW >= 200;
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: palette.surfaceElevated
-                .withValues(alpha: sigma > 0 ? 0.75 : 0.94),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: palette.primary.withValues(alpha: 0.3)),
+                .withValues(alpha: sigma > 0 ? (palette.isDaylight ? 0.86 : 0.78) : 0.95),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: palette.isDaylight
+                  ? Colors.white.withValues(alpha: 0.85)
+                  : palette.primary.withValues(alpha: 0.35),
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1162,35 +1199,39 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: Icon(Icons.upload_rounded, color: context.palette.primary),
-                title: const Text('Push Phone Clipboard -> PC'),
-                onTap: () async {
-                  Navigator.of(ctx).pop();
-                  final data = await Clipboard.getData('text/plain');
-                  final txt = data?.text ?? '';
-                  if (txt.isEmpty) return;
-                  client.sendClipboard(txt);
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.download_rounded, color: context.palette.primary),
-                title: const Text('Pull PC Clipboard -> Phone'),
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  client.requestClipboard();
-                },
-              ),
-            ],
+      builder: (ctx) {
+        final sheetPalette = ctx.palette;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: Icon(Icons.upload_rounded, color: sheetPalette.primary),
+                  title: const Text('Push Phone Clipboard -> PC'),
+                  onTap: () async {
+                    Navigator.of(ctx).pop();
+                    final data = await Clipboard.getData('text/plain');
+                    final txt = data?.text ?? '';
+                    if (txt.isEmpty) return;
+                    client.sendClipboard(txt);
+                  },
+                ),
+                ListTile(
+                  leading:
+                      Icon(Icons.download_rounded, color: sheetPalette.primary),
+                  title: const Text('Pull PC Clipboard -> Phone'),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    client.requestClipboard();
+                  },
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1266,11 +1307,16 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     final monLabel =
         _monitors.length > 1 ? 'MON $_activeMonitorIdx' : 'MON';
     final dock = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
-        color: palette.surfaceElevated.withValues(alpha: sigma > 0 ? 0.85 : 0.96),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: palette.primary.withValues(alpha: 0.3)),
+        color: palette.surfaceElevated.withValues(
+            alpha: sigma > 0 ? (palette.isDaylight ? 0.90 : 0.85) : 0.96),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: palette.isDaylight
+              ? Colors.white.withValues(alpha: 0.85)
+              : palette.primary.withValues(alpha: 0.32),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1305,10 +1351,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
       ),
     );
     return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(999),
       child: sigma > 0
           ? BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
               child: dock,
             )
           : dock,
@@ -1324,27 +1370,29 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget> {
     final palette = context.palette;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(999),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
           color: isAccent
-              ? palette.primary.withValues(alpha: 0.25)
-              : Colors.white.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(6),
+              ? palette.primary.withValues(
+                  alpha: palette.isDaylight ? 0.16 : 0.26)
+              : palette.isDaylight
+                  ? palette.primary.withValues(alpha: 0.06)
+                  : Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(999),
           border: Border.all(
             color: isAccent
                 ? palette.primary
-                : Colors.white.withValues(alpha: 0.15),
+                : palette.dividerColor,
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isAccent ? palette.primary : Colors.white,
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
-            fontFamily: 'monospace',
+            color: isAccent ? palette.primary : palette.textPrimary,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),

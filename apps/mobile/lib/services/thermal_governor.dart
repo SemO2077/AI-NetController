@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 
 /// Device Thermal & Battery Hardware Governance Engine
 /// ============================================================================
@@ -123,24 +122,15 @@ class ThermalGovernor extends ChangeNotifier {
 
   /// Updates battery state
   void updateBatteryState({required int percentage, required bool isCharging}) {
-    final bool changed = (_batteryPercentage != percentage) || (_isCharging != isCharging);
-    _batteryPercentage = percentage;
+    final int clamped = percentage.clamp(0, 100);
+    final bool changed = (_batteryPercentage != clamped) || (_isCharging != isCharging);
+    _batteryPercentage = clamped;
     _isCharging = isCharging;
 
     if (_batteryPercentage <= 15 && !_isCharging) {
       _governorStatusMessage = "Low Battery (<15%): Stream collapsed to On-Demand Snapshot Mode";
     } else if (_governorStatusMessage.startsWith("Low Battery")) {
-      switch (_currentProfile) {
-        case ThermalProfile.nominal:
-          _governorStatusMessage = "Nominal: Full Glassmorphism Active (60 FPS)";
-          break;
-        case ThermalProfile.fair:
-          _governorStatusMessage = "Fair: Thermal Throttling Activated (20 FPS, Sigma 8)";
-          break;
-        case ThermalProfile.critical:
-          _governorStatusMessage = "Critical: GPU Throttling Active (10 FPS, Flat Acrylic)";
-          break;
-      }
+      _governorStatusMessage = _statusForProfile(_currentProfile);
     }
 
     if (changed) {
@@ -148,9 +138,21 @@ class ThermalGovernor extends ChangeNotifier {
     }
   }
 
+  static String _statusForProfile(ThermalProfile profile) {
+    switch (profile) {
+      case ThermalProfile.nominal:
+        return "Nominal: Full Glassmorphism Active (60 FPS)";
+      case ThermalProfile.fair:
+        return "Fair: Thermal Throttling Activated (20 FPS, Sigma 8)";
+      case ThermalProfile.critical:
+        return "Critical: GPU Throttling Active (10 FPS, Flat Acrylic)";
+    }
+  }
+
   /// Manually force a profile for testing / benchmarking
   void forceProfile(ThermalProfile profile) {
     _currentProfile = profile;
+    _governorStatusMessage = _statusForProfile(profile);
     notifyListeners();
   }
 }

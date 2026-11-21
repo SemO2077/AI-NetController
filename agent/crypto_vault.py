@@ -23,6 +23,12 @@ try:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding as _SerEncoding,
+        NoEncryption as _SerNoEncryption,
+        PrivateFormat as _SerPrivateFormat,
+        PublicFormat as _SerPublicFormat,
+    )
     HAS_CRYPTOGRAPHY_ACCEL = True
 except ImportError:
     HAS_CRYPTOGRAPHY_ACCEL = False
@@ -33,6 +39,8 @@ NONCE_SIZE = 12         # 96-bit ChaCha20 nonce (4-byte salt/epoch + 8-byte mono
 TAG_SIZE = 16           # 128-bit Poly1305 authentication tag
 SALT_SIZE = 16          # 128-bit HKDF ephemeral salt
 WINDOW_SIZE = 128       # RFC 6479 Sliding Window Bitmask size (bits)
+_MAX_U64 = 0xFFFFFFFFFFFFFFFF
+_NONCE_STRUCT = struct.Struct(">IQ")
 
 CTX_HOST_TX = b"cst-host-tx"
 CTX_CLIENT_TX = b"cst-client-tx"
@@ -67,6 +75,7 @@ class SlidingWindowReplayProtector:
         if not isinstance(window_size, int) or isinstance(window_size, bool) or window_size <= 0:
             raise ValueError("window_size must be a positive integer.")
         self.window_size = window_size
+        self._window_mask: int = (1 << window_size) - 1
         self.max_seq: int = 0
         # 128-bit bitmask represented by two 64-bit unsigned integers
         self.bitmap: int = 0
@@ -116,8 +125,8 @@ class SlidingWindowReplayProtector:
                 # Sequence jumped past entire window
                 self.bitmap = 1
             self.max_seq = seq
-            # Mask to 128 bits
-            self.bitmap &= (1 << self.window_size) - 1
+            # Mask to window_size bits
+            self.bitmap &= self._window_mask
             return True
         else:
             # Older or duplicate packet
@@ -459,15 +468,18 @@ class HostCryptoVault:
                 raise RuntimeError("Cryptographic handshake has not been established or vault is closed.")
 
             if seq is None:
-                self.tx_seq += 1
-                seq = self.tx_seq
+                next_seq = self.tx_seq + 1
+                if next_seq > _MAX_U64:
+                    raise OverflowError("ChaCha20-Poly1305 64-bit nonce sequence exhausted; rekey required.")
+                self.tx_seq = next_seq
+                seq = next_seq
             else:
-                if not isinstance(seq, int) or isinstance(seq, bool) or seq <= self.tx_seq or seq <= 0:
-                    raise ValueError("Sequence number must be a strictly increasing positive integer to prevent nonce reuse.")
+                if not isinstance(seq, int) or isinstance(seq, bool) or seq <= self.tx_seq or seq <= 0 or seq > _MAX_U64:
+                    raise ValueError("Sequence number must be a strictly increasing positive 64-bit integer to prevent nonce reuse.")
                 self.tx_seq = seq
 
             # Nonce format: 4 zero bytes + 8-byte big-endian sequence
-            nonce = struct.pack(">IQ", 0, seq)
+            nonce = _NONCE_STRUCT.pack(0, seq)
 
             if self._send_cipher is not None:
                 ct = self._send_cipher.encrypt(nonce, plaintext, aad)
@@ -488,7 +500,7 @@ class HostCryptoVault:
             nonce = framed_payload[:12]
             ciphertext_and_tag = framed_payload[12:]
 
-            epoch, seq = struct.unpack(">IQ", nonce)
+            epoch, seq = _NONCE_STRUCT.unpack(nonce)
             if epoch != 0:
                 return None
 
@@ -538,10 +550,9 @@ class HostCryptoVault:
 def fast_x25519_generate_keypair() -> Tuple[bytes, bytes]:
     """Generates an ephemeral X25519 keypair using C-accelerated backend when installed."""
     if HAS_CRYPTOGRAPHY_ACCEL:
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, PrivateFormat, NoEncryption
         priv_obj = x25519.X25519PrivateKey.generate()
-        priv_raw = priv_obj.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
-        pub_raw = priv_obj.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        priv_raw = priv_obj.private_bytes(_SerEncoding.Raw, _SerPrivateFormat.Raw, _SerNoEncryption())
+        pub_raw = priv_obj.public_key().public_bytes(_SerEncoding.Raw, _SerPublicFormat.Raw)
         return priv_raw, pub_raw
     return FallbackCurve25519.generate_keypair()
 

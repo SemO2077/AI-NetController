@@ -12,7 +12,7 @@
   - **SIMD `TurboJPEG` Fast-DCT Encoding**: Added `TJFLAG_FASTDCT` (`2048`) with `TJSAMP_420` chroma subsampling across `AdaptiveScreenPipeline` and `MultiMonitorStreamer` for sub-5ms frame encoding.
   - **2D Strided Delta Detection & High-Quality Settling Frame**: Sampled `img32[::8, ::16]` across the full 2D viewport to detect static screens accurately and emit 1 high-quality settling frame before pausing redundant duplicate encodings.
   - **Desktop Switch / UAC Auto-Recovery**: Replaced global `mss` sharing with thread-local `mss` instances and automatic `_reinit_mss()` recovery when Windows transitions across UAC prompts or lock screens.
-  - **Explicit `OP_FRAME_SYNC` Flow Control**: Added `_send_frame_guarded` single-in-flight frame delivery and `OP_FRAME_SYNC` (`0x06`) acknowledgment gating (with a 250ms safety fallback) to eliminate TCP socket bufferbloat.
+  - **Explicit `OP_FRAME_SYNC` Flow Control**: Added `_send_frame_guarded` single-in-flight frame delivery and `OP_FRAME_SYNC` (`0xED`) acknowledgment gating (with a 250ms safety fallback) to eliminate TCP socket bufferbloat.
 - **Zero-Allocation Web `<canvas>` Renderer (`apps/web/src/components/modals/ScreenViewerModal.tsx`, `apps/web/src/store/screenStore.ts`)**:
   - Bypassed React state re-renders and `URL.createObjectURL` GC churn on every video frame by decoding binary JPEG frames directly via `createImageBitmap(blob)` and painting onto a hardware-accelerated `<canvas>` inside `requestAnimationFrame`.
   - Added a live **FPS badge**, **AEAD encryption badge**, and a **150ms debounced `ResizeObserver`** that automatically negotiates optimal `STREAM_CONFIG` capture dimensions with the Host Daemon.
@@ -25,7 +25,7 @@
   - Unified mutual 91-byte X25519 + HMAC-SHA256 handshakes (`INIT_ECDH_VAULT_M` / `ACK_ECDH_VAULT_M`), HKDF-SHA256 directional session key derivation (`c2h_key`, `h2c_key`, `c2h_iv_salt`, `h2c_iv_salt`), `CST_ECDH_V2` ChaCha20-Poly1305 AEAD wire framing, and 128-bit sliding-window replay defense across the Python Host Daemon (`agent/agent.py`), Node/Express Control Server (`apps/web/server.ts`), WebWorker socket engine (`apps/web/src/workers/networkWorker.ts`, `apps/web/src/utils/cryptoVault.ts`), and Flutter Mobile Client (`apps/mobile/lib/security/crypto_engine.dart`, `apps/mobile/lib/services/host_connection_client.dart`).
   - Enforced post-vault anti-downgrade (`HostAgentDaemon._aead_required()`) and fail-closed `require_aead` enforcement so unencrypted control packets are rejected once AEAD is active.
   - Added immediate ephemeral private key zeroization after handshake completion and strict TLS certificate validation (`agent/tls_manager.py`).
-- **End-to-End Encrypted `CST-PAIR-X25519-V1` PIN Pairing (`apps/web/src/services/pairCrypto.ts`, `agent/agent.py`, `apps/mobile/lib/services/host_connection_client.dart`)**:
+- **End-to-End Encrypted `CST-PAIR-X25519-V1` PIN Pairing (`apps/web/src/utils/cryptoVault.ts`, `agent/agent.py`, `apps/mobile/lib/services/host_connection_client.dart`)**:
   - Upgraded 6-digit PIN pairing (`PAIR_INIT` / `PAIR_FINISH`) to wrap the host shared secret inside an ephemeral X25519 + HKDF-SHA256 + AES-256-GCM / ChaCha20-Poly1305 envelope bound to the 6-digit PIN, ensuring pairing tokens never cross the LAN in cleartext.
 
 ### 3. Command AST Firewall, SSRF/DNS Rebinding & Platform Hardening
@@ -44,7 +44,7 @@
   - Added native Android `ainet://pair` deep-link handling (`MainActivity.kt` -> `main.dart`), automatic clipboard pairing link detection (`ainet://pair` and `#pair_ip=`), unmasked 6-digit PIN inputs with auto-submit on the 6th digit, auto-prompt PIN dialog when tapping an unpaired host, and an inline **Quick Pair (6-Digit PIN)** banner directly inside the Web Screen Viewer.
 - **Rich In-Stream Remote Controls & Emergency Kill Switch**:
   - Added **Monitor Switcher** (`MON 1..N` / `ALL`), **Pull PC Clip** & **Push to PC** clipboard synchronization, **Double-Click** action button, and an inline **AI Approval Bar** (`Approve` / `Deny`) inside `ScreenViewerModal.tsx`.
-  - Wired global **Panic Kill All** (`PANIC_KILL_ALL` / `OP_KILL` `0xFF`) across Web, Mobile, and Host Agent to immediately terminate active child processes and revoke sessions.
+  - Wired global **Panic Kill All** (`PANIC_KILL_ALL` authenticated control action) across Web, Mobile, and Host Agent to immediately terminate active child processes and revoke sessions.
   - Fixed `START_HERE_WINDOWS.bat` and `START_HERE_LINUX.sh` to auto-open `http://localhost:3000` and launch `agent/agent.py` with proper `PYTHONPATH`.
 - **Automated Verification Suites**:
   - Added `agent/tests/test_screen_stream_and_hardening.py` and `apps/web/src/tests/verifyCryptoAndSecurity.ts` covering mutual ECDH, AEAD framing, replay defense, encrypted PIN pairing, AST firewall rules, and 60 FPS frame sync backpressure.

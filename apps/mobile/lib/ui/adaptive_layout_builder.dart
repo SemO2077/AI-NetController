@@ -123,83 +123,110 @@ class AdaptiveScaffold extends StatelessWidget {
             false, // Insets manually offset floating overlays
         body: Stack(
           children: [
-            // Ambient Futuristic Liquid Glass Refraction Glows (isolated in RepaintBoundary)
+            // Energetic Apple Liquid Glass Aurora Refraction Orbs (Daylight & Vibrant Dark)
             Positioned.fill(
               child: RepaintBoundary(
                 child: IgnorePointer(
-                  child: Stack(
-                    children: [
-                      AnimatedPositioned(
-                        duration: ambientDur,
-                        curve: Curves.easeOutCubic,
-                        top: selectedIndex == 0
-                            ? -110
-                            : (selectedIndex == 1 ? -70 : -90),
-                        right: selectedIndex == 0
-                            ? -70
-                            : (selectedIndex == 1 ? -30 : -100),
-                        child: AnimatedContainer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: palette.isDaylight
+                            ? const [
+                                Color(0xFFF6F3FF),
+                                Color(0xFFEDF4FF),
+                                Color(0xFFFDF2F8),
+                              ]
+                            : const [
+                                Color(0xFF090B1D),
+                                Color(0xFF111030),
+                                Color(0xFF190D2D),
+                              ],
+                      ),
+                    ),
+                    child: Stack(
+                      children: [
+                        AnimatedPositioned(
+                          duration: ambientDur,
+                          curve: Curves.easeOutBack,
+                          top: selectedIndex == 0
+                              ? -100
+                              : (selectedIndex == 1 ? -60 : -85),
+                          right: selectedIndex == 0
+                              ? -65
+                              : (selectedIndex == 1 ? -25 : -95),
+                          child: AnimatedContainer(
+                            duration: ambientDur,
+                            curve: Curves.easeOutCubic,
+                            width: 380,
+                            height: 380,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: RadialGradient(
+                                colors: [
+                                  palette.primary.withValues(
+                                      alpha: palette.isDaylight ? 0.30 : 0.28),
+                                  palette.secondary.withValues(
+                                      alpha: palette.isDaylight ? 0.14 : 0.10),
+                                  Colors.transparent,
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        AnimatedPositioned(
+                          duration: ambientDur,
+                          curve: Curves.easeOutBack,
+                          bottom: selectedIndex == 0
+                              ? -95
+                              : (selectedIndex == 1 ? -125 : -65),
+                          left: selectedIndex == 0
+                              ? -75
+                              : (selectedIndex == 1 ? -35 : -95),
+                          child: AnimatedContainer(
+                            duration: ambientDur,
+                            curve: Curves.easeOutCubic,
+                            width: 360,
+                            height: 360,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: RadialGradient(
+                                colors: [
+                                  palette.secondary.withValues(
+                                      alpha: palette.isDaylight ? 0.26 : 0.24),
+                                  palette.sky.withValues(
+                                      alpha: palette.isDaylight ? 0.14 : 0.08),
+                                  Colors.transparent,
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        AnimatedPositioned(
                           duration: ambientDur,
                           curve: Curves.easeOutCubic,
-                          width: 360,
-                          height: 360,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: RadialGradient(
-                              colors: [
-                                palette.primary.withValues(alpha: 0.16),
-                                palette.secondary.withValues(alpha: 0.05),
-                                Colors.transparent,
-                              ],
+                          top: selectedIndex == 1 ? 140 : 80,
+                          left: selectedIndex == 2 ? -40 : 40,
+                          child: Container(
+                            width: 280,
+                            height: 280,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: RadialGradient(
+                                colors: [
+                                  palette.sky.withValues(
+                                      alpha: palette.isDaylight ? 0.22 : 0.14),
+                                  palette.success.withValues(
+                                      alpha: palette.isDaylight ? 0.10 : 0.05),
+                                  Colors.transparent,
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      AnimatedPositioned(
-                        duration: ambientDur,
-                        curve: Curves.easeOutCubic,
-                        bottom: selectedIndex == 0
-                            ? -90
-                            : (selectedIndex == 1 ? -120 : -65),
-                        left: selectedIndex == 0
-                            ? -80
-                            : (selectedIndex == 1 ? -40 : -95),
-                        child: AnimatedContainer(
-                          duration: ambientDur,
-                          curve: Curves.easeOutCubic,
-                          width: 340,
-                          height: 340,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: RadialGradient(
-                              colors: [
-                                palette.secondary.withValues(alpha: 0.14),
-                                palette.primary.withValues(alpha: 0.04),
-                                Colors.transparent,
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: -150,
-                        left: 60,
-                        right: 60,
-                        child: Container(
-                          height: 240,
-                          decoration: BoxDecoration(
-                            gradient: RadialGradient(
-                              radius: 0.9,
-                              colors: [
-                                Colors.white.withValues(alpha: 0.04),
-                                palette.primary.withValues(alpha: 0.03),
-                                Colors.transparent,
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -277,7 +304,7 @@ class AdaptiveScaffold extends StatelessWidget {
         Positioned.fill(
           child: Column(
             children: [
-              _buildAppBar(context, showNavIcon: false),
+              _buildAppBar(context),
               Expanded(
                 child: Padding(
                   padding: EdgeInsets.only(
@@ -321,47 +348,47 @@ class AdaptiveScaffold extends StatelessWidget {
     final Widget pillContent = Container(
       height: pillHeight,
       padding: EdgeInsets.symmetric(
-        horizontal: isUltraCompact ? 4 : 8,
-        vertical: isShort ? 3 : 5,
+        horizontal: isUltraCompact ? 5 : 8,
+        vertical: isShort ? 4 : 5,
       ),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          stops: const [0.0, 0.45, 1.0],
-          colors: [
-            Color.lerp(palette.surfaceElevated, Colors.white, 0.14)!
-                .withValues(alpha: sigma > 0 ? 0.86 : 0.96),
-            palette.surfaceElevated.withValues(alpha: sigma > 0 ? 0.84 : 0.96),
-            Color.lerp(palette.surface, Colors.black, 0.25)!
-                .withValues(alpha: sigma > 0 ? 0.90 : 0.98),
-          ],
+          stops: const [0.0, 0.5, 1.0],
+          colors: palette.isDaylight
+              ? [
+                  Colors.white.withValues(alpha: sigma > 0 ? 0.82 : 0.94),
+                  const Color(0xFFF6F7FF)
+                      .withValues(alpha: sigma > 0 ? 0.72 : 0.92),
+                  Colors.white.withValues(alpha: sigma > 0 ? 0.78 : 0.94),
+                ]
+              : [
+                  Color.lerp(palette.surfaceElevated, Colors.white, 0.14)!
+                      .withValues(alpha: sigma > 0 ? 0.76 : 0.94),
+                  palette.surfaceElevated
+                      .withValues(alpha: sigma > 0 ? 0.72 : 0.94),
+                  Color.lerp(palette.surface, Colors.black, 0.22)!
+                      .withValues(alpha: sigma > 0 ? 0.82 : 0.96),
+                ],
         ),
-        borderRadius: BorderRadius.circular(31),
+        borderRadius: BorderRadius.circular(34),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.20),
-          width: 1.15,
+          color: palette.glassBorderIdle,
+          width: 1.25,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.64),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
-          ),
-          BoxShadow(
-            color: palette.primary.withValues(alpha: 0.18),
-            blurRadius: 18,
-            spreadRadius: -2,
-          ),
-        ],
+        boxShadow: palette.elevationShadows(
+          isSelected: true,
+          glowColor: palette.primary,
+        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           const FluidSpecularBar(
             isSelected: true,
-            height: 1.0,
-            margin: EdgeInsets.symmetric(horizontal: 24),
+            height: 1.2,
+            margin: EdgeInsets.symmetric(horizontal: 26),
           ),
           Expanded(
             child: Row(
@@ -372,32 +399,23 @@ class AdaptiveScaffold extends StatelessWidget {
                 return Flexible(
                   child: FluidPressScale(
                     onTap: () => onIndexChanged(index),
-                    pressedScale: 0.94,
+                    pressedScale: 0.91,
                     child: AnimatedContainer(
                       duration: dur,
                       curve: Curves.easeOutCubic,
                       padding: EdgeInsets.symmetric(
                         horizontal: isSelected
-                            ? (isUltraCompact ? 10 : 16)
+                            ? (isUltraCompact ? 11 : 16)
                             : (isUltraCompact ? 8 : 12),
                         vertical: isShort ? 5 : 8,
                       ),
                       decoration: BoxDecoration(
-                        gradient: isSelected
-                            ? LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [
-                                  palette.primary.withValues(alpha: 0.28),
-                                  palette.secondary.withValues(alpha: 0.18),
-                                ],
-                              )
-                            : null,
+                        gradient: isSelected ? palette.heroGradient : null,
                         color: isSelected ? null : Colors.transparent,
-                        borderRadius: BorderRadius.circular(22),
+                        borderRadius: BorderRadius.circular(26),
                         border: isSelected
                             ? Border.all(
-                                color: palette.primary.withValues(alpha: 0.52),
+                                color: Colors.white.withValues(alpha: 0.55),
                                 width: 1,
                               )
                             : null,
@@ -405,8 +423,9 @@ class AdaptiveScaffold extends StatelessWidget {
                             ? [
                                 BoxShadow(
                                   color:
-                                      palette.primary.withValues(alpha: 0.26),
-                                  blurRadius: 14,
+                                      palette.primary.withValues(alpha: 0.36),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 4),
                                 ),
                               ]
                             : null,
@@ -415,16 +434,16 @@ class AdaptiveScaffold extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           AnimatedScale(
-                            scale: isSelected ? 1.10 : 1.0,
+                            scale: isSelected ? 1.12 : 1.0,
                             duration: dur,
-                            curve: Curves.easeOutCubic,
+                            curve: Curves.easeOutBack,
                             child: Icon(
                               isSelected
                                   ? (item.activeIcon ?? item.icon)
                                   : item.icon,
                               size: isUltraCompact ? 17 : 19,
                               color: isSelected
-                                  ? palette.primary
+                                  ? Colors.white
                                   : palette.textSecondary,
                             ),
                           ),
@@ -433,17 +452,21 @@ class AdaptiveScaffold extends StatelessWidget {
                             const SizedBox(width: 4),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 5, vertical: 1),
+                                  horizontal: 5.5, vertical: 1),
                               decoration: BoxDecoration(
-                                color: palette.primary.withValues(alpha: 0.25),
-                                borderRadius: BorderRadius.circular(8),
+                                color: isSelected
+                                    ? Colors.white.withValues(alpha: 0.28)
+                                    : palette.success.withValues(alpha: 0.18),
+                                borderRadius: BorderRadius.circular(10),
                               ),
                               child: Text(
                                 '${item.badgeCount}',
                                 style: TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                  color: palette.primary,
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: isSelected
+                                      ? Colors.white
+                                      : palette.success,
                                 ),
                               ),
                             ),
@@ -463,8 +486,8 @@ class AdaptiveScaffold extends StatelessWidget {
                                         style: TextStyle(
                                           color: Colors.white,
                                           fontSize: context.fluidFont(11),
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 0.4,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: -0.1,
                                         ),
                                       ),
                                     )
@@ -485,7 +508,7 @@ class AdaptiveScaffold extends StatelessWidget {
 
     return RepaintBoundary(
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(31),
+        borderRadius: BorderRadius.circular(34),
         child: sigma > 0
             ? BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
@@ -500,14 +523,15 @@ class AdaptiveScaffold extends StatelessWidget {
   // 2. MEDIUM VIEW (600-840dp): TWO-COLUMN ADAPTIVE + NAVIGATION RAIL
   // -------------------------------------------------------------------
   Widget _buildMediumRailView(BuildContext context) {
+    final palette = context.palette;
     return Row(
       children: [
         _buildNavigationRail(context, extended: false),
-        const VerticalDivider(width: 1, color: Colors.white10),
+        VerticalDivider(width: 1, color: palette.dividerColor),
         Expanded(
           child: Column(
             children: [
-              _buildAppBar(context, showNavIcon: false),
+              _buildAppBar(context),
               Expanded(
                 child: _buildFluidSwitcher(
                   context: context,
@@ -529,23 +553,26 @@ class AdaptiveScaffold extends StatelessWidget {
   // -------------------------------------------------------------------
   Widget _buildExpandedSplitView(BuildContext context) {
     final palette = context.palette;
+    final String? activeTabSubtitle =
+        (selectedIndex >= 0 && selectedIndex < navItems.length)
+            ? navItems[selectedIndex].label.toUpperCase()
+            : null;
     return Row(
       children: [
         _buildNavigationRail(context, extended: true),
-        const VerticalDivider(width: 1, color: Colors.white10),
+        VerticalDivider(width: 1, color: palette.dividerColor),
         if (selectedIndex == 0) ...[
           // Master Fleet List Pane (Default 35% of remaining space)
           Expanded(
             flex: (expandedMasterWidthFraction * 100).round(),
             child: Column(
               children: [
-                _buildAppBar(context,
-                    showNavIcon: false, subtitle: 'FLEET DIRECTORY'),
+                _buildAppBar(context, subtitle: 'FLEET DIRECTORY'),
                 Expanded(child: expandedMasterPane ?? compactBody),
               ],
             ),
           ),
-          const VerticalDivider(width: 1, color: Colors.white10),
+          VerticalDivider(width: 1, color: palette.dividerColor),
           // Detail Console / Stream / Telemetry Pane (Default 65% of remaining space)
           Expanded(
             flex: ((1.0 - expandedMasterWidthFraction) * 100).round(),
@@ -576,9 +603,7 @@ class AdaptiveScaffold extends StatelessWidget {
           Expanded(
             child: Column(
               children: [
-                _buildAppBar(context,
-                    showNavIcon: false,
-                    subtitle: navItems[selectedIndex].label.toUpperCase()),
+                _buildAppBar(context, subtitle: activeTabSubtitle),
                 Expanded(
                   child: _buildFluidSwitcher(
                     context: context,
@@ -613,16 +638,28 @@ class AdaptiveScaffold extends StatelessWidget {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color.lerp(palette.surfaceElevated, palette.primary, 0.08)!
-                  .withValues(alpha: 0.94),
-              palette.surfaceElevated.withValues(alpha: 0.90),
-              palette.background.withValues(alpha: 0.95),
-            ],
+            colors: palette.isDaylight
+                ? [
+                    Colors.white.withValues(alpha: 0.78),
+                    const Color(0xFFF4F6FF).withValues(alpha: 0.72),
+                    Colors.white.withValues(alpha: 0.80),
+                  ]
+                : [
+                    Color.lerp(palette.surfaceElevated, palette.primary, 0.08)!
+                        .withValues(alpha: 0.90),
+                    palette.surfaceElevated.withValues(alpha: 0.86),
+                    palette.background.withValues(alpha: 0.92),
+                  ],
+          ),
+          border: Border(
+            right: BorderSide(color: palette.glassBorderIdle, width: 1),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.40),
+              color: (palette.isDaylight
+                      ? const Color(0xFF4C3E94)
+                      : Colors.black)
+                  .withValues(alpha: palette.isDaylight ? 0.10 : 0.36),
               blurRadius: 16,
               offset: const Offset(4, 0),
             ),
@@ -642,29 +679,27 @@ class AdaptiveScaffold extends StatelessWidget {
                     : MainAxisAlignment.center,
                 children: [
                   Container(
-                    width: isShort ? 28 : 34,
-                    height: isShort ? 28 : 34,
+                    width: isShort ? 30 : 36,
+                    height: isShort ? 30 : 36,
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: palette.primary, width: 1.5),
-                      gradient: RadialGradient(
-                        colors: [
-                          palette.primary.withValues(alpha: 0.26),
-                          palette.primary.withValues(alpha: 0.06),
-                        ],
+                      borderRadius: BorderRadius.circular(13),
+                      gradient: palette.heroGradient,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.55),
+                        width: 1.0,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: palette.primary.withValues(alpha: 0.28),
+                          color: palette.primary.withValues(alpha: 0.34),
                           blurRadius: 12,
                         ),
                       ],
                     ),
                     child: Center(
                       child: Icon(
-                        Icons.shield_outlined,
-                        size: isShort ? 14 : 16,
-                        color: palette.primary,
+                        Icons.hub_rounded,
+                        size: isShort ? 15 : 18,
+                        color: Colors.white,
                       ),
                     ),
                   ),
@@ -672,13 +707,12 @@ class AdaptiveScaffold extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'AI-NET NODE',
+                        'AI NetController',
                         style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontWeight: FontWeight.bold,
-                          fontSize: context.fluidFont(12),
-                          color: palette.primary,
-                          letterSpacing: 1.2,
+                          fontWeight: FontWeight.w800,
+                          fontSize: context.fluidFont(12.5),
+                          color: palette.textPrimary,
+                          letterSpacing: -0.3,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -701,39 +735,30 @@ class AdaptiveScaffold extends StatelessWidget {
                     ),
                     child: FluidPressScale(
                       onTap: () => onIndexChanged(index),
-                      pressedScale: 0.96,
+                      pressedScale: 0.94,
                       child: AnimatedContainer(
                         duration: dur,
                         curve: Curves.easeOutCubic,
                         padding: EdgeInsets.symmetric(
-                          vertical: isShort ? 7 : 10,
-                          horizontal: 10,
+                          vertical: isShort ? 8 : 10,
+                          horizontal: 12,
                         ),
                         decoration: BoxDecoration(
-                          gradient: isSelected
-                              ? LinearGradient(
-                                  begin: Alignment.centerLeft,
-                                  end: Alignment.centerRight,
-                                  colors: [
-                                    palette.primary.withValues(alpha: 0.24),
-                                    palette.secondary.withValues(alpha: 0.10),
-                                  ],
-                                )
-                              : null,
+                          gradient: isSelected ? palette.heroGradient : null,
                           color: isSelected ? null : Colors.transparent,
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(20),
                           border: isSelected
                               ? Border.all(
-                                  color:
-                                      palette.primary.withValues(alpha: 0.52),
+                                  color: Colors.white.withValues(alpha: 0.55),
                                 )
                               : Border.all(color: Colors.transparent),
                           boxShadow: isSelected
                               ? [
                                   BoxShadow(
                                     color:
-                                        palette.primary.withValues(alpha: 0.20),
-                                    blurRadius: 12,
+                                        palette.primary.withValues(alpha: 0.30),
+                                    blurRadius: 14,
+                                    offset: const Offset(0, 4),
                                   ),
                                 ]
                               : null,
@@ -744,16 +769,16 @@ class AdaptiveScaffold extends StatelessWidget {
                               : MainAxisAlignment.center,
                           children: [
                             AnimatedScale(
-                              scale: isSelected ? 1.08 : 1.0,
+                              scale: isSelected ? 1.10 : 1.0,
                               duration: dur,
-                              curve: Curves.easeOutCubic,
+                              curve: Curves.easeOutBack,
                               child: Icon(
                                 isSelected
                                     ? (item.activeIcon ?? item.icon)
                                     : item.icon,
                                 size: 20,
                                 color: isSelected
-                                    ? palette.primary
+                                    ? Colors.white
                                     : palette.textSecondary,
                               ),
                             ),
@@ -764,11 +789,11 @@ class AdaptiveScaffold extends StatelessWidget {
                                   item.label,
                                   style: TextStyle(
                                     color: isSelected
-                                        ? palette.primary
+                                        ? Colors.white
                                         : palette.textSecondary,
                                     fontWeight: isSelected
-                                        ? FontWeight.bold
-                                        : FontWeight.normal,
+                                        ? FontWeight.w800
+                                        : FontWeight.w600,
                                     fontSize: context.fluidFont(12),
                                   ),
                                   overflow: TextOverflow.ellipsis,
@@ -790,107 +815,124 @@ class AdaptiveScaffold extends StatelessWidget {
   }
 
   // -------------------------------------------------------------------
-  // TOP CYBER APP BAR
+  // DETACHED FLOATING APPLE LIQUID GLASS TOP HEADER CAPSULE
   // -------------------------------------------------------------------
-  Widget _buildAppBar(BuildContext context,
-      {required bool showNavIcon, String? subtitle}) {
+  Widget _buildAppBar(BuildContext context, {String? subtitle}) {
     final palette = context.palette;
     final isShort = context.isShortViewport;
-    final isUltraCompact = context.isUltraCompact;
-    final isNarrow = context.screenWidth < 380;
 
-    return Container(
-      constraints: BoxConstraints(minHeight: isShort ? 44 : 54),
-      padding: EdgeInsets.symmetric(
-        horizontal: isUltraCompact ? 10 : 16,
-        vertical: isShort ? 4 : 6,
-      ),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Color.lerp(palette.surfaceElevated, palette.primary, 0.06)!
-                .withValues(alpha: 0.72),
-            palette.background.withValues(alpha: 0.25),
-          ],
-        ),
-        border: Border(
-          bottom: BorderSide(
-            color: palette.primary.withValues(alpha: 0.18),
-            width: 1,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availW = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : context.screenWidth;
+        final isTight = availW < 340;
+        final isNarrow = availW < 420;
+
+        return Container(
+          margin: EdgeInsets.fromLTRB(
+            isTight ? 6 : 12,
+            isShort ? 4 : 7,
+            isTight ? 6 : 12,
+            isShort ? 3 : 6,
           ),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            margin: EdgeInsets.only(right: isUltraCompact ? 7 : 10),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: palette.primary,
-              boxShadow: [
-                BoxShadow(
-                  color: palette.primary.withValues(alpha: 0.65),
-                  blurRadius: 8,
-                  spreadRadius: 1,
-                ),
-              ],
+          constraints: BoxConstraints(minHeight: isShort ? 44 : 52),
+          padding: EdgeInsets.symmetric(
+            horizontal: isTight ? 8 : 14,
+            vertical: isShort ? 3 : 6,
+          ),
+          decoration: BoxDecoration(
+            gradient: palette.cardBevelGradient(isSelected: false),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: palette.glassBorderIdle,
+              width: 1.15,
             ),
+            boxShadow: palette.elevationShadows(isSelected: false),
           ),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: context.fluidFont(isUltraCompact ? 12.5 : 14),
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: isUltraCompact ? 0.8 : 2.0,
-                    color: CyberColors.textPrimary,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (subtitle != null)
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: context.fluidFont(9),
-                      color: CyberColors.textSecondary,
-                      letterSpacing: 1.0,
+          child: Row(
+            children: [
+              if (!isTight)
+                Container(
+                  width: isShort ? 26 : 32,
+                  height: isShort ? 26 : 32,
+                  margin: const EdgeInsets.only(right: 10),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(11),
+                    gradient: palette.heroGradient,
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.55),
+                      width: 1,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    boxShadow: [
+                      BoxShadow(
+                        color: palette.primary.withValues(alpha: 0.34),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
                   ),
-              ],
-            ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.hub_rounded,
+                      size: 16,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: context.fluidFont(isTight ? 12.5 : 15),
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.35,
+                        color: palette.textPrimary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (subtitle != null)
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: context.fluidFont(9.5),
+                          fontWeight: FontWeight.w600,
+                          color: palette.textSecondary,
+                          letterSpacing: 0.1,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                  ],
+                ),
+              ),
+              if (actions != null)
+                IconButtonTheme(
+                  data: IconButtonThemeData(
+                    style: isNarrow
+                        ? IconButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.all(isTight ? 3 : 5),
+                            minimumSize: Size(isTight ? 28 : 32, isTight ? 28 : 32),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          )
+                        : null,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: actions!,
+                  ),
+                ),
+            ],
           ),
-          if (actions != null)
-            IconButtonTheme(
-              data: IconButtonThemeData(
-                style: isNarrow
-                    ? IconButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.all(6),
-                        minimumSize: const Size(34, 34),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      )
-                    : null,
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: actions!,
-              ),
-            ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -962,9 +1004,153 @@ class _HitlSheetContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    final sigma = palette.glass.blurSigma;
     final isUltraCompact = context.isUltraCompact;
     final viewHeight = MediaQuery.sizeOf(context).height;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+
+    final Widget sheetBody = Container(
+      padding: EdgeInsets.all(isUltraCompact ? 16 : 24),
+      decoration: BoxDecoration(
+        color: palette.surfaceElevated.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(isDialog ? 24 : 28),
+        border: Border.all(
+          color: palette.accent.withValues(alpha: 0.6),
+          width: 1.5,
+        ),
+      ),
+      child: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: palette.accent.withValues(alpha: 0.16),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.warning_amber_rounded,
+                    color: palette.accent,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'HITL COMMAND APPROVAL',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.bold,
+                          fontSize: context.fluidFont(14),
+                          color: palette.accent,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      Text(
+                        'Target: $hostName • Risk: $riskLevel',
+                        style: TextStyle(
+                          fontSize: context.fluidFont(11),
+                          color: palette.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'PROPOSED SHELL COMMAND',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+                color: palette.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: palette.terminalBackground,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: palette.dividerColor),
+              ),
+              child: SelectableText(
+                command,
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  color: palette.terminalText,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Agent Reasoning: $reasoning',
+              style: TextStyle(
+                fontSize: context.fluidFont(11),
+                color: palette.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: palette.textPrimary,
+                      side: BorderSide(color: palette.dividerColor),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text('REJECT'),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: palette.accent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      elevation: 8,
+                      shadowColor: palette.accent.withValues(alpha: 0.45),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        'AUTHORIZE',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
 
     return SafeArea(
       child: Padding(
@@ -978,154 +1164,12 @@ class _HitlSheetContent extends StatelessWidget {
           child: RepaintBoundary(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(isDialog ? 24 : 28),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                child: Container(
-                  padding: EdgeInsets.all(isUltraCompact ? 16 : 24),
-                  decoration: BoxDecoration(
-                    color: palette.surfaceElevated.withValues(alpha: 0.96),
-                    borderRadius: BorderRadius.circular(isDialog ? 24 : 28),
-                    border: Border.all(
-                        color: palette.accent.withValues(alpha: 0.6),
-                        width: 1.5),
-                  ),
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color:
-                                    CyberColors.accent.withValues(alpha: 0.2),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.warning_amber_rounded,
-                                  color: CyberColors.accent, size: 24),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'HITL COMMAND APPROVAL',
-                                    style: TextStyle(
-                                      fontFamily: 'monospace',
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: context.fluidFont(14),
-                                      color: CyberColors.accent,
-                                      letterSpacing: 1.2,
-                                    ),
-                                  ),
-                                  Text(
-                                    'Target: $hostName • Risk: $riskLevel',
-                                    style: TextStyle(
-                                      fontSize: context.fluidFont(11),
-                                      color: CyberColors.textSecondary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'PROPOSED SHELL COMMAND',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.2,
-                            color: CyberColors.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.6),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Colors.white12),
-                          ),
-                          child: SelectableText(
-                            command,
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              color: palette.primary,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Agent Reasoning: $reasoning',
-                          style: TextStyle(
-                            fontSize: context.fluidFont(11),
-                            color: CyberColors.textTertiary,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: () =>
-                                    Navigator.of(context).pop(false),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: Colors.white70,
-                                  side: const BorderSide(color: Colors.white24),
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 13),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: Text('REJECT'),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: () =>
-                                    Navigator.of(context).pop(true),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: CyberColors.accent,
-                                  foregroundColor: Colors.white,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 13),
-                                  elevation: 8,
-                                  shadowColor: CyberColors.accent
-                                      .withValues(alpha: 0.5),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: Text(
-                                    'AUTHORIZE',
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.bold),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+              child: sigma > 0
+                  ? BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                      child: sheetBody,
+                    )
+                  : sheetBody,
             ),
           ),
         ),

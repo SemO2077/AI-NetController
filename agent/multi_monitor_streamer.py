@@ -48,12 +48,19 @@ def _enable_windows_dpi_awareness() -> None:
         return
     try:
         # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        user32 = ctypes.windll.user32
+        fn = getattr(user32, "SetProcessDpiAwarenessContext", None)
+        if fn is not None:
+            fn.argtypes = [ctypes.c_void_p]
+            fn.restype = ctypes.c_bool
+            if fn(ctypes.c_void_p(-4)):
+                return
     except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 
 class MultiMonitorStreamer:
@@ -123,12 +130,11 @@ class MultiMonitorStreamer:
 
     def _refresh_monitors_list(self) -> List[Dict[str, Any]]:
         """Queries MSS for connected monitors and binds default display."""
-        if not self._sct:
-            logger.warning("MSS screen capture unavailable; returning empty monitor list.")
-            return []
-
         monitors = []
         with self._lock:
+            if not self._sct:
+                logger.warning("MSS screen capture unavailable; returning empty monitor list.")
+                return []
             # mss.monitors[0] is the unified virtual desktop bounding box
             # Individual physical screens are 1, 2, ...
             total_screens = len(self._sct.monitors)
@@ -172,10 +178,9 @@ class MultiMonitorStreamer:
         """
         Dynamically changes active capture target to monitor_index without restarting server.
         """
-        if not self._sct:
-            return False
-
         with self._lock:
+            if not self._sct:
+                return False
             if 1 <= monitor_index < len(self._sct.monitors):
                 self._active_monitor_index = monitor_index
                 self._current_bbox = self._sct.monitors[monitor_index].copy()
@@ -227,10 +232,16 @@ class MultiMonitorStreamer:
                 except Exception as tj_err:
                     logger.debug(f"TurboJPEG encode fallback to Pillow: {tj_err}")
 
-            # 2. Fallback to Pillow
+            # 2. Fallback to Pillow (zero-copy frombuffer + thread-local reusable BytesIO)
             if Image:
-                img = Image.frombytes("RGB", raw_sct_img.size, raw_sct_img.bgra, "raw", "BGRX")
-                buf = io.BytesIO()
+                img = Image.frombuffer("RGB", raw_sct_img.size, raw_sct_img.bgra, "raw", "BGRX", 0, 1)
+                buf = getattr(self._tls, "bio", None)
+                if buf is None:
+                    buf = io.BytesIO()
+                    self._tls.bio = buf
+                else:
+                    buf.seek(0)
+                    buf.truncate(0)
                 img.save(buf, format="JPEG", quality=clamped_quality, optimize=False)
                 return buf.getvalue(), width, height
 
@@ -284,15 +295,20 @@ class MultiMonitorStreamer:
             if color_buckets:
                 # Find the most vibrant prominent color
                 dominant = max(color_buckets.items(), key=lambda item: item[1])[0]
-                self._dominant_hex_color = f"#{dominant[0]:02X}{dominant[1]:02X}{dominant[2]:02X}"
-                logger.info(f"Extracted Desktop Wallpaper Dominant Color: {self._dominant_hex_color}")
+                hex_val = f"#{dominant[0]:02X}{dominant[1]:02X}{dominant[2]:02X}"
+                with self._lock:
+                    self._dominant_hex_color = hex_val
+                logger.info(f"Extracted Desktop Wallpaper Dominant Color: {hex_val}")
             else:
-                self._dominant_hex_color = "#00F0FF"
+                with self._lock:
+                    self._dominant_hex_color = "#00F0FF"
         except Exception as e:
             logger.warning(f"Failed to extract dominant color: {e}")
-            self._dominant_hex_color = "#00F0FF"
+            with self._lock:
+                self._dominant_hex_color = "#00F0FF"
 
     @property
     def dominant_color_hex(self) -> str:
         """Returns the current extracted dominant color HEX string."""
-        return self._dominant_hex_color
+        with self._lock:
+            return self._dominant_hex_color

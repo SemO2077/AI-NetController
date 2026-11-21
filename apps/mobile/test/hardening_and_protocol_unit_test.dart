@@ -208,5 +208,103 @@ void main() {
         }
       }
     });
+
+    test('SecureSecretStore coalesces concurrent init() and survives corrupt legacy devices JSON', () async {
+      final tmpDir = Directory.systemTemp.createTempSync('ainet_ks_race_');
+      try {
+        Hive.init(tmpDir.path);
+        int keyProviderCalls = 0;
+        final deterministicKey = Uint8List.fromList(
+          List<int>.generate(32, (i) => (i * 3 + 17) & 0xFF),
+        );
+        final store = SecureSecretStore(
+          keyProvider: () async {
+            keyProviderCalls++;
+            await Future<void>.delayed(const Duration(milliseconds: 25));
+            return Uint8List.fromList(deterministicKey);
+          },
+        );
+
+        await Future.wait([
+          store.saveToken('10.0.0.1', 'tok_one'),
+          store.saveToken('10.0.0.2', 'tok_two'),
+          store.saveCertFingerprint('10.0.0.1', 'AA:BB'),
+        ]);
+
+        expect(keyProviderCalls, equals(1));
+        expect(store.hasOpenVault, isTrue);
+        expect(store.getToken('10.0.0.1'), equals('tok_one'));
+        expect(store.getToken('10.0.0.2'), equals('tok_two'));
+        expect(store.getCertFingerprint('10.0.0.1'), equals('aa:bb'));
+
+        final legacyBox = await Hive.openBox('corrupt_legacy_devices');
+        await legacyBox.put('devices', '{not-valid-json');
+        expect(await store.migrateLegacyDeviceList(legacyBox), isEmpty);
+        await legacyBox.close();
+      } finally {
+        await Hive.close();
+        if (tmpDir.existsSync()) {
+          tmpDir.deleteSync(recursive: true);
+        }
+      }
+    });
+
+    test('NetworkFramer isolates fragment sessions by (opcode, messageId) and hkdfExpand enforces RFC 5869 bounds', () async {
+      final framer = NetworkFramer();
+      final List<WirePacket> received = <WirePacket>[];
+      final sub = framer.onPacket.listen(received.add);
+
+      Uint8List makeFrag(int opcode, int msgId, int offset, int total, List<int> data) {
+        final payload = Uint8List(kFragmentHeaderSize + data.length);
+        final bd = ByteData.sublistView(payload);
+        bd.setUint32(0, msgId, Endian.big);
+        bd.setUint32(4, offset, Endian.big);
+        bd.setUint32(8, total, Endian.big);
+        payload.setRange(kFragmentHeaderSize, payload.length, data);
+        return packPacket(opcode, payload, flags: kFlagIsFragmented, seq: 1);
+      }
+
+      // Same messageId (42) across two different opcodes must reassemble independently
+      framer.pushChunk(makeFrag(BinaryOpcode.frame, 42, 0, 4, [1, 2]));
+      framer.pushChunk(makeFrag(BinaryOpcode.shell, 42, 0, 4, [10, 20]));
+      framer.pushChunk(makeFrag(BinaryOpcode.frame, 42, 2, 4, [3, 4]));
+      framer.pushChunk(makeFrag(BinaryOpcode.shell, 42, 2, 4, [30, 40]));
+
+      expect(received.length, equals(2));
+      expect(received[0].opcode, equals(BinaryOpcode.frame));
+      expect(received[0].payload, equals(Uint8List.fromList([1, 2, 3, 4])));
+      expect(received[1].opcode, equals(BinaryOpcode.shell));
+      expect(received[1].payload, equals(Uint8List.fromList([10, 20, 30, 40])));
+
+      // Zero-copy PacketReassembler.ingestPacket and post-dispose guard
+      final reassembler = PacketReassembler();
+      final frag0 = Uint8List(kFragmentHeaderSize + 2);
+      ByteData.sublistView(frag0)
+        ..setUint32(0, 7, Endian.big)
+        ..setUint32(4, 0, Endian.big)
+        ..setUint32(8, 4, Endian.big);
+      frag0.setRange(kFragmentHeaderSize, frag0.length, [9, 8]);
+      final frag1 = Uint8List(kFragmentHeaderSize + 2);
+      ByteData.sublistView(frag1)
+        ..setUint32(0, 7, Endian.big)
+        ..setUint32(4, 2, Endian.big)
+        ..setUint32(8, 4, Endian.big);
+      frag1.setRange(kFragmentHeaderSize, frag1.length, [7, 6]);
+
+      expect(reassembler.ingestPacket(BinaryOpcode.frame, kFlagIsFragmented, 1, frag0), isNull);
+      final done = reassembler.ingestPacket(BinaryOpcode.frame, kFlagIsFragmented, 1, frag1);
+      expect(done?.payload, equals(Uint8List.fromList([9, 8, 7, 6])));
+      reassembler.dispose();
+      expect(reassembler.ingestPacket(BinaryOpcode.frame, 0, 2, Uint8List(4)), isNull);
+
+      // RFC 5869 HKDF-SHA256 output length bounds
+      final prk = Uint8List(32);
+      expect(ce.hkdfExpand(prk, const [1, 2], 0), isEmpty);
+      expect(() => ce.hkdfExpand(prk, const [1, 2], -1), throwsRangeError);
+      expect(() => ce.hkdfExpand(prk, const [1, 2], 255 * 32 + 1), throwsRangeError);
+
+      await sub.cancel();
+      framer.dispose();
+    });
   });
 }

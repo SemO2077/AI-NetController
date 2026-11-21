@@ -36,14 +36,17 @@ build_exe.bat
 
 ## 3. Android Companion Application (`apps/mobile/`)
 
-### Option A: Flutter Split-ABI Build (Full Flutter Companion)
+### Option A: Flutter Split-ABI & Universal Builds (Full Flutter Companion)
 
-Prerequisites: Flutter 3.29+ (`Dart 3.7+`) and Android SDK.
+Prerequisites: Flutter 3.29+ (`Dart 3.7+`), JDK 17+ (for Gradle 9.5.0 / AGP 9.3.1), and Android SDK.
 
 ```bash
 cd apps/mobile
 flutter pub get
+# Compact arm64-v8a APK (strips non-arm64 JNI libs)
 flutter build apk --release --split-per-abi
+# Multi-ABI Universal APK (arm64-v8a, armeabi-v7a, x86_64)
+flutter build apk --release
 ```
 
 Generated APKs are placed under `apps/mobile/build/app/outputs/flutter-apk/`.

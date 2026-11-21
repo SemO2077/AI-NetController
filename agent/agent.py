@@ -31,12 +31,11 @@ import struct
 import sys
 import threading
 import time
-import weakref
 import zlib
 import base64
 import ipaddress
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Set, Tuple, Any, Callable
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 try:
     import numpy as np
@@ -211,7 +210,6 @@ try:
         show_uninstall_dialog,
         show_install_dialog,
         perform_full_uninstall,
-        register_windows_uninstaller,
     )
 except ImportError:
     try:
@@ -225,7 +223,6 @@ except ImportError:
             show_uninstall_dialog,
             show_install_dialog,
             perform_full_uninstall,
-            register_windows_uninstaller,
         )
     except ImportError:
         SingleInstanceGuard = None
@@ -237,7 +234,6 @@ except ImportError:
         show_uninstall_dialog = None
         show_install_dialog = None
         perform_full_uninstall = None
-        register_windows_uninstaller = None
 
 try:
     from icon_assets import get_icon_image
@@ -249,23 +245,17 @@ except ImportError:
 
 try:
     from daemon_config import (
-        ensure_fresh_pin,
         get_config_path,
         get_config_revision,
         load_config,
-        regenerate_pin,
-        rotate_token,
         save_config,
     )
 except ImportError:
     try:
         from agent.daemon_config import (
-            ensure_fresh_pin,
             get_config_path,
             get_config_revision,
             load_config,
-            regenerate_pin,
-            rotate_token,
             save_config,
         )
     except ImportError:
@@ -279,9 +269,6 @@ except ImportError:
         save_config = lambda cfg: False
         get_config_path = lambda: ""
         get_config_revision = lambda: 0
-        rotate_token = lambda: f"ainet_{secrets.token_hex(24)}"
-        regenerate_pin = lambda: f"{secrets.randbelow(900000) + 100000}"
-        ensure_fresh_pin = lambda cfg=None: (regenerate_pin(), int(time.time()), True)
 
 try:
     from tls_manager import build_server_ssl_context, compute_cert_fingerprint
@@ -341,6 +328,35 @@ CRITICAL_COMMAND_PATTERNS = {
     "rm -rf", "taskkill", "stop-process", "remove-item"
 }
 
+# Windows SendInput & Desktop Lock ctypes bindings (defined once at module level)
+_WIN_USER32_LOCK_BOUND = False
+if platform.system() == "Windows":
+    class _WIN_KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class _WIN_MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class _WIN_INPUT_UNION(ctypes.Union):
+        _fields_ = [("ki", _WIN_KEYBDINPUT), ("mi", _WIN_MOUSEINPUT)]
+
+    class _WIN_INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("u", _WIN_INPUT_UNION)]
+
+
 # =====================================================================
 # WINDOWS KERNEL JOB OBJECT SUPERVISOR (RESOURCE CONTAINMENT)
 # =====================================================================
@@ -351,14 +367,17 @@ class WindowsJobSupervisor:
     Guarantees kernel handles are closed immediately to prevent handle leaks.
     """
     def __init__(self, memory_limit_mb: int = 256):
+        self._lock = threading.RLock()
         self.memory_limit_mb = int(memory_limit_mb)
         self.is_windows = platform.system() == "Windows"
         self.job_handle = None
         self.kernel32 = None
+        self._init_job_object()
 
+    def _init_job_object(self) -> None:
         if not self.is_windows:
             return
-
+        memory_limit_mb = self.memory_limit_mb
         try:
             self.kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
             self.kernel32.CreateJobObjectW.restype = wintypes.HANDLE
@@ -443,46 +462,49 @@ class WindowsJobSupervisor:
 
     def assign_process(self, pid: int) -> bool:
         """Assigns child process to sandbox Job Object and immediately closes process handle."""
-        if not self.is_windows or not self.job_handle or not self.kernel32:
-            return False
+        with self._lock:
+            if not self.is_windows or not self.job_handle or not self.kernel32:
+                return False
 
-        proc_handle = None
-        try:
-            # PROCESS_SET_QUOTA (0x0100) | PROCESS_TERMINATE (0x0001)
-            proc_handle = self.kernel32.OpenProcess(0x0101, False, pid)
-            if proc_handle:
-                success = bool(self.kernel32.AssignProcessToJobObject(self.job_handle, proc_handle))
-                return success
-        except Exception as e:
-            logger.debug(f"Assign process {pid} error: {e}")
+            proc_handle = None
+            try:
+                # PROCESS_SET_QUOTA (0x0100) | PROCESS_TERMINATE (0x0001)
+                proc_handle = self.kernel32.OpenProcess(0x0101, False, pid)
+                if proc_handle:
+                    success = bool(self.kernel32.AssignProcessToJobObject(self.job_handle, proc_handle))
+                    return success
+            except Exception as e:
+                logger.debug(f"Assign process {pid} error: {e}")
+                return False
+            finally:
+                if proc_handle:
+                    # Crucial: Close process handle immediately to prevent handle leaks
+                    self.kernel32.CloseHandle(proc_handle)
             return False
-        finally:
-            if proc_handle:
-                # Crucial: Close process handle immediately to prevent handle leaks
-                self.kernel32.CloseHandle(proc_handle)
-        return False
 
     def reset(self):
         """Terminates active child processes inside Job Object and opens a fresh supervisor handle."""
-        if not self.is_windows or not self.kernel32:
-            return
-        if self.job_handle:
-            try:
-                self.kernel32.TerminateJobObject(self.job_handle, 1)
-            except Exception as e:
-                logger.error("Error terminating job object: %s", e)
-            self.close()
-        self.__init__(memory_limit_mb=getattr(self, "memory_limit_mb", 256))
+        with self._lock:
+            if not self.is_windows or not self.kernel32:
+                return
+            if self.job_handle:
+                try:
+                    self.kernel32.TerminateJobObject(self.job_handle, 1)
+                except Exception as e:
+                    logger.error("Error terminating job object: %s", e)
+                self.close()
+            self._init_job_object()
 
     def close(self):
         """Clean up the job object handle upon agent termination."""
-        if self.job_handle and self.kernel32:
-            try:
-                self.kernel32.CloseHandle(self.job_handle)
-                self.job_handle = None
-                logger.info("Windows Job Object handle closed cleanly.")
-            except Exception as e:
-                logger.debug(f"Job Object close error: {e}")
+        with self._lock:
+            if self.job_handle and self.kernel32:
+                try:
+                    self.kernel32.CloseHandle(self.job_handle)
+                    self.job_handle = None
+                    logger.info("Windows Job Object handle closed cleanly.")
+                except Exception as e:
+                    logger.debug(f"Job Object close error: {e}")
 
 # Global Job Object Supervisor instance
 JOB_SUPERVISOR = WindowsJobSupervisor(memory_limit_mb=256)
@@ -528,7 +550,14 @@ class AdaptiveScreenPipeline:
     def __init__(self, target_resolution: Tuple[int, int] = (1280, 720)):
         if platform.system() == "Windows":
             try:
-                ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+                u32 = ctypes.windll.user32
+                fn = getattr(u32, "SetProcessDpiAwarenessContext", None)
+                if fn is not None:
+                    fn.argtypes = [ctypes.c_void_p]
+                    fn.restype = ctypes.c_bool
+                    fn(ctypes.c_void_p(-4))
+                else:
+                    u32.SetProcessDPIAware()
             except Exception:
                 try:
                     ctypes.windll.user32.SetProcessDPIAware()
@@ -548,7 +577,7 @@ class AdaptiveScreenPipeline:
         self.last_stream_size: Optional[Tuple[int, int]] = None
         self._last_capture_err_log: float = 0.0
         self._consecutive_grab_errors: int = 0
-        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ScreenEncoder")
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ScreenEncoder")
         self.is_running = True
 
         # Initialize TurboJPEG
@@ -657,9 +686,10 @@ class AdaptiveScreenPipeline:
                 self.consecutive_static = 0
 
             # Fast 2D strided multi-channel frame delta detector (covers all 4 BGRA bytes across full viewport)
+            img32 = None
             if np is not None:
                 img32 = np.frombuffer(raw_shot.bgra, dtype=np.uint32).reshape((h_shot, w_shot))
-                sample_bytes = np.ascontiguousarray(img32[::8, ::16]).tobytes()
+                sample_bytes = img32[::8, ::16].tobytes()
                 current_hash = zlib.adler32(sample_bytes)
                 frame_unchanged = (
                     (not force_send)
@@ -702,17 +732,17 @@ class AdaptiveScreenPipeline:
                 out_h = max(1, int(round(h_shot * scale)))
                 if out_w < w_shot or out_h < h_shot:
                     self.last_stream_size = (out_w, out_h)
-                    if self.turbo is not None and np is not None:
+                    if self.turbo is not None and np is not None and img32 is not None:
                         cache_key = (w_shot, h_shot, out_w, out_h)
                         cached = self._resize_cache
                         if cached is not None and cached[0] == cache_key and isinstance(cached[1], tuple):
-                            yi, xi = cached[1]
+                            yi_col, xi = cached[1]
                         else:
-                            yi = (np.arange(out_h, dtype=np.intp) * h_shot) // out_h
+                            yi_col = ((np.arange(out_h, dtype=np.intp) * h_shot) // out_h)[:, None]
                             xi = (np.arange(out_w, dtype=np.intp) * w_shot) // out_w
-                            self._resize_cache = (cache_key, (yi, xi))
-                        bgra_2d = np.frombuffer(raw_shot.bgra, dtype=np.uint8).reshape((h_shot, w_shot, 4))
-                        scaled_rgb = np.ascontiguousarray(bgra_2d[yi][:, xi, 2::-1])
+                            self._resize_cache = (cache_key, (yi_col, xi))
+                        sub_bgra = img32[yi_col, xi].view(np.uint8).reshape((out_h, out_w, 4))
+                        scaled_rgb = np.ascontiguousarray(sub_bgra[:, :, 2::-1])
                         try:
                             encoded = self.turbo.encode(
                                 scaled_rgb,
@@ -787,7 +817,9 @@ class AdaptiveScreenPipeline:
         return res
 
     def close(self):
-        """Shuts down executor and releases thread-local resources cleanly."""
+        """Shuts down executor and releases thread-local resources cleanly (idempotent)."""
+        if not self.is_running and not self._worker_scts:
+            return
         self.is_running = False
         # Wait for in-flight grab tasks to finish before closing mss handles
         self.executor.shutdown(wait=True, cancel_futures=True)
@@ -895,6 +927,8 @@ class HostAgentDaemon:
         self._last_cfg_mtime: float = self._safe_cfg_mtime()
         self._last_cfg_rev: int = int(get_config_revision())
         self._last_cfg_stat_ts: float = 0.0
+        self._local_ip_cache: Tuple[float, str] = (0.0, "")
+        self._disk_pct_cache: Tuple[float, float] = (0.0, 0.0)
         self.tls_fingerprint: str = ""
 
         # Persistent credentials & policies (CSPRNG only, never hardcoded fallbacks)
@@ -1032,7 +1066,8 @@ class HostAgentDaemon:
     def _next_outbound_seq(self, ws: WebSocketServerProtocol) -> int:
         """Allocates a strictly monotonic 32-bit sequence number (>= 1) per client connection."""
         nxt = ((self._client_outbound_seq.get(ws, 0) + 1) & 0xFFFFFFFF) or 1
-        self._client_outbound_seq[ws] = nxt
+        if ws in self.clients or ws in self._ws_write_locks:
+            self._client_outbound_seq[ws] = nxt
         return nxt
 
     def _safe_cfg_mtime(self) -> float:
@@ -1166,7 +1201,7 @@ class HostAgentDaemon:
             self.security_profile = str(getattr(self.gui_state, "security_profile", self.security_profile))
             self.is_paused = bool(getattr(self.gui_state, "is_paused", False))
             gui_bl = getattr(self.gui_state, "blacklisted_devices", None)
-            if gui_bl is not None:
+            if gui_bl:
                 with self.gui_state.lock:
                     bl_copy = list(gui_bl)
                 self.blacklisted_ips.update(self._extract_blacklisted_ips(bl_copy))
@@ -1213,10 +1248,19 @@ class HostAgentDaemon:
             return bool(self.gui_state.is_ip_blacklisted(client_ip))
         return False
 
+    def _get_ws_write_lock(self, ws: WebSocketServerProtocol) -> asyncio.Lock:
+        """Returns per-socket write lock without leaking disconnected sockets into the map."""
+        lock = self._ws_write_locks.get(ws)
+        if lock is not None:
+            return lock
+        lock = asyncio.Lock()
+        if ws in self.clients:
+            self._ws_write_locks[ws] = lock
+        return lock
+
     async def _ws_send(self, ws: WebSocketServerProtocol, data: Any) -> None:
         """Serializes concurrent writes onto a WebSocket transport cleanly."""
-        lock = self._ws_write_locks.setdefault(ws, asyncio.Lock())
-        async with lock:
+        async with self._get_ws_write_lock(ws):
             await ws.send(data)
 
     def force_disconnect_client(self, client_id_or_ip: str):
@@ -1279,7 +1323,6 @@ class HostAgentDaemon:
                         save_config(cfg)
             except Exception as exc:
                 logger.debug("Could not persist auto-ban for %s: %s", client_ip, exc)
-            logger.warning("AUTO-BAN TRIGGERED: Blacklisted %s due to 3+ failed auth attempts.", client_ip)
 
     def _get_current_secret(self) -> bytes:
         """Returns configured persistent/env strong token (respecting rotation)."""
@@ -1511,10 +1554,13 @@ class HostAgentDaemon:
                     return self
 
                 async def __anext__(self):
+                    frag_opcode: Optional[int] = None
+                    frag_buf = bytearray()
                     while not self._closed:
                         try:
                             head = await reader.readexactly(2)
                             b1, b2 = head[0], head[1]
+                            is_fin = (b1 & 0x80) != 0
                             opcode = b1 & 0x0F
                             is_masked = (b2 & 0x80) != 0
                             length = b2 & 0x7F
@@ -1523,9 +1569,10 @@ class HostAgentDaemon:
                             elif length == 127:
                                 length = struct.unpack("!Q", await reader.readexactly(8))[0]
                             if length > MAX_WIRE_FRAME_SIZE:
-                                raise ValueError(f"Frame payload length {length} exceeds MAX_WIRE_FRAME_SIZE")
-                            if opcode >= 0x08 and length > 125:
-                                await self.close(code=1002, reason="Control frame payload too large")
+                                await self.close(code=1009, reason="Message too big")
+                                raise StopAsyncIteration
+                            if opcode >= 0x08 and (length > 125 or not is_fin):
+                                await self.close(code=1002, reason="Invalid control frame")
                                 raise StopAsyncIteration
                             mask_key = await reader.readexactly(4) if is_masked else b""
                             raw_payload = await reader.readexactly(length)
@@ -1542,9 +1589,30 @@ class HostAgentDaemon:
                                 continue
                             if opcode == 0x0A:  # PONG -> ignore
                                 continue
+                            if opcode == 0x00:  # Continuation frame
+                                if frag_opcode is None or len(frag_buf) + len(raw_payload) > MAX_WIRE_FRAME_SIZE:
+                                    await self.close(code=1009 if frag_opcode is not None else 1002, reason="Invalid continuation frame")
+                                    raise StopAsyncIteration
+                                frag_buf.extend(raw_payload)
+                                if not is_fin:
+                                    continue
+                                full_payload = bytes(frag_buf)
+                                res_opcode = frag_opcode
+                                frag_opcode = None
+                                frag_buf.clear()
+                                if res_opcode == 0x01:
+                                    return full_payload.decode('utf-8', errors='replace')
+                                return full_payload
+                            if not is_fin:
+                                frag_opcode = opcode
+                                frag_buf.clear()
+                                frag_buf.extend(raw_payload)
+                                continue
                             if opcode == 0x01:
                                 return raw_payload.decode('utf-8', errors='replace')
                             return raw_payload
+                        except StopAsyncIteration:
+                            raise
                         except Exception:
                             raise StopAsyncIteration
                     raise StopAsyncIteration
@@ -1552,8 +1620,11 @@ class HostAgentDaemon:
             adapter = _StdlibWsAdapter()
             await self.handle_connection(adapter)
         except Exception:
+            pass
+        finally:
             try:
-                writer.close()
+                if not writer.is_closing():
+                    writer.close()
             except Exception:
                 pass
 
@@ -1598,7 +1669,12 @@ class HostAgentDaemon:
                 await self._close_zeroconf_async()
 
     def _get_local_ip(self) -> str:
-        """Determines primary non-loopback LAN IPv4 passively (no external 8.8.8.8 probe)."""
+        """Determines primary non-loopback LAN IPv4 passively with 30s TTL cache (no external 8.8.8.8 probe)."""
+        now_mono = time.monotonic()
+        cached_ts, cached_ip = self._local_ip_cache
+        if cached_ip and (now_mono - cached_ts) < 30.0:
+            return cached_ip
+        resolved = "127.0.0.1"
         try:
             if psutil is not None:
                 stats = psutil.net_if_stats()
@@ -1620,19 +1696,22 @@ class HostAgentDaemon:
                             else:
                                 secondary.append(ip)
                 if preferred:
-                    return preferred[0]
-                if secondary:
-                    return secondary[0]
+                    resolved = preferred[0]
+                elif secondary:
+                    resolved = secondary[0]
         except Exception:
             pass
-        try:
-            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-                ip = info[4][0]
-                if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
-                    return ip
-        except Exception:
-            pass
-        return "127.0.0.1"
+        if resolved == "127.0.0.1":
+            try:
+                for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                    ip = info[4][0]
+                    if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                        resolved = ip
+                        break
+            except Exception:
+                pass
+        self._local_ip_cache = (now_mono, resolved)
+        return resolved
 
     def _start_system_tray(self):
         """Initializes high-visibility background Windows system tray icon with rich controls."""
@@ -1694,7 +1773,7 @@ class HostAgentDaemon:
 
             def _add_desktop_shortcut():
                 if create_desktop_shortcut:
-                    ok1, msg1 = create_desktop_shortcut()
+                    _, msg1 = create_desktop_shortcut()
                     if create_start_menu_shortcut:
                         create_start_menu_shortcut()
                     if self.gui_state:
@@ -1775,7 +1854,7 @@ class HostAgentDaemon:
         logger.warning("PANIC TRIGGERED: Aborting all active tasks, approvals, and client sessions.")
 
         def _panic_abort_async():
-            for approval_id, entry in list(self.pending_approvals.items()):
+            for _, entry in list(self.pending_approvals.items()):
                 fut = entry.get("future") if isinstance(entry, dict) else entry
                 if fut and not fut.done():
                     fut.set_result(False)
@@ -2089,6 +2168,8 @@ class HostAgentDaemon:
                                     if pt is None:
                                         raise ValueError("AEAD tag verification failed")
                                     inner = json.loads(pt.decode("utf-8"))
+                                    if not isinstance(inner, dict):
+                                        raise ValueError("PAIR_FINISH inner payload must be a JSON object")
                                 except Exception:
                                     self._record_pin_failure(client_ip, now_ts)
                                     self._record_auth_failure(client_ip, client_id)
@@ -2403,8 +2484,7 @@ class HostAgentDaemon:
                             continue
                     if vault is not None and not vault.is_established:
                         vault_ok = False
-                        lock = self._ws_write_locks.setdefault(ws, asyncio.Lock())
-                        async with lock:
+                        async with self._get_ws_write_lock(ws):
                             if len(payload) >= 80 and vault.complete_handshake(payload):
                                 self._clients_need_keyframe.add(ws)
                                 self._client_auth_ts[ws] = time.monotonic()
@@ -2580,8 +2660,7 @@ class HostAgentDaemon:
         self._wake_stream()
 
     async def _send_encrypted_or_plain(self, ws: WebSocketServerProtocol, opcode: int, payload: bytes, seq: int = 0) -> None:
-        lock = self._ws_write_locks.setdefault(ws, asyncio.Lock())
-        async with lock:
+        async with self._get_ws_write_lock(ws):
             if seq <= 0 and opcode not in (OP_AUTH, OP_PING):
                 seq = self._next_outbound_seq(ws)
             vault = self._client_vaults.get(ws)
@@ -2864,6 +2943,8 @@ class HostAgentDaemon:
         """Handles HITL challenge responses with session binding and secret HMAC proof."""
         try:
             data = json.loads(payload.decode('utf-8'))
+            if not isinstance(data, dict):
+                return
             action_upper = str(data.get("action") or "").upper()
             if action_upper in ("PANIC_KILL_ALL", "PANIC") and ws in self.authenticated_clients:
                 if not self._is_client_input_allowed(ws):
@@ -3040,6 +3121,8 @@ class HostAgentDaemon:
                 return
 
             data = json.loads(payload.decode('utf-8'))
+            if not isinstance(data, dict):
+                return
             raw_action = str(data.get("action") or "").lower()
             if raw_action in ("", "input_event", "pc_control", "remote_input"):
                 action = str(data.get("kind") or data.get("type") or raw_action).lower()
@@ -3071,48 +3154,26 @@ class HostAgentDaemon:
                 if platform.system() == "Windows":
                     try:
                         # Native Win32 SendInput KEYEVENTF_UNICODE supports Cyrillic/Unicode without clobbering clipboard
-                        class _KEYBDINPUT(ctypes.Structure):
-                            _fields_ = [
-                                ("wVk", wintypes.WORD),
-                                ("wScan", wintypes.WORD),
-                                ("dwFlags", wintypes.DWORD),
-                                ("time", wintypes.DWORD),
-                                ("dwExtraInfo", ctypes.c_size_t),
-                            ]
-
-                        class _MOUSEINPUT(ctypes.Structure):
-                            _fields_ = [
-                                ("dx", wintypes.LONG),
-                                ("dy", wintypes.LONG),
-                                ("mouseData", wintypes.DWORD),
-                                ("dwFlags", wintypes.DWORD),
-                                ("time", wintypes.DWORD),
-                                ("dwExtraInfo", ctypes.c_size_t),
-                            ]
-
-                        class _INPUT_UNION(ctypes.Union):
-                            _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT)]
-
-                        class _INPUT(ctypes.Structure):
-                            _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
-
                         INPUT_KEYBOARD = 1
                         KEYEVENTF_UNICODE = 0x0004
                         KEYEVENTF_KEYUP = 0x0002
                         events = []
                         for ch in text_val:
                             if ch == "\n":
-                                events.append(_INPUT(type=INPUT_KEYBOARD, u=_INPUT_UNION(ki=_KEYBDINPUT(wVk=0x0D))))
-                                events.append(_INPUT(type=INPUT_KEYBOARD, u=_INPUT_UNION(ki=_KEYBDINPUT(wVk=0x0D, dwFlags=KEYEVENTF_KEYUP))))
+                                events.append(_WIN_INPUT(type=INPUT_KEYBOARD, u=_WIN_INPUT_UNION(ki=_WIN_KEYBDINPUT(wVk=0x0D))))
+                                events.append(_WIN_INPUT(type=INPUT_KEYBOARD, u=_WIN_INPUT_UNION(ki=_WIN_KEYBDINPUT(wVk=0x0D, dwFlags=KEYEVENTF_KEYUP))))
                                 continue
                             utf16 = ch.encode("utf-16-le")
                             for idx in range(0, len(utf16), 2):
                                 code_unit = int.from_bytes(utf16[idx:idx + 2], "little")
-                                events.append(_INPUT(type=INPUT_KEYBOARD, u=_INPUT_UNION(ki=_KEYBDINPUT(wScan=code_unit, dwFlags=KEYEVENTF_UNICODE))))
-                                events.append(_INPUT(type=INPUT_KEYBOARD, u=_INPUT_UNION(ki=_KEYBDINPUT(wScan=code_unit, dwFlags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))))
+                                events.append(_WIN_INPUT(type=INPUT_KEYBOARD, u=_WIN_INPUT_UNION(ki=_WIN_KEYBDINPUT(wScan=code_unit, dwFlags=KEYEVENTF_UNICODE))))
+                                events.append(_WIN_INPUT(type=INPUT_KEYBOARD, u=_WIN_INPUT_UNION(ki=_WIN_KEYBDINPUT(wScan=code_unit, dwFlags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))))
                         if events:
-                            arr = (_INPUT * len(events))(*events)
-                            ctypes.windll.user32.SendInput(len(events), ctypes.byref(arr), ctypes.sizeof(_INPUT))
+                            arr = (_WIN_INPUT * len(events))(*events)
+                            u32 = ctypes.windll.user32
+                            u32.SendInput.argtypes = [wintypes.UINT, ctypes.c_void_p, ctypes.c_int]
+                            u32.SendInput.restype = wintypes.UINT
+                            u32.SendInput(len(events), ctypes.byref(arr), ctypes.sizeof(_WIN_INPUT))
                             return
                     except Exception:
                         pass
@@ -3316,6 +3377,8 @@ class HostAgentDaemon:
                     steps = max(1, min(10, round(vol_pct / 10)))
             else:
                 data = json.loads(payload.decode('utf-8'))
+                if not isinstance(data, dict):
+                    return
                 action = str(data.get("action") or data.get("command") or data.get("type") or "").lower()
                 if "steps" in data:
                     steps = max(1, min(10, int(data["steps"])))
@@ -3349,6 +3412,8 @@ class HostAgentDaemon:
             stripped = payload.lstrip()
             if stripped.startswith(b'{'):
                 data = json.loads(stripped.decode('utf-8'))
+                if not isinstance(data, dict):
+                    return
                 if "width" in data and "height" in data:
                     self.screen_pipeline.set_target_resolution(int(data["width"]), int(data["height"]))
                 if "quality" in data:
@@ -3381,10 +3446,11 @@ class HostAgentDaemon:
                 stripped = payload.lstrip()
                 if stripped.startswith(b'{'):
                     data = json.loads(stripped.decode('utf-8'))
-                    mon_target = data.get("monitor", data.get("switch_to"))
-                    if mon_target is not None:
-                        self._switch_active_monitor(int(mon_target))
-                        switched = True
+                    if isinstance(data, dict):
+                        mon_target = data.get("monitor", data.get("switch_to"))
+                        if mon_target is not None:
+                            self._switch_active_monitor(int(mon_target))
+                            switched = True
                 elif len(payload) == 1:
                     self._switch_active_monitor(payload[0])
                     switched = True
@@ -3443,13 +3509,14 @@ class HostAgentDaemon:
                 req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
 
                 loop = asyncio.get_running_loop()
+                was_auth = ws in self.authenticated_clients
 
                 def sync_stream():
                     total_streamed = 0
                     max_stream_bytes = 2 * 1024 * 1024  # 2 MiB output cap
                     with urllib.request.urlopen(req, timeout=10.0) as resp:
                         for line in resp:
-                            if not self.is_running or (self.clients and ws not in self.authenticated_clients):
+                            if not self.is_running or (was_auth and ws not in self.authenticated_clients):
                                 break
                             if line:
                                 chunk = json.loads(line.decode('utf-8'))
@@ -3488,11 +3555,18 @@ class HostAgentDaemon:
     # =================================================================
     @staticmethod
     def _is_workstation_locked() -> bool:
-        """Fast Win32 desktop lock check so idle capture skips locked consoles."""
+        """Fast Win32 desktop lock check with 64-bit safe HDESK bindings (zero kernel handle leaks)."""
+        global _WIN_USER32_LOCK_BOUND
         if platform.system() != "Windows":
             return False
         try:
             u32 = ctypes.windll.user32
+            if not _WIN_USER32_LOCK_BOUND:
+                u32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                u32.OpenInputDesktop.restype = wintypes.HANDLE
+                u32.CloseDesktop.argtypes = [wintypes.HANDLE]
+                u32.CloseDesktop.restype = wintypes.BOOL
+                _WIN_USER32_LOCK_BOUND = True
             h_desk = u32.OpenInputDesktop(0, False, 0x0001)
             if not h_desk:
                 return True
@@ -3678,11 +3752,16 @@ class HostAgentDaemon:
                     ram = round(float(vm.percent), 1)
                     ram_used_gb = round(float(vm.used) / (1024 ** 3), 2)
                     ram_total_gb = round(float(vm.total) / (1024 ** 3), 2)
-                    try:
-                        root_disk = os.path.abspath(os.sep)
-                        disk_pct = round(float(psutil.disk_usage(root_disk).percent), 1)
-                    except Exception:
-                        disk_pct = 0.0
+                    now_disk_mono = time.monotonic()
+                    if (now_disk_mono - self._disk_pct_cache[0]) >= 10.0 or self._disk_pct_cache[0] == 0.0:
+                        try:
+                            root_disk = os.path.abspath(os.sep)
+                            disk_pct = round(float(psutil.disk_usage(root_disk).percent), 1)
+                        except Exception:
+                            disk_pct = 0.0
+                        self._disk_pct_cache = (now_disk_mono, disk_pct)
+                    else:
+                        disk_pct = self._disk_pct_cache[1]
                 else:
                     ram = 0.0
                     ram_used_gb = 0.0
@@ -3778,6 +3857,12 @@ class HostAgentDaemon:
         self._client_replay.clear()
         self._client_outbound_seq.clear()
         self._ws_write_locks.clear()
+        self._clients_need_keyframe.clear()
+        self._clients_explicit_sync.clear()
+        self._client_auth_ts.clear()
+        self._client_frame_inflight.clear()
+        self._stream_paused_clients.clear()
+        self.active_nonces.clear()
 
     def _close_sync_handles(self) -> None:
         """Releases file writers, screen encoder thread pools, monitor handles, and job objects."""
@@ -3888,9 +3973,11 @@ class HostAgentDaemon:
             self.clients.clear()
             self.authenticated_clients.clear()
             self._close_vaults_and_approvals()
-            if self.server:
+            server = self.server
+            self.server = None
+            if server:
                 try:
-                    self.server.close()
+                    server.close()
                 except Exception:
                     pass
             if self.zeroconf is not None:
@@ -3953,8 +4040,8 @@ def main():
 
     if "--create-shortcut" in sys.argv:
         if create_desktop_shortcut:
-            ok1, msg1 = create_desktop_shortcut()
-            ok2, msg2 = create_start_menu_shortcut() if create_start_menu_shortcut else (False, "")
+            _, msg1 = create_desktop_shortcut()
+            _, msg2 = create_start_menu_shortcut() if create_start_menu_shortcut else (False, "")
             print(f"Desktop shortcut: {msg1}")
             print(f"Start Menu shortcut: {msg2}")
         sys.exit(0)

@@ -73,14 +73,49 @@ void main() {
       );
       expect(arp.length, equals(28));
       expect(arp[7], equals(2)); // ARP Reply opcode low byte
+
+      // Pool must never hand back an externally disposed client
+      final pooled1 = HostConnectionPool.instance.acquire(
+        hostIp: '127.0.0.1',
+        port: 18765,
+        sharedSecret: 'pool_secret',
+        certFingerprint: 'AA:BB',
+      );
+      final pooledSame = HostConnectionPool.instance.acquire(
+        hostIp: '127.0.0.1',
+        port: 18765,
+        sharedSecret: 'pool_secret',
+        certFingerprint: 'aabb',
+      );
+      expect(identical(pooled1, pooledSame), isTrue);
+      pooled1.dispose();
+      final pooledFresh = HostConnectionPool.instance.acquire(
+        hostIp: '127.0.0.1',
+        port: 18765,
+        sharedSecret: 'pool_secret',
+        certFingerprint: 'aabb',
+      );
+      expect(identical(pooled1, pooledFresh), isFalse);
+      HostConnectionPool.instance.disposeAll();
+
+      // ShellResult.fromJson accepts numeric double exit_code safely
+      final parsedShell = ShellResult.fromJson({
+        'status': 'success',
+        'exit_code': 0.0,
+        'output': 'ok',
+        'command': 'echo ok',
+      });
+      expect(parsedShell.exitCode, equals(0));
+      expect(parsedShell.isSuccess, isTrue);
     });
 
-    testWidgets('ViewportStreamWidget preserves targetFps and renders ValueListenable HUD cleanly', (tester) async {
+    testWidgets('ViewportStreamWidget preserves targetFps, toggles keepScreenAwake cleanly, and renders ValueListenable HUD', (tester) async {
       const widget = ViewportStreamWidget(
         hostIp: '127.0.0.1',
         hostName: 'Test-Workstation',
         sharedSecret: '',
         targetFps: 15,
+        keepScreenAwake: true,
       );
       expect(widget.targetFps, equals(15));
 
@@ -108,6 +143,28 @@ void main() {
       expect(find.text('Test-Workstation'), findsOneWidget);
       expect(find.text('0 FPS'), findsOneWidget);
       expect(find.text('--ms'), findsOneWidget);
+
+      // Toggle keepScreenAwake via didUpdateWidget without refcount leak or error
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: CyberTheme.themeData,
+          home: const Scaffold(
+            body: SizedBox(
+              width: 640,
+              height: 360,
+              child: ViewportStreamWidget(
+                hostIp: '127.0.0.1',
+                hostName: 'Test-Workstation',
+                sharedSecret: '',
+                targetFps: 30,
+                keepScreenAwake: false,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(tester.takeException(), isNull);
     });
   });
 }

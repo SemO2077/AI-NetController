@@ -367,18 +367,26 @@ function establishConnection(url: string, token: string = currentToken) {
 
     // Connection watchdog (3500ms timeout prevents hanging sockets on latent Wi-Fi)
     connectionWatchdog = setTimeout(() => {
-      if (ws.readyState === WebSocket.CONNECTING) {
+      if (socket === ws && ws.readyState === WebSocket.CONNECTING) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        socket = null;
         try {
           ws.close();
         } catch {
           // ignore
         }
         self.postMessage({ type: 'STATUS', status: 'timeout' });
-        scheduleReconnect();
+        if (autoReconnectEnabled) {
+          scheduleReconnect();
+        }
       }
     }, 3500);
 
     ws.onopen = () => {
+      if (socket !== ws) return;
       clearConnectionWatchdog();
       reconnectAttempts = 0;
       autoReconnectEnabled = true;
@@ -387,22 +395,35 @@ function establishConnection(url: string, token: string = currentToken) {
       clearAuthHandshakeTimer();
       authHandshakeTimer = setTimeout(() => {
         if (!sessionAuthenticated && socket === ws && ws.readyState === WebSocket.OPEN) {
+          ws.onopen = null;
+          ws.onmessage = null;
+          ws.onerror = null;
+          ws.onclose = null;
+          socket = null;
+          stopHeartbeat();
+          sessionAuthenticated = false;
+          authChallengeResponded = false;
+          resetVaultState();
+          pendingPings.clear();
           self.postMessage({
             type: 'STATUS',
             status: 'timeout',
             message: 'Host agent did not complete OP_AUTH handshake within 3.5s.',
           });
           try {
-            ws.close(4001, 'Auth handshake timeout');
+            ws.close(4008, 'Auth handshake timeout');
           } catch {
             // ignore
           }
-          scheduleReconnect();
+          if (autoReconnectEnabled) {
+            scheduleReconnect();
+          }
         }
       }, 3500);
     };
 
     ws.onmessage = (e: MessageEvent) => {
+      if (socket !== ws) return;
       if (e.data instanceof ArrayBuffer) {
         activeProtocolMode = 'binary';
         parseBinaryFrame(new Uint8Array(e.data));
@@ -452,11 +473,14 @@ function establishConnection(url: string, token: string = currentToken) {
     };
 
     ws.onerror = () => {
+      if (socket !== ws) return;
       hadSocketError = true;
       clearConnectionWatchdog();
     };
 
     ws.onclose = (event) => {
+      if (socket !== ws) return;
+      socket = null;
       clearConnectionWatchdog();
       clearAuthHandshakeTimer();
       stopHeartbeat();
@@ -881,12 +905,17 @@ self.onmessage = (event: MessageEvent) => {
       clearAuthHandshakeTimer();
       stopHeartbeat();
       if (socket) {
+        const oldSocket = socket;
+        socket = null;
         try {
-          socket.close(1000, 'User disconnect');
+          oldSocket.onopen = null;
+          oldSocket.onmessage = null;
+          oldSocket.onerror = null;
+          oldSocket.onclose = null;
+          oldSocket.close(1000, 'User disconnect');
         } catch {
           // ignore
         }
-        socket = null;
       }
       outboundQueue.length = 0;
       self.postMessage({ type: 'STATUS', status: 'disconnected' });

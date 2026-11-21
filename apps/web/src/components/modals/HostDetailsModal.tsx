@@ -20,6 +20,8 @@ import {
   Zap,
   Edit3,
   Trash2,
+  ChevronDown,
+  X,
 } from 'lucide-react';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { getBatteryConfig } from '../fleet/HostCard';
@@ -57,8 +59,16 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
   onDeleteHost,
 }) => {
   const { language } = useTranslation();
+  const isBg = language === 'bg';
   const [copiedField, setCopiedField] = useState<'ip' | 'mac' | null>(null);
+  const [showSecurityDrawer, setShowSecurityDrawer] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const copyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setConfirmDelete(false);
+    setShowSecurityDrawer(Boolean(isQuarantined || isCircuitTripped));
+  }, [host?.id, isOpen, isQuarantined, isCircuitTripped]);
 
   useEffect(() => {
     return () => {
@@ -105,75 +115,132 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
       onClose={onClose}
       title={host.name}
       subtitle={
-        language === 'bg'
+        isBg
           ? `Детайли за хост и мрежова телеметрия (${host.ip})`
           : `Host specifications & network telemetry (${host.ip})`
       }
     >
       <div className="space-y-4 select-none font-sans">
-        {/* Top Host Profile Banner */}
-        <div className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-white/[0.04] border border-white/10">
+        {/* Top Host Profile Hero Banner */}
+        <div className="flex items-center justify-between gap-3 p-4 rounded-[24px] glass-liquid-subtle">
           <div className="flex items-center space-x-3.5 min-w-0">
             <div
-              className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 border ${
-                host.isOnline
-                  ? 'glass-liquid text-cyan-400 border-cyan-400/40 shadow-[0_4px_16px_rgba(6,182,212,0.2)]'
-                  : 'glass-liquid text-white/40 border-white/10'
+              className={`w-12 h-12 squircle-badge flex items-center justify-center shrink-0 ${
+                host.isOnline ? 'squircle-hero' : 'squircle-amber opacity-85'
               }`}
             >
               <DeviceIcon className="w-6 h-6" />
             </div>
 
             <div className="min-w-0">
-              <div className="flex items-center space-x-2">
-                <span className="font-bold text-white text-base break-words">{host.name}</span>
+              <div className="flex items-center space-x-2 flex-wrap">
+                <span className="font-display font-extrabold ink-primary text-base break-words">
+                  {host.name}
+                </span>
                 <span
-                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full border shrink-0 ${
+                  className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border shrink-0 ${
                     host.isOnline
-                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                      : 'bg-white/5 text-white/50 border-white/10'
+                      ? 'bg-emerald-500/14 text-emerald-400 border-emerald-500/35'
+                      : 'bg-amber-500/14 text-amber-400 border-amber-500/35'
                   }`}
                 >
                   {host.isOnline
-                    ? language === 'bg'
-                      ? 'ОНЛАЙН'
-                      : 'ONLINE'
-                    : language === 'bg'
-                    ? 'ПРИСПАН'
-                    : 'SLEEPING'}
+                    ? isBg
+                      ? 'Онлайн'
+                      : 'Online'
+                    : isBg
+                    ? 'Спящ'
+                    : 'Sleeping'}
                 </span>
               </div>
-              <p className="text-xs text-white/50 font-mono mt-0.5">{host.ip} • {host.mac}</p>
+              <p className="text-xs ink-muted font-mono mt-0.5">
+                {host.ip} • {host.mac}
+              </p>
             </div>
           </div>
 
           <div className="flex items-center space-x-1.5 shrink-0">
             {host.isOnline ? (
-              <span className="flex items-center space-x-1 text-emerald-400 text-xs font-mono">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
+              <span className="flex items-center space-x-1.5 text-emerald-400 text-xs font-mono font-semibold px-2.5 py-1 rounded-full bg-emerald-500/12 border border-emerald-500/30">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 <span className="hidden sm:inline">
                   {isMdnsHost
-                    ? language === 'bg'
+                    ? isBg
                       ? 'mDNS активен'
-                      : 'mDNS Active'
-                    : language === 'bg'
+                      : 'mDNS Live'
+                    : isBg
                     ? 'Онлайн'
                     : 'Live Host'}
                 </span>
               </span>
             ) : (
-              <span className="flex items-center space-x-1 text-amber-400/80 text-xs font-mono">
+              <span className="flex items-center space-x-1.5 text-amber-400 text-xs font-mono font-semibold px-2.5 py-1 rounded-full bg-amber-500/12 border border-amber-500/30">
                 <span className="w-2 h-2 rounded-full bg-amber-400" />
                 <span className="hidden sm:inline">
-                  {language === 'bg' ? 'Готов за WoL' : 'WoL Ready'}
+                  {isBg ? 'Готов за WoL' : 'WoL Ready'}
                 </span>
               </span>
             )}
           </div>
         </div>
 
-        {/* 30-Second Latency Sparkline Chart Component */}
-        <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10">
+        {/* Primary Hero Action Bar (Up Front!) */}
+        <div className="flex items-center gap-2">
+          {host.isOnline ? (
+            <>
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.03, y: -1 }}
+                whileTap={{ scale: 0.93 }}
+                transition={{ type: 'spring', stiffness: 480, damping: 24 }}
+                onClick={() => {
+                  triggerHapticFeedback('medium');
+                  onClose();
+                  onSelectForTerminal?.(host.id);
+                }}
+                className="flex-1 min-h-[42px] py-2.5 px-4 rounded-full liquid-hero-btn font-bold text-xs flex items-center justify-center space-x-2 cursor-pointer"
+              >
+                <Terminal className="w-4 h-4" />
+                <span>{isBg ? 'Отвори терминал' : 'Open Terminal'}</span>
+              </motion.button>
+
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.03, y: -1 }}
+                whileTap={{ scale: 0.93 }}
+                transition={{ type: 'spring', stiffness: 480, damping: 24 }}
+                onClick={() => {
+                  triggerHapticFeedback('medium');
+                  onClose();
+                  onViewScreen?.(host);
+                }}
+                className="flex-1 min-h-[42px] py-2.5 px-4 rounded-full liquid-control-pill font-bold text-xs flex items-center justify-center space-x-2 cursor-pointer"
+              >
+                <Eye className="w-4 h-4 text-sky-400" />
+                <span>{isBg ? 'Преглед на екран' : 'View Screen'}</span>
+              </motion.button>
+            </>
+          ) : (
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.03, y: -1 }}
+              whileTap={{ scale: 0.93 }}
+              transition={{ type: 'spring', stiffness: 480, damping: 24 }}
+              onClick={() => {
+                triggerHapticFeedback('heavy');
+                onClose();
+                onSendWol?.(host);
+              }}
+              className="w-full min-h-[44px] py-3 px-4 rounded-full squircle-amber preserve-white font-bold text-xs flex items-center justify-center space-x-2 cursor-pointer"
+            >
+              <Power className="w-4 h-4" />
+              <span>{isBg ? 'Събуди през Wake-on-LAN' : 'Wake via Wake-on-LAN'}</span>
+            </motion.button>
+          )}
+        </div>
+
+        {/* 30-Second Adaptive Latency Sparkline */}
+        <div className="p-4 rounded-[24px] glass-liquid-subtle">
           <HostLatencySparkline
             history={host.latencyHistory}
             currentPing={host.ping}
@@ -188,17 +255,17 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
 
         {/* Hardware & System Specifications Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs font-mono">
-          <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
-            <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'IP АДРЕС' : 'IP ADDRESS'}
+          <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1">
+            <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+              {isBg ? 'IP адрес' : 'IP Address'}
             </span>
-            <div className="flex items-center justify-between">
-              <span className="text-cyan-300 font-bold">{host.ip}</span>
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-cyan-400 font-bold truncate">{host.ip}</span>
               <button
                 type="button"
                 onClick={() => copyToClipboard(host.ip, 'ip')}
-                className="text-white/40 hover:text-white transition p-1 cursor-pointer"
-                title={language === 'bg' ? 'Копирай IP' : 'Copy IP'}
+                className="ink-muted hover:ink-primary transition p-1 cursor-pointer"
+                title={isBg ? 'Копирай IP' : 'Copy IP'}
               >
                 {copiedField === 'ip' ? (
                   <Check className="w-3 h-3 text-emerald-400" />
@@ -209,17 +276,17 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
             </div>
           </div>
 
-          <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
-            <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'MAC АДРЕС' : 'MAC ADDRESS'}
+          <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1">
+            <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+              {isBg ? 'MAC адрес' : 'MAC Address'}
             </span>
-            <div className="flex items-center justify-between">
-              <span className="text-white/80 font-medium truncate">{host.mac}</span>
+            <div className="flex items-center justify-between gap-1">
+              <span className="ink-primary font-semibold truncate">{host.mac}</span>
               <button
                 type="button"
                 onClick={() => copyToClipboard(host.mac, 'mac')}
-                className="text-white/40 hover:text-white transition p-1 cursor-pointer"
-                title={language === 'bg' ? 'Копирай MAC' : 'Copy MAC'}
+                className="ink-muted hover:ink-primary transition p-1 cursor-pointer"
+                title={isBg ? 'Копирай MAC' : 'Copy MAC'}
               >
                 {copiedField === 'mac' ? (
                   <Check className="w-3 h-3 text-emerald-400" />
@@ -230,87 +297,87 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
             </div>
           </div>
 
-          <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
-            <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'ПОРТ НА АГЕНТА' : 'AGENT PORT'}
+          <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1">
+            <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+              {isBg ? 'Порт на агента' : 'Agent Port'}
             </span>
             <span className="text-emerald-400 font-bold block">{host.port || 8765} (TCP/WS)</span>
           </div>
 
-          <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
-            <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'ОПЕРАЦИОННА СИСТЕМА' : 'OPERATING SYSTEM'}
+          <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1">
+            <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+              {isBg ? 'Операционна система' : 'OS'}
             </span>
-            <span className="text-white/90 font-medium capitalize block">
+            <span className="ink-primary font-semibold capitalize block">
               {host.os === 'windows' ? 'Windows' : 'Linux'}
             </span>
           </div>
 
-          <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
-            <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'ПРОЦЕСОР (CPU)' : 'PROCESSOR (CPU)'}
+          <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1.5">
+            <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+              {isBg ? 'Процесор (CPU)' : 'CPU Load'}
             </span>
             <div className="flex items-center space-x-2">
-              <span className="text-white font-bold">{safeCpu}%</span>
-              <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <span className="ink-primary font-bold">{safeCpu}%</span>
+              <div className="flex-1 h-2 bg-current/10 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-cyan-400 rounded-full transition-all duration-500"
+                  className="h-full bg-gradient-to-r from-violet-500 to-sky-400 rounded-full transition-all duration-500"
                   style={{ width: `${safeCpu}%` }}
                 />
               </div>
             </div>
           </div>
 
-          <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
-            <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'ПАМЕТ (RAM)' : 'MEMORY (RAM)'}
+          <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1.5">
+            <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+              {isBg ? 'Памет (RAM)' : 'Memory (RAM)'}
             </span>
             <div className="flex items-center space-x-2">
-              <span className="text-white font-bold">{safeRam}%</span>
-              <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <span className="ink-primary font-bold">{safeRam}%</span>
+              <div className="flex-1 h-2 bg-current/10 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-teal-400 rounded-full transition-all duration-500"
+                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500"
                   style={{ width: `${safeRam}%` }}
                 />
               </div>
             </div>
           </div>
 
-          <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
-            <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'ДИСКОВО ПРОСТРАНСТВО' : 'DISK STORAGE'}
+          <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1">
+            <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+              {isBg ? 'Дисково пространство' : 'Disk Storage'}
             </span>
-            <span className="text-white/80 truncate block">{host.diskUsage || 'N/A'}</span>
+            <span className="ink-primary font-medium truncate block">{host.diskUsage || 'N/A'}</span>
           </div>
 
           {host.batteryPercentage !== undefined && (
-            <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1">
-              <span className="text-white/40 text-[10px] block">
-                {language === 'bg' ? 'БАТЕРИЯ (ЛАПТОП)' : 'BATTERY (LAPTOP)'}
+            <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1">
+              <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+                {isBg ? 'Батерия' : 'Battery'}
               </span>
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1.5">
                 <span className={`font-bold ${getBatteryConfig(host.batteryPercentage, host.isCharging).colorText}`}>
                   {host.batteryPercentage}%
                 </span>
-                <span className="text-[10px] text-white/50">
+                <span className="text-[10px] ink-muted">
                   {host.isCharging
-                    ? language === 'bg'
+                    ? isBg
                       ? 'Зарежда се'
                       : 'Charging'
-                    : language === 'bg'
-                    ? 'На батерия'
-                    : 'On Battery'}
+                    : isBg
+                    ? 'Батерия'
+                    : 'Battery'}
                 </span>
-                {host.isCharging && <Zap className="w-3 h-3 text-amber-300 fill-current animate-pulse" />}
+                {host.isCharging && <Zap className="w-3 h-3 text-amber-400 fill-current animate-pulse" />}
               </div>
             </div>
           )}
 
-          <div className="glass-liquid p-3 rounded-xl border border-white/5 space-y-1 col-span-2">
-            <span className="text-white/40 text-[10px] block">
-              {language === 'bg' ? 'ПОСЛЕДНА ТЕЛЕМЕТРИЯ' : 'LAST TELEMETRY'}
+          <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1 col-span-2">
+            <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
+              {isBg ? 'Последна телеметрия' : 'Last Telemetry'}
             </span>
-            <span className="text-white/80 truncate flex items-center space-x-1.5">
+            <span className="ink-primary truncate flex items-center space-x-1.5">
               <Clock className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               <span>{host.lastSeen}</span>
             </span>
@@ -319,15 +386,15 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
 
         {/* Tags */}
         {host.tags && host.tags.length > 0 && (
-          <div className="flex items-center space-x-2 flex-wrap gap-y-1.5 pt-1">
-            <span className="text-white/40 text-xs font-mono flex items-center space-x-1">
+          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+            <span className="ink-muted text-xs font-mono flex items-center space-x-1">
               <Tag className="w-3 h-3" />
-              <span>{language === 'bg' ? 'Етикети:' : 'Tags:'}</span>
+              <span>{isBg ? 'Етикети:' : 'Tags:'}</span>
             </span>
             {host.tags.map((tag) => (
               <span
                 key={tag}
-                className="glass-liquid px-2.5 py-0.5 rounded-full text-xs font-mono text-cyan-300 border border-cyan-400/20"
+                className="liquid-control-pill px-2.5 py-0.5 rounded-full text-xs font-mono text-cyan-400 font-semibold"
               >
                 #{tag}
               </span>
@@ -335,132 +402,89 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
           </div>
         )}
 
-        {/* Security & Failsafe Actions */}
-        <div className="p-3 bg-white/[0.02] border border-white/10 rounded-xl space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-300 flex items-center gap-1.5">
-              <ShieldAlert className="w-3.5 h-3.5 text-cyan-400" />
+        {/* Progressive Disclosure: Security & Failsafe Isolation Drawer */}
+        <div className="rounded-[24px] glass-liquid-subtle overflow-hidden">
+          <button
+            type="button"
+            onClick={() => {
+              triggerHapticFeedback('light');
+              setShowSecurityDrawer((v) => !v);
+            }}
+            className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs cursor-pointer"
+          >
+            <span className="font-display font-bold ink-primary flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-rose-400" />
               <span>
-                {language === 'bg' ? 'Защита и Мрежова Изолация' : 'Security & Network Isolation'}
+                {isBg ? 'Защита и мрежова изолация' : 'Security & Network Isolation'}
               </span>
+              {isQuarantined && (
+                <span className="px-2 py-0.5 rounded-full bg-rose-500/16 border border-rose-500/35 text-rose-400 font-mono text-[10px] font-bold">
+                  {isBg ? 'Карантина' : 'Quarantined'}
+                </span>
+              )}
+              {isCircuitTripped && (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/16 border border-amber-500/35 text-amber-400 font-mono text-[10px] font-bold">
+                  {isBg ? 'Прекъсвач' : 'Circuit Tripped'}
+                </span>
+              )}
             </span>
-            {isQuarantined && (
-              <span className="px-2 py-0.5 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-300 font-mono text-[10px] font-bold">
-                {language === 'bg' ? 'ПОД КАРАНТИНА' : 'QUARANTINED'}
-              </span>
-            )}
-            {isCircuitTripped && (
-              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono text-[10px] font-bold">
-                {language === 'bg' ? 'ПРЕКЪСВАЧ: АКТИВЕН' : 'CIRCUIT TRIPPED'}
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 pt-1">
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.03, y: -1 }}
-              whileTap={{ scale: 0.93 }}
-              transition={{ type: 'spring', stiffness: 500, damping: 25 }}
-              onClick={() => {
-                triggerHapticFeedback('warning');
-                onToggleQuarantine?.(host.id);
-              }}
-              className={`flex-1 min-h-[44px] py-2.5 px-4 rounded-full text-xs font-semibold border transition flex items-center justify-center space-x-1.5 cursor-pointer ${
-                isQuarantined
-                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-200 hover:bg-rose-500/30'
-                  : 'bg-white/5 border-white/10 text-slate-300 hover:text-white hover:bg-white/10'
+            <ChevronDown
+              className={`w-4 h-4 ink-muted transition-transform duration-150 ${
+                showSecurityDrawer ? 'rotate-180' : ''
               }`}
-            >
-              {isQuarantined ? <ShieldOff className="w-3.5 h-3.5 text-rose-400" /> : <ShieldAlert className="w-3.5 h-3.5 text-cyan-400" />}
-              <span>
-                {isQuarantined
-                  ? language === 'bg'
-                    ? 'Освободи от Карантина'
-                    : 'Release from Quarantine'
-                  : language === 'bg'
-                  ? 'Постави под Карантина'
-                  : 'Quarantine Host'}
-              </span>
-            </motion.button>
+            />
+          </button>
 
-            {isCircuitTripped && (
+          {showSecurityDrawer && (
+            <div className="px-4 pb-4 pt-1 border-t border-white/[0.08] flex items-center gap-2 flex-wrap">
               <motion.button
                 type="button"
-                whileHover={{ scale: 1.03, y: -1 }}
-                whileTap={{ scale: 0.93 }}
-                transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.94 }}
                 onClick={() => {
-                  triggerHapticFeedback('light');
-                  onResetCircuit?.(host.id);
+                  triggerHapticFeedback('warning');
+                  onToggleQuarantine?.(host.id);
                 }}
-                className="min-h-[44px] py-2.5 px-4 rounded-full text-xs font-semibold bg-amber-500/20 border border-amber-500/40 text-amber-200 hover:bg-amber-500/30 transition flex items-center space-x-1 cursor-pointer"
+                className={`flex-1 min-h-[40px] py-2 px-4 rounded-full text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer ${
+                  isQuarantined
+                    ? 'squircle-rose preserve-white'
+                    : 'liquid-control-pill ink-primary'
+                }`}
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>{language === 'bg' ? 'Нулирай прекъсвач' : 'Reset Circuit'}</span>
-              </motion.button>
-            )}
-          </div>
-        </div>
-
-        {/* Primary Action Buttons */}
-        <div className="flex items-center space-x-2 pt-2 border-t border-white/10">
-          {host.isOnline ? (
-            <>
-              <motion.button
-                type="button"
-                whileHover={{ scale: 1.04, y: -1.5 }}
-                whileTap={{ scale: 0.92 }}
-                transition={{ type: 'spring', stiffness: 480, damping: 24 }}
-                onClick={() => {
-                  triggerHapticFeedback('medium');
-                  onClose();
-                  onSelectForTerminal?.(host.id);
-                }}
-                className="flex-1 min-h-[44px] py-3 px-4 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 font-bold text-xs border border-cyan-400/40 transition flex items-center justify-center space-x-2 shadow-[0_4px_16px_rgba(6,182,212,0.2)] cursor-pointer"
-              >
-                <Terminal className="w-4 h-4" />
-                <span>{language === 'bg' ? 'Отвори терминал' : 'Open Terminal'}</span>
+                {isQuarantined ? <ShieldOff className="w-3.5 h-3.5" /> : <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />}
+                <span>
+                  {isQuarantined
+                    ? isBg
+                      ? 'Освободи от карантина'
+                      : 'Release from Quarantine'
+                    : isBg
+                    ? 'Постави под карантина'
+                    : 'Quarantine Host'}
+                </span>
               </motion.button>
 
-              <motion.button
-                type="button"
-                whileHover={{ scale: 1.04, y: -1.5 }}
-                whileTap={{ scale: 0.92 }}
-                transition={{ type: 'spring', stiffness: 480, damping: 24 }}
-                onClick={() => {
-                  triggerHapticFeedback('medium');
-                  onClose();
-                  onViewScreen?.(host);
-                }}
-                className="flex-1 min-h-[44px] py-3 px-4 rounded-full glass-liquid hover:brightness-110 text-white font-semibold text-xs border border-white/20 transition flex items-center justify-center space-x-2 cursor-pointer"
-              >
-                <Eye className="w-4 h-4 text-cyan-400" />
-                <span>{language === 'bg' ? 'Преглед на екран' : 'View Screen'}</span>
-              </motion.button>
-            </>
-          ) : (
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.04, y: -1.5 }}
-              whileTap={{ scale: 0.92 }}
-              transition={{ type: 'spring', stiffness: 480, damping: 24 }}
-              onClick={() => {
-                triggerHapticFeedback('heavy');
-                onClose();
-                onSendWol?.(host);
-              }}
-              className="w-full min-h-[44px] py-3.5 px-4 rounded-full bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-xs border border-amber-400/40 transition flex items-center justify-center space-x-2 shadow-[0_4px_16px_rgba(245,158,11,0.25)] cursor-pointer"
-            >
-              <Power className="w-4 h-4" />
-              <span>{language === 'bg' ? 'Събуди през Wake-on-LAN' : 'Wake via Wake-on-LAN'}</span>
-            </motion.button>
+              {isCircuitTripped && (
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.94 }}
+                  onClick={() => {
+                    triggerHapticFeedback('light');
+                    onResetCircuit?.(host.id);
+                  }}
+                  className="min-h-[40px] py-2 px-4 rounded-full text-xs font-bold squircle-amber preserve-white flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>{isBg ? 'Нулирай прекъсвач' : 'Reset Circuit'}</span>
+                </motion.button>
+              )}
+            </div>
           )}
         </div>
 
-        {/* Host Management: Edit & Remove Host */}
+        {/* Host Management: Edit & Inline 2-Step Remove Confirmation */}
         {(onEditHost || onDeleteHost) && (
-          <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+          <div className="flex items-center gap-2 pt-2 border-t border-white/[0.08]">
             {onEditHost && (
               <button
                 type="button"
@@ -469,33 +493,52 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
                   onClose();
                   onEditHost(host);
                 }}
-                className="flex-1 min-h-[42px] py-2.5 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.09] border border-white/12 text-slate-200 hover:text-cyan-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                className="flex-1 min-h-[40px] py-2 px-4 rounded-full liquid-control-pill text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Edit3 className="w-3.5 h-3.5 text-cyan-400" />
-                <span>{language === 'bg' ? 'Редактирай Хост' : 'Edit Host'}</span>
+                <span>{isBg ? 'Редактирай хост' : 'Edit Host'}</span>
               </button>
             )}
-            {onDeleteHost && (
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHapticFeedback('warning');
-                  const confirmMsg =
-                    language === 'bg'
-                      ? `Премахване на хост "${host.name}" (${host.ip}) от флота?`
-                      : `Remove host "${host.name}" (${host.ip}) from fleet?`;
-                  if (typeof window !== 'undefined' && !window.confirm(confirmMsg)) {
-                    return;
-                  }
-                  onDeleteHost(host.id);
-                  onClose();
-                }}
-                className="flex-1 min-h-[42px] py-2.5 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 hover:text-rose-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                <span>{language === 'bg' ? 'Премахни Хост' : 'Remove Host'}</span>
-              </button>
-            )}
+            {onDeleteHost &&
+              (confirmDelete ? (
+                <div className="flex-1 flex items-center justify-between gap-1.5 px-3 py-1.5 rounded-full bg-rose-500/14 border border-rose-500/40">
+                  <span className="text-[11px] font-semibold text-rose-400 truncate">
+                    {isBg ? 'Премахни?' : 'Remove host?'}
+                  </span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerHapticFeedback('warning');
+                        onDeleteHost(host.id);
+                        onClose();
+                      }}
+                      className="px-3 py-1 rounded-full squircle-rose preserve-white text-[11px] font-bold cursor-pointer"
+                    >
+                      {isBg ? 'Потвърди' : 'Confirm'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(false)}
+                      className="p-1 rounded-full ink-secondary hover:ink-primary cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback('light');
+                    setConfirmDelete(true);
+                  }}
+                  className="flex-1 min-h-[40px] py-2 px-4 rounded-full bg-rose-500/12 hover:bg-rose-500/20 border border-rose-500/35 text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isBg ? 'Премахни хост' : 'Remove Host'}</span>
+                </button>
+              ))}
           </div>
         )}
       </div>

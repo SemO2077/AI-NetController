@@ -10,17 +10,12 @@
 
 import { RiskLevel } from '../types';
 import {
-  base64ToBytes,
-  bytesToBase64,
-  chacha20Poly1305Decrypt,
-  chacha20Poly1305Encrypt,
-  concatBytes,
-  hkdfSha256,
-  randomBytes,
-  x25519GenerateKeypair,
-  x25519ScalarMult,
-  zeroize,
-} from './pairCrypto';
+  createEncryptedPairFinish,
+  createEncryptedPairInit,
+  decryptEncryptedPairResult,
+  destroyEncryptedPairSession,
+  EncryptedPairSession,
+} from '../utils/cryptoVault';
 
 export function buildHostWsUri(ip: string, port: number = 8765, preferTls?: boolean): string {
   const isHttps = typeof window !== 'undefined' && window.location?.protocol === 'https:';
@@ -456,19 +451,12 @@ export function pairHostWithPin(
     }
     let settled = false;
     let ws: WebSocket | null = null;
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-
-    let cliPriv: Uint8Array | null = null;
-    let cliPub: Uint8Array | null = null;
-    let cliN1: Uint8Array | null = null;
-    let pairKey: Uint8Array | null = null;
-    let pairAad: Uint8Array | null = null;
+    let pairSession: EncryptedPairSession | null = null;
     let sentEncryptedInit = false;
 
     const cleanupSecrets = () => {
-      if (cliPriv) { zeroize(cliPriv); cliPriv = null; }
-      if (pairKey) { zeroize(pairKey); pairKey = null; }
+      destroyEncryptedPairSession(pairSession);
+      pairSession = null;
     };
 
     const finish = (token: string | null) => {
@@ -476,10 +464,18 @@ export function pairHostWithPin(
       settled = true;
       clearTimeout(timer);
       cleanupSecrets();
-      try {
-        ws?.close(1000, 'PAIR complete');
-      } catch {
-        // ignore
+      if (ws) {
+        const activeWs = ws;
+        ws = null;
+        try {
+          activeWs.onopen = null;
+          activeWs.onmessage = null;
+          activeWs.onerror = null;
+          activeWs.onclose = null;
+          activeWs.close(1000, 'PAIR complete');
+        } catch {
+          // ignore
+        }
       }
       resolve(token);
     };
@@ -489,19 +485,10 @@ export function pairHostWithPin(
       ws = new WebSocket(wsUri);
       ws.onopen = () => {
         try {
-          const kp = x25519GenerateKeypair();
-          cliPriv = kp.privateKey;
-          cliPub = kp.publicKey;
-          cliN1 = randomBytes(16);
+          const { session, message } = createEncryptedPairInit(deviceLabel);
+          pairSession = session;
           sentEncryptedInit = true;
-          ws?.send(
-            JSON.stringify({
-              action: 'PAIR_INIT',
-              client_pub: bytesToBase64(cliPub),
-              client_nonce: bytesToBase64(cliN1),
-              device: deviceLabel,
-            })
-          );
+          ws?.send(JSON.stringify(message));
         } catch {
           finish(null);
         }
@@ -510,63 +497,22 @@ export function pairHostWithPin(
         if (typeof evt.data !== 'string') return;
         try {
           const msg = JSON.parse(evt.data);
-          if (msg.event === 'PAIR_CHALLENGE' && cliPriv && cliPub && cliN1) {
-            const hostPub = base64ToBytes(String(msg.host_pub || ''));
-            const hostN2 = base64ToBytes(String(msg.host_nonce || ''));
-            if (hostPub.length !== 32 || hostN2.length !== 16) {
-              finish(null);
-              return;
-            }
-            const shared = x25519ScalarMult(cliPriv, hostPub);
-            zeroize(cliPriv);
-            cliPriv = null;
-            let nonZero = 0;
-            for (let i = 0; i < shared.length; i++) nonZero |= shared[i];
-            if (nonZero === 0) {
-              zeroize(shared);
-              finish(null);
-              return;
-            }
-            pairKey = hkdfSha256(
-              concatBytes(cliN1, hostN2),
-              shared,
-              encoder.encode('CST_PAIR_WRAP_V1'),
-              32
+          if (msg.event === 'PAIR_CHALLENGE' && pairSession) {
+            const finishMsg = createEncryptedPairFinish(
+              pairSession,
+              String(msg.host_pub || ''),
+              String(msg.host_nonce || ''),
+              cleanPin,
+              deviceLabel
             );
-            zeroize(shared);
-            pairAad = concatBytes(
-              encoder.encode('CST_PAIR_V1'),
-              cliPub,
-              hostPub,
-              cliN1,
-              hostN2
-            );
-            const nonceZero = new Uint8Array(12);
-            const innerPt = encoder.encode(JSON.stringify({ pin: cleanPin, device: deviceLabel }));
-            const ctAndTag = chacha20Poly1305Encrypt(pairKey, nonceZero, innerPt, pairAad);
-            zeroize(innerPt);
-            ws?.send(
-              JSON.stringify({
-                action: 'PAIR_FINISH',
-                ciphertext: bytesToBase64(concatBytes(nonceZero, ctAndTag)),
-                device: deviceLabel,
-              })
-            );
-          } else if (msg.event === 'PAIR_RESULT' && pairKey && pairAad) {
-            const rawCt = base64ToBytes(String(msg.ciphertext || ''));
-            if (rawCt.length < 28) {
+            if (!finishMsg) {
               finish(null);
               return;
             }
-            const respNonce = rawCt.subarray(0, 12);
-            const pt = chacha20Poly1305Decrypt(pairKey, respNonce, rawCt.subarray(12), pairAad);
-            if (!pt) {
-              finish(null);
-              return;
-            }
-            const decoded = JSON.parse(decoder.decode(pt));
-            zeroize(pt);
-            if (typeof decoded.pairingToken === 'string' && decoded.pairingToken) {
+            ws?.send(JSON.stringify(finishMsg));
+          } else if (msg.event === 'PAIR_RESULT' && pairSession) {
+            const decoded = decryptEncryptedPairResult(pairSession, String(msg.ciphertext || ''));
+            if (decoded && typeof decoded.pairingToken === 'string' && decoded.pairingToken) {
               saveAuthToken(decoded.pairingToken, wsUri);
               saveAuthToken(decoded.pairingToken);
               finish(decoded.pairingToken);
@@ -581,6 +527,7 @@ export function pairHostWithPin(
             // Only fall back to legacy plaintext PAIR if host specifically lacks PAIR_INIT support
             if (sentEncryptedInit && /unavailable|binary protocol|unknown/i.test(String(msg.error || ''))) {
               sentEncryptedInit = false;
+              cleanupSecrets();
               ws?.send(JSON.stringify({ action: 'PAIR', pin: cleanPin, device: deviceLabel }));
               return;
             }

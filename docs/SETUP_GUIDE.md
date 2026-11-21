@@ -10,7 +10,7 @@ This guide covers configuring and running **AI NetController** (`v0.80.0` / Beta
 | **Python** | v3.11+ | v3.12+ | Host Agent daemon (`agent/agent.py`) |
 | **Flutter** | v3.29+ (`Dart 3.7+`) | Latest stable | Optional: only required when building `apps/mobile/` from source |
 | **Operating System** | Windows 10/11 x64 | Windows 11 x64 | Linux/macOS supported; Windows required for Job Object sandboxing & DPAPI config |
-| **Android** | Android 10 (API 29) | Android 12–15 | Mobile companion runtime |
+| **Android** | Android 7.0 (API 24) | Android 12–16 | Mobile companion runtime (`targetSdk 36`) |
 | **Ollama** | Optional | v0.3.0+ | Local LLM diagnostics (`http://127.0.0.1:11434`) |
 
 ## 2. Control Server & Web Console
@@ -41,7 +41,7 @@ AI_AGENT_SECRET=your_secure_random_token_here
 GEMINI_API_KEY=your_gemini_api_key_here
 
 # Optional local Ollama host
-OLLAMA_HOST=http://localhost:11434
+OLLAMA_HOST=http://127.0.0.1:11434
 ```
 
 ### Running the Server
@@ -108,7 +108,7 @@ npm run lint
 npm test
 python -m unittest discover -s agent/tests -v
 
-# Flutter unit and live-daemon integration suite
+# Flutter unit and live-daemon integration suite (requires Python with agent/requirements.txt on PATH)
 cd apps/mobile
 flutter analyze
 flutter test test/

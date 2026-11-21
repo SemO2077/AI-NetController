@@ -22,7 +22,6 @@ import logging
 import os
 import platform
 import secrets
-import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -94,21 +93,24 @@ def _dpapi_protect(plaintext: str) -> str:
         entropy_blob = _DATA_BLOB(len(_DPAPI_ENTROPY), entropy_buf)
         out_blob = _DATA_BLOB()
         # CRYPTPROTECT_UI_FORBIDDEN = 0x01
-        if crypt32.CryptProtectData(
-            ctypes.byref(in_blob),
-            None,
-            ctypes.byref(entropy_blob),
-            None,
-            None,
-            0x01,
-            ctypes.byref(out_blob),
-        ):
-            try:
-                enc = ctypes.string_at(out_blob.pbData, out_blob.cbData)
-                return _DPAPI_PREFIX + base64.b64encode(enc).decode("ascii")
-            finally:
-                if out_blob.pbData:
-                    kernel32.LocalFree(ctypes.cast(out_blob.pbData, wintypes.HLOCAL))
+        try:
+            if crypt32.CryptProtectData(
+                ctypes.byref(in_blob),
+                None,
+                ctypes.byref(entropy_blob),
+                None,
+                None,
+                0x01,
+                ctypes.byref(out_blob),
+            ):
+                try:
+                    enc = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+                    return _DPAPI_PREFIX + base64.b64encode(enc).decode("ascii")
+                finally:
+                    if out_blob.pbData:
+                        kernel32.LocalFree(ctypes.cast(out_blob.pbData, wintypes.HLOCAL))
+        finally:
+            ctypes.memset(ctypes.addressof(data_buf), 0, ctypes.sizeof(data_buf))
     except Exception as exc:
         if os.environ.get("AI_STRICT_DPAPI") == "1":
             raise RuntimeError(f"Strict DPAPI protection failed: {exc}") from exc
@@ -174,7 +176,10 @@ def _restrict_file_permissions(path: str, is_dir: bool = False) -> None:
 
 def get_config_dir() -> str:
     """Returns absolute path to AI NetController user configuration folder."""
-    if _IS_WINDOWS:
+    env_dir = (os.environ.get("AI_CONFIG_DIR") or "").strip()
+    if env_dir:
+        config_dir = os.path.abspath(os.path.expanduser(env_dir))
+    elif _IS_WINDOWS:
         base = os.environ.get("LOCALAPPDATA") or os.path.join(
             os.environ.get("USERPROFILE", ""), "AppData", "Local"
         )
@@ -252,6 +257,8 @@ def _generate_default_config() -> Dict[str, Any]:
         "file_transfer_enabled": True,
         "audio_control_enabled": True,
         "ollama_bridge_enabled": True,
+        "ui_theme_mode": "light",
+        "ui_accent": "violet",
     }
 
 
@@ -303,6 +310,17 @@ def _validate_and_sanitize_config(
         merged["security_profile"] = raw["security_profile"]
     if isinstance(raw.get("protocol"), str) and raw["protocol"].strip():
         merged["protocol"] = raw["protocol"].strip()
+    if isinstance(raw.get("ui_theme_mode"), str) and raw["ui_theme_mode"] in ("light", "dark"):
+        merged["ui_theme_mode"] = raw["ui_theme_mode"]
+    if isinstance(raw.get("ui_accent"), str) and raw["ui_accent"] in (
+        "violet",
+        "cobalt",
+        "cyan",
+        "emerald",
+        "rose",
+        "amber",
+    ):
+        merged["ui_accent"] = raw["ui_accent"]
 
     # Valid TCP port range & capture FPS
     raw_port = raw.get("port")
@@ -449,10 +467,22 @@ def save_config(config: Dict[str, Any], prefer_env_secret: bool = False) -> bool
                 to_write["pairing_token"] = _dpapi_protect(to_write["pairing_token"])
                 to_write["pairing_pin"] = _dpapi_protect(to_write["pairing_pin"])
 
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(to_write, f, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
+            if not _IS_WINDOWS:
+                fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    fh = os.fdopen(fd, "w", encoding="utf-8")
+                except Exception:
+                    os.close(fd)
+                    raise
+                with fh as f:
+                    json.dump(to_write, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+            else:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(to_write, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
             _restrict_file_permissions(tmp_path, is_dir=False)
 
             last_err: Optional[OSError] = None

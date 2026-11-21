@@ -143,14 +143,14 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     super.initState();
     _scaleController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 180),
+      duration: const Duration(milliseconds: 210),
     );
 
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.96).animate(
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.94).animate(
       CurvedAnimation(
         parent: _scaleController,
         curve: Curves.easeOutCubic,
-        reverseCurve: Curves.easeOutCubic,
+        reverseCurve: Curves.elasticOut,
       ),
     );
   }
@@ -216,20 +216,18 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                   curve: Curves.easeOutCubic,
                   padding: EdgeInsets.fromLTRB(
                     hPad,
-                    isCompactCard ? 8.0 : 10.0,
+                    isCompactCard ? 10.0 : 12.0,
                     hPad,
-                    isCompactCard ? 12.0 : 15.0,
+                    isCompactCard ? 14.0 : 16.0,
                   ),
                   decoration: BoxDecoration(
                     gradient: palette.cardBevelGradient(isSelected: isSelected),
-                    borderRadius: BorderRadius.circular(22.0),
+                    borderRadius: BorderRadius.circular(26.0),
                     border: Border.all(
                       color: isSelected
-                          ? palette.primary.withValues(alpha: 0.82)
-                          : (isOnline
-                              ? Colors.white.withValues(alpha: 0.18)
-                              : palette.glassBorderIdle),
-                      width: isSelected ? 1.6 : 1.0,
+                          ? palette.primary.withValues(alpha: 0.85)
+                          : palette.glassBorderIdle,
+                      width: isSelected ? 1.8 : 1.15,
                     ),
                     boxShadow: palette.elevationShadows(
                       isSelected: isSelected,
@@ -242,62 +240,59 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                     children: [
                       FluidSpecularBar(
                         isSelected: isSelected || isOnline,
-                        height: 1.0,
+                        height: 1.2,
                         margin: const EdgeInsets.only(
-                          left: 6,
-                          right: 6,
-                          bottom: 8,
+                          left: 8,
+                          right: 8,
+                          bottom: 10,
                         ),
                       ),
                       Row(
                         children: [
                           Container(
-                            width: isCompactCard ? 34 : 40,
-                            height: isCompactCard ? 34 : 40,
+                            width: isCompactCard ? 38 : 44,
+                            height: isCompactCard ? 38 : 44,
                             decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(13),
-                              gradient: RadialGradient(
-                                center: const Alignment(-0.25, -0.25),
-                                radius: 1.0,
-                                colors: isOnline
-                                    ? [
-                                        palette.primary.withValues(alpha: 0.24),
-                                        palette.primary.withValues(alpha: 0.08),
-                                      ]
-                                    : [
-                                        Colors.white.withValues(alpha: 0.06),
-                                        Colors.white.withValues(alpha: 0.02),
+                              borderRadius: BorderRadius.circular(15),
+                              gradient: isOnline
+                                  ? palette.heroGradient
+                                  : const LinearGradient(
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                      colors: [
+                                        Color(0xFF64748B),
+                                        Color(0xFF94A3B8),
                                       ],
-                              ),
+                                    ),
                               border: Border.all(
-                                color: isOnline
-                                    ? palette.primary.withValues(alpha: 0.44)
-                                    : Colors.white.withValues(alpha: 0.09),
+                                color: Colors.white.withValues(alpha: 0.55),
+                                width: 1.0,
                               ),
-                              boxShadow: isOnline
-                                  ? [
-                                      BoxShadow(
-                                        color: palette.primary
-                                            .withValues(alpha: 0.22),
-                                        blurRadius: 10,
-                                      ),
-                                    ]
-                                  : null,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: (isOnline
+                                          ? palette.primary
+                                          : const Color(0xFF64748B))
+                                      .withValues(alpha: 0.34),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
                             ),
                             child: Center(
                               child: CustomPaint(
                                 size: Size(
-                                  isCompactCard ? 17 : 20,
-                                  isCompactCard ? 17 : 20,
+                                  isCompactCard ? 18 : 22,
+                                  isCompactCard ? 18 : 22,
                                 ),
                                 painter: CyberNodeBadgePainter(
                                   isOnline: isOnline,
-                                  activeColor: palette.primary,
+                                  activeColor: Colors.white,
                                 ),
                               ),
                             ),
                           ),
-                          SizedBox(width: isCompactCard ? 8 : 12),
+                          SizedBox(width: isCompactCard ? 10 : 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -306,10 +301,10 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                                 Text(
                                   widget.name,
                                   style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: context.fluidFont(14),
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: context.fluidFont(14.5),
                                     color: palette.textPrimary,
-                                    letterSpacing: -0.2,
+                                    letterSpacing: -0.3,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -319,10 +314,10 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                                   statusParts.join(' · '),
                                   style: TextStyle(
                                     fontSize: context.fluidFont(11),
+                                    fontWeight: FontWeight.w600,
                                     color: isOnline
-                                        ? palette.primary
-                                            .withValues(alpha: 0.92)
-                                        : palette.textSecondary,
+                                        ? palette.success
+                                        : palette.warning,
                                     fontFamily: 'monospace',
                                   ),
                                   maxLines: 1,
@@ -335,7 +330,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                             _ActionOrbButton(
                               tooltip: 'Open Live Stream',
                               icon: Icons.videocam_rounded,
-                              color: palette.primary,
+                              color: palette.sky,
                               onPressed: widget.onOpenStream!,
                             )
                           else if (!isOnline && widget.onWakeOnLan != null)
@@ -461,7 +456,9 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
             height: 5,
             width: double.infinity,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.07),
+              color: palette.isDaylight
+                  ? palette.primary.withValues(alpha: 0.12)
+                  : Colors.white.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(5),
             ),
             child: TweenAnimationBuilder<double>(

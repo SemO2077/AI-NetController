@@ -11,6 +11,8 @@ import {
   ShieldCheck,
   RotateCcw,
   AlertTriangle,
+  Search,
+  X,
 } from 'lucide-react';
 import { HostDevice } from '../../types';
 import { useTranslation } from '../../i18n/useTranslation';
@@ -118,6 +120,8 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
   const [activeTab, setActiveTab] = useState<'persistent' | 'session'>('persistent');
   const [newPersistentRule, setNewPersistentRule] = useState('');
   const [newSessionRule, setNewSessionRule] = useState('');
+  const [ruleSearch, setRuleSearch] = useState('');
+  const [confirmClearRam, setConfirmClearRam] = useState(false);
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const feedbackTimerRef = useRef<number | null>(null);
@@ -280,26 +284,40 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
         'Log all executed PowerShell commands to current session audit trail',
       ];
 
+  const ruleQ = ruleSearch.trim().toLowerCase();
+  const filteredPersistent = persistentRules
+    .map((rule, origIdx) => ({ rule, origIdx, localized: localizeRuleText(rule, isBg) }))
+    .filter((item) => !ruleQ || item.localized.toLowerCase().includes(ruleQ));
+  const filteredSession = sessionRules
+    .map((rule, origIdx) => ({ rule, origIdx, localized: localizeRuleText(rule, isBg) }))
+    .filter((item) => !ruleQ || item.localized.toLowerCase().includes(ruleQ));
+
   return (
     <div className="space-y-4 w-full min-w-0">
       {/* 1. Target Host Selector Card */}
-      <div className="p-3.5 rounded-2xl bg-[#0b1324]/90 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-400/30 flex items-center justify-center text-cyan-300 shrink-0">
+      <div className="p-3.5 rounded-[24px] glass-liquid-subtle flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 squircle-badge squircle-hero flex items-center justify-center shrink-0">
             <Monitor className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-[11px] font-mono text-slate-400">
+            <div className="text-[11px] font-semibold ink-muted">
               {isBg ? 'Целеви компютър за правилата' : 'Target Host for Rules'}
             </div>
-            <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+            <div className="text-xs font-display font-bold ink-primary truncate flex items-center gap-1.5">
               <span
                 className={`w-2 h-2 rounded-full shrink-0 ${
                   selectedHost?.isOnline ? 'bg-emerald-400' : 'bg-amber-400'
                 }`}
               />
-              <span className="truncate">{selectedHost?.name || selectedHostId || (isBg ? "Няма свързан компютър" : "No Host Connected")}</span>
-              {selectedHost?.ip && <span className="text-slate-400 font-mono text-[11px]">({selectedHost.ip})</span>}
+              <span className="truncate">
+                {selectedHost?.name ||
+                  selectedHostId ||
+                  (isBg ? 'Няма свързан компютър' : 'No Host Connected')}
+              </span>
+              {selectedHost?.ip && (
+                <span className="ink-muted font-mono text-[11px]">({selectedHost.ip})</span>
+              )}
             </div>
           </div>
         </div>
@@ -312,15 +330,15 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
               setSelectedHostId(e.target.value);
             }}
             aria-label={isBg ? 'Избери целеви компютър' : 'Select target host'}
-            className="w-full truncate rounded-xl bg-[#060b16] border border-cyan-500/35 px-3 py-2 min-h-[42px] text-xs text-cyan-200 font-mono font-semibold focus:border-cyan-400 focus:outline-none cursor-pointer"
+            className="w-full truncate rounded-full liquid-control-pill px-3.5 py-2 min-h-[40px] text-xs ink-primary font-mono font-semibold focus:border-cyan-400 focus:outline-none cursor-pointer"
           >
             {hosts.length === 0 ? (
-              <option value="" disabled className="bg-slate-950 text-slate-500">
+              <option value="" disabled>
                 {isBg ? 'Няма регистрирани устройства' : 'No registered devices'}
               </option>
             ) : (
               hosts.map((h) => (
-                <option key={h.id} value={h.id} className="bg-slate-950 text-cyan-200">
+                <option key={h.id} value={h.id}>
                   {h.name} ({h.ip})
                 </option>
               ))
@@ -336,9 +354,9 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            className="p-3 bg-emerald-500/15 border border-emerald-500/35 rounded-xl text-emerald-300 text-xs flex items-center gap-2"
+            className="p-3 bg-emerald-500/14 border border-emerald-500/35 rounded-2xl text-emerald-400 text-xs font-medium flex items-center gap-2"
           >
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
             <span>
               {isBg
                 ? `Правилата за ${selectedHost?.name} са синхронизирани успешно!`
@@ -351,144 +369,178 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            className="p-3 bg-amber-500/15 border border-amber-500/35 rounded-xl text-amber-200 text-xs flex items-center gap-2"
+            className="p-3 bg-amber-500/14 border border-amber-500/35 rounded-2xl text-amber-400 text-xs font-medium flex items-center gap-2"
           >
-            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+            <AlertTriangle className="w-4 h-4 shrink-0" />
             <span>{syncError}</span>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* 2. Clean Segmented Tab Switcher: Persistent Rules vs Session Memory */}
-      <div className="grid grid-cols-2 gap-1.5 p-1.5 rounded-2xl bg-[#060b16] border border-white/10">
-        <button
-          type="button"
-          onClick={() => {
-            triggerHapticFeedback('selection');
-            setActiveTab('persistent');
-          }}
-          className={`relative min-h-[42px] px-3 py-2 rounded-xl text-xs font-display font-bold flex items-center justify-center gap-2 transition cursor-pointer z-10 min-w-0 ${
-            activeTab === 'persistent' ? 'text-teal-200' : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          {activeTab === 'persistent' && (
-            <motion.div
-              layoutId="memoryManagerTabPill"
-              transition={SPRING_BUBBLY}
-              className="absolute inset-0 rounded-xl bg-teal-500/20 border border-teal-400/40 shadow-[0_0_16px_rgba(20,184,166,0.2)] -z-10"
-            />
-          )}
-          <HardDrive className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-          <span className="truncate">
-            {isBg ? 'Постоянни правила' : 'Persistent Rules'}
-          </span>
-          <span className="px-1.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 text-[10px] font-mono shrink-0">
-            {persistentRules.length}
-          </span>
-        </button>
+      {/* 2. Sliding Full-Capsule Tab Switcher + Live Rule Search */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+        <div className="grid grid-cols-2 gap-1 p-1 rounded-full glass-liquid-subtle flex-1">
+          <button
+            type="button"
+            onClick={() => {
+              triggerHapticFeedback('selection');
+              setActiveTab('persistent');
+            }}
+            className={`relative min-h-[38px] px-3 py-1.5 rounded-full text-xs font-display font-bold flex items-center justify-center gap-1.5 transition cursor-pointer z-10 min-w-0 ${
+              activeTab === 'persistent' ? 'preserve-white' : 'ink-secondary hover:ink-primary'
+            }`}
+          >
+            {activeTab === 'persistent' && (
+              <motion.div
+                layoutId="memoryManagerTabPill"
+                transition={SPRING_BUBBLY}
+                className="absolute inset-0 rounded-full liquid-hero-btn -z-10"
+              />
+            )}
+            <HardDrive className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{isBg ? 'Постоянни' : 'Persistent'}</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono shrink-0 ${
+                activeTab === 'persistent'
+                  ? 'bg-white/25 text-white'
+                  : 'bg-emerald-500/15 text-emerald-400'
+              }`}
+            >
+              {persistentRules.length}
+            </span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            triggerHapticFeedback('selection');
-            setActiveTab('session');
-          }}
-          className={`relative min-h-[42px] px-3 py-2 rounded-xl text-xs font-display font-bold flex items-center justify-center gap-2 transition cursor-pointer z-10 min-w-0 ${
-            activeTab === 'session' ? 'text-indigo-200' : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          {activeTab === 'session' && (
-            <motion.div
-              layoutId="memoryManagerTabPill"
-              transition={SPRING_BUBBLY}
-              className="absolute inset-0 rounded-xl bg-indigo-500/20 border border-indigo-400/40 shadow-[0_0_16px_rgba(99,102,241,0.2)] -z-10"
-            />
+          <button
+            type="button"
+            onClick={() => {
+              triggerHapticFeedback('selection');
+              setActiveTab('session');
+            }}
+            className={`relative min-h-[38px] px-3 py-1.5 rounded-full text-xs font-display font-bold flex items-center justify-center gap-1.5 transition cursor-pointer z-10 min-w-0 ${
+              activeTab === 'session' ? 'preserve-white' : 'ink-secondary hover:ink-primary'
+            }`}
+          >
+            {activeTab === 'session' && (
+              <motion.div
+                layoutId="memoryManagerTabPill"
+                transition={SPRING_BUBBLY}
+                className="absolute inset-0 rounded-full liquid-hero-btn -z-10"
+              />
+            )}
+            <Cpu className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{isBg ? 'Сесийна (RAM)' : 'Session (RAM)'}</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono shrink-0 ${
+                activeTab === 'session'
+                  ? 'bg-white/25 text-white'
+                  : 'bg-violet-500/15 text-violet-300'
+              }`}
+            >
+              {sessionRules.length}
+            </span>
+          </button>
+        </div>
+
+        <div className="relative sm:w-52 shrink-0">
+          <Search className="w-3.5 h-3.5 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={ruleSearch}
+            onChange={(e) => setRuleSearch(e.target.value)}
+            placeholder={isBg ? 'Филтрирай правила...' : 'Filter rules...'}
+            className="w-full h-10 pl-9 pr-8 rounded-full glass-liquid-subtle text-xs ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80 focus:border-cyan-400 focus:outline-none"
+          />
+          {ruleSearch && (
+            <button
+              type="button"
+              onClick={() => setRuleSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           )}
-          <Cpu className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-          <span className="truncate">
-            {isBg ? 'Сесийна памет (RAM)' : 'Session Memory (RAM)'}
-          </span>
-          <span className="px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-mono shrink-0">
-            {sessionRules.length}
-          </span>
-        </button>
+        </div>
       </div>
 
-      {/* 3. Active Tab Content Panel (Full Width — Zero Horizontal Overflow) */}
+      {/* 3. Active Tab Content Panel */}
       {activeTab === 'persistent' ? (
-        <div className="rounded-2xl bg-[#0b1324]/90 border border-teal-500/25 p-4 sm:p-5 space-y-4 w-full min-w-0">
-          {/* Header & Storage Badge */}
+        <div className="rounded-[24px] glass-liquid-subtle p-4 sm:p-5 space-y-4 w-full min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-white/[0.08]">
-            <div className="flex items-center gap-2 min-w-0">
-              <ShieldCheck className="w-4 h-4 text-teal-400 shrink-0" />
-              <h3 className="font-bold text-sm text-white truncate">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 squircle-badge squircle-emerald flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-4 h-4" />
+              </div>
+              <h3 className="font-display font-bold text-sm ink-primary truncate">
                 {isBg
-                  ? 'Постоянни системни правила (Дългосрочна памет)'
-                  : 'Persistent System Rules (Long-Term Storage)'}
+                  ? 'Постоянни системни правила'
+                  : 'Persistent System Rules'}
               </h3>
             </div>
-            <span className="text-[10.5px] bg-teal-500/15 text-teal-300 px-2.5 py-0.5 rounded-full border border-teal-500/30 font-mono shrink-0">
+            <span className="text-[10.5px] bg-emerald-500/14 text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/35 font-mono font-bold shrink-0">
               config.json
             </span>
           </div>
 
-          <p className="text-xs text-slate-300 leading-relaxed">
+          <p className="text-xs ink-secondary leading-relaxed">
             {isBg
-              ? 'Записват се постоянно на диска на хоста и се спазват от AI агента при всяко изпълнение на команда, дори след рестарт на компютъра.'
-              : 'Saved permanently on the host disk and enforced by the AI agent across every command and system reboot.'}
+              ? 'Записват се постоянно на диска на хоста и се спазват от AI агента при всяко изпълнение на команда, дори след рестарт.'
+              : 'Saved permanently on the host disk and enforced by the AI agent across every command and reboot.'}
           </p>
 
-          {/* Add Persistent Rule Input Row (min-w-0 prevents flex overflow) */}
-          <form onSubmit={handleAddPersistent} className="flex flex-col sm:flex-row gap-2 w-full min-w-0">
+          <form
+            onSubmit={handleAddPersistent}
+            className="flex flex-col sm:flex-row gap-2 w-full min-w-0"
+          >
             <input
               type="text"
               value={newPersistentRule}
               onChange={(e) => setNewPersistentRule(e.target.value)}
               placeholder={
                 isBg
-                  ? 'Въведете ново постоянно правило (напр. Браузър по подразбиране е Brave)...'
-                  : 'Enter a new persistent rule (e.g. Default browser is Brave)...'
+                  ? 'Ново постоянно правило (напр. Браузър по подразбиране е Brave)...'
+                  : 'New persistent rule (e.g. Default browser is Brave)...'
               }
-              className="flex-1 min-w-0 min-h-[44px] bg-[#050914] border border-white/15 rounded-xl px-3.5 py-2 text-xs text-white focus:border-teal-400 focus:outline-none placeholder:text-slate-500"
+              className="flex-1 min-w-0 min-h-[42px] liquid-terminal-entry rounded-full px-4 py-2 text-xs ink-primary focus:border-cyan-400 focus:outline-none placeholder:text-[var(--ink-secondary)] placeholder:opacity-80"
             />
             <motion.button
               type="submit"
-              whileTap={{ scale: 0.96 }}
+              whileTap={{ scale: 0.94 }}
               transition={SPRING_POP}
               disabled={!newPersistentRule.trim()}
-              className="min-h-[44px] px-4 py-2 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shrink-0 transition cursor-pointer"
+              className="min-h-[42px] px-4 py-2 liquid-hero-btn disabled:opacity-40 font-bold rounded-full text-xs flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>{isBg ? 'Добави правило' : 'Add Rule'}</span>
+              <span>{isBg ? 'Добави' : 'Add Rule'}</span>
             </motion.button>
           </form>
 
-          {/* Active Persistent Rules List */}
-          <div className="space-y-2 max-h-60 overflow-y-auto pr-0.5">
-            {persistentRules.length === 0 ? (
-              <div className="text-xs text-slate-400 py-6 text-center rounded-xl bg-black/30 border border-dashed border-white/10">
-                {isBg
+          <div className="space-y-2 max-h-60 overflow-y-auto pr-0.5 bouncy-scroll">
+            {filteredPersistent.length === 0 ? (
+              <div className="text-xs ink-muted py-6 text-center rounded-2xl liquid-terminal-entry border border-dashed border-white/[0.15]">
+                {ruleQ
+                  ? isBg
+                    ? 'Няма съвпадащи правила.'
+                    : 'No rules match your filter.'
+                  : isBg
                   ? 'Няма конфигурирани постоянни правила за този хост.'
-                  : 'No persistent rules configured for this host.'}
+                  : 'No persistent rules configured for this host yet.'}
               </div>
             ) : (
-              persistentRules.map((rule, idx) => (
+              filteredPersistent.map(({ origIdx, localized }) => (
                 <div
-                  key={idx}
-                  className="flex items-center justify-between gap-3 p-3 bg-[#060b16] border border-white/10 hover:border-teal-500/35 rounded-xl text-xs text-slate-100 transition"
+                  key={origIdx}
+                  className="flex items-center justify-between gap-3 p-3 liquid-terminal-entry rounded-2xl text-xs ink-primary transition"
                 >
                   <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                    <span className="w-5 h-5 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300 font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                      {idx + 1}
+                    <span className="w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                      {origIdx + 1}
                     </span>
-                    <span className="leading-relaxed break-words min-w-0">
-                      {localizeRuleText(rule, isBg)}
-                    </span>
+                    <span className="leading-relaxed break-words min-w-0">{localized}</span>
                   </div>
                   <button
                     type="button"
-                    onClick={() => handleRemovePersistent(idx)}
-                    className="text-slate-400 hover:text-rose-400 p-2 rounded-lg hover:bg-rose-500/10 transition shrink-0 cursor-pointer"
+                    onClick={() => handleRemovePersistent(origIdx)}
+                    className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center text-rose-400 shrink-0 cursor-pointer"
                     title={isBg ? 'Изтрий правило' : 'Delete rule'}
                     aria-label={isBg ? 'Изтрий правило' : 'Delete rule'}
                   >
@@ -500,8 +552,8 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
           </div>
 
           {/* 1-Tap Quick Rule Templates */}
-          <div className="pt-2 border-t border-white/[0.08] space-y-2">
-            <div className="flex items-center gap-1.5 text-[11px] font-mono text-teal-300/90">
+          <div className="pt-3 border-t border-white/[0.08] space-y-2">
+            <div className="flex items-center gap-1.5 text-[11px] font-display font-bold text-emerald-400">
               <Sparkles className="w-3.5 h-3.5" />
               <span>{isBg ? 'Бързи шаблони с 1 клик:' : '1-Tap Quick Rule Templates:'}</span>
             </div>
@@ -511,9 +563,9 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
                   key={idx}
                   type="button"
                   onClick={() => handleAddPresetRule('persistent', preset)}
-                  className="text-left px-2.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-teal-500/15 border border-white/10 hover:border-teal-400/40 text-[11px] text-slate-300 hover:text-teal-200 transition cursor-pointer flex items-center gap-1.5"
+                  className="text-left px-3 py-1.5 rounded-full liquid-control-pill text-[11px] ink-primary transition cursor-pointer flex items-center gap-1.5"
                 >
-                  <Plus className="w-3 h-3 text-teal-400 shrink-0" />
+                  <Plus className="w-3 h-3 text-emerald-400 shrink-0" />
                   <span className="line-clamp-1">{preset}</span>
                 </button>
               ))}
@@ -521,42 +573,64 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
           </div>
         </div>
       ) : (
-        <div className="rounded-2xl bg-[#0b1324]/90 border border-indigo-500/25 p-4 sm:p-5 space-y-4 w-full min-w-0">
-          {/* Header & RAM Badge */}
+        <div className="rounded-[24px] glass-liquid-subtle p-4 sm:p-5 space-y-4 w-full min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-white/[0.08]">
-            <div className="flex items-center gap-2 min-w-0">
-              <Cpu className="w-4 h-4 text-indigo-400 shrink-0" />
-              <h3 className="font-bold text-sm text-white truncate">
-                {isBg
-                  ? 'Сесийни инструкции (Временна RAM памет)'
-                  : 'Session Instructions (Ephemeral RAM Context)'}
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 squircle-badge squircle-violet flex items-center justify-center shrink-0">
+                <Cpu className="w-4 h-4" />
+              </div>
+              <h3 className="font-display font-bold text-sm ink-primary truncate">
+                {isBg ? 'Сесийни инструкции (RAM)' : 'Session Instructions (RAM)'}
               </h3>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[10.5px] bg-indigo-500/15 text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-500/30 font-mono">
+              <span className="text-[10.5px] bg-violet-500/14 text-violet-300 px-2.5 py-0.5 rounded-full border border-violet-400/35 font-mono font-bold">
                 {isBg ? 'Само в RAM' : 'RAM Only'}
               </span>
-              {sessionRules.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleClearSession}
-                  className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-[11px] font-semibold text-rose-300 flex items-center gap-1 transition cursor-pointer"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>{isBg ? 'Изчисти RAM' : 'Clear RAM'}</span>
-                </button>
-              )}
+              {sessionRules.length > 0 &&
+                (confirmClearRam ? (
+                  <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/35">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleClearSession();
+                        setConfirmClearRam(false);
+                      }}
+                      className="px-2 py-0.5 rounded-full squircle-rose preserve-white text-[10.5px] font-bold cursor-pointer"
+                    >
+                      {isBg ? 'Потвърди' : 'Confirm'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearRam(false)}
+                      className="p-0.5 ink-secondary cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmClearRam(true)}
+                    className="px-2.5 py-1 rounded-full bg-rose-500/12 hover:bg-rose-500/20 border border-rose-500/30 text-[11px] font-semibold text-rose-400 flex items-center gap-1 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>{isBg ? 'Изчисти RAM' : 'Clear RAM'}</span>
+                  </button>
+                ))}
             </div>
           </div>
 
-          <p className="text-xs text-slate-300 leading-relaxed">
+          <p className="text-xs ink-secondary leading-relaxed">
             {isBg
-              ? 'Временни инструкции, валидни само за текущата работна сесия. Изчистват се автоматично при рестартиране на демона.'
+              ? 'Временни инструкции, валидни само за текущата работна сесия. Изчистват се автоматично при рестарт на демона.'
               : 'Temporary instructions active only for the current session. Automatically cleared when the host daemon restarts.'}
           </p>
 
-          {/* Add Session Rule Input Row */}
-          <form onSubmit={handleAddSession} className="flex flex-col sm:flex-row gap-2 w-full min-w-0">
+          <form
+            onSubmit={handleAddSession}
+            className="flex flex-col sm:flex-row gap-2 w-full min-w-0"
+          >
             <input
               type="text"
               value={newSessionRule}
@@ -566,46 +640,47 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
                   ? 'Нова временна инструкция (напр. Не питай за потвърждение при малки ъпдейти)...'
                   : 'New session instruction (e.g. Do not prompt for minor updates)...'
               }
-              className="flex-1 min-w-0 min-h-[44px] bg-[#050914] border border-white/15 rounded-xl px-3.5 py-2 text-xs text-white focus:border-indigo-400 focus:outline-none placeholder:text-slate-500"
+              className="flex-1 min-w-0 min-h-[42px] liquid-terminal-entry rounded-full px-4 py-2 text-xs ink-primary focus:border-cyan-400 focus:outline-none placeholder:text-[var(--ink-secondary)] placeholder:opacity-80"
             />
             <motion.button
               type="submit"
-              whileTap={{ scale: 0.96 }}
+              whileTap={{ scale: 0.94 }}
               transition={SPRING_POP}
               disabled={!newSessionRule.trim()}
-              className="min-h-[44px] px-4 py-2 bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shrink-0 transition cursor-pointer"
+              className="min-h-[42px] px-4 py-2 liquid-hero-btn disabled:opacity-40 font-bold rounded-full text-xs flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>{isBg ? 'Запази в RAM' : 'Save to RAM'}</span>
             </motion.button>
           </form>
 
-          {/* Active Session Rules List */}
-          <div className="space-y-2 max-h-60 overflow-y-auto pr-0.5">
-            {sessionRules.length === 0 ? (
-              <div className="text-xs text-slate-400 py-6 text-center rounded-xl bg-black/30 border border-dashed border-white/10">
-                {isBg
+          <div className="space-y-2 max-h-60 overflow-y-auto pr-0.5 bouncy-scroll">
+            {filteredSession.length === 0 ? (
+              <div className="text-xs ink-muted py-6 text-center rounded-2xl liquid-terminal-entry border border-dashed border-white/[0.15]">
+                {ruleQ
+                  ? isBg
+                    ? 'Няма съвпадащи инструкции.'
+                    : 'No instructions match your filter.'
+                  : isBg
                   ? 'Няма активни сесийни инструкции в RAM паметта.'
                   : 'No active session instructions in RAM.'}
               </div>
             ) : (
-              sessionRules.map((rule, idx) => (
+              filteredSession.map(({ origIdx, localized }) => (
                 <div
-                  key={idx}
-                  className="flex items-center justify-between gap-3 p-3 bg-[#060b16] border border-white/10 hover:border-indigo-500/35 rounded-xl text-xs text-slate-100 transition"
+                  key={origIdx}
+                  className="flex items-center justify-between gap-3 p-3 liquid-terminal-entry rounded-2xl text-xs ink-primary transition"
                 >
                   <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                    <span className="w-5 h-5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                      {idx + 1}
+                    <span className="w-5 h-5 rounded-full bg-violet-500/15 border border-violet-400/35 text-violet-300 font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                      {origIdx + 1}
                     </span>
-                    <span className="leading-relaxed break-words min-w-0">
-                      {localizeRuleText(rule, isBg)}
-                    </span>
+                    <span className="leading-relaxed break-words min-w-0">{localized}</span>
                   </div>
                   <button
                     type="button"
-                    onClick={() => handleRemoveSession(idx)}
-                    className="text-slate-400 hover:text-rose-400 p-2 rounded-lg hover:bg-rose-500/10 transition shrink-0 cursor-pointer"
+                    onClick={() => handleRemoveSession(origIdx)}
+                    className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center text-rose-400 shrink-0 cursor-pointer"
                     title={isBg ? 'Изтрий инструкция' : 'Delete instruction'}
                     aria-label={isBg ? 'Изтрий инструкция' : 'Delete instruction'}
                   >
@@ -616,9 +691,8 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
             )}
           </div>
 
-          {/* 1-Tap Session Templates */}
-          <div className="pt-2 border-t border-white/[0.08] space-y-2">
-            <div className="flex items-center gap-1.5 text-[11px] font-mono text-indigo-300/90">
+          <div className="pt-3 border-t border-white/[0.08] space-y-2">
+            <div className="flex items-center gap-1.5 text-[11px] font-display font-bold text-violet-300">
               <Sparkles className="w-3.5 h-3.5" />
               <span>{isBg ? 'Бързи сесийни шаблони:' : '1-Tap Session Templates:'}</span>
             </div>
@@ -628,9 +702,9 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
                   key={idx}
                   type="button"
                   onClick={() => handleAddPresetRule('session', preset)}
-                  className="text-left px-2.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-indigo-500/15 border border-white/10 hover:border-indigo-400/40 text-[11px] text-slate-300 hover:text-indigo-200 transition cursor-pointer flex items-center gap-1.5"
+                  className="text-left px-3 py-1.5 rounded-full liquid-control-pill text-[11px] ink-primary transition cursor-pointer flex items-center gap-1.5"
                 >
-                  <Plus className="w-3 h-3 text-indigo-400 shrink-0" />
+                  <Plus className="w-3 h-3 text-violet-300 shrink-0" />
                   <span className="line-clamp-1">{preset}</span>
                 </button>
               ))}

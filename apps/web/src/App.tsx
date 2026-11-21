@@ -17,7 +17,8 @@ import {
   saveAuthToken,
 } from './services/securityService';
 import { AlertTriangle, KeyRound, ShieldAlert, X } from 'lucide-react';
-import { SPRING_BUBBLY, TAB_VIEW_VARIANTS } from './utils/springPhysics';
+import { SPRING_BUBBLY, SPRING_POP, TAB_VIEW_VARIANTS } from './utils/springPhysics';
+import { LiquidGlassDefs } from './components/ui/LiquidGlassDefs';
 
 const CommandTerminal = React.lazy(() =>
   import('./components/terminal/CommandTerminal').then((module) => ({
@@ -56,6 +57,7 @@ export default function App() {
   const isOmnibarOpen = useUIStore((s) => s.isOmnibarOpen);
   const setOmnibarOpen = useUIStore((s) => s.setOmnibarOpen);
   const language = useUIStore((s) => s.language);
+  const themeMode = useUIStore((s) => s.themeMode);
   const accentColor = useUIStore((s) => s.accentColor);
   const fontFamily = useUIStore((s) => s.fontFamily);
   const glassIntensity = useUIStore((s) => s.glassIntensity);
@@ -70,8 +72,8 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
-    applyAppearanceToDocument({ accentColor, fontFamily, glassIntensity, ambientMode });
-  }, [accentColor, fontFamily, glassIntensity, ambientMode]);
+    applyAppearanceToDocument({ themeMode, accentColor, fontFamily, glassIntensity, ambientMode });
+  }, [themeMode, accentColor, fontFamily, glassIntensity, ambientMode]);
 
   const fleet = useFleetState();
   const agent = useWorkerEngine({
@@ -223,7 +225,7 @@ export default function App() {
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ secret: pairToken }),
+            body: JSON.stringify({ token: pairToken }),
           })
             .then((r) => {
               if (r.ok) setLanAuthRequired(false);
@@ -347,7 +349,7 @@ export default function App() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isSixDigitPin ? { pin: raw } : { secret: raw }),
+        body: JSON.stringify(isSixDigitPin ? { pin: raw } : { token: raw }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.authenticated) {
@@ -424,8 +426,12 @@ export default function App() {
 
   return (
     <GlobalErrorBoundary>
-      <div className="h-[100dvh] w-full max-w-full bg-[#030712] text-white flex flex-col font-sans selection:bg-cyan-500/40 selection:text-cyan-100 relative overflow-hidden">
-        {/* 120Hz Hardware-Accelerated Moving Fluid Background Canvas (4 Selectable Modes) */}
+      <LiquidGlassDefs />
+      <div
+        className="h-[100dvh] w-full max-w-full ink-primary flex flex-col font-sans selection:bg-cyan-500/30 relative overflow-hidden"
+        style={{ background: 'var(--canvas-gradient)' }}
+      >
+        {/* 120Hz Hardware-Accelerated Energetic Shifting Aurora & Liquid Backdrop Canvas */}
         {ambientMode !== 'minimal' && (
           <div
             className="fixed inset-0 pointer-events-none z-0 overflow-hidden select-none"
@@ -435,31 +441,31 @@ export default function App() {
             {ambientMode === 'fluid' && (
               <>
                 <div
-                  className="fluid-vortex-layer absolute top-1/2 left-1/2 w-[135vmax] h-[135vmax] rounded-full opacity-55"
+                  className="fluid-vortex-layer absolute top-1/2 left-1/2 w-[150vmax] h-[150vmax] rounded-full opacity-55"
                   style={{
                     background:
-                      'conic-gradient(from 0deg at 50% 50%, var(--aurora-orb-1) 0deg, transparent 90deg, var(--aurora-orb-2) 180deg, transparent 270deg, var(--aurora-orb-3) 360deg)',
+                      'conic-gradient(from 0deg at 50% 50%, var(--aurora-orb-1) 0deg, transparent 85deg, var(--aurora-orb-2) 170deg, transparent 255deg, var(--aurora-orb-3) 340deg, var(--aurora-orb-1) 360deg)',
                   }}
                 />
                 <div
-                  className="fluid-blob-1 absolute -top-[18%] -left-[14%] w-[82vw] h-[72vh] rounded-full"
+                  className="fluid-blob-1 absolute -top-[22%] -left-[18%] w-[92vw] h-[86vh] rounded-full"
                   style={{
                     background:
-                      'radial-gradient(circle at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 42%, transparent 72%)',
+                      'radial-gradient(ellipse closest-side at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 48%, transparent 100%)',
                   }}
                 />
                 <div
-                  className="fluid-blob-2 absolute top-[14%] -right-[16%] w-[78vw] h-[74vh] rounded-full"
+                  className="fluid-blob-2 absolute top-[8%] -right-[20%] w-[90vw] h-[88vh] rounded-full"
                   style={{
                     background:
-                      'radial-gradient(circle at 50% 50%, var(--aurora-orb-2) 0%, var(--aurora-orb-3) 44%, transparent 72%)',
+                      'radial-gradient(ellipse closest-side at 50% 50%, var(--aurora-orb-2) 0%, var(--aurora-orb-3) 48%, transparent 100%)',
                   }}
                 />
                 <div
-                  className="fluid-blob-3 absolute -bottom-[20%] left-[8%] w-[84vw] h-[68vh] rounded-full"
+                  className="fluid-blob-3 absolute -bottom-[24%] left-[4%] w-[96vw] h-[84vh] rounded-full"
                   style={{
                     background:
-                      'radial-gradient(circle at 50% 50%, var(--aurora-orb-3) 0%, var(--aurora-orb-4) 40%, transparent 72%)',
+                      'radial-gradient(ellipse closest-side at 50% 50%, var(--aurora-orb-3) 0%, var(--aurora-orb-4) 46%, transparent 100%)',
                   }}
                 />
               </>
@@ -468,17 +474,24 @@ export default function App() {
             {ambientMode === 'aurora' && (
               <>
                 <div
-                  className="aurora-ribbon-1 absolute -top-[22%] -left-[18%] w-[135%] h-[62%] rounded-full"
+                  className="aurora-ribbon-1 absolute -top-[24%] -left-[20%] w-[144%] h-[78%] rounded-full"
                   style={{
                     background:
-                      'radial-gradient(ellipse 85% 55% at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 48%, transparent 78%)',
+                      'radial-gradient(ellipse closest-side at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 50%, transparent 100%)',
                   }}
                 />
                 <div
-                  className="aurora-ribbon-2 absolute -bottom-[24%] -right-[18%] w-[135%] h-[64%] rounded-full"
+                  className="aurora-ribbon-2 absolute -bottom-[26%] -right-[20%] w-[144%] h-[80%] rounded-full"
                   style={{
                     background:
-                      'radial-gradient(ellipse 85% 55% at 50% 50%, var(--aurora-orb-3) 0%, var(--aurora-orb-1) 46%, transparent 78%)',
+                      'radial-gradient(ellipse closest-side at 50% 50%, var(--aurora-orb-3) 0%, var(--aurora-orb-1) 48%, transparent 100%)',
+                  }}
+                />
+                <div
+                  className="aurora-ribbon-3 absolute top-[14%] left-[10%] w-[84vw] h-[76vh] rounded-full"
+                  style={{
+                    background:
+                      'radial-gradient(ellipse closest-side at 50% 50%, var(--aurora-orb-4) 0%, var(--aurora-orb-2) 45%, transparent 100%)',
                   }}
                 />
               </>
@@ -488,14 +501,14 @@ export default function App() {
               <>
                 <div className="cyber-grid-pattern absolute inset-0 opacity-90" />
                 <div
-                  className="cyber-core-pulse absolute top-1/2 left-1/2 w-[85vw] h-[85vh] rounded-full"
+                  className="cyber-core-pulse absolute top-1/2 left-1/2 w-[96vw] h-[96vh] rounded-full"
                   style={{
                     background:
-                      'radial-gradient(circle at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 38%, transparent 70%)',
+                      'radial-gradient(ellipse closest-side at 50% 50%, var(--aurora-orb-1) 0%, var(--aurora-orb-2) 44%, transparent 100%)',
                   }}
                 />
                 <div
-                  className="cyber-scan-beam absolute inset-x-0 h-40 opacity-35"
+                  className="cyber-scan-beam absolute inset-x-0 h-44 opacity-40"
                   style={{
                     background:
                       'linear-gradient(to bottom, transparent 0%, var(--theme-accent-glow) 50%, transparent 100%)',
@@ -510,11 +523,11 @@ export default function App() {
         <AnimatePresence>
           {qolToast && (
             <motion.div
-              initial={{ opacity: 0, y: -12, scale: 0.96 }}
+              initial={{ opacity: 0, y: -16, scale: 0.9 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.1 } }}
-              transition={SPRING_BUBBLY}
-              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.5rem)] left-1/2 -translate-x-1/2 z-[96] px-4 py-2 rounded-full glass-liquid-elevated border border-cyan-400/45 text-cyan-100 text-xs font-semibold shadow-lg pointer-events-none whitespace-nowrap"
+              exit={{ opacity: 0, y: -10, scale: 0.94, transition: { duration: 0.12 } }}
+              transition={SPRING_POP}
+              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.6rem)] left-1/2 -translate-x-1/2 z-[96] px-4 py-2 rounded-full glass-liquid-elevated border border-cyan-400/45 ink-primary text-xs font-bold shadow-lg pointer-events-none whitespace-nowrap"
             >
               {qolToast}
             </motion.div>
@@ -524,19 +537,21 @@ export default function App() {
         <AnimatePresence>
           {agent.unreachableAlert && (
             <motion.div
-              initial={{ opacity: 0, y: -16, scale: 0.96 }}
+              initial={{ opacity: 0, y: -16, scale: 0.94 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -12, scale: 0.96, transition: { duration: 0.12 } }}
               transition={SPRING_BUBBLY}
-              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.5rem)] left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-1.5rem)] max-w-lg glass-liquid-elevated border border-rose-500/40 rounded-2xl p-3 flex items-center justify-between gap-3 text-rose-100"
+              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.6rem)] left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-1.5rem)] max-w-lg glass-liquid-elevated border border-rose-500/45 rounded-3xl p-3 flex items-center justify-between gap-3"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                <div className="text-xs leading-snug truncate">{agent.unreachableAlert.message}</div>
+                <div className="w-7 h-7 rounded-xl squircle-rose flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                </div>
+                <div className="text-xs font-medium leading-snug truncate ink-primary">{agent.unreachableAlert.message}</div>
               </div>
               <button
                 onClick={agent.clearUnreachableAlert}
-                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-rose-300 shrink-0"
+                className="w-8 h-8 flex items-center justify-center rounded-full liquid-control-pill shrink-0"
                 aria-label={language === 'bg' ? 'Затвори' : 'Close'}
               >
                 <X className="w-4 h-4" />
@@ -548,22 +563,24 @@ export default function App() {
         <AnimatePresence>
           {agent.securityAlert && (
             <motion.div
-              initial={{ opacity: 0, y: -16, scale: 0.96 }}
+              initial={{ opacity: 0, y: -16, scale: 0.94 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -12, scale: 0.96, transition: { duration: 0.12 } }}
               transition={SPRING_BUBBLY}
-              className="fixed top-[calc(env(safe-area-inset-top,8px)+3.5rem)] left-1/2 -translate-x-1/2 z-[95] w-[calc(100%-1.5rem)] max-w-lg glass-liquid-elevated border border-amber-500/50 rounded-2xl p-3 flex items-center justify-between gap-3 text-amber-100"
+              className="fixed top-[calc(env(safe-area-inset-top,8px)+3.8rem)] left-1/2 -translate-x-1/2 z-[95] w-[calc(100%-1.5rem)] max-w-lg glass-liquid-elevated border border-amber-500/50 rounded-3xl p-3 flex items-center justify-between gap-3"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                <div className="w-7 h-7 rounded-xl squircle-amber flex items-center justify-center shrink-0">
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                </div>
                 <div className="min-w-0">
-                  <div className="text-xs font-bold text-amber-100 truncate">{agent.securityAlert.title}</div>
-                  <div className="text-[11px] leading-snug text-amber-200/90 mt-0.5 break-words">{agent.securityAlert.reason}</div>
+                  <div className="text-xs font-bold ink-primary truncate">{agent.securityAlert.title}</div>
+                  <div className="text-[11px] leading-snug ink-secondary mt-0.5 break-words">{agent.securityAlert.reason}</div>
                 </div>
               </div>
               <button
                 onClick={agent.clearSecurityAlert}
-                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-amber-300 shrink-0"
+                className="w-8 h-8 flex items-center justify-center rounded-full liquid-control-pill shrink-0"
                 aria-label={language === 'bg' ? 'Затвори' : 'Close'}
               >
                 <X className="w-4 h-4" />
@@ -574,7 +591,7 @@ export default function App() {
 
         {/* Scrollable Native App Viewport */}
         <main className="relative z-10 w-full max-w-full flex-1 overflow-y-auto overflow-x-hidden bouncy-scroll">
-          <div className="w-full max-w-full ultrawide-canvas mx-auto px-3 sm:px-5 lg:px-8 pt-2.5 pb-[calc(env(safe-area-inset-bottom,8px)+5rem)] landscape-compact-shell min-h-full flex flex-col">
+          <div className="w-full max-w-full ultrawide-canvas mx-auto px-3.5 sm:px-6 lg:px-8 pt-3.5 pb-[calc(env(safe-area-inset-bottom,8px)+5.8rem)] landscape-compact-shell min-h-full flex flex-col">
             <AnimatePresence mode="wait" initial={false}>
               {activeTab === 'fleet' && (
                 <motion.div
@@ -695,6 +712,21 @@ export default function App() {
                       hostsCount={fleet.hosts.length}
                       hosts={fleet.hosts}
                       onSendWolPacket={fleet.sendWolPacket}
+                      executionLogs={
+                        agent.lastExecutionResult
+                          ? [
+                              {
+                                id: agent.lastExecutionResult.command_id || 'latest-exec',
+                                timestamp: agent.lastExecutionResult.timestamp,
+                                target_id: agent.lastExecutionResult.target_id,
+                                status: agent.lastExecutionResult.status,
+                                output: agent.lastExecutionResult.output,
+                                exitCode: agent.lastExecutionResult.exit_code,
+                                execution_time_ms: agent.lastExecutionResult.execution_time_ms,
+                              },
+                            ]
+                          : []
+                      }
                     />
                   </React.Suspense>
                 </motion.div>
@@ -728,24 +760,26 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[105] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+              style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+              className="fixed inset-0 z-[105] flex items-center justify-center p-4 backdrop-blur-md modal-backdrop-scrim"
             >
               <motion.div
-                initial={{ opacity: 0, scale: 0.94, y: 12 }}
+                initial={{ opacity: 0, scale: 0.92, y: 16 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.94, y: 12 }}
-                className="w-full max-w-md rounded-3xl bg-[#091020]/96 border border-cyan-400/35 shadow-[0_24px_64px_rgba(0,0,0,0.92)] p-6 space-y-4"
+                transition={SPRING_BUBBLY}
+                className="w-full max-w-md rounded-[2rem] glass-liquid-modal p-6 space-y-4"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center text-cyan-300 shrink-0">
+                    <div className="w-11 h-11 squircle-badge squircle-hero flex items-center justify-center shrink-0">
                       <KeyRound className="w-5 h-5" />
                     </div>
                     <div>
-                      <h2 className="font-display text-base font-bold text-white">
+                      <h2 className="font-display text-base font-bold ink-primary">
                         {language === 'bg' ? 'Удостоверяване в LAN' : 'LAN Session Sign-In'}
                       </h2>
-                      <p className="text-xs text-slate-400">
+                      <p className="text-xs ink-muted">
                         {language === 'bg'
                           ? 'Въведете 6-цифрения PIN от PC агента или секретния ключ'
                           : 'Enter the 6-digit PIN from the PC Agent or your control secret'}
@@ -755,7 +789,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setLanAuthRequired(false)}
-                    className="w-8 h-8 rounded-full bg-white/[0.06] hover:bg-white/15 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer"
+                    className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
                     aria-label={language === 'bg' ? 'Затвори' : 'Close'}
                   >
                     <X className="w-4 h-4" />
@@ -770,10 +804,10 @@ export default function App() {
                     value={lanAuthInput}
                     onChange={(e) => setLanAuthInput(e.target.value)}
                     placeholder={language === 'bg' ? '6-цифрен PIN (напр. 482910) или ключ' : '6-digit PIN (e.g. 482910) or token'}
-                    className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/15 focus:border-cyan-400 text-sm font-mono text-cyan-100 outline-none"
+                    className="w-full px-4 py-3 rounded-2xl glass-liquid-subtle focus:border-cyan-400 text-sm font-mono ink-primary outline-none"
                   />
                   {lanAuthError && (
-                    <div className="text-xs text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded-xl px-3 py-2">
+                    <div className="text-xs text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded-2xl px-3.5 py-2">
                       {lanAuthError}
                     </div>
                   )}
@@ -781,14 +815,14 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setLanAuthRequired(false)}
-                      className="min-h-[42px] px-4 py-2 rounded-xl bg-white/[0.06] hover:bg-white/12 text-slate-300 text-xs font-semibold cursor-pointer"
+                      className="min-h-[42px] px-4 py-2 rounded-full liquid-control-pill text-xs font-semibold cursor-pointer"
                     >
                       {language === 'bg' ? 'По-късно' : 'Later'}
                     </button>
                     <button
                       type="submit"
                       disabled={!lanAuthInput.trim() || isSubmittingLanAuth}
-                      className="min-h-[42px] px-5 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 disabled:opacity-45 text-slate-950 text-xs font-bold cursor-pointer"
+                      className="min-h-[42px] px-5 py-2 rounded-full liquid-hero-btn disabled:opacity-45 text-xs font-bold cursor-pointer"
                     >
                       {isSubmittingLanAuth
                         ? language === 'bg'

@@ -24,29 +24,6 @@ const int kDefaultMaxChunkSize = 64 * 1024;
 // Session TTL: incomplete chunks purged after 5 seconds
 const Duration kFragmentSessionTtl = Duration(seconds: 5);
 
-/// Representation of a single parsed fragment chunk
-class PacketFragment {
-  final int opcode;
-  final int flags;
-  final int seq;
-  final int messageId;
-  final int fragmentOffset;
-  final int totalLength;
-  final bool isLast;
-  final Uint8List chunkPayload;
-
-  const PacketFragment({
-    required this.opcode,
-    required this.flags,
-    required this.seq,
-    required this.messageId,
-    required this.fragmentOffset,
-    required this.totalLength,
-    required this.isLast,
-    required this.chunkPayload,
-  });
-}
-
 /// Shared interval-verified reassembly buffer used by [PacketReassembler] and `NetworkFramer`.
 class FragmentAssemblySession {
   final int messageId;
@@ -208,37 +185,73 @@ class PacketFragmenter {
 
 /// Reassembles streaming fragmented chunks into complete ProtocolPackets
 class PacketReassembler {
-  final Map<String, FragmentAssemblySession> _sessions = {};
+  static const int _maxActiveSessions = 32;
+  static const int _maxTotalBufferedBytes = 32 * 1024 * 1024;
+
+  final Map<(int, int), FragmentAssemblySession> _sessions = {};
   final StreamController<ProtocolPacket> _completePacketStream =
       StreamController<ProtocolPacket>.broadcast();
   final StreamController<int> _frameSyncRequestStream =
       StreamController<int>.broadcast();
   Timer? _cleanupTimer;
   int _lastVideoMessageId = 0;
+  bool _isDisposed = false;
 
   Stream<ProtocolPacket> get onPacketReassembled =>
       _completePacketStream.stream;
   Stream<int> get onFrameSyncRequested => _frameSyncRequestStream.stream;
 
-  PacketReassembler() {
-    // Periodic garbage collection for aborted transmissions (tightened to 1s for fast keyframe recovery)
+  PacketReassembler();
+
+  void _ensureCleanupTimer() {
+    if (_isDisposed || _cleanupTimer != null || _sessions.isEmpty) return;
+    // Periodic garbage collection for aborted transmissions (1s for fast keyframe recovery)
     _cleanupTimer = Timer.periodic(
         const Duration(seconds: 1), (_) => _purgeStaleSessions());
+  }
+
+  void _stopCleanupTimerIfIdle() {
+    if (_sessions.isEmpty) {
+      _cleanupTimer?.cancel();
+      _cleanupTimer = null;
+    }
   }
 
   /// Ingests a raw network buffer. Returns the reassembled [ProtocolPacket]
   /// if this chunk completed a message, or if it was an unfragmented packet.
   ProtocolPacket? ingestBytes(Uint8List rawBytes) {
+    if (_isDisposed) return null;
     final ProtocolHeader? header = parseHeader(rawBytes);
     if (header == null ||
         rawBytes.length != kHeaderSize + header.payloadLength) {
       return null;
     }
 
-    final int opcode = header.opcode;
-    final int flags = header.flags;
-    final int seq = header.seq;
-    final int payloadLength = header.payloadLength;
+    final Uint8List payload = Uint8List.sublistView(
+      rawBytes,
+      kHeaderSize,
+      kHeaderSize + header.payloadLength,
+    );
+    return ingestPacket(
+      header.opcode,
+      header.flags,
+      header.seq,
+      payload,
+      copyUnfragmented: true,
+    );
+  }
+
+  /// Ingests an already-framed (or AEAD-decrypted) packet payload without re-packing
+  /// a synthetic 12-byte header.
+  ProtocolPacket? ingestPacket(
+    int opcode,
+    int flags,
+    int seq,
+    Uint8List payload, {
+    bool copyUnfragmented = false,
+  }) {
+    if (_isDisposed) return null;
+    final int payloadLength = payload.length;
     final bool isFragmented = (flags & kFlagIsFragmented) != 0;
 
     // Fast-path: Unfragmented packet
@@ -247,17 +260,17 @@ class PacketReassembler {
         opcode: opcode,
         flags: flags,
         seq: seq,
-        payload: rawBytes.sublist(kHeaderSize, kHeaderSize + payloadLength),
+        payload: copyUnfragmented ? Uint8List.fromList(payload) : payload,
       );
     }
 
     // Fragmented packet: Extract fragmentation sub-header
     if (payloadLength < kFragmentHeaderSize) return null;
 
-    final ByteData bd = ByteData.sublistView(rawBytes);
-    final int messageId = bd.getUint32(kHeaderSize + 0, Endian.big);
-    final int offset = bd.getUint32(kHeaderSize + 4, Endian.big);
-    final int totalLength = bd.getUint32(kHeaderSize + 8, Endian.big);
+    final ByteData bd = ByteData.sublistView(payload, 0, kFragmentHeaderSize);
+    final int messageId = bd.getUint32(0, Endian.big);
+    final int offset = bd.getUint32(4, Endian.big);
+    final int totalLength = bd.getUint32(8, Endian.big);
     final int chunkBytesLength = payloadLength - kFragmentHeaderSize;
 
     // Guard against forged/corrupted fragment headers causing OOM
@@ -269,22 +282,22 @@ class PacketReassembler {
       return null;
     }
 
-    final String sessionKey = '${opcode}_$messageId';
+    final (int, int) sessionKey = (opcode, messageId);
     if (!_sessions.containsKey(sessionKey)) {
       int totalBufferedBytes = _sessions.values.fold<int>(
         0,
         (sum, s) => sum + s.totalLength,
       );
-      if (_sessions.length >= 32 ||
-          totalBufferedBytes + totalLength > 32 * 1024 * 1024) {
+      if (_sessions.length >= _maxActiveSessions ||
+          totalBufferedBytes + totalLength > _maxTotalBufferedBytes) {
         _purgeStaleSessions();
         totalBufferedBytes = _sessions.values.fold<int>(
           0,
           (sum, s) => sum + s.totalLength,
         );
         while (_sessions.isNotEmpty &&
-            (_sessions.length >= 32 ||
-                totalBufferedBytes + totalLength > 32 * 1024 * 1024)) {
+            (_sessions.length >= _maxActiveSessions ||
+                totalBufferedBytes + totalLength > _maxTotalBufferedBytes)) {
           final removed = _sessions.remove(_sessions.keys.first);
           if (removed != null) {
             totalBufferedBytes -= removed.totalLength;
@@ -305,12 +318,12 @@ class PacketReassembler {
     }
 
     final Uint8List chunkData = Uint8List.sublistView(
-      rawBytes,
-      kHeaderSize + kFragmentHeaderSize,
-      kHeaderSize + payloadLength,
+      payload,
+      kFragmentHeaderSize,
+      payloadLength,
     );
 
-    // Get or initialize assembly session scoped by opcode + messageId
+    // Get or initialize assembly session scoped by (opcode, messageId)
     final FragmentAssemblySession session = _sessions.putIfAbsent(
       sessionKey,
       () => FragmentAssemblySession(
@@ -321,6 +334,7 @@ class PacketReassembler {
         baseSeq: seq,
       ),
     );
+    _ensureCleanupTimer();
 
     if (session.totalLength != totalLength || session.opcode != opcode) {
       return null;
@@ -331,6 +345,7 @@ class PacketReassembler {
     // Check completion
     if (session.isComplete) {
       _sessions.remove(sessionKey);
+      _stopCleanupTimerIfIdle();
       final ProtocolPacket reassembled = ProtocolPacket(
         opcode: session.opcode,
         flags: session.baseFlags,
@@ -363,12 +378,15 @@ class PacketReassembler {
       }
       return isExpired;
     });
+    _stopCleanupTimerIfIdle();
   }
 
   void dispose() {
+    _isDisposed = true;
     _cleanupTimer?.cancel();
-    _completePacketStream.close();
-    _frameSyncRequestStream.close();
+    _cleanupTimer = null;
+    unawaited(_completePacketStream.close());
+    unawaited(_frameSyncRequestStream.close());
     _sessions.clear();
   }
 }

@@ -16,9 +16,9 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 try:
-    from agent import parse_header, pack_packet, MAGIC, HEADER_SIZE, MAX_PAYLOAD_SIZE, OP_PING, OP_FRAME, OP_SHELL, OP_AUTH
+    from agent import parse_header, pack_packet, MAGIC, OP_PING
 except ImportError:
-    from agent.agent import parse_header, pack_packet, MAGIC, HEADER_SIZE, MAX_PAYLOAD_SIZE, OP_PING, OP_FRAME, OP_SHELL, OP_AUTH
+    from agent.agent import parse_header, pack_packet, MAGIC, OP_PING
 from command_ast_firewall import CommandASTFirewall
 
 class TestAgentStressSuite(unittest.TestCase):

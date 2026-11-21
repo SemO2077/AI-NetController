@@ -248,7 +248,7 @@ class ShellResult {
     return ShellResult(
       commandId: json['command_id'] as String?,
       status: json['status'] as String? ?? 'unknown',
-      exitCode: json['exit_code'] as int? ?? 0,
+      exitCode: (json['exit_code'] as num?)?.toInt() ?? 0,
       output: json['output'] as String? ?? '',
       command: json['command'] as String? ?? '',
     );

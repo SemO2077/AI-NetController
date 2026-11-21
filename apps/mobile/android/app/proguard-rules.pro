@@ -19,7 +19,6 @@
 -keep class com.github.dart_lang.jni.** { *; }
 -keep class com.github.dart_lang.jni_flutter.** { *; }
 -keep class dev.fluttercommunity.plus.** { *; }
--keep class com.benjaminabel.vibration.** { *; }
 
 # Preserve ChaCha20-Poly1305 and Curve25519 reflection models
 -keepclassmembers enum * {

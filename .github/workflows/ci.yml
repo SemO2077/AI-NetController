@@ -7,6 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   web-tests:
     name: Web Console & Server
@@ -15,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v7
@@ -37,8 +46,9 @@ jobs:
       - name: Upload web distribution artifact
         uses: actions/upload-artifact@v7
         with:
-          name: web-dist-${{ github.ref_name }}
+          name: web-dist-${{ github.sha }}
           path: apps/web/dist/
+          if-no-files-found: error
           retention-days: 7
 
   agent-tests:
@@ -54,6 +64,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v7
@@ -67,6 +79,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r agent/requirements.txt
 
+      - name: Syntax-check repository Python scripts
+        run: python -c "import glob, py_compile; [py_compile.compile(p, doraise=True) for p in sorted(glob.glob('scripts/*.py'))]"
+
       - name: Run unit and security tests
         run: python -m unittest discover -s agent/tests -v
 
@@ -77,6 +92,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup Python 3.12 (for live daemon E2E test)
         uses: actions/setup-python@v7

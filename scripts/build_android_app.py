@@ -2,7 +2,7 @@
 """
 AI NetController - Native Android Application Builder
 Compiles a hardware-accelerated Android APK embedding the exact React/Tailwind/D3 Web Console
-using official Android SDK build-tools and JDK 25.
+using official Android SDK build-tools and JDK 17+.
 """
 import os
 import sys
@@ -506,16 +506,19 @@ def zipalign_and_sign():
         ensure_debug_keystore()
         print("[*] Signing APK with local debug keystore (set AI_ANDROID_KEYSTORE for release signing)...")
 
+    sign_env = ENV.copy()
+    sign_env["AI_APKSIGNER_KS_PASS"] = ks_pass
+    sign_env["AI_APKSIGNER_KEY_PASS"] = key_pass
     cmd_sign = [
         APKSIGNER, "sign",
         "--ks", ks_path,
-        "--ks-pass", f"pass:{ks_pass}",
+        "--ks-pass", "env:AI_APKSIGNER_KS_PASS",
         "--ks-key-alias", ks_alias,
-        "--key-pass", f"pass:{key_pass}",
+        "--key-pass", "env:AI_APKSIGNER_KEY_PASS",
         "--out", signed_apk,
         aligned_apk
     ]
-    res = subprocess.run(cmd_sign, env=ENV, capture_output=True, text=True)
+    res = subprocess.run(cmd_sign, env=sign_env, capture_output=True, text=True)
     if res.returncode != 0:
         print("[ERROR] apksigner failed:", res.stderr)
         sys.exit(1)
@@ -563,6 +566,7 @@ def distribute_apk(signed_apk):
         manifest["publishedAt"] = datetime.now(timezone.utc).isoformat()
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)
+            f.write("\n")
 
     sums_path = os.path.join(rel_dir, "SHA256SUMS.txt")
     if os.path.exists(sums_path):

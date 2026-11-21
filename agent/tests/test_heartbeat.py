@@ -21,7 +21,7 @@ for directory in (AGENT_DIR, TESTS_DIR):
     if str(directory) not in sys.path:
         sys.path.insert(0, str(directory))
 
-from test_e2e_loopback import PureWebSocketClient, LoopbackHostDaemon, pack_packet, parse_packet, MAGIC, OP_PING, OP_AUTH
+from test_e2e_loopback import PureWebSocketClient, LoopbackHostDaemon, pack_packet, parse_packet, OP_PING, OP_AUTH
 
 class HeartbeatTestClient(PureWebSocketClient):
     async def send_text(self, text: str):

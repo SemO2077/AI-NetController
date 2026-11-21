@@ -25,10 +25,10 @@ android {
 
     signingConfigs {
         release {
-            def ksPath = System.getenv("AI_ANDROID_KEYSTORE")
-            def ksPass = System.getenv("AI_ANDROID_KEYSTORE_PASS")
-            def ksAlias = System.getenv("AI_ANDROID_KEY_ALIAS")
-            def ksKeyPass = System.getenv("AI_ANDROID_KEY_PASS") ?: ksPass
+            def ksPath = (System.getenv("AI_ANDROID_KEYSTORE") ?: "").trim()
+            def ksPass = (System.getenv("AI_ANDROID_KEYSTORE_PASS") ?: "").trim()
+            def ksAlias = (System.getenv("AI_ANDROID_KEY_ALIAS") ?: "").trim()
+            def ksKeyPass = (System.getenv("AI_ANDROID_KEY_PASS") ?: "").trim() ?: ksPass
             if (ksPath && ksPass && ksAlias) {
                 storeFile file(ksPath)
                 storePassword ksPass
@@ -41,11 +41,19 @@ android {
     buildTypes {
         release {
             def strictRelease = System.getenv("AI_RELEASE_BUILD") == "1"
-            def hasReleaseKeystore = (System.getenv("AI_ANDROID_KEYSTORE") ?: "").trim().length() > 0 &&
-                (System.getenv("AI_ANDROID_KEYSTORE_PASS") ?: "").trim().length() > 0 &&
-                (System.getenv("AI_ANDROID_KEY_ALIAS") ?: "").trim().length() > 0
-            if (strictRelease && !hasReleaseKeystore) {
-                throw new GradleException("AI_RELEASE_BUILD=1 requires AI_ANDROID_KEYSTORE, AI_ANDROID_KEYSTORE_PASS, and AI_ANDROID_KEY_ALIAS")
+            def ksPath = (System.getenv("AI_ANDROID_KEYSTORE") ?: "").trim()
+            def ksPass = (System.getenv("AI_ANDROID_KEYSTORE_PASS") ?: "").trim()
+            def ksAlias = (System.getenv("AI_ANDROID_KEY_ALIAS") ?: "").trim()
+            def hasReleaseKeystore = ksPath.length() > 0 &&
+                ksPass.length() > 0 &&
+                ksAlias.length() > 0
+            if (strictRelease) {
+                if (!hasReleaseKeystore) {
+                    throw new GradleException("AI_RELEASE_BUILD=1 requires AI_ANDROID_KEYSTORE, AI_ANDROID_KEYSTORE_PASS, and AI_ANDROID_KEY_ALIAS")
+                }
+                if (!file(ksPath).exists()) {
+                    throw new GradleException("AI_ANDROID_KEYSTORE file does not exist: ${ksPath}")
+                }
             }
             signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
             minifyEnabled true

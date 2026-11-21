@@ -158,98 +158,106 @@ void main() {
     test('PIN PAIR exchange returns pairingToken and executes real OP_SHELL command', () async {
       final liveDaemon = daemon!;
       final ws = await WebSocket.connect('ws://127.0.0.1:${liveDaemon.port}');
-      final completer = Completer<String>();
-      final shellCompleter = Completer<String>();
-      String? pairedToken;
-      var challengeReceived = false;
+      StreamSubscription<dynamic>? sub;
+      WebSocket? ws2;
+      StreamSubscription<dynamic>? sub2;
 
-      late StreamSubscription sub;
-      sub = ws.listen((msg) {
-        if (msg is String) {
-          final decoded = jsonDecode(msg) as Map<String, dynamic>;
-          if (decoded['event'] == 'AUTHENTICATED' && decoded['pairingToken'] is String) {
-            pairedToken = decoded['pairingToken'] as String;
-            if (!completer.isCompleted) completer.complete(pairedToken!);
+      try {
+        final completer = Completer<String>();
+        final shellCompleter = Completer<String>();
+        String? pairedToken;
+        var challengeReceived = false;
+
+        sub = ws.listen((msg) {
+          if (msg is String) {
+            final decoded = jsonDecode(msg) as Map<String, dynamic>;
+            if (decoded['event'] == 'AUTHENTICATED' && decoded['pairingToken'] is String) {
+              pairedToken = decoded['pairingToken'] as String;
+              if (!completer.isCompleted) completer.complete(pairedToken!);
+            }
+          } else if (msg is List<int>) {
+            final pkt = StreamBinaryPacket.parse(Uint8List.fromList(msg));
+            if (pkt == null) return;
+            if (pkt.opcode == StreamOpcode.auth && pkt.payload.length == 16) {
+              challengeReceived = true;
+            } else if (pkt.opcode == StreamOpcode.shell && !shellCompleter.isCompleted) {
+              shellCompleter.complete(utf8.decode(pkt.payload, allowMalformed: true));
+            }
           }
-        } else if (msg is List<int>) {
-          final pkt = StreamBinaryPacket.parse(Uint8List.fromList(msg));
-          if (pkt == null) return;
-          if (pkt.opcode == StreamOpcode.auth && pkt.payload.length == 16) {
-            challengeReceived = true;
-          } else if (pkt.opcode == StreamOpcode.shell && !shellCompleter.isCompleted) {
-            shellCompleter.complete(utf8.decode(pkt.payload, allowMalformed: true));
-          }
-        }
-      });
+        });
 
-      // Exchange 6-digit PIN for persistent pairing token
-      ws.add(jsonEncode({
-        'action': 'PAIR',
-        'pin': liveDaemon.pin,
-        'device': 'Flutter Test Mobile',
-      }));
+        // Exchange 6-digit PIN for persistent pairing token
+        ws.add(jsonEncode({
+          'action': 'PAIR',
+          'pin': liveDaemon.pin,
+          'device': 'Flutter Test Mobile',
+        }));
 
-      final token = await completer.future.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw TimeoutException('PAIR timed out. stderr:\n${liveDaemon.stderrText}'),
-      );
-      expect(challengeReceived, isTrue);
-      expect(token, equals('ainet_mobile_e2e_paired_token'));
+        final token = await completer.future.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => throw TimeoutException('PAIR timed out. stderr:\n${liveDaemon.stderrText}'),
+        );
+        expect(challengeReceived, isTrue);
+        expect(token, equals('ainet_mobile_e2e_paired_token'));
 
-      // Now open a second WebSocket and authenticate binaries via paired token HMAC
-      await sub.cancel();
-      await ws.close();
+        // Now open a second WebSocket and authenticate binaries via paired token HMAC
+        await sub.cancel();
+        sub = null;
+        await ws.close();
 
-      final ws2 = await WebSocket.connect('ws://127.0.0.1:${liveDaemon.port}');
-      final authOk = Completer<bool>();
-      final cmdOut = Completer<Map<String, dynamic>>();
-      var sentShell = false;
+        ws2 = await WebSocket.connect('ws://127.0.0.1:${liveDaemon.port}');
+        final authOk = Completer<bool>();
+        final cmdOut = Completer<Map<String, dynamic>>();
+        var sentShell = false;
 
-      final sub2 = ws2.listen((msg) {
-        if (msg is List<int>) {
-          final pkt = StreamBinaryPacket.parse(Uint8List.fromList(msg));
-          if (pkt == null) return;
-          if (pkt.opcode == StreamOpcode.auth) {
-            final status = utf8.decode(pkt.payload, allowMalformed: true).trim();
-            if (status == 'OK_AUTHENTICATED' || status == 'AUTH_OK') {
-              if (!authOk.isCompleted) authOk.complete(true);
-              if (!sentShell) {
-                sentShell = true;
-                ws2.add(StreamBinaryPacket.pack(
-                  StreamOpcode.shell,
-                  1,
-                  Uint8List.fromList(utf8.encode('echo MOBILE_DAEMON_E2E_OK')),
+        sub2 = ws2.listen((msg) {
+          if (msg is List<int>) {
+            final pkt = StreamBinaryPacket.parse(Uint8List.fromList(msg));
+            if (pkt == null) return;
+            if (pkt.opcode == StreamOpcode.auth) {
+              final status = utf8.decode(pkt.payload, allowMalformed: true).trim();
+              if (status == 'OK_AUTHENTICATED' || status == 'AUTH_OK') {
+                if (!authOk.isCompleted) authOk.complete(true);
+                if (!sentShell) {
+                  sentShell = true;
+                  ws2?.add(StreamBinaryPacket.pack(
+                    StreamOpcode.shell,
+                    1,
+                    Uint8List.fromList(utf8.encode('echo MOBILE_DAEMON_E2E_OK')),
+                  ));
+                }
+              } else if (pkt.payload.length == 16) {
+                final digest = Hmac(sha256, utf8.encode(token)).convert(pkt.payload);
+                ws2?.add(StreamBinaryPacket.pack(
+                  StreamOpcode.auth,
+                  pkt.seqId,
+                  Uint8List.fromList(digest.bytes),
                 ));
               }
-            } else if (pkt.payload.length == 16) {
-              final digest = Hmac(sha256, utf8.encode(token)).convert(pkt.payload);
-              ws2.add(StreamBinaryPacket.pack(
-                StreamOpcode.auth,
-                pkt.seqId,
-                Uint8List.fromList(digest.bytes),
-              ));
+            } else if (pkt.opcode == StreamOpcode.shell && !cmdOut.isCompleted) {
+              cmdOut.complete(jsonDecode(utf8.decode(pkt.payload)) as Map<String, dynamic>);
             }
-          } else if (pkt.opcode == StreamOpcode.shell && !cmdOut.isCompleted) {
-            cmdOut.complete(jsonDecode(utf8.decode(pkt.payload)) as Map<String, dynamic>);
           }
-        }
-      });
+        });
 
-      expect(
-        await authOk.future.timeout(
+        expect(
+          await authOk.future.timeout(
+            const Duration(seconds: 5),
+            onTimeout: () => throw TimeoutException('ws2 OP_AUTH timed out. stderr:\n${liveDaemon.stderrText}'),
+          ),
+          isTrue,
+        );
+        final shellJson = await cmdOut.future.timeout(
           const Duration(seconds: 5),
-          onTimeout: () => throw TimeoutException('ws2 OP_AUTH timed out. stderr:\n${liveDaemon.stderrText}'),
-        ),
-        isTrue,
-      );
-      final shellJson = await cmdOut.future.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw TimeoutException('ws2 OP_SHELL timed out. stderr:\n${liveDaemon.stderrText}'),
-      );
-      expect(shellJson['output'].toString(), contains('MOBILE_DAEMON_E2E_OK'));
-
-      await sub2.cancel();
-      await ws2.close();
+          onTimeout: () => throw TimeoutException('ws2 OP_SHELL timed out. stderr:\n${liveDaemon.stderrText}'),
+        );
+        expect(shellJson['output'].toString(), contains('MOBILE_DAEMON_E2E_OK'));
+      } finally {
+        await sub?.cancel();
+        await sub2?.cancel();
+        await ws.close();
+        await ws2?.close();
+      }
     });
 
     testWidgets(
@@ -264,7 +272,10 @@ void main() {
         });
 
         final container = ProviderContainer();
-        addTearDown(container.dispose);
+        addTearDown(() {
+          HostConnectionPool.instance.disposeAll();
+          container.dispose();
+        });
 
         final liveDaemon = daemon!;
         container.read(app.fleetProvider.notifier).addHost(
@@ -385,7 +396,10 @@ void main() {
 
         final liveDaemon = daemon!;
         final container = ProviderContainer();
-        addTearDown(container.dispose);
+        addTearDown(() {
+          HostConnectionPool.instance.disposeAll();
+          container.dispose();
+        });
 
         container.read(app.fleetProvider.notifier).addHost(
               app.HostState(

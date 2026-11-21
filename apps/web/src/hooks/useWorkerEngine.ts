@@ -62,7 +62,6 @@ export function useWorkerEngine({
   const [isVaultEncrypted, setIsVaultEncrypted] = useState(false);
 
   const workerRef = useRef<Worker | null>(null);
-  const currentBlobUrlRef = useRef<string | null>(null);
   const lastThumbnailSyncRef = useRef<number>(0);
   const targetIdRef = useRef(targetId);
   const wsUrlRef = useRef(wsUrl);
@@ -70,12 +69,6 @@ export function useWorkerEngine({
   const onTelemetryRef = useRef(onTelemetry);
   const onHostUnreachableRef = useRef(onHostUnreachable);
   const pendingHitlCommandRef = useRef<{ commandId: string; cmd: ClientCommandMessage; riskLevel: RiskLevel } | null>(null);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      fetch('/api/auth/session', { credentials: 'include' }).catch(() => {});
-    }
-  }, []);
 
   useEffect(() => {
     targetIdRef.current = targetId;
@@ -234,14 +227,9 @@ export function useWorkerEngine({
             const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
             if (now - lastThumbnailSyncRef.current >= 1000 || !useScreenStore.getState().screenBase64) {
               lastThumbnailSyncRef.current = now;
-              const prevUrl = currentBlobUrlRef.current;
               const blob = new Blob([buffer], { type: 'image/jpeg' });
               const url = URL.createObjectURL(blob);
-              currentBlobUrlRef.current = url;
               useScreenStore.getState().setScreenBase64(url);
-              if (prevUrl) {
-                window.setTimeout(() => URL.revokeObjectURL(prevUrl), 120);
-              }
             }
             setIsCapturingScreen((prev) => (prev ? false : prev));
           }
@@ -350,10 +338,6 @@ export function useWorkerEngine({
     };
 
     return () => {
-      if (currentBlobUrlRef.current) {
-        URL.revokeObjectURL(currentBlobUrlRef.current);
-        currentBlobUrlRef.current = null;
-      }
       clearScreenFrames();
       worker.terminate();
     };

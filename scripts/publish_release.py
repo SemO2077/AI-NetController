@@ -14,17 +14,21 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GITHUB_PUB = os.path.join(SCRIPT_DIR, "publish_github_release.py")
 GITLAB_PUB = os.path.join(SCRIPT_DIR, "publish_gitlab_release.py")
 
-if __name__ == "__main__":
+
+def main() -> int:
     platform = "github"
     filtered_args = []
     i = 1
     while i < len(sys.argv):
         arg = sys.argv[i]
-        if arg == "--platform" and i + 1 < len(sys.argv):
+        if arg == "--platform":
+            if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("-"):
+                print("[!] Missing value for --platform. Choose from: github, gitlab, all, both.")
+                return 2
             platform = sys.argv[i + 1].lower()
             i += 2
             continue
-        elif arg.startswith("--platform="):
+        if arg.startswith("--platform="):
             platform = arg.split("=", 1)[1].lower()
             i += 1
             continue
@@ -39,14 +43,18 @@ if __name__ == "__main__":
         targets = [("github", GITHUB_PUB)]
     else:
         print(f"[!] Unsupported platform '{platform}'. Choose from: github, gitlab, all, both.")
-        sys.exit(2)
+        return 2
 
     exit_code = 0
     for name, target_script in targets:
-        print(f"[*] Dispatching release publisher for platform: {name}")
+        print(f"[*] Dispatching release publisher for platform: {name}", flush=True)
         rc = subprocess.run([sys.executable, target_script] + filtered_args).returncode
         if rc != 0:
-            print(f"[!] Release publisher failed for platform '{name}' (exit code {rc}).")
+            print(f"[!] Release publisher failed for platform '{name}' (exit code {rc}).", flush=True)
             exit_code = rc
 
-    sys.exit(exit_code)
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

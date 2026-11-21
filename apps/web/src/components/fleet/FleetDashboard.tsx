@@ -25,7 +25,8 @@ import { useWolHistory } from '../../store/wolHistoryStore';
 import { HostCard } from './HostCard';
 import { generateMagicPacket } from '../../services/wolService';
 import { useTranslation, Language } from '../../i18n/useTranslation';
-import { POPOVER_BUBBLE_VARIANTS } from '../../utils/springPhysics';
+import { POPOVER_BUBBLE_VARIANTS, SPRING_JELLY, SPRING_POP } from '../../utils/springPhysics';
+import { ThemeQuickControls } from '../ui/ThemeQuickControls';
 
 const LazyNetworkTopologyGraph = React.lazy(() =>
   import('../telemetry/NetworkTopologyGraph').then((module) => ({
@@ -267,6 +268,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
   const [searchQuery, setSearchQuery] = useState('');
   const deferredQuery = useDeferredValue(searchQuery);
+  const [confirmWakeAll, setConfirmWakeAll] = useState(false);
 
   const [activeFilter, setActiveFilter] = useState<
     'all' | 'online' | 'sleeping' | 'servers' | 'quarantined'
@@ -375,22 +377,10 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     [onSendWol, onInspectWolPacket]
   );
 
-  const handleWakeAllOffline = useCallback(() => {
+  const executeWakeAllOffline = useCallback(() => {
     triggerHapticFeedback('heavy');
+    setConfirmWakeAll(false);
     if (offlineHosts.length === 0) return;
-
-    if (
-      useUIStore.getState().isCommandConfirmations &&
-      typeof window !== 'undefined' &&
-      typeof window.confirm === 'function'
-    ) {
-      const confirmed = window.confirm(
-        language === 'bg'
-          ? `Потвърдете изпращане на Wake-on-LAN към всички ${offlineHosts.length} спящи хоста?`
-          : `Confirm sending Wake-on-LAN to all ${offlineHosts.length} sleeping hosts?`
-      );
-      if (!confirmed) return;
-    }
 
     offlineHosts.forEach((host) => {
       if (onWakeHost) {
@@ -406,7 +396,18 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
         onInspectWolPacket(host);
       }
     });
-  }, [offlineHosts, onWakeHost, onSendWol, onInspectWolPacket, language]);
+  }, [offlineHosts, onWakeHost, onSendWol, onInspectWolPacket]);
+
+  const handleWakeAllOffline = useCallback(() => {
+    triggerHapticFeedback('light');
+    if (offlineHosts.length === 0) return;
+
+    if (useUIStore.getState().isCommandConfirmations && !confirmWakeAll) {
+      setConfirmWakeAll(true);
+      return;
+    }
+    executeWakeAllOffline();
+  }, [offlineHosts.length, confirmWakeAll, executeWakeAllOffline]);
 
   const hasWakingHosts = Object.keys(wakingCountdown).length > 0;
   useEffect(() => {
@@ -530,71 +531,117 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
   return (
     <div id="fleet-dashboard-container" className="w-full flex flex-col select-none pb-2 relative">
-      {/* Sleek Top App Bar & Unified Filter Controls */}
-      <div className="pt-1 pb-3 flex flex-col gap-2.5 relative z-30">
+      {/* Detached Floating Apple Liquid Glass Header & Airy Filter Toolbar */}
+      <div className="pt-0.5 pb-4 flex flex-col gap-3 relative z-30">
         {/* Network Disconnection Banner */}
         {isNetworkDisconnected && (
-          <div className="glass-liquid-subtle w-full px-3.5 py-2.5 border border-amber-500/40 rounded-xl flex items-center justify-between text-xs text-amber-200">
+          <div className="glass-liquid-subtle w-full px-4 py-2.5 border border-amber-500/40 rounded-full flex items-center justify-between text-xs text-amber-200">
             <div className="flex items-center gap-2 min-w-0">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="truncate">{t('conn_disconnected')}</span>
+              <span className="truncate font-medium">{t('conn_disconnected')}</span>
             </div>
             {onReconnectNetwork && (
-              <button
+              <motion.button
                 type="button"
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.92 }}
+                transition={SPRING_POP}
                 onClick={onReconnectNetwork}
-                className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-400/50 rounded-lg font-semibold transition shrink-0 active:scale-95"
+                className="px-3.5 py-1.5 rounded-full squircle-amber preserve-white text-xs font-bold transition shrink-0"
               >
                 {t('conn_reconnect')}
-              </button>
+              </motion.button>
             )}
           </div>
         )}
 
-        {/* 1. NATIVE TOP APP BAR: Title & Live Status on Left | Primary Actions on Right */}
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-col min-w-0">
-            <h1 className="text-fluid-title font-bold tracking-tight font-display text-white truncate">
-              {t('fleet_title')}
-            </h1>
-            <div className="flex items-center gap-1.5 text-[11px] font-medium tabular-nums mt-0.5">
-              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
-              <span className="text-emerald-300 font-semibold">
-                {onlineCount} {t('fleet_online')}
-              </span>
-              <span className="text-slate-600">•</span>
-              <span className="text-amber-300/90">
-                {offlineCount} {t('fleet_sleeping')}
-              </span>
+        {/* 1. DETACHED FLOATING LIQUID GLASS HEADER CAPSULE */}
+        <header className="glass-liquid-elevated liquid-capsule-refract rounded-[24px] sm:rounded-[28px] px-3.5 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-2.5 sm:gap-3 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 squircle-badge squircle-hero flex items-center justify-center shrink-0">
+              <Monitor className="w-5 h-5" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <h1 className="text-fluid-title font-extrabold tracking-tight font-display ink-primary truncate">
+                {t('fleet_title')}
+              </h1>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold tabular-nums mt-0.5 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/18 border border-emerald-400/40 text-emerald-300">
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="beacon-pulse-emerald absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+                  </span>
+                  <span>
+                    {onlineCount} {t('fleet_online')}
+                  </span>
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/16 border border-amber-400/35 text-amber-300">
+                  <span className="inline-flex h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                  <span>
+                    {offlineCount} {t('fleet_sleeping')}
+                  </span>
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            {offlineCount > 0 && (
-              <button
-                type="button"
-                onClick={handleWakeAllOffline}
-                className="h-9 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-amber-200 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
-                title={
-                  language === 'bg'
-                    ? `Събуди всички спящи хостове (${offlineCount})`
-                    : `Wake all sleeping hosts (${offlineCount})`
-                }
-              >
-                <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span className="hidden xs:inline">
-                  {language === 'bg' ? 'Събуди' : 'Wake All'}
-                </span>
-              </button>
-            )}
+          <div className="flex items-center justify-between sm:justify-end gap-1.5 w-full sm:w-auto shrink-0 sm:ml-auto flex-wrap">
+            <ThemeQuickControls showAccentDots />
 
-            <button
+            {offlineCount > 0 &&
+              (confirmWakeAll ? (
+                <div className="flex items-center gap-1 h-9 px-1.5 rounded-full bg-amber-500/18 border border-amber-500/40">
+                  <button
+                    type="button"
+                    onClick={executeWakeAllOffline}
+                    className="h-7 px-2.5 rounded-full bg-amber-500 hover:bg-amber-400 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
+                  >
+                    <Zap className="w-3 h-3 shrink-0" />
+                    <span>
+                      {language === 'bg'
+                        ? `Събуди (${offlineCount})`
+                        : `Wake ${offlineCount}?`}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmWakeAll(false)}
+                    className="h-7 px-2 rounded-full liquid-control-pill text-[11px] font-semibold ink-primary cursor-pointer"
+                  >
+                    {language === 'bg' ? 'Не' : 'Cancel'}
+                  </button>
+                </div>
+              ) : (
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.05, y: -1 }}
+                  whileTap={{ scale: 0.91 }}
+                  transition={SPRING_POP}
+                  onClick={handleWakeAllOffline}
+                  className="h-9 px-3.5 rounded-full squircle-amber preserve-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  title={
+                    language === 'bg'
+                      ? `Събуди всички спящи хостове (${offlineCount})`
+                      : `Wake all sleeping hosts (${offlineCount})`
+                  }
+                >
+                  <Zap className="w-3.5 h-3.5 shrink-0 icon-bolt-live" />
+                  <span className="hidden xs:inline">
+                    {language === 'bg' ? 'Събуди' : 'Wake All'}
+                  </span>
+                </motion.button>
+              ))}
+
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.05, y: -1 }}
+              whileTap={{ scale: 0.91 }}
+              transition={SPRING_POP}
               onClick={() => {
                 triggerHapticFeedback('light');
                 openModal('quickSetup');
               }}
-              className="h-9 px-2.5 sm:px-3 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+              className="h-9 px-3 rounded-full liquid-control-pill text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
               title={
                 language === 'bg'
                   ? 'Сдвояване на компютър и QR настройка'
@@ -605,15 +652,18 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               <span className="hidden sm:inline">
                 {language === 'bg' ? 'Сдвои PC' : 'Pair PC'}
               </span>
-            </button>
+            </motion.button>
 
-            <button
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.06, y: -1 }}
+              whileTap={{ scale: 0.9 }}
+              transition={SPRING_POP}
               onClick={() => {
                 triggerHapticFeedback('selection');
                 setViewMode((prev) => (prev === 'grid' ? 'topology' : 'grid'));
               }}
-              className="w-9 h-9 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 flex items-center justify-center transition active:scale-95"
+              className="w-9 h-9 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
               title={
                 viewMode === 'grid'
                   ? t('fleet_view_topology')
@@ -626,42 +676,47 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               ) : (
                 <LayoutGrid className="w-4 h-4 text-cyan-400" />
               )}
-            </button>
+            </motion.button>
 
-            <button
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.05, y: -1 }}
+              whileTap={{ scale: 0.91 }}
+              transition={SPRING_POP}
               onClick={() => {
                 triggerHapticFeedback('light');
                 addHostHandler();
               }}
-              className="h-9 px-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-100 font-semibold text-xs flex items-center gap-1.5 transition active:scale-95"
+              className="h-9 px-3.5 rounded-full liquid-hero-btn font-bold text-xs flex items-center gap-1.5 cursor-pointer"
               title={t('fleet_add_host_tooltip')}
               aria-label={t('fleet_add_host_aria')}
             >
-              <Plus className="w-4 h-4 text-cyan-300 shrink-0" />
+              <Plus className="w-4 h-4 stroke-[2.6] shrink-0 icon-plus-bubbly" />
               <span className="hidden xs:inline">
                 {language === 'bg' ? 'Добави' : 'Add PC'}
               </span>
-            </button>
+            </motion.button>
           </div>
-        </div>
+        </header>
 
-        {/* 2. SEARCH + SCAN LAN + SORT ROW */}
+        {/* 2. AIRY FLOATING CAPSULE SEARCH + SCAN + SORT BAR */}
         <div className={`flex items-center gap-2 relative ${isSortMenuOpen ? 'z-50' : 'z-20'}`}>
-          <div className="flex-1 h-10 rounded-xl glass-liquid-subtle px-3 flex items-center gap-2 focus-within:border-cyan-400/60 transition min-w-0">
-            <Search className="w-4 h-4 text-slate-400 shrink-0" />
+          <div className="flex-1 h-11 rounded-full glass-liquid-subtle px-4 flex items-center gap-2.5 focus-within:border-cyan-400/65 transition min-w-0">
+            <Search className="w-4 h-4 text-cyan-400 shrink-0" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t('fleet_search_placeholder')}
-              className="flex-1 min-w-0 bg-transparent border-none outline-none text-xs sm:text-sm text-white placeholder-slate-500"
+              placeholder={
+                language === 'bg' ? 'Търси PC, IP или MAC...' : 'Search PCs, IP or MAC...'
+              }
+              className="flex-1 min-w-0 bg-transparent border-none outline-none text-xs sm:text-sm ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80"
             />
             {searchQuery ? (
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="p-1 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition"
+                className="p-1 rounded-full hover:bg-black/5 ink-muted transition"
                 aria-label={t('fleet_clear_search')}
               >
                 <X className="w-3.5 h-3.5" />
@@ -673,7 +728,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                   triggerHapticFeedback('light');
                   toggleOmnibar();
                 }}
-                className="hidden lg:inline-flex px-2 py-0.5 rounded bg-white/[0.06] hover:bg-white/[0.12] text-[11px] font-mono text-slate-300 border border-white/10 transition"
+                className="hidden lg:inline-flex px-2.5 py-0.5 rounded-full liquid-control-pill text-[11px] font-mono ink-secondary"
                 title={t('fleet_spotlight_tooltip')}
               >
                 ⌘K
@@ -681,47 +736,51 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             )}
           </div>
 
-          <button
+          <motion.button
             type="button"
+            whileHover={{ scale: 1.05, y: -1 }}
+            whileTap={{ scale: 0.91 }}
+            transition={SPRING_POP}
             onClick={() => {
               triggerHapticFeedback('medium');
               rescanHandler();
             }}
             disabled={isScanning}
-            className="h-10 w-10 sm:w-auto sm:px-3 rounded-xl glass-liquid-subtle hover:border-cyan-400/45 text-slate-100 text-xs font-semibold flex items-center justify-center gap-1.5 transition disabled:opacity-40 shrink-0 active:scale-95"
+            className="h-11 w-11 sm:w-auto sm:px-4 rounded-full liquid-control-pill text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-45 shrink-0 cursor-pointer"
             title={t('fleet_rescan_tooltip')}
             aria-label={t('fleet_rescan_aria')}
           >
             <RefreshCw className={`w-4 h-4 text-cyan-400 ${isScanning ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">{language === 'bg' ? 'Сканирай' : 'Scan'}</span>
-          </button>
+          </motion.button>
 
-          {/* Compact Sort Dropdown */}
+          {/* Compact Sort Pill Dropdown */}
           <div className="relative shrink-0">
-            <button
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.05, y: -1 }}
+              whileTap={{ scale: 0.91 }}
+              transition={SPRING_POP}
               onClick={() => {
                 triggerHapticFeedback('light');
                 setIsSortMenuOpen((prev) => !prev);
               }}
-              className="h-10 px-2.5 sm:px-3 rounded-xl glass-liquid-subtle hover:border-cyan-400/45 flex items-center gap-1.5 text-xs font-medium text-slate-100 shrink-0 active:scale-95"
+              className="h-11 px-3 sm:px-3.5 rounded-full liquid-control-pill flex items-center gap-1.5 text-xs font-semibold shrink-0 cursor-pointer"
               title={`${t('sort_label')} ${currentSortOption.label}`}
               aria-label={`${t('sort_label')} ${currentSortOption.label}`}
             >
               <CurrentSortIcon className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="hidden xs:inline font-semibold text-slate-200">
-                {currentSortOption.label}
-              </span>
+              <span className="hidden xs:inline">{currentSortOption.label}</span>
               <ChevronDown
-                className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-150 ${
+                className={`w-3.5 h-3.5 opacity-60 transition-transform duration-200 ${
                   isSortMenuOpen ? 'rotate-180' : ''
                 }`}
               />
-            </button>
+            </motion.button>
 
             <AnimatePresence>
               {isSortMenuOpen && (
-                <>
+                <div key="fleet-sort-menu-layer">
                   <div
                     className="fixed inset-0 z-[90]"
                     onClick={() => setIsSortMenuOpen(false)}
@@ -731,7 +790,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                     initial="initial"
                     animate="animate"
                     exit="exit"
-                    className="absolute right-0 top-11 z-[100] w-48 rounded-2xl dropdown-menu-surface p-1.5 space-y-1"
+                    className="absolute right-0 top-12 z-[100] w-52 rounded-3xl dropdown-menu-surface p-2 space-y-1"
                   >
                     {sortOptions.map((opt) => {
                       const isActive = sortMode === opt.id;
@@ -744,32 +803,32 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                             handleSortToggle(opt.id);
                             setIsSortMenuOpen(false);
                           }}
-                          className={`w-full min-h-[38px] px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition ${
+                          className={`w-full min-h-[38px] px-3 py-1.5 rounded-2xl text-xs flex items-center justify-between transition ${
                             isActive
-                              ? 'bg-cyan-500/20 text-cyan-200 font-semibold border border-cyan-400/30'
-                              : 'text-slate-300 hover:bg-white/[0.06] hover:text-white'
+                              ? 'liquid-hero-btn font-bold'
+                              : 'ink-secondary hover:bg-cyan-500/10 hover:ink-primary'
                           }`}
                         >
                           <span className="flex items-center gap-2">
-                            <OptIcon className="w-3.5 h-3.5 text-cyan-400" />
+                            <OptIcon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-cyan-400'}`} />
                             <span>{opt.label}</span>
                           </span>
-                          <span className="text-[10px] font-mono text-slate-400">
+                          <span className={`text-[10px] font-mono ${isActive ? 'text-white/90' : 'opacity-65'}`}>
                             {opt.badge}
                           </span>
                         </button>
                       );
                     })}
                   </motion.div>
-                </>
+                </div>
               )}
             </AnimatePresence>
           </div>
         </div>
 
-        {/* 3. FILTER CHIPS ROW */}
+        {/* 3. JELLY LIQUID FILTER PILLS ROW */}
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1 overflow-x-auto scrollbar-none min-w-0 flex-1 py-0.5">
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none min-w-0 flex-1 py-0.5 px-0.5">
             {[
               { id: 'all', label: t('filter_all'), count: hosts.length },
               { id: 'online', label: t('filter_online'), count: onlineCount },
@@ -787,50 +846,63 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             ].map((chip) => {
               const isActive = activeFilter === chip.id;
               return (
-                <button
+                <motion.button
                   key={chip.id}
                   type="button"
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.91 }}
+                  transition={SPRING_POP}
                   onClick={() => {
                     triggerHapticFeedback('selection');
                     setActiveFilter(chip.id as any);
                   }}
-                  className={`h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 shrink-0 border active:scale-95 ${
-                    isActive
-                      ? 'bg-gradient-to-b from-cyan-400/28 to-cyan-500/15 border-cyan-300/50 text-white font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]'
-                      : 'glass-liquid-subtle text-slate-300 hover:text-white'
+                  className={`relative h-8.5 px-3.5 rounded-full text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 shrink-0 cursor-pointer ${
+                    isActive ? 'preserve-white' : 'liquid-control-pill'
                   }`}
                 >
-                  <span>{chip.label}</span>
+                  {isActive && (
+                    <motion.span
+                      layoutId="fleetActiveFilterPill"
+                      transition={SPRING_JELLY}
+                      className="absolute inset-0 rounded-full liquid-hero-btn pointer-events-none"
+                    />
+                  )}
+                  <span className="relative z-10">{chip.label}</span>
                   {chip.count !== null && (
                     <span
-                      className={`text-[10px] font-mono tabular-nums ${
-                        isActive ? 'text-cyan-300' : 'text-slate-500'
+                      className={`relative z-10 text-[10px] font-mono tabular-nums px-1.5 py-0.2 rounded-full ${
+                        isActive
+                          ? 'bg-white/25 text-white'
+                          : 'bg-cyan-500/12 text-cyan-400'
                       }`}
                     >
                       {chip.count}
                     </span>
                   )}
-                </button>
+                </motion.button>
               );
             })}
           </div>
 
           {onPanicKill && hosts.length > 0 && (
-            <button
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.9 }}
+              transition={SPRING_POP}
               onClick={() => {
                 triggerHapticFeedback('heavy');
                 onPanicKill();
               }}
-              className="h-8 px-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 text-rose-300 text-[11px] font-semibold flex items-center gap-1 shrink-0 transition active:scale-95"
+              className="h-8.5 px-3 rounded-full bg-rose-500/14 border border-rose-500/35 hover:bg-rose-500/22 text-rose-400 text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
               title={t('fleet_panic_tooltip')}
               aria-label={t('fleet_panic_aria')}
             >
-              <OctagonAlert className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <OctagonAlert className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">
                 {language === 'bg' ? 'Авариен Стоп' : 'Kill Switch'}
               </span>
-            </button>
+            </motion.button>
           )}
         </div>
       </div>
@@ -860,18 +932,18 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
           </React.Suspense>
         </div>
       ) : filteredHosts.length === 0 ? (
-        <div className="glass-liquid rounded-2xl p-6 sm:p-10 flex flex-col items-center justify-center text-center mx-auto max-w-md my-4">
-          <div className="w-12 h-12 rounded-2xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center text-cyan-300 mb-3">
-            <Monitor className="w-6 h-6" />
+        <div className="glass-liquid rounded-[30px] p-7 sm:p-10 flex flex-col items-center justify-center text-center mx-auto max-w-md my-6">
+          <div className="w-14 h-14 squircle-badge squircle-hero flex items-center justify-center mb-4">
+            <Monitor className="w-7 h-7" />
           </div>
-          <h3 className="text-base sm:text-lg font-bold text-white tracking-tight font-display">
+          <h3 className="text-base sm:text-lg font-extrabold ink-primary tracking-tight font-display">
             {hosts.length === 0
               ? language === 'bg'
                 ? 'Няма добавени компютри'
                 : 'No Computers Added Yet'
               : t('empty_hosts_title')}
           </h3>
-          <p className="text-xs text-slate-400 max-w-sm mt-1.5 mb-5 leading-relaxed">
+          <p className="text-xs ink-muted max-w-sm mt-1.5 mb-5 leading-relaxed">
             {hosts.length === 0
               ? language === 'bg'
                 ? 'Добавете своя компютър по IP и MAC адрес или сканирайте локалната мрежа за автоматично откриване.'
@@ -883,7 +955,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="h-10 px-4 rounded-xl bg-white/10 hover:bg-white/15 active:scale-95 text-white border border-white/15 font-semibold text-xs transition"
+                className="h-10 px-4 rounded-full liquid-control-pill font-semibold text-xs"
               >
                 {language === 'bg' ? 'Изчисти търсенето' : 'Clear Search'}
               </button>
@@ -894,15 +966,15 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                 triggerHapticFeedback('light');
                 openModal('quickSetup');
               }}
-              className="h-10 px-4 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 active:scale-95 text-emerald-200 border border-emerald-400/40 font-bold text-xs flex items-center gap-1.5 transition"
+              className="h-10 px-4 rounded-full squircle-emerald preserve-white font-bold text-xs flex items-center gap-1.5"
             >
-              <QrCode className="w-4 h-4 text-emerald-300" />
+              <QrCode className="w-4 h-4" />
               <span>{language === 'bg' ? 'Бързо сдвояване (QR/PIN)' : 'Quick Pair (QR/PIN)'}</span>
             </button>
             <button
               type="button"
               onClick={addHostHandler}
-              className="h-10 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
+              className="h-10 px-4 rounded-full liquid-hero-btn font-bold text-xs flex items-center gap-1.5"
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>{language === 'bg' ? 'Добави компютър' : 'Add First PC'}</span>
@@ -912,7 +984,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                 type="button"
                 onClick={() => onRescan()}
                 disabled={isScanning}
-                className="h-10 px-4 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 active:scale-95 text-cyan-200 border border-cyan-400/35 font-semibold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
+                className="h-10 px-4 rounded-full liquid-control-pill text-cyan-400 font-semibold text-xs flex items-center gap-1.5 disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
                 <span>

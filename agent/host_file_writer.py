@@ -12,6 +12,7 @@ clients to the Host PC. Features:
 """
 
 import asyncio
+import bisect
 import hashlib
 import logging
 import os
@@ -20,9 +21,10 @@ import secrets
 import shutil
 import stat
 import struct
+import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Union
 
 logger = logging.getLogger("HostFileWriter")
 
@@ -31,6 +33,10 @@ OP_FILE_TRANSFER = 0x0C
 MAGIC = b'\xC5\x71'
 HEADER_STRUCT = struct.Struct('!2sBBII')
 HEADER_SIZE = HEADER_STRUCT.size
+_TRANSFER_ID_STRUCT = struct.Struct('!I')
+_U64_STRUCT = struct.Struct('!Q')
+_ACK_PAYLOAD_STRUCT = struct.Struct('!IBQ')
+_MAX_WRITTEN_INTERVALS = 8192
 
 # Transfer Sub-Commands (first byte of Opcode 0x0C payload)
 CMD_INIT = 0x01      # Initiate transfer with metadata (filename, size, checksum)
@@ -61,18 +67,22 @@ _DANGEROUS_EXECUTABLES = {
 
 
 def _is_symlink_or_reparse(path: Path) -> bool:
-    """Checks for POSIX symlinks and Windows NTFS junctions / reparse points."""
+    """Checks for POSIX symlinks and Windows NTFS junctions / reparse points (including broken links)."""
     try:
-        if path.is_symlink():
-            return True
-        reparse_attr = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        if reparse_attr and path.exists():
-            st = os.lstat(path)
-            if getattr(st, "st_file_attributes", 0) & reparse_attr:
-                return True
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
     except OSError:
         return True
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    reparse_attr = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if reparse_attr and (getattr(st, "st_file_attributes", 0) & reparse_attr):
+        return True
     return False
+
+
+_RENAME_LOCK = threading.Lock()
 
 
 class ActiveTransfer:
@@ -96,7 +106,9 @@ class ActiveTransfer:
         self.temp_path.parent.mkdir(parents=True, exist_ok=True)
         if _is_symlink_or_reparse(self.temp_path.parent) or _is_symlink_or_reparse(self.temp_path):
             raise ValueError("Unsafe symlink or reparse point detected for transfer temp path")
-        flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        # Match POSIX access mode to fdopen mode (O_WRONLY for "wb", O_RDWR for "r+b")
+        access_flag = os.O_WRONLY if truncate else os.O_RDWR
+        flags = access_flag | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
         if truncate:
             flags |= os.O_TRUNC
         fd = os.open(str(self.temp_path), flags, 0o600)
@@ -109,8 +121,30 @@ class ActiveTransfer:
     def _record_written_range(self, start: int, end: int) -> None:
         if end <= start:
             return
-        intervals = self._written_intervals + [(start, end)]
-        intervals.sort()
+        intervals = self._written_intervals
+        # O(1) fast path for sequential / adjacent / overlapping trailing writes
+        if not intervals:
+            intervals.append((start, end))
+            self.bytes_written = end - start
+            return
+        last_s, last_e = intervals[-1]
+        if start >= last_s:
+            if start <= last_e:
+                if end > last_e:
+                    intervals[-1] = (last_s, end)
+                    self.bytes_written += end - last_e
+                return
+            if len(intervals) >= _MAX_WRITTEN_INTERVALS:
+                raise ValueError("Excessive fragmented chunk ranges in file transfer")
+            intervals.append((start, end))
+            self.bytes_written += end - start
+            return
+
+        # Out-of-order insertion with bisect + local merge
+        idx = bisect.bisect_left(intervals, (start, end))
+        if len(intervals) >= _MAX_WRITTEN_INTERVALS:
+            raise ValueError("Excessive fragmented chunk ranges in file transfer")
+        intervals.insert(idx, (start, end))
         merged = [intervals[0]]
         for cur_s, cur_e in intervals[1:]:
             prev_s, prev_e = merged[-1]
@@ -186,16 +220,25 @@ class ActiveTransfer:
                     pass
             return False
 
-        # Atomic rename part file to final filename
-        if self.target_path.exists() or _is_symlink_or_reparse(self.target_path):
-            stem = self.target_path.stem
-            ext = self.target_path.suffix
-            counter = 1
-            while self.target_path.exists() or _is_symlink_or_reparse(self.target_path):
-                self.target_path = self.target_path.with_name(f"{stem} ({counter}){ext}")
-                counter += 1
-
-        self.temp_path.replace(self.target_path)
+        # Atomic rename part file to final filename (serialized to prevent concurrent collision races)
+        try:
+            with _RENAME_LOCK:
+                if self.target_path.exists() or _is_symlink_or_reparse(self.target_path):
+                    stem = self.target_path.stem
+                    ext = self.target_path.suffix
+                    counter = 1
+                    while self.target_path.exists() or _is_symlink_or_reparse(self.target_path):
+                        self.target_path = self.target_path.with_name(f"{stem} ({counter}){ext}")
+                        counter += 1
+                self.temp_path.replace(self.target_path)
+        except OSError as exc:
+            logger.error("Failed to finalize atomic rename for %s: %s", self.filename, exc)
+            if self.temp_path.exists() and not _is_symlink_or_reparse(self.temp_path):
+                try:
+                    self.temp_path.unlink()
+                except OSError:
+                    pass
+            return False
         try:
             try:
                 from windows_integration import apply_mark_of_the_web
@@ -269,7 +312,7 @@ class HostFileWriter:
         if len(payload) < 1 + 4 + 8 + 64:
             return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "INIT payload too small")
 
-        total_size = struct.unpack_from('!Q', payload, 5)[0]
+        total_size = _U64_STRUCT.unpack_from(payload, 5)[0]
         sha256_hex = payload[13:77].decode('ascii', errors='ignore').strip()
         raw_filename = payload[77:].decode('utf-8', errors='replace')
 
@@ -296,8 +339,9 @@ class HostFileWriter:
             logger.error("Path traversal blocked for transfer %s: %s -> %s", transfer_id, raw_filename, target_path)
             return self._build_ack(transfer_id, STATUS_ERR_TRAVERSAL, 0, "Access denied: path traversal attempt")
 
-        if transfer_id in self.active_transfers:
-            self.active_transfers[transfer_id].abort()
+        existing = self.active_transfers.pop(transfer_id, None)
+        if existing is not None:
+            existing.abort()
 
         self.prune_stale_transfers(max_idle_sec=300.0)
         if len(self.active_transfers) >= MAX_CONCURRENT_TRANSFERS:
@@ -310,6 +354,7 @@ class HostFileWriter:
         except Exception:
             pass
 
+        transfer: Optional[ActiveTransfer] = None
         try:
             transfer = ActiveTransfer(transfer_id, clean_name, total_size, sha256_hex, target_path)
             if not self._verify_path_contained(transfer.temp_path):
@@ -320,6 +365,8 @@ class HostFileWriter:
             logger.info("Transfer initiated: ID %s, File: '%s', Size: %d bytes", transfer_id, clean_name, total_size)
             return self._build_ack(transfer_id, STATUS_OK, 0, "Ready for chunks")
         except Exception as e:
+            if transfer is not None:
+                transfer.abort()
             logger.error("Failed to initialize transfer %s: %s", transfer_id, e)
             return self._build_ack(transfer_id, STATUS_ERR_IO, 0, str(e))
 
@@ -331,7 +378,7 @@ class HostFileWriter:
             return self._build_ack(0, STATUS_ERR_IO, 0, "Packet truncated")
 
         sub_cmd = payload[0]
-        transfer_id = struct.unpack_from('!I', payload, 1)[0]
+        transfer_id = _TRANSFER_ID_STRUCT.unpack_from(payload, 1)[0]
 
         if sub_cmd == CMD_INIT:
             return self._prepare_transfer(transfer_id, payload)
@@ -344,7 +391,7 @@ class HostFileWriter:
             if len(payload) < 1 + 4 + 8:
                 return self._build_ack(transfer_id, STATUS_ERR_IO, transfer.bytes_written, "Chunk header truncated")
 
-            offset = struct.unpack_from('!Q', payload, 5)[0]
+            offset = _U64_STRUCT.unpack_from(payload, 5)[0]
             chunk_data = payload[13:]
 
             try:
@@ -378,7 +425,7 @@ class HostFileWriter:
         Async-safe wrapper that offloads large-file SHA-256 finalization off the event loop.
         """
         if len(payload) >= 5 and payload[0] == CMD_FINISH:
-            transfer_id = struct.unpack_from('!I', payload, 1)[0]
+            transfer_id = _TRANSFER_ID_STRUCT.unpack_from(payload, 1)[0]
             transfer = self.active_transfers.pop(transfer_id, None)
             if not transfer:
                 return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown transfer ID")
@@ -417,8 +464,8 @@ class HostFileWriter:
         Format: [2 magic][1 opcode][1 flags][4 seq][4 len] + [4 id][1 status][8 bytes_written][msg_utf8]
         """
         msg_bytes = message.encode('utf-8')
-        ack_payload = struct.pack('!IBQ', transfer_id, status, bytes_written) + msg_bytes
+        ack_payload = _ACK_PAYLOAD_STRUCT.pack(transfer_id, status, bytes_written) + msg_bytes
         length = len(ack_payload)
 
-        header = struct.pack('!2sBBII', MAGIC, OP_FILE_TRANSFER, 0, seq, length)
+        header = HEADER_STRUCT.pack(MAGIC, OP_FILE_TRANSFER, 0, seq, length)
         return header + ack_payload

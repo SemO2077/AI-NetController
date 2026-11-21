@@ -1,4 +1,5 @@
 node_modules/
+.npm/
 build/
 dist/
 apps/web/dist/
@@ -20,10 +21,15 @@ Desktop.ini
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
 .venv/
 venv/
 
-# Flutter
+# Flutter & Android
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
@@ -32,16 +38,25 @@ apps/mobile/android/.gradle/
 apps/mobile/android_native_build/
 apps/mobile/android/local.properties
 apps/mobile/android/key.properties
+*.aab
+
+# Certificates, Keys & Signing Material (never commit)
 *.jks
 *.keystore
 *.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
 
-# Standalone root convenience binaries (official releases tracked in public/releases/)
+# Standalone root convenience binaries & MSIX packages
 /*.exe
 /*.apk
+/*.zip
+*.msix
 
 public/releases/*/*.exe
 public/releases/*/*.zip
 public/releases/*/*.apk
-
-
+public/releases/*/*.msix

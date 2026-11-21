@@ -7,7 +7,7 @@ echo.
 flutter --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Flutter SDK not found in system PATH!
-    echo Please install Flutter 3.24+ from https://docs.flutter.dev/get-started/install
+    echo Please install Flutter 3.29+ from https://docs.flutter.dev/get-started/install
     pause
     exit /b 1
 )

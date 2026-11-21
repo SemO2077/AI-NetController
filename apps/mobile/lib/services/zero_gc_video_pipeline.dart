@@ -47,8 +47,7 @@ class _DoubleFrameRingBuffer {
   }
 
   void dispose() {
-    _slotA?.fillRange(0, _slotA!.length, 0);
-    _slotB?.fillRange(0, _slotB!.length, 0);
+    // Drop slot references without mutating in-place while an async native codec may read a slice.
     _slotA = null;
     _slotB = null;
   }
@@ -123,6 +122,10 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
     if (oldWidget.frameStream != widget.frameStream) {
       unawaited(_streamSub?.cancel());
       _subscribeToFrames();
+      final seed = widget.initialFrame;
+      if (seed != null && seed.isNotEmpty && _activeImageNotifier.value == null) {
+        _onFrameArrival(seed);
+      }
     }
   }
 
@@ -247,13 +250,15 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
         valueListenable: _activeImageNotifier,
         builder: (context, imageToRender, _) {
           if (imageToRender == null) {
-            return const Center(
+            return Center(
               child: SizedBox(
                 width: 32,
                 height: 32,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00F0FF)),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Theme.of(context).colorScheme.primary,
+                  ),
                 ),
               ),
             );

@@ -1,7 +1,8 @@
 import React, { useId, useMemo } from 'react';
-import { Activity, Zap, ArrowUpRight, Gauge, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Activity, Gauge, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { HeartbeatMetrics } from '../../types';
 import { useTranslation } from '../../i18n/useTranslation';
+import { useUIStore } from '../../store/uiStore';
 
 interface HeartbeatSparklineProps {
   metrics: HeartbeatMetrics;
@@ -17,6 +18,8 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
   className = '',
 }) => {
   const { t, language } = useTranslation();
+  const themeMode = useUIStore((s) => s.themeMode);
+  const isLight = themeMode === 'light';
   const uid = useId();
   const compactGradId = `compactSparklineGrad-${uid}`;
   const detailedGradId = `detailedSparklineGrad-${uid}`;
@@ -70,59 +73,47 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
     return { path, area, lastPoint, width, height, minVal, maxVal };
   }, [history, currentLatencyMs, variant]);
 
-  // Color scheme based on status and jitter
+  // Color scheme based on status, jitter, and polarity
   const colorConfig = useMemo(() => {
     if (status === 'unreachable') {
       return {
-        stroke: '#f43f5e', // rose-500
-        fill: 'rgba(244, 63, 94, 0.15)',
+        stroke: isLight ? '#e11d48' : '#fb7185',
         text: 'text-rose-400',
-        border: 'border-rose-500/30',
-        bg: 'bg-rose-950/40',
-        glow: 'shadow-[0_0_8px_rgba(244,63,94,0.3)]',
-        badge: 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+        border: 'border-rose-500/35',
+        dotFill: isLight ? '#ffffff' : '#ffffff',
       };
     }
     if (status === 'warning' || jitterMs > 25) {
       return {
-        stroke: '#f59e0b', // amber-500
-        fill: 'rgba(245, 158, 11, 0.15)',
+        stroke: isLight ? '#d97706' : '#fbbf24',
         text: 'text-amber-400',
-        border: 'border-amber-500/30',
-        bg: 'bg-amber-950/40',
-        glow: 'shadow-[0_0_8px_rgba(245,158,11,0.3)]',
-        badge: 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+        border: 'border-amber-500/35',
+        dotFill: '#ffffff',
       };
     }
-    // Healthy
     return {
-      stroke: '#06b6d4', // cyan-500
-      fill: 'rgba(6, 182, 212, 0.15)',
-      text: 'text-cyan-300',
-      border: 'border-cyan-500/30',
-      bg: 'bg-slate-900/90',
-      glow: 'shadow-[0_0_8px_rgba(6,182,212,0.25)]',
-      badge: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+      stroke: isLight ? '#7c3aed' : '#22d3ee',
+      text: 'text-cyan-400',
+      border: 'border-cyan-400/35',
+      dotFill: '#ffffff',
     };
-  }, [status, jitterMs]);
+  }, [status, jitterMs, isLight]);
 
-  // COMPACT VARIANT (for Main CyberHeader)
+  // COMPACT VARIANT
   if (variant === 'compact') {
     return (
       <button
         type="button"
         onClick={onClick}
-        className={`group flex items-center space-x-2 px-2.5 py-1 rounded-xl border ${colorConfig.border} ${colorConfig.bg} hover:border-cyan-400/50 transition-all select-none ${className}`}
+        className={`group flex items-center space-x-2 px-3 py-1 rounded-full liquid-control-pill border ${colorConfig.border} transition-all select-none cursor-pointer ${className}`}
         title={
           language === 'bg'
             ? `Heartbeat RTT: ${currentLatencyMs ?? 0}ms • Джитър: ±${jitterMs}ms • Кликни за WebSocket настройки`
             : `Heartbeat RTT: ${currentLatencyMs ?? 0}ms • Jitter: ±${jitterMs}ms • Click for WebSocket settings`
         }
       >
-        {/* Activity Icon */}
         <Activity className={`w-3.5 h-3.5 ${colorConfig.text} ${status === 'healthy' ? 'animate-pulse' : ''}`} />
 
-        {/* Inline SVG Sparkline */}
         <div className="relative w-14 h-5 flex items-center">
           <svg
             viewBox={`0 0 ${svgData.width} ${svgData.height}`}
@@ -131,7 +122,7 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
           >
             <defs>
               <linearGradient id={compactGradId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={colorConfig.stroke} stopOpacity="0.35" />
+                <stop offset="0%" stopColor={colorConfig.stroke} stopOpacity="0.38" />
                 <stop offset="100%" stopColor={colorConfig.stroke} stopOpacity="0.0" />
               </linearGradient>
             </defs>
@@ -140,7 +131,7 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
               d={svgData.path}
               fill="none"
               stroke={colorConfig.stroke}
-              strokeWidth="1.5"
+              strokeWidth="1.75"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -158,20 +149,19 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
                 cx={svgData.lastPoint.x}
                 cy={svgData.lastPoint.y}
                 r="2"
-                fill="#ffffff"
+                fill={colorConfig.dotFill}
+                stroke={colorConfig.stroke}
+                strokeWidth="1"
               />
             )}
           </svg>
         </div>
 
-        {/* Real-time Metric Badges */}
         <div className="flex flex-col items-start font-mono leading-none">
-          <div className="flex items-center space-x-1">
-            <span className={`text-[11px] font-bold ${colorConfig.text}`}>
-              {currentLatencyMs !== null ? `${currentLatencyMs}ms` : '—'}
-            </span>
-          </div>
-          <span className="text-[10px] text-slate-400 tracking-tight">
+          <span className={`text-[11px] font-bold ${colorConfig.text}`}>
+            {currentLatencyMs !== null ? `${currentLatencyMs}ms` : '—'}
+          </span>
+          <span className="text-[10px] ink-muted tracking-tight">
             ±{jitterMs}ms jtr
           </span>
         </div>
@@ -179,33 +169,34 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
     );
   }
 
-  // DETAILED VARIANT (for WsConfigModal)
+  // DETAILED VARIANT (Dual-Mode Liquid Glass for WsConfigModal)
   return (
-    <div className={`p-4 bg-slate-950/90 border ${colorConfig.border} rounded-xl space-y-3 select-none ${className}`}>
-      {/* Header & Stability Badge */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <Gauge className={`w-4 h-4 ${colorConfig.text}`} />
-          <span className="text-xs font-semibold text-slate-200 uppercase tracking-wider font-display">
+    <div className={`p-4 glass-liquid-subtle border ${colorConfig.border} rounded-[24px] space-y-3 select-none ${className}`}>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 squircle-badge squircle-hero flex items-center justify-center shrink-0">
+            <Gauge className="w-3.5 h-3.5" />
+          </div>
+          <span className="text-xs font-bold ink-primary font-display tracking-tight">
             {language === 'bg' ? 'Латентност и джитър в реално време' : 'Real-Time Heartbeat Jitter & Latency'}
           </span>
         </div>
 
         <div className="flex items-center space-x-1.5">
           {status === 'healthy' && (
-            <span className="flex items-center space-x-1 text-[11px] font-mono text-emerald-400 bg-emerald-950/50 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+            <span className="flex items-center space-x-1 text-[11px] font-mono font-bold text-emerald-400 bg-emerald-500/14 border border-emerald-500/35 px-2.5 py-0.5 rounded-full">
               <CheckCircle2 className="w-3 h-3" />
               <span>{jitterMs <= 5 ? t('spark_high_stability') : t('spark_normal_variation')}</span>
             </span>
           )}
           {status === 'warning' && (
-            <span className="flex items-center space-x-1 text-[11px] font-mono text-amber-400 bg-amber-950/50 border border-amber-500/30 px-2 py-0.5 rounded-full">
+            <span className="flex items-center space-x-1 text-[11px] font-mono font-bold text-amber-400 bg-amber-500/14 border border-amber-500/35 px-2.5 py-0.5 rounded-full">
               <AlertCircle className="w-3 h-3 animate-pulse" />
               <span>{t('spark_delay_jitter')}</span>
             </span>
           )}
           {status === 'unreachable' && (
-            <span className="flex items-center space-x-1 text-[11px] font-mono text-rose-400 bg-rose-950/50 border border-rose-500/30 px-2 py-0.5 rounded-full">
+            <span className="flex items-center space-x-1 text-[11px] font-mono font-bold text-rose-400 bg-rose-500/14 border border-rose-500/35 px-2.5 py-0.5 rounded-full">
               <AlertCircle className="w-3 h-3" />
               <span>{t('spark_unreachable')}</span>
             </span>
@@ -213,13 +204,12 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
         </div>
       </div>
 
-      {/* SVG Canvas Area */}
-      <div className="relative w-full h-16 bg-slate-900/80 rounded-lg p-1.5 border border-slate-800/80 overflow-hidden">
-        {/* Subtle Horizontal Grid Guides */}
-        <div className="absolute inset-0 flex flex-col justify-between p-2 pointer-events-none opacity-20">
-          <div className="w-full border-b border-slate-600 border-dashed" />
-          <div className="w-full border-b border-slate-600 border-dashed" />
-          <div className="w-full border-b border-slate-600 border-dashed" />
+      {/* Adaptive SVG Canvas */}
+      <div className="relative w-full h-18 liquid-terminal-entry rounded-2xl p-2 overflow-hidden">
+        <div className="absolute inset-0 flex flex-col justify-between p-2.5 pointer-events-none opacity-25">
+          <div className="w-full border-b border-current border-dashed" />
+          <div className="w-full border-b border-current border-dashed" />
+          <div className="w-full border-b border-current border-dashed" />
         </div>
 
         <svg
@@ -229,25 +219,21 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
         >
           <defs>
             <linearGradient id={detailedGradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={colorConfig.stroke} stopOpacity="0.4" />
+              <stop offset="0%" stopColor={colorConfig.stroke} stopOpacity={isLight ? '0.32' : '0.42'} />
               <stop offset="100%" stopColor={colorConfig.stroke} stopOpacity="0.0" />
             </linearGradient>
           </defs>
 
-          {/* Fill Area */}
           <path d={svgData.area} fill={`url(#${detailedGradId})`} />
-
-          {/* Stroke Line */}
           <path
             d={svgData.path}
             fill="none"
             stroke={colorConfig.stroke}
-            strokeWidth="2"
+            strokeWidth="2.2"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
 
-          {/* Data Points */}
           {svgData.lastPoint && (
             <>
               <circle
@@ -262,46 +248,47 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
                 cy={svgData.lastPoint.y}
                 r="3.5"
                 fill="#ffffff"
+                stroke={colorConfig.stroke}
+                strokeWidth="1.5"
               />
             </>
           )}
         </svg>
 
-        {/* Watermark Min/Max scale labels */}
-        <div className="absolute bottom-1 right-2 text-[10px] font-mono text-slate-500 pointer-events-none">
+        <div className="absolute bottom-1 right-2.5 text-[10px] font-mono ink-muted pointer-events-none">
           Max: {maxLatencyMs}ms
         </div>
-        <div className="absolute top-1 right-2 text-[10px] font-mono text-slate-500 pointer-events-none">
+        <div className="absolute top-1 right-2.5 text-[10px] font-mono ink-muted pointer-events-none">
           Min: {minLatencyMs}ms
         </div>
       </div>
 
-      {/* Numerical Metrics Row */}
-      <div className="grid grid-cols-4 gap-2 pt-1">
-        <div className="bg-slate-900/70 p-2 rounded-lg border border-slate-800/90 text-center">
-          <div className="text-[10px] text-slate-400 uppercase font-mono">{t('spark_rtt_now')}</div>
-          <div className={`text-sm font-bold font-mono ${colorConfig.text}`}>
+      {/* Numerical KPI Row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-0.5">
+        <div className="liquid-terminal-entry p-2.5 rounded-2xl text-center">
+          <div className="text-[10px] ink-muted uppercase font-mono">{t('spark_rtt_now')}</div>
+          <div className={`text-sm font-extrabold font-mono ${colorConfig.text} mt-0.5`}>
             {currentLatencyMs !== null ? `${currentLatencyMs} ms` : '—'}
           </div>
         </div>
 
-        <div className="bg-slate-900/70 p-2 rounded-lg border border-slate-800/90 text-center">
-          <div className="text-[10px] text-slate-400 uppercase font-mono">{t('spark_jitter')}</div>
-          <div className="text-sm font-bold font-mono text-amber-300">
+        <div className="liquid-terminal-entry p-2.5 rounded-2xl text-center">
+          <div className="text-[10px] ink-muted uppercase font-mono">{t('spark_jitter')}</div>
+          <div className="text-sm font-extrabold font-mono text-amber-400 mt-0.5">
             ±{jitterMs} ms
           </div>
         </div>
 
-        <div className="bg-slate-900/70 p-2 rounded-lg border border-slate-800/90 text-center">
-          <div className="text-[10px] text-slate-400 uppercase font-mono">{t('spark_avg_30s')}</div>
-          <div className="text-sm font-bold font-mono text-slate-200">
+        <div className="liquid-terminal-entry p-2.5 rounded-2xl text-center">
+          <div className="text-[10px] ink-muted uppercase font-mono">{t('spark_avg_30s')}</div>
+          <div className="text-sm font-extrabold font-mono ink-primary mt-0.5">
             {avgLatencyMs} ms
           </div>
         </div>
 
-        <div className="bg-slate-900/70 p-2 rounded-lg border border-slate-800/90 text-center">
-          <div className="text-[10px] text-slate-400 uppercase font-mono">{t('spark_samples')}</div>
-          <div className="text-sm font-bold font-mono text-slate-400">
+        <div className="liquid-terminal-entry p-2.5 rounded-2xl text-center">
+          <div className="text-[10px] ink-muted uppercase font-mono">{t('spark_samples')}</div>
+          <div className="text-sm font-extrabold font-mono ink-secondary mt-0.5">
             {history.length} / 20
           </div>
         </div>

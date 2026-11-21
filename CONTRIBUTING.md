@@ -4,7 +4,7 @@ Contributions across the Python host agent, React/Express web console, and Flutt
 
 ## Development Environment
 
-- **Node.js**: `>= 20.0.0` (`npm >= 10.0.0`) for `apps/web/`
+- **Node.js**: `>= 22.12.0` (`v22.x` or `v24.x` LTS, `npm >= 10.0.0`) for `apps/web/`
 - **Python**: `>= 3.11` (Windows recommended for Job Object isolation and Win32 integration tests)
 - **Flutter**: `>= 3.29.0` (`Dart >= 3.7.0`) for `apps/mobile/`
 

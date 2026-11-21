@@ -13,6 +13,7 @@ import datetime
 import ipaddress
 import logging
 import os
+import secrets
 import socket
 import ssl
 from typing import Iterable, Optional, Tuple
@@ -75,7 +76,7 @@ def ensure_tls_certificate(
                 all_ips.add(ip.strip())
 
     if os.path.isfile(cert_path) and os.path.isfile(key_path):
-        if _is_cert_valid_and_fresh(cert_path, required_ips=all_ips):
+        if _is_cert_valid_and_fresh(cert_path, required_ips=all_ips, key_path=key_path):
             _restrict_file_permissions(key_path, is_dir=False)
             return cert_path, key_path, compute_cert_fingerprint(cert_path)
 
@@ -95,8 +96,12 @@ def ensure_tls_certificate(
 
     san_entries: list[x509.GeneralName] = [
         x509.DNSName("localhost"),
-        x509.DNSName(hostname),
     ]
+    if hostname.lower() != "localhost":
+        try:
+            san_entries.append(x509.DNSName(hostname))
+        except ValueError:
+            pass
 
     for ip_str in sorted(all_ips):
         try:
@@ -126,28 +131,34 @@ def ensure_tls_certificate(
     )
 
     def _atomic_write_secret(dest_path: str, data: bytes) -> None:
-        tmp_path = f"{dest_path}.tmp.{os.getpid()}"
-        if os.name != "nt":
-            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                with os.fdopen(fd, "wb") as fh:
+        tmp_path = f"{dest_path}.tmp.{os.getpid()}.{secrets.token_hex(6)}"
+        try:
+            if os.name != "nt":
+                fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    fh = os.fdopen(fd, "wb")
+                except Exception:
+                    os.close(fd)
+                    raise
+                with fh:
                     fh.write(data)
                     fh.flush()
                     os.fsync(fh.fileno())
-            except Exception:
-                try:
+            else:
+                with open(tmp_path, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                _restrict_file_permissions(tmp_path, is_dir=False)
+            os.replace(tmp_path, dest_path)
+            _restrict_file_permissions(dest_path, is_dir=False)
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
                     os.remove(tmp_path)
-                except OSError:
-                    pass
-                raise
-        else:
-            with open(tmp_path, "wb") as fh:
-                fh.write(data)
-                fh.flush()
-                os.fsync(fh.fileno())
-            _restrict_file_permissions(tmp_path, is_dir=False)
-        os.replace(tmp_path, dest_path)
-        _restrict_file_permissions(dest_path, is_dir=False)
+            except OSError:
+                pass
+            raise
 
     _atomic_write_secret(key_path, key_pem)
     _atomic_write_secret(cert_path, cert_pem)
@@ -160,12 +171,27 @@ def ensure_tls_certificate(
 def _is_cert_valid_and_fresh(
     cert_path: str,
     required_ips: Optional[Iterable[str]] = None,
+    key_path: Optional[str] = None,
 ) -> bool:
     try:
         from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
 
         with open(cert_path, "rb") as f:
             cert = x509.load_pem_x509_certificate(f.read())
+        if key_path is not None:
+            with open(key_path, "rb") as kf:
+                priv_key = serialization.load_pem_private_key(kf.read(), password=None)
+            cert_pub_bytes = cert.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            key_pub_bytes = priv_key.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            if cert_pub_bytes != key_pub_bytes:
+                return False
         now = datetime.datetime.now(datetime.timezone.utc)
         exp = getattr(cert, "not_valid_after_utc", None)
         if exp is None:

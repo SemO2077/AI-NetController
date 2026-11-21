@@ -544,11 +544,13 @@ class TestDaemonFullFeatures(unittest.IsolatedAsyncioTestCase):
             # AST Blocked command
             await ws.send(agent_mod.pack_packet(agent_mod.OP_SHELL, b"powershell -EncodedCommand ZQBjAGgAbwA=", seq=2))
             blocked_res = None
-            while time.monotonic() < time.monotonic() + 3.0:
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
                 pkt = agent_mod.unpack_packet(await asyncio.wait_for(ws.recv(), timeout=3.0))
                 if pkt and pkt[1] == agent_mod.OP_SHELL:
                     blocked_res = json.loads(pkt[5].decode("utf-8"))
                     break
+            self.assertIsNotNone(blocked_res)
             self.assertEqual(blocked_res["status"], "rejected")
             self.assertEqual(blocked_res["risk_level"], "BLOCKED")
 

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto_pkg;
 import 'package:flutter/material.dart';
 import '../protocol/binary_protocol.dart';
+import '../theme/fluid_theme.dart';
 
 /// Opcode 0x0C File Transfer Sub-Commands
 const int kFileCmdInit = 0x01;
@@ -82,7 +83,8 @@ class FileTransferEngine {
     Uint8List Function(int opcode, Uint8List payload)? packetBuilder,
   }) async* {
     _isCancelled = false;
-    final int transferId = ++_idCounter;
+    _idCounter = (_idCounter >= 0x7FFFFFFE) ? 100 : (_idCounter + 1);
+    final int transferId = _idCounter;
     Uint8List buildFrame(Uint8List payload) => packetBuilder != null
         ? packetBuilder(BinaryOpcode.fileTransfer, payload)
         : packPacket(BinaryOpcode.fileTransfer, payload, seq: ++_txSeq);
@@ -92,41 +94,58 @@ class FileTransferEngine {
     String? hostError;
     Completer<void>? finishAckWaiter;
 
-    final StreamSubscription<ProtocolPacket> ackSub = ackStream.listen((pkt) {
-      if (pkt.opcode != BinaryOpcode.fileTransfer || pkt.payload.length < 13) {
-        return;
+    void wakeWaiter() {
+      final waiter = finishAckWaiter;
+      if (waiter != null && !waiter.isCompleted) {
+        waiter.complete();
       }
-      final bd = ByteData.sublistView(pkt.payload);
-      final int ackId = bd.getUint32(0, Endian.big);
-      if (ackId != transferId) return;
-      observedHostAck = true;
-      final int status = bd.getUint8(4);
-      final String msg = pkt.payload.length > 13
-          ? utf8.decode(pkt.payload.sublist(13), allowMalformed: true).trim()
-          : '';
-      if (status == kFileStatusCompleted) {
-        completedAck = true;
-        final waiter = finishAckWaiter;
-        if (waiter != null && !waiter.isCompleted) {
-          waiter.complete();
+    }
+
+    final StreamSubscription<ProtocolPacket> ackSub = ackStream.listen(
+      (pkt) {
+        if (pkt.opcode != BinaryOpcode.fileTransfer || pkt.payload.length < 13) {
+          return;
         }
-      } else if (status >= kFileStatusErrTraversal) {
-        hostError = msg.isNotEmpty
-            ? msg
-            : 'Host rejected transfer (status 0x${status.toRadixString(16)})';
-        final waiter = finishAckWaiter;
-        if (waiter != null && !waiter.isCompleted) {
-          waiter.complete();
+        final bd = ByteData.sublistView(pkt.payload);
+        final int ackId = bd.getUint32(0, Endian.big);
+        if (ackId != transferId) return;
+        observedHostAck = true;
+        final int status = bd.getUint8(4);
+        final String msg = pkt.payload.length > 13
+            ? utf8.decode(pkt.payload.sublist(13), allowMalformed: true).trim()
+            : '';
+        if (status == kFileStatusCompleted) {
+          completedAck = true;
+          wakeWaiter();
+        } else if (status >= kFileStatusErrTraversal) {
+          hostError = msg.isNotEmpty
+              ? msg
+              : 'Host rejected transfer (status 0x${status.toRadixString(16)})';
+          wakeWaiter();
         }
-      }
-    });
+      },
+      onError: (Object err) {
+        hostError ??= 'Transfer ACK stream error: $err';
+        wakeWaiter();
+      },
+      onDone: () {
+        if (!completedAck) {
+          hostError ??= 'Connection closed while awaiting transfer ACK.';
+          wakeWaiter();
+        }
+      },
+    );
+
+    final String filename = file.uri.pathSegments.isNotEmpty
+        ? file.uri.pathSegments.last
+        : 'upload_${DateTime.now().millisecondsSinceEpoch}.bin';
+    int totalBytes = 0;
+    int bytesSent = 0;
+    RandomAccessFile? raf;
+    final Stopwatch stopwatch = Stopwatch();
 
     try {
-      final String filename = file.uri.pathSegments.isNotEmpty
-          ? file.uri.pathSegments.last
-          : 'upload_${DateTime.now().millisecondsSinceEpoch}.bin';
-
-      final int totalBytes = await file.length();
+      totalBytes = await file.length();
       yield TransferProgress(
         transferId: transferId,
         filename: filename,
@@ -139,6 +158,18 @@ class FileTransferEngine {
 
       // 1. Calculate SHA-256 Checksum without loading entire file into memory
       final digest = await crypto_pkg.sha256.bind(file.openRead()).first;
+      if (_isCancelled) {
+        yield TransferProgress(
+          transferId: transferId,
+          filename: filename,
+          totalBytes: totalBytes,
+          bytesSent: 0,
+          speedBytesPerSec: 0,
+          eta: Duration.zero,
+          state: TransferState.cancelled,
+        );
+        return;
+      }
       final String shaHex = digest.toString();
 
       // 2. Transmit INIT Packet (Sub-cmd 0x01)
@@ -166,131 +197,50 @@ class FileTransferEngine {
         state: TransferState.transferring,
       );
 
-      // 3. Stream 64KB Chunks with Sliding Speed Calculation
-      final RandomAccessFile raf = await file.open(mode: FileMode.read);
-      int bytesSent = 0;
-      final Stopwatch stopwatch = Stopwatch()..start();
+      // 3. Stream 64KB Chunks with Reusable Buffer & Sliding Speed Calculation
+      raf = await file.open(mode: FileMode.read);
+      stopwatch.start();
+      final Uint8List chunkBuf = Uint8List(13 + kFileTransferChunkSize);
+      final ByteData bdChunk = ByteData.sublistView(chunkBuf, 0, 13);
+      bdChunk.setUint8(0, kFileCmdChunk);
+      bdChunk.setUint32(1, transferId, Endian.big);
 
-      try {
-        while (bytesSent < totalBytes && !_isCancelled && hostError == null) {
-          final int remaining = totalBytes - bytesSent;
-          final int chunkSize = min(remaining, kFileTransferChunkSize);
-          final Uint8List chunkBytes = await raf.read(chunkSize);
-          if (chunkBytes.isEmpty) {
-            break;
-          }
-
-          // Chunk Payload: [1 cmd][4 id][8 offset][chunk_bytes...]
-          final Uint8List chunkPayload = Uint8List(1 + 4 + 8 + chunkBytes.length);
-          final ByteData bdChunk = ByteData.sublistView(chunkPayload);
-          bdChunk.setUint8(0, kFileCmdChunk);
-          bdChunk.setUint32(1, transferId, Endian.big);
-          bdChunk.setUint64(5, bytesSent, Endian.big);
-          chunkPayload.setRange(13, 13 + chunkBytes.length, chunkBytes);
-
-          sendPacket(buildFrame(chunkPayload));
-          bytesSent += chunkBytes.length;
-
-          final double elapsedSec = stopwatch.elapsedMilliseconds / 1000.0;
-          final double speed = elapsedSec > 0 ? (bytesSent / elapsedSec) : 0.0;
-          final int remainingBytes = totalBytes - bytesSent;
-          final double remainingSec = speed > 0 ? (remainingBytes / speed) : 0.0;
-
-          yield TransferProgress(
-            transferId: transferId,
-            filename: filename,
-            totalBytes: totalBytes,
-            bytesSent: bytesSent,
-            speedBytesPerSec: speed,
-            eta: Duration(seconds: remainingSec.toInt()),
-            state: TransferState.transferring,
-          );
-
-          // Yield slightly to prevent blocking the event loop
-          await Future.delayed(const Duration(milliseconds: 1));
+      while (bytesSent < totalBytes && !_isCancelled && hostError == null) {
+        final int remaining = totalBytes - bytesSent;
+        final int chunkSize = min(remaining, kFileTransferChunkSize);
+        final int readBytes = await raf.readInto(chunkBuf, 13, 13 + chunkSize);
+        if (readBytes <= 0) {
+          break;
         }
 
-        if (hostError != null) {
-          yield TransferProgress(
-            transferId: transferId,
-            filename: filename,
-            totalBytes: totalBytes,
-            bytesSent: bytesSent,
-            speedBytesPerSec: 0,
-            eta: Duration.zero,
-            state: TransferState.failed,
-            errorMessage: hostError,
-          );
-          return;
-        }
+        // Chunk Payload: [1 cmd][4 id][8 offset][chunk_bytes...]
+        bdChunk.setUint64(5, bytesSent, Endian.big);
+        final Uint8List chunkPayload =
+            Uint8List.sublistView(chunkBuf, 0, 13 + readBytes);
 
-        if (_isCancelled) {
-          // Send ABORT
-          final Uint8List abortPayload = Uint8List(5);
-          ByteData.sublistView(abortPayload)
-            ..setUint8(0, kFileCmdAbort)
-            ..setUint32(1, transferId, Endian.big);
-          sendPacket(buildFrame(abortPayload));
+        sendPacket(buildFrame(chunkPayload));
+        bytesSent += readBytes;
 
-          yield TransferProgress(
-            transferId: transferId,
-            filename: filename,
-            totalBytes: totalBytes,
-            bytesSent: bytesSent,
-            speedBytesPerSec: 0,
-            eta: Duration.zero,
-            state: TransferState.cancelled,
-          );
-          return;
-        }
+        final double elapsedSec = stopwatch.elapsedMilliseconds / 1000.0;
+        final double speed = elapsedSec > 0 ? (bytesSent / elapsedSec) : 0.0;
+        final int remainingBytes = totalBytes - bytesSent;
+        final double remainingSec = speed > 0 ? (remainingBytes / speed) : 0.0;
 
-        // 4. Transmit FINISH Packet (Sub-cmd 0x03)
-        if (observedHostAck && !completedAck) {
-          finishAckWaiter = Completer<void>();
-        }
-        final Uint8List finishPayload = Uint8List(5);
-        ByteData.sublistView(finishPayload)
-          ..setUint8(0, kFileCmdFinish)
-          ..setUint32(1, transferId, Endian.big);
-        sendPacket(buildFrame(finishPayload));
-
-        final pendingWaiter = finishAckWaiter;
-        if (pendingWaiter != null) {
-          await pendingWaiter.future.timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              hostError ??= 'Timed out awaiting host SHA-256 verification ACK.';
-            },
-          );
-        }
-
-        if (hostError != null) {
-          yield TransferProgress(
-            transferId: transferId,
-            filename: filename,
-            totalBytes: totalBytes,
-            bytesSent: bytesSent,
-            speedBytesPerSec: 0,
-            eta: Duration.zero,
-            state: TransferState.failed,
-            errorMessage: hostError,
-          );
-          return;
-        }
-
-        final double totalElapsedSec =
-            max(stopwatch.elapsedMilliseconds / 1000.0, 0.001);
         yield TransferProgress(
           transferId: transferId,
           filename: filename,
           totalBytes: totalBytes,
-          bytesSent: totalBytes,
-          speedBytesPerSec:
-              totalBytes > 0 ? (totalBytes / totalElapsedSec) : 0.0,
-          eta: Duration.zero,
-          state: TransferState.completed,
+          bytesSent: bytesSent,
+          speedBytesPerSec: speed,
+          eta: Duration(seconds: remainingSec.toInt()),
+          state: TransferState.transferring,
         );
-      } catch (e) {
+
+        // Yield slightly to prevent blocking the event loop
+        await Future.delayed(const Duration(milliseconds: 1));
+      }
+
+      if (hostError != null) {
         yield TransferProgress(
           transferId: transferId,
           filename: filename,
@@ -299,13 +249,91 @@ class FileTransferEngine {
           speedBytesPerSec: 0,
           eta: Duration.zero,
           state: TransferState.failed,
-          errorMessage: e.toString(),
+          errorMessage: hostError,
         );
-      } finally {
-        await raf.close();
-        stopwatch.stop();
+        return;
       }
+
+      if (_isCancelled) {
+        // Send ABORT
+        final Uint8List abortPayload = Uint8List(5);
+        ByteData.sublistView(abortPayload)
+          ..setUint8(0, kFileCmdAbort)
+          ..setUint32(1, transferId, Endian.big);
+        sendPacket(buildFrame(abortPayload));
+
+        yield TransferProgress(
+          transferId: transferId,
+          filename: filename,
+          totalBytes: totalBytes,
+          bytesSent: bytesSent,
+          speedBytesPerSec: 0,
+          eta: Duration.zero,
+          state: TransferState.cancelled,
+        );
+        return;
+      }
+
+      // 4. Transmit FINISH Packet (Sub-cmd 0x03)
+      if (observedHostAck && !completedAck) {
+        finishAckWaiter = Completer<void>();
+      }
+      final Uint8List finishPayload = Uint8List(5);
+      ByteData.sublistView(finishPayload)
+        ..setUint8(0, kFileCmdFinish)
+        ..setUint32(1, transferId, Endian.big);
+      sendPacket(buildFrame(finishPayload));
+
+      final pendingWaiter = finishAckWaiter;
+      if (pendingWaiter != null) {
+        await pendingWaiter.future.timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            hostError ??= 'Timed out awaiting host SHA-256 verification ACK.';
+          },
+        );
+      }
+
+      if (hostError != null) {
+        yield TransferProgress(
+          transferId: transferId,
+          filename: filename,
+          totalBytes: totalBytes,
+          bytesSent: bytesSent,
+          speedBytesPerSec: 0,
+          eta: Duration.zero,
+          state: TransferState.failed,
+          errorMessage: hostError,
+        );
+        return;
+      }
+
+      final double totalElapsedSec =
+          max(stopwatch.elapsedMilliseconds / 1000.0, 0.001);
+      yield TransferProgress(
+        transferId: transferId,
+        filename: filename,
+        totalBytes: totalBytes,
+        bytesSent: totalBytes,
+        speedBytesPerSec:
+            totalBytes > 0 ? (totalBytes / totalElapsedSec) : 0.0,
+        eta: Duration.zero,
+        state: TransferState.completed,
+      );
+    } catch (e) {
+      yield TransferProgress(
+        transferId: transferId,
+        filename: filename,
+        totalBytes: totalBytes,
+        bytesSent: bytesSent,
+        speedBytesPerSec: 0,
+        eta: Duration.zero,
+        state: TransferState.failed,
+        errorMessage: e.toString(),
+      );
     } finally {
+      await raf?.close();
+      stopwatch.stop();
       await ackSub.cancel();
     }
   }
@@ -328,11 +356,12 @@ class FileTransferProgressDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     return Dialog(
-      backgroundColor: const Color(0xFF0A1628),
+      backgroundColor: palette.surfaceElevated,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
-        side: const BorderSide(color: Color(0x3300F0FF)),
+        side: BorderSide(color: palette.primary.withValues(alpha: 0.35)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(24.0),
@@ -349,16 +378,16 @@ class FileTransferProgressDialog extends StatelessWidget {
                   CircularProgressIndicator(
                     value: progress.fraction,
                     strokeWidth: 8,
-                    backgroundColor: Colors.white10,
-                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F0FF)),
+                    backgroundColor: palette.dividerColor,
+                    valueColor: AlwaysStoppedAnimation<Color>(palette.primary),
                   ),
                   Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         '${progress.percentage}%',
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: palette.textPrimary,
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
                           fontFamily: 'monospace',
@@ -368,8 +397,8 @@ class FileTransferProgressDialog extends StatelessWidget {
                         progress.state == TransferState.hashing
                             ? 'HASHING'
                             : 'TRANSFER',
-                        style: const TextStyle(
-                          color: Color(0xFF7A93B2),
+                        style: TextStyle(
+                          color: palette.textSecondary,
                           fontSize: 9,
                           letterSpacing: 1.2,
                         ),
@@ -386,8 +415,8 @@ class FileTransferProgressDialog extends StatelessWidget {
               progress.filename,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: palette.textPrimary,
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
               ),
@@ -400,17 +429,17 @@ class FileTransferProgressDialog extends StatelessWidget {
               children: [
                 Text(
                   progress.speedFormatted,
-                  style: const TextStyle(
-                    color: Color(0xFF00FFA3),
+                  style: TextStyle(
+                    color: palette.success,
                     fontSize: 12,
                     fontFamily: 'monospace',
                   ),
                 ),
-                const Text(' • ', style: TextStyle(color: Colors.white24)),
+                Text(' • ', style: TextStyle(color: palette.textTertiary)),
                 Text(
                   'ETA: ${progress.eta.inSeconds}s',
-                  style: const TextStyle(
-                    color: Color(0xFF7A93B2),
+                  style: TextStyle(
+                    color: palette.textSecondary,
                     fontSize: 12,
                     fontFamily: 'monospace',
                   ),
@@ -425,8 +454,8 @@ class FileTransferProgressDialog extends StatelessWidget {
               OutlinedButton(
                 onPressed: onCancel,
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFFF2A6D),
-                  side: const BorderSide(color: Color(0x66FF2A6D)),
+                  foregroundColor: palette.accent,
+                  side: BorderSide(color: palette.accent.withValues(alpha: 0.5)),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
@@ -437,8 +466,8 @@ class FileTransferProgressDialog extends StatelessWidget {
               ElevatedButton(
                 onPressed: () => Navigator.of(context).pop(),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF00FFA3),
-                  foregroundColor: Colors.black,
+                  backgroundColor: palette.success,
+                  foregroundColor: palette.isDaylight ? Colors.white : Colors.black,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
@@ -449,7 +478,7 @@ class FileTransferProgressDialog extends StatelessWidget {
               ElevatedButton(
                 onPressed: () => Navigator.of(context).pop(),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF2A6D),
+                  backgroundColor: palette.accent,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),

@@ -49,6 +49,7 @@ void main() {
       final box = await Hive.openBox(kAppPrefsBoxName);
       final notifier = AppPreferencesNotifier(boxOverride: box);
 
+      await notifier.setThemeMode(AppThemeMode.dark);
       await notifier.setAccent(nonDefaultAccent);
       await notifier.setGlassIntensity(GlassIntensity.minimal);
       await notifier.setReducedMotion(true);
@@ -64,6 +65,7 @@ void main() {
       final reopenedBox = await Hive.openBox(kAppPrefsBoxName);
       final restored = AppPreferencesNotifier(boxOverride: reopenedBox).state;
 
+      expect(restored.themeMode, equals(AppThemeMode.dark));
       expect(restored.accent, equals(nonDefaultAccent));
       expect(restored.glassIntensity, equals(GlassIntensity.minimal));
       expect(restored.reducedMotion, isTrue);
@@ -101,10 +103,30 @@ void main() {
       await notifier.clearTerminalHistory();
       expect(notifier.state.terminalHistory, isEmpty);
 
+      await notifier.setThemeMode(AppThemeMode.dark);
       await notifier.setAccent(CyberAccentPreset.values.last);
+      await notifier.pushTerminalCommand('kept-before-reset');
       await notifier.resetDefaults();
-      expect(notifier.state.accent, equals(CyberAccentPreset.cyan));
+      expect(notifier.state.themeMode, equals(AppThemeMode.daylight));
+      expect(notifier.state.accent, equals(CyberAccentPreset.violet));
       expect(notifier.state.hasCompletedOnboarding, isTrue);
+      expect(notifier.state.terminalHistory, isEmpty);
+
+      // Verify resetDefaults persisted onboarding & cleared history to disk
+      await box.close();
+      final reopenedBox = await Hive.openBox(kAppPrefsBoxName);
+      final afterReset = AppPreferencesNotifier(boxOverride: reopenedBox).state;
+      expect(afterReset.hasCompletedOnboarding, isTrue);
+      expect(afterReset.terminalHistory, isEmpty);
+
+      // Verify corrupt Hive types fall back safely without throwing TypeError
+      await reopenedBox.put('themeMode', 12345);
+      await reopenedBox.put('targetFps', 'invalid_fps');
+      await reopenedBox.put('reducedMotion', 'not_a_bool');
+      final recovered = AppPreferencesNotifier(boxOverride: reopenedBox).state;
+      expect(recovered.themeMode, equals(AppThemeMode.daylight));
+      expect(recovered.targetFps, equals(30));
+      expect(recovered.reducedMotion, isFalse);
     });
   });
 
@@ -231,10 +253,14 @@ void main() {
       expect(NetworkValidators.inspectCommandRisk('shutdown /s /t 0'), isNotNull);
       // Caret obfuscation defense
       expect(NetworkValidators.inspectCommandRisk('s^h^u^t^d^o^w^n /r'), isNotNull);
-      // Encoded PowerShell payload
+      // Encoded PowerShell payload (including caret-obfuscated -e^n^c flag)
       final encoded = base64Encode(utf8.encode('Stop-Process -Name explorer'));
       expect(
         NetworkValidators.inspectCommandRisk('powershell -EncodedCommand $encoded'),
+        isNotNull,
+      );
+      expect(
+        NetworkValidators.inspectCommandRisk('powershell -e^n^c $encoded'),
         isNotNull,
       );
     });

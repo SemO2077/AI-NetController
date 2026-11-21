@@ -16,8 +16,8 @@ import {
   Zap,
   RefreshCw,
   ArrowRight,
-  TerminalSquare,
   CheckCircle2,
+  KeyRound,
 } from 'lucide-react';
 import { useTranslation } from '../../i18n/useTranslation';
 import { triggerHapticFeedback } from '../../services/hapticService';
@@ -102,7 +102,6 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     };
   }, []);
 
-  // Capture browser PWA install prompt if available
   useEffect(() => {
     const handler = (e: Event) => {
       e.preventDefault();
@@ -152,7 +151,6 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     return () => controller.abort();
   }, [isOpen, fetchSetupDetails]);
 
-  // Compute dynamic pairing URL based on detected or user-edited LAN IP
   const effectiveIp = customIp.trim() || setupInfo?.localIp || window.location.hostname || '127.0.0.1';
   const effectivePort = setupInfo?.daemonPort || 8765;
   const effectiveHostname = setupInfo?.hostname || 'LOCAL-HOST';
@@ -168,14 +166,25 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     if (setupInfo?.ainetPairUri && (!customIp.trim() || customIp.trim() === setupInfo.localIp)) {
       return setupInfo.ainetPairUri;
     }
+    const proto = effectiveWsUri.startsWith('wss://') ? 'wss' : 'ws';
     const params = new URLSearchParams({
-      ip: effectiveIp,
+      proto,
+      host: effectiveIp,
       port: String(effectivePort),
       name: effectiveHostname,
       ...(effectivePin ? { pin: effectivePin } : {}),
     });
     return `ainet://pair?${params.toString()}`;
-  }, [setupInfo?.ainetPairUri, setupInfo?.localIp, customIp, effectiveIp, effectivePort, effectiveHostname, effectivePin]);
+  }, [
+    setupInfo?.ainetPairUri,
+    setupInfo?.localIp,
+    customIp,
+    effectiveWsUri,
+    effectiveIp,
+    effectivePort,
+    effectiveHostname,
+    effectivePin,
+  ]);
 
   const effectiveMobilePairUrl = React.useMemo(() => {
     const baseOrigin =
@@ -196,7 +205,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
 
   const activeQrPayload = qrMode === 'android' ? effectiveAndroidPairUri : effectiveMobilePairUrl;
 
-  // Generate crisp QR Code whenever activeQrPayload changes
+  // High-contrast crisp QR on pure white frame (optimal for mobile cameras in Daylight & Dark)
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
@@ -204,8 +213,8 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
       width: 240,
       margin: 1,
       color: {
-        dark: '#e0f2fe',
-        light: '#070c18',
+        dark: '#0f172a',
+        light: '#ffffff',
       },
       errorCorrectionLevel: 'M',
     })
@@ -252,33 +261,66 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     }
   };
 
+  const progressSteps = [
+    {
+      id: 'pc' as const,
+      num: 1,
+      label: isBg ? 'PC Агент' : 'PC Agent',
+      done: isDaemonReady,
+    },
+    {
+      id: 'phone' as const,
+      num: 2,
+      label: isBg ? 'QR & PIN' : 'Phone QR & PIN',
+      done: Boolean(effectivePin || isPairedSuccess),
+    },
+    {
+      id: 'verify' as const,
+      num: 3,
+      label: isBg ? 'Готовност' : 'Readiness',
+      done: isConnected || isPairedSuccess,
+    },
+  ];
+
   if (!isOpen) return null;
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-[95] flex items-center justify-center p-2.5 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
+      <div
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            triggerHapticFeedback('light');
+            onClose();
+          }
+        }}
+        style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+        className="fixed inset-0 z-[95] flex items-center justify-center p-2.5 sm:p-4 backdrop-blur-md overflow-y-auto"
+      >
         <motion.div
           variants={MODAL_BUBBLE_VARIANTS}
           initial="initial"
           animate="animate"
           exit="exit"
-          className="relative w-full max-w-4xl rounded-3xl bg-[#070c18]/96 backdrop-blur-3xl border border-white/15 border-t-white/25 shadow-[0_28px_80px_rgba(0,0,0,0.92)] text-white overflow-hidden my-auto max-h-[92dvh] flex flex-col transform-gpu"
+          className="relative w-full max-w-4xl rounded-[28px] glass-liquid-modal overflow-hidden my-auto max-h-[92dvh] flex flex-col transform-gpu"
         >
+          {/* Specular Accent Top Bar */}
+          <div className="h-1 w-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)] shrink-0" />
+
           {/* Top Header */}
-          <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-[#0b1324]/70 shrink-0">
+          <div className="px-5 py-4 border-b border-[var(--glass-border)] flex items-center justify-between gap-3 shrink-0">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-2xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center text-cyan-300 shrink-0 shadow-[0_0_16px_rgba(34,211,238,0.2)]">
+              <div className="w-10 h-10 squircle-badge squircle-hero shrink-0">
                 <Sparkles className="w-5 h-5 icon-sparkle-live" />
               </div>
               <div className="min-w-0">
-                <h2 className="font-display text-base sm:text-lg font-extrabold tracking-tight text-white truncate">
+                <h2 className="font-display text-base sm:text-lg font-extrabold tracking-tight ink-primary truncate">
                   {isBg
-                    ? 'Бърза Настройка и Свързване (PC + Телефон)'
-                    : 'Quick Setup & Phone/PC Pairing'}
+                    ? 'Бърза настройка и сдвояване'
+                    : 'Quick Setup & Device Pairing'}
                 </h2>
-                <p className="text-fluid-meta text-slate-400 truncate">
+                <p className="text-xs ink-secondary truncate">
                   {isBg
-                    ? 'Автоматично сдвояване, QR код за телефон и инсталатори (.EXE / .APK)'
+                    ? 'Автоматично сдвояване с 1 клик, QR код за телефон и инсталатори (.EXE / .APK)'
                     : 'Zero-typing auto-pairing, instant Phone QR code, and PC/Mobile installers'}
                 </p>
               </div>
@@ -290,96 +332,147 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 triggerHapticFeedback('light');
                 onClose();
               }}
-              className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full bg-white/[0.06] hover:bg-white/15 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white transition cursor-pointer shrink-0"
+              className="w-10 h-10 min-w-[40px] min-h-[40px] rounded-full liquid-control-pill flex items-center justify-center ink-secondary hover:ink-primary transition cursor-pointer shrink-0"
               aria-label={isBg ? 'Затвори' : 'Close'}
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Step Filter Tabs */}
-          <div className="px-5 pt-3 pb-2 flex items-center justify-between gap-2 flex-wrap border-b border-white/[0.06] bg-[#070c18]/60 shrink-0">
-            <div className="flex items-center gap-1 p-1 rounded-2xl bg-[#0b1324] border border-white/10 overflow-x-auto scrollbar-none">
-              {[
-                { id: 'all', label: isBg ? 'Всичко в 1 изглед' : 'All-in-One Setup', icon: Sparkles },
-                { id: 'pc', label: isBg ? '1. Настройка на PC' : '1. PC Setup (.EXE)', icon: Monitor },
-                { id: 'phone', label: isBg ? '2. Телефон (QR / APK)' : '2. Phone (QR / APK)', icon: Smartphone },
-                { id: 'verify', label: isBg ? '3. Тест на връзката' : '3. Verify Connection', icon: ShieldCheck },
-              ].map((tab) => {
-                const isActive = activeStep === tab.id;
-                const Icon = tab.icon;
-                return (
+          {/* Interactive 3-Step Readiness Stepper + View Filter Bar */}
+          <div className="px-5 py-3 flex flex-col gap-2.5 border-b border-[var(--glass-border)] glass-liquid-subtle shrink-0">
+            {/* Step Progress Indicator */}
+            <div className="flex items-center justify-between gap-2">
+              {progressSteps.map((step, idx) => (
+                <React.Fragment key={step.id}>
                   <button
-                    key={tab.id}
                     type="button"
                     onClick={() => {
-
-                      setActiveStep(tab.id as any);
+                      triggerHapticFeedback('light');
+                      setActiveStep(step.id);
                     }}
-                    className={`relative min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-display font-semibold flex items-center gap-1.5 whitespace-nowrap transition cursor-pointer z-10 ${
-                      isActive ? 'text-cyan-200' : 'text-slate-400 hover:text-white'
-                    }`}
+                    className="flex items-center gap-2 min-w-0 group cursor-pointer"
                   >
-                    {isActive && (
-                      <motion.div
-                        layoutId="quickSetupStepPill"
-                        transition={SPRING_BUBBLY}
-                        className="absolute inset-0 rounded-xl bg-cyan-500/20 border border-cyan-400/35 -z-10 transform-gpu"
-                      />
-                    )}
-                    <Icon className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                    <span>{tab.label}</span>
+                    <span
+                      className={`w-6 h-6 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 transition ${
+                        step.done
+                          ? 'bg-emerald-500 text-white shadow-sm'
+                          : activeStep === step.id
+                          ? 'bg-[var(--accent-primary)] text-white shadow-sm'
+                          : 'liquid-control-pill ink-secondary'
+                      }`}
+                    >
+                      {step.done ? <Check className="w-3.5 h-3.5 stroke-[2.6]" /> : step.num}
+                    </span>
+                    <span
+                      className={`text-xs font-display font-semibold truncate transition ${
+                        activeStep === step.id
+                          ? 'text-[var(--accent-primary)]'
+                          : step.done
+                          ? 'text-emerald-600 dark:text-emerald-300'
+                          : 'ink-secondary group-hover:ink-primary'
+                      }`}
+                    >
+                      {step.label}
+                    </span>
                   </button>
-                );
-              })}
+                  {idx < progressSteps.length - 1 && (
+                    <div
+                      className={`flex-1 h-0.5 rounded-full transition-colors ${
+                        step.done
+                          ? 'bg-emerald-500/60'
+                          : 'bg-[var(--glass-border)]'
+                      }`}
+                    />
+                  )}
+                </React.Fragment>
+              ))}
             </div>
 
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.94 }}
-              transition={SPRING_POP}
-              onClick={() => void fetchSetupDetails()}
-              className="min-h-[38px] px-3 rounded-xl bg-white/[0.05] hover:bg-white/10 border border-white/10 text-xs font-mono text-cyan-300 flex items-center gap-1.5 cursor-pointer shrink-0"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-              <span>{isBg ? 'Обнови IP' : 'Refresh IP'}</span>
-            </motion.button>
+            {/* Filter Pills + Refresh IP */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-1 p-1 rounded-full glass-liquid-subtle border border-[var(--glass-border)] overflow-x-auto scrollbar-none">
+                {[
+                  { id: 'all', label: isBg ? 'Всичко в 1 изглед' : 'All-in-One', icon: Sparkles },
+                  { id: 'pc', label: isBg ? '1. PC Агент' : '1. PC Agent', icon: Monitor },
+                  { id: 'phone', label: isBg ? '2. Телефон (QR)' : '2. Phone QR', icon: Smartphone },
+                  { id: 'verify', label: isBg ? '3. Проверка' : '3. Readiness', icon: ShieldCheck },
+                ].map((tab) => {
+                  const isActive = activeStep === tab.id;
+                  const Icon = tab.icon;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => {
+                        triggerHapticFeedback('light');
+                        setActiveStep(tab.id as any);
+                      }}
+                      className={`relative min-h-[34px] px-3 py-1.5 rounded-full text-xs font-display font-semibold flex items-center gap-1.5 whitespace-nowrap transition cursor-pointer z-10 ${
+                        isActive ? 'preserve-white' : 'ink-secondary hover:ink-primary'
+                      }`}
+                    >
+                      {isActive && (
+                        <motion.div
+                          layoutId="quickSetupStepPill"
+                          transition={SPRING_BUBBLY}
+                          className="absolute inset-0 rounded-full liquid-hero-btn -z-10 transform-gpu"
+                        />
+                      )}
+                      <Icon className="w-3.5 h-3.5 shrink-0" />
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.94 }}
+                transition={SPRING_POP}
+                onClick={() => void fetchSetupDetails()}
+                className="min-h-[36px] px-3.5 rounded-full liquid-control-pill text-xs font-display font-semibold ink-primary flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-[var(--accent-primary)] ${isLoading ? 'animate-spin' : ''}`} />
+                <span>{isBg ? 'Обнови IP' : 'Refresh IP'}</span>
+              </motion.button>
+            </div>
           </div>
 
           {/* Scrollable Body */}
-          <div className="p-5 overflow-y-auto space-y-5 flex-1">
-            {/* Quick Auto-Pair PC Action */}
-            <div className="rounded-2xl bg-gradient-to-r from-cyan-500/15 via-sky-500/10 to-emerald-500/15 border border-cyan-400/35 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="p-5 overflow-y-auto bouncy-scroll space-y-5 flex-1">
+            {/* Quick Auto-Pair PC Hero Strip */}
+            <div className="rounded-3xl glass-liquid-subtle border border-[var(--accent-primary)]/30 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="space-y-1 min-w-0">
-                <div className="flex items-center gap-2 text-xs font-mono text-cyan-300">
-                  <Zap className="w-4 h-4 text-amber-400 icon-bolt-live shrink-0" />
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[var(--accent-primary)]/14 border border-[var(--accent-primary)]/30 text-[11px] font-display font-bold text-[var(--accent-primary)]">
+                  <Zap className="w-3.5 h-3.5 shrink-0" />
                   <span>
-                    {isBg ? 'СТЪПКА 0: АВТОМАТИЧНО СДВОЯВАНЕ' : 'INSTANT ZERO-CONFIG AUTO-PAIRING'}
+                    {isBg ? 'Мигновено авто-сдвояване' : 'Instant Zero-Config Auto-Pairing'}
                   </span>
                 </div>
-                <h3 className="font-display text-sm sm:text-base font-bold text-white">
+                <h3 className="font-display text-sm sm:text-base font-extrabold ink-primary">
                   {isBg
                     ? `Открит компютър: ${effectiveHostname} (${effectiveIp}:${effectivePort})`
                     : `Detected PC: ${effectiveHostname} (${effectiveIp}:${effectivePort})`}
                 </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="text-xs ink-secondary leading-relaxed">
                   {isBg
-                    ? 'Натиснете бутона отдясно, за да добавите този компютър към флота и да свържете WebSocket канала автоматично без писане на IP адреси.'
-                    : 'Click the button on the right to automatically add this PC to your Fleet list and connect the live WebSocket channel with zero manual typing.'}
+                    ? 'Добавете този компютър към устройствата и свържете WebSocket канала автоматично без въвеждане на IP.'
+                    : 'Add this PC to your Devices list and establish a live encrypted WebSocket channel with zero manual typing.'}
                 </p>
               </div>
 
               <motion.button
                 type="button"
-                whileHover={{ scale: 1.04, y: -1 }}
-                whileTap={{ scale: 0.94 }}
+                whileHover={{ scale: 1.03, y: -1 }}
+                whileTap={{ scale: 0.95 }}
                 transition={SPRING_POP}
                 onClick={handleOneTapAutoPair}
-                className={`min-h-[48px] px-5 py-2.5 rounded-2xl font-display font-bold text-xs sm:text-sm flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 shadow-lg transition transform-gpu ${
+                className={`min-h-[46px] px-5 py-2.5 rounded-full font-display font-bold text-xs sm:text-sm flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 transition transform-gpu preserve-white ${
                   isPairedSuccess
-                    ? 'bg-emerald-400 text-slate-950 shadow-emerald-500/25'
-                    : 'bg-cyan-400 hover:bg-cyan-300 text-slate-950 shadow-cyan-500/25'
+                    ? 'bg-emerald-500 hover:bg-emerald-400 shadow-lg'
+                    : 'liquid-hero-btn'
                 }`}
               >
                 {isPairedSuccess ? (
@@ -390,128 +483,125 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 ) : (
                   <>
                     <Zap className="w-4 h-4 stroke-[2.3]" />
-                    <span>{isBg ? 'Свържи това PC с 1 клик' : '1-Tap Pair This PC Now'}</span>
+                    <span>{isBg ? 'Свържи това PC с 1 клик' : '1-Tap Pair This PC'}</span>
                   </>
                 )}
               </motion.button>
             </div>
 
             {/* MAIN GRID: PC SETUP (LEFT) + PHONE QR SETUP (RIGHT) */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
               {/* STEP 1: PC SETUP CARD */}
               {(activeStep === 'all' || activeStep === 'pc') && (
                 <div
                   className={`${
                     activeStep === 'pc' ? 'lg:col-span-12' : 'lg:col-span-6'
-                  } rounded-2xl bg-[#0b1324]/90 border border-white/12 p-4 sm:p-5 flex flex-col justify-between space-y-4`}
+                  } rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 sm:p-5 flex flex-col justify-between space-y-4`}
                 >
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-400/30 flex items-center justify-center text-cyan-300">
-                          <Monitor className="w-4.5 h-4.5 icon-bubbly" />
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-9 h-9 squircle-badge squircle-sky shrink-0">
+                          <Monitor className="w-4.5 h-4.5" />
                         </div>
-                        <div>
-                          <h3 className="font-display text-sm sm:text-base font-bold text-white">
-                            {isBg ? '1. Стартиране на PC Демона' : '1. Run on Your Windows PC'}
+                        <div className="min-w-0">
+                          <h3 className="font-display text-sm sm:text-base font-bold ink-primary truncate">
+                            {isBg ? '1. Стартиране на PC агента' : '1. Run on Your Windows PC'}
                           </h3>
-                          <p className="text-[11px] text-slate-400">
+                          <p className="text-[11px] ink-secondary truncate">
                             {isBg
-                              ? 'Антивирус-безопасен десктоп контролен център'
-                              : 'Antivirus-safe desktop control center & listener'}
+                              ? 'Антивирус-безопасен контролен център'
+                              : 'Antivirus-safe desktop control center'}
                           </p>
                         </div>
                       </div>
-                      <span className="text-[11px] font-mono text-emerald-300">Port {effectivePort}</span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border border-emerald-500/25 shrink-0">
+                        Port {effectivePort}
+                      </span>
                     </div>
 
-                    <p className="text-xs text-slate-300 leading-relaxed">
-                      {isBg
-                        ? 'Изберете най-удобния начин за стартиране на компютъра си — не се изискват сложни настройки:'
-                        : 'Pick whichever option is easiest for you — no manual terminal configuration needed:'}
-                    </p>
-
                     {/* Option A: Auto-Setup Launcher (.BAT) */}
-                    <div className="p-3.5 rounded-xl bg-[#070c18] border border-cyan-400/30 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-display font-bold text-cyan-200">
+                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--accent-primary)]/30 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-display font-bold ink-primary">
                           {isBg
-                            ? 'Вариант А (Препоръчан): Авто-Стартер (.BAT)'
-                            : 'Option A (Recommended): Auto-Setup Script (.BAT)'}
+                            ? 'Вариант А (Препоръчан): Авто-стартер (.BAT)'
+                            : 'Option A (Recommended): Auto-Setup (.BAT)'}
                         </span>
-                        <span className="text-[10px] font-mono text-emerald-300">Auto-Firewall + GUI</span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 shrink-0">
+                          Auto-Firewall
+                        </span>
                       </div>
-                      <p className="text-[11px] text-slate-400 leading-snug">
+                      <p className="text-[11px] ink-secondary leading-snug">
                         {isBg
-                          ? 'Автоматично инсталира зависимостите, отваря порт 8765 в Windows Firewall и пуска PC Демона + Уеб сървъра.'
-                          : 'Automatically checks dependencies, opens Windows Firewall port 8765, and starts the PC Daemon GUI + Web Server.'}
+                          ? 'Проверява зависимостите, отваря порт 8765 в Windows Firewall и пуска PC демона + уеб сървъра.'
+                          : 'Checks dependencies, opens Windows Firewall port 8765, and starts the PC Daemon GUI + Web Server.'}
                       </p>
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        <a
-                          href="/api/setup/windows-launcher"
-                          download="AI_NetController_PC_Setup.bat"
-                          onClick={() => triggerHapticFeedback('medium')}
-                          className="min-h-[42px] px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 font-display font-bold text-xs flex items-center gap-2 transition cursor-pointer"
-                        >
-                          <Download className="w-4 h-4 text-cyan-300" />
-                          <span>
-                            {isBg ? 'Изтегли AI_NetController_PC_Setup.bat' : 'Download PC Setup Launcher (.BAT)'}
-                          </span>
-                        </a>
-                      </div>
+                      <a
+                        href="/api/setup/windows-launcher"
+                        download="AI_NetController_PC_Setup.bat"
+                        onClick={() => triggerHapticFeedback('medium')}
+                        className="inline-flex min-h-[40px] px-4 py-2 rounded-full liquid-hero-btn preserve-white font-display font-bold text-xs items-center gap-2 transition cursor-pointer"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>
+                          {isBg ? 'Изтегли PC Setup Launcher (.BAT)' : 'Download PC Setup Launcher (.BAT)'}
+                        </span>
+                      </a>
                     </div>
 
                     {/* Option B: Standalone Windows .EXE */}
-                    <div className="p-3.5 rounded-xl bg-[#070c18] border border-white/10 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-display font-bold text-white">
+                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-display font-bold ink-primary">
                           {isBg
-                            ? 'Вариант Б: Самостоятелен Windows .EXE файл'
-                            : 'Option B: Standalone Windows Executable (.EXE)'}
+                            ? 'Вариант Б: Самостоятелен Windows .EXE'
+                            : 'Option B: Standalone Windows .EXE'}
                         </span>
-                        <span className="text-[10px] font-mono text-slate-400">v0.80.0 (Beta)</span>
+                        <span className="text-[10px] font-mono ink-muted">v0.80.0</span>
                       </div>
-                      <p className="text-[11px] text-slate-400 leading-snug">
+                      <p className="text-[11px] ink-secondary leading-snug">
                         {isBg
-                          ? 'Готов компилиран изпълним файл за Windows 10/11 (AV-Safe режим без UPX компресия).'
+                          ? 'Готов компилиран изпълним файл за Windows 10/11 (AV-Safe без UPX компресия).'
                           : 'Pre-compiled Windows 10/11 binary built with AV-Safe directory mode (no UPX packer).'}
                       </p>
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        <a
-                          href={setupInfo?.exeDownloadUrl || '/releases/v0.80.0/AI_NetController_HostAgent_v0.80.0_win64.exe'}
-                          download="AI_NetController_HostAgent_v0.80.0_win64.exe"
-                          onClick={() => triggerHapticFeedback('medium')}
-                          className="min-h-[42px] px-4 py-2 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center gap-2 transition cursor-pointer"
-                        >
-                          <Download className="w-4 h-4 text-emerald-400" />
-                          <span>{isBg ? 'Изтегли AI_NetController_HostAgent_v0.80.0_win64.exe' : 'Download AI_NetController_HostAgent_v0.80.0_win64.exe'}</span>
-                        </a>
-                      </div>
+                      <a
+                        href={
+                          setupInfo?.exeDownloadUrl ||
+                          '/releases/v0.80.0/AI_NetController_HostAgent_v0.80.0_win64.exe'
+                        }
+                        download="AI_NetController_HostAgent_v0.80.0_win64.exe"
+                        onClick={() => triggerHapticFeedback('medium')}
+                        className="inline-flex min-h-[40px] px-4 py-2 rounded-full liquid-control-pill ink-primary font-display font-semibold text-xs items-center gap-2 transition cursor-pointer"
+                      >
+                        <Download className="w-4 h-4 text-emerald-500" />
+                        <span>AI_NetController_HostAgent_v0.80.0_win64.exe</span>
+                      </a>
                     </div>
 
                     {/* Option C: Copy 1-Line Command */}
-                    <div className="p-3 rounded-xl bg-[#050811] border border-white/10 flex items-center justify-between gap-2">
+                    <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="text-[10px] font-mono text-slate-400">
+                        <div className="text-[10px] ink-muted">
                           {isBg ? 'Или стартирайте от папката на проекта:' : 'Or run inside the project folder:'}
                         </div>
-                        <code className="text-xs font-mono text-cyan-300 truncate block mt-0.5">
+                        <code className="text-xs font-mono font-semibold text-[var(--accent-primary)] truncate block mt-0.5">
                           START_HERE_WINDOWS.bat
                         </code>
                       </div>
                       <button
                         type="button"
                         onClick={() => handleCopy('START_HERE_WINDOWS.bat', 'cmd')}
-                        className="min-h-[38px] px-3 rounded-lg bg-white/[0.06] hover:bg-white/12 border border-white/10 text-xs font-mono text-slate-200 flex items-center gap-1.5 cursor-pointer shrink-0"
+                        className="min-h-[36px] px-3 rounded-full liquid-control-pill text-xs font-display font-semibold ink-primary flex items-center gap-1.5 cursor-pointer shrink-0"
                       >
                         {copiedField === 'cmd' ? (
                           <>
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <Check className="w-3.5 h-3.5 text-emerald-500" />
                             <span>{isBg ? 'Копирано' : 'Copied'}</span>
                           </>
                         ) : (
                           <>
-                            <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                            <Copy className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
                             <span>{isBg ? 'Копирай' : 'Copy'}</span>
                           </>
                         )}
@@ -526,87 +616,98 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 <div
                   className={`${
                     activeStep === 'phone' ? 'lg:col-span-12' : 'lg:col-span-6'
-                  } rounded-2xl bg-[#0b1324]/90 border border-white/12 p-4 sm:p-5 flex flex-col justify-between space-y-4`}
+                  } rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 sm:p-5 flex flex-col justify-between space-y-4`}
                 >
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center text-emerald-300">
-                          <Smartphone className="w-4.5 h-4.5 icon-bubbly" />
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-9 h-9 squircle-badge squircle-emerald shrink-0">
+                          <Smartphone className="w-4.5 h-4.5" />
                         </div>
-                        <div>
-                          <h3 className="font-display text-sm sm:text-base font-bold text-white">
-                            {isBg ? '2. Настройка на Телефона (QR или APK)' : '2. Connect Your Phone (QR or APK)'}
+                        <div className="min-w-0">
+                          <h3 className="font-display text-sm sm:text-base font-bold ink-primary truncate">
+                            {isBg ? '2. Свързване на телефона (QR / APK)' : '2. Connect Your Phone (QR / APK)'}
                           </h3>
-                          <p className="text-[11px] text-slate-400">
+                          <p className="text-[11px] ink-secondary truncate">
                             {isBg
-                              ? 'Сканирайте с камерата за автоматично сдвояване'
-                              : 'Scan with phone camera for zero-typing auto-pairing'}
+                              ? 'Сканирайте за автоматично сдвояване'
+                              : 'Scan with camera for zero-typing pairing'}
                           </p>
                         </div>
                       </div>
-                      <QrCode className="w-5 h-5 text-cyan-400" />
+                      <QrCode className="w-5 h-5 text-[var(--accent-primary)] shrink-0" />
                     </div>
 
                     {/* Prominent 6-Digit Pairing PIN Row */}
-                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-400/35 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-amber-300 font-bold">
-                          {isBg ? '6-цифрен PIN за сдвояване' : '6-Digit Pairing PIN'}
+                    <div className="p-3.5 rounded-2xl bg-amber-500/12 border border-amber-500/35 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 squircle-badge squircle-amber shrink-0">
+                          <KeyRound className="w-4 h-4" />
                         </div>
-                        <div className="text-lg font-mono font-extrabold tracking-[0.22em] text-white tabular-nums">
-                          {effectivePin || (isBg ? 'Офлайн' : 'Offline')}
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-display font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                            {isBg ? '6-цифрен PIN за сдвояване' : '6-Digit Pairing PIN'}
+                          </div>
+                          <div className="text-lg font-mono font-extrabold tracking-[0.22em] ink-primary tabular-nums">
+                            {effectivePin || (isBg ? 'Офлайн' : 'Offline')}
+                          </div>
                         </div>
                       </div>
                       <button
                         type="button"
                         disabled={!effectivePin}
                         onClick={() => handleCopy(effectivePin, 'pin')}
-                        className="min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 border border-amber-400/40 text-amber-200 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
+                        className="min-h-[36px] px-3.5 py-1.5 rounded-full liquid-control-pill disabled:opacity-40 text-xs font-display font-bold ink-primary flex items-center gap-1.5 cursor-pointer shrink-0"
                       >
                         {copiedField === 'pin' ? (
                           <>
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <Check className="w-3.5 h-3.5 text-emerald-500" />
                             <span>{isBg ? 'Копиран' : 'Copied'}</span>
                           </>
                         ) : (
                           <>
-                            <Copy className="w-3.5 h-3.5" />
+                            <Copy className="w-3.5 h-3.5 text-amber-600 dark:text-amber-300" />
                             <span>{isBg ? 'Копирай PIN' : 'Copy PIN'}</span>
                           </>
                         )}
                       </button>
                     </div>
 
-                    {/* QR Target Mode Toggle: Android App vs Phone Browser */}
-                    <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-[#050811] border border-white/10">
+                    {/* QR Target Mode Toggle */}
+                    <div className="grid grid-cols-2 gap-1.5 p-1 rounded-full liquid-terminal-entry border border-[var(--glass-border)]">
                       <button
                         type="button"
-                        onClick={() => setQrMode('android')}
-                        className={`min-h-[34px] px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition cursor-pointer ${
+                        onClick={() => {
+                          triggerHapticFeedback('light');
+                          setQrMode('android');
+                        }}
+                        className={`min-h-[34px] px-2.5 py-1 rounded-full text-[11px] font-display font-bold transition cursor-pointer ${
                           qrMode === 'android'
-                            ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/40'
-                            : 'text-slate-400 hover:text-white border border-transparent'
+                            ? 'bg-[var(--accent-primary)]/18 text-[var(--accent-primary)] border border-[var(--accent-primary)]/40'
+                            : 'ink-secondary hover:ink-primary border border-transparent'
                         }`}
                       >
-                        {isBg ? 'Android Приложение (Direct)' : 'Android App (Direct)'}
+                        {isBg ? 'Android Приложение' : 'Android App (Direct)'}
                       </button>
                       <button
                         type="button"
-                        onClick={() => setQrMode('browser')}
-                        className={`min-h-[34px] px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition cursor-pointer ${
+                        onClick={() => {
+                          triggerHapticFeedback('light');
+                          setQrMode('browser');
+                        }}
+                        className={`min-h-[34px] px-2.5 py-1 rounded-full text-[11px] font-display font-bold transition cursor-pointer ${
                           qrMode === 'browser'
-                            ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
-                            : 'text-slate-400 hover:text-white border border-transparent'
+                            ? 'bg-emerald-500/18 text-emerald-600 dark:text-emerald-300 border border-emerald-500/40'
+                            : 'ink-secondary hover:ink-primary border border-transparent'
                         }`}
                       >
                         {isBg ? 'Уеб Браузър (PWA)' : 'Phone Browser (PWA)'}
                       </button>
                     </div>
 
-                    {/* QR Code + Editable LAN IP Row */}
-                    <div className="p-3.5 rounded-xl bg-[#070c18] border border-white/10 flex flex-col sm:flex-row items-center gap-4">
-                      <div className="w-36 h-36 rounded-2xl bg-[#070c18] border-2 border-cyan-400/40 p-2 flex items-center justify-center shrink-0 shadow-[0_0_24px_rgba(34,211,238,0.15)]">
+                    {/* Crisp White-Framed QR Code + Editable LAN IP Row */}
+                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex flex-col sm:flex-row items-center gap-4">
+                      <div className="w-36 h-36 rounded-2xl bg-white p-2.5 flex items-center justify-center shrink-0 shadow-md border border-black/10">
                         {qrDataUrl ? (
                           <img
                             src={qrDataUrl}
@@ -615,58 +716,58 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                             className="w-full h-full object-contain rounded-lg"
                           />
                         ) : (
-                          <QrCode className="w-14 h-14 text-cyan-400/50 animate-pulse" />
+                          <QrCode className="w-14 h-14 text-slate-400 animate-pulse" />
                         )}
                       </div>
 
                       <div className="flex-1 space-y-2.5 w-full min-w-0">
                         <div>
-                          <label className="block text-[11px] font-mono text-slate-400 mb-1">
-                            {isBg ? 'Wi-Fi / LAN IP адрес на вашия PC:' : 'Your PC Wi-Fi / LAN IP Address:'}
+                          <label className="block text-[11px] font-display font-semibold ink-secondary mb-1">
+                            {isBg ? 'Wi-Fi / LAN IP адрес на PC:' : 'Your PC Wi-Fi / LAN IP:'}
                           </label>
                           <input
                             type="text"
                             value={customIp}
                             onChange={(e) => setCustomIp(e.target.value)}
                             placeholder="192.168.1.104"
-                            className="w-full px-3 py-2 rounded-xl bg-[#0b1324] border border-white/15 text-xs font-mono text-cyan-200 outline-none focus:border-cyan-400"
+                            className="w-full px-3 py-2 rounded-xl glass-liquid-subtle border border-[var(--glass-border)] text-xs font-mono ink-primary outline-none focus:border-[var(--accent-primary)]"
                           />
                         </div>
 
-                        <p className="text-[11px] text-slate-300 leading-snug">
+                        <p className="text-[11px] ink-secondary leading-snug">
                           {qrMode === 'android'
                             ? isBg
-                              ? 'Сканирайте от Android приложението или камерата. Сдвоява се директно с PC Агента (порт 8765) с E2E криптиране!'
-                              : 'Scan in the Android companion app or phone camera. Pairs directly to the PC Agent (port 8765) with E2E encryption!'
+                              ? 'Сканирайте от Android приложението или камерата. Сдвоява се директно с PC агента (порт 8765) с E2E криптиране.'
+                              : 'Scan in the Android companion app or phone camera. Pairs directly to the PC Agent (port 8765) with E2E encryption.'
                             : allowLanWeb
                             ? isBg
-                              ? 'Насочете камерата на телефона към QR кода. Отваря уеб конзолата и автоматично сдвоява вашия PC!'
-                              : 'Point your phone camera at this QR code. It opens the web console and automatically pairs your PC!'
+                              ? 'Насочете камерата към QR кода — отваря уеб конзолата и автоматично сдвоява вашия PC.'
+                              : 'Point your phone camera at this QR code to open the web console and auto-pair your PC.'
                             : isBg
-                            ? 'Забележка: Уеб сървърът слуша само на localhost. За достъп от браузър на телефона стартирайте с ALLOW_LAN_WEB=true или ползвайте Android App QR.'
-                            : 'Note: Web server is currently localhost-only. Set ALLOW_LAN_WEB=true for phone browser access, or switch to Android App QR.'}
+                            ? 'Уеб сървърът слуша само на localhost. Стартирайте с ALLOW_LAN_WEB=true за браузър на телефона или ползвайте Android QR.'
+                            : 'Web server is localhost-only. Set ALLOW_LAN_WEB=true for phone browser access, or switch to Android App QR.'}
                         </p>
 
                         <button
                           type="button"
                           onClick={() => handleCopy(activeQrPayload, 'pairUrl')}
-                          className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/12 border border-white/10 text-xs font-mono text-cyan-300 flex items-center justify-center gap-1.5 cursor-pointer"
+                          className="w-full min-h-[36px] px-3 py-1.5 rounded-full liquid-control-pill text-xs font-display font-semibold ink-primary flex items-center justify-center gap-1.5 cursor-pointer"
                         >
                           {copiedField === 'pairUrl' ? (
                             <>
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>{isBg ? 'Линкът за сдвояване е копиран!' : 'Auto-Pair Link Copied!'}</span>
+                              <Check className="w-3.5 h-3.5 text-emerald-500" />
+                              <span>{isBg ? 'Линкът е копиран!' : 'Auto-Pair Link Copied!'}</span>
                             </>
                           ) : (
                             <>
-                              <Copy className="w-3.5 h-3.5" />
+                              <Copy className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
                               <span>
                                 {qrMode === 'android'
                                   ? isBg
                                     ? 'Копирай ainet:// линк'
                                     : 'Copy ainet:// Pair Link'
                                   : isBg
-                                  ? 'Копирай линк за авто-сдвояване'
+                                  ? 'Копирай линк за сдвояване'
                                   : 'Copy Auto-Pairing Link'}
                               </span>
                             </>
@@ -675,55 +776,57 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Two Phone App Installation Buttons: PWA (1-Tap) + Native Android .APK */}
+                    {/* Phone Install Buttons */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                       <button
                         type="button"
                         onClick={handleInstallPwa}
-                        className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 font-display font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+                        className="min-h-[42px] px-3.5 py-2 rounded-full bg-emerald-500/18 hover:bg-emerald-500/26 border border-emerald-500/35 text-emerald-700 dark:text-emerald-300 font-display font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                       >
-                        <Smartphone className="w-4 h-4 text-emerald-300 shrink-0" />
+                        <Smartphone className="w-4 h-4 shrink-0" />
                         <span>
-                          {isBg ? 'Инсталирай Уеб Приложение (PWA)' : '1-Tap Install Phone App (PWA)'}
+                          {isBg ? 'Инсталирай Web App (PWA)' : '1-Tap Install PWA'}
                         </span>
                       </button>
 
                       <a
-                        href={setupInfo?.apkDownloadUrl || '/releases/v0.80.0/AI_NetController_v0.80.0_arm64-v8a.apk'}
+                        href={
+                          setupInfo?.apkDownloadUrl ||
+                          '/releases/v0.80.0/AI_NetController_v0.80.0_arm64-v8a.apk'
+                        }
                         download="AI_NetController_v0.80.0_arm64-v8a.apk"
                         onClick={() => triggerHapticFeedback('medium')}
-                        className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/15 border border-white/15 text-white font-display font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+                        className="min-h-[42px] px-3.5 py-2 rounded-full liquid-control-pill ink-primary font-display font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                       >
-                        <Download className="w-4 h-4 text-cyan-300 shrink-0" />
+                        <Download className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
                         <span>{isBg ? 'Изтегли Android .APK' : 'Download Android .APK'}</span>
                       </a>
                     </div>
 
-                    {/* Optional collapsible PWA guide for iOS Safari / Android Chrome */}
                     <AnimatePresence>
                       {showPwaGuide && (
                         <motion.div
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: 'auto' }}
                           exit={{ opacity: 0, height: 0 }}
-                          className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-[11px] text-emerald-100 space-y-1 overflow-hidden"
+                          className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-[11px] ink-primary space-y-1 overflow-hidden"
                         >
-                          <div className="font-bold text-emerald-300">
+                          <div className="font-display font-bold text-emerald-700 dark:text-emerald-300">
                             {isBg
-                              ? 'Как да добавите иконата на началния екран на телефона:'
-                              : 'How to install directly to your Phone Home Screen:'}
+                              ? 'Добавяне на иконата към началния екран:'
+                              : 'Add to your Phone Home Screen:'}
                           </div>
                           <div>
                             • <strong>Android (Chrome):</strong>{' '}
                             {isBg
-                              ? 'Натиснете менюто (⋮) горе вдясно → "Add to Home screen" / "Install app".'
-                              : 'Tap the browser menu (⋮) → "Install app" or "Add to Home screen".'}
+                              ? 'Менюто (⋮) горе вдясно → "Install app" / "Add to Home screen".'
+                              : 'Tap menu (⋮) → "Install app" or "Add to Home screen".'}
                           </div>
                           <div>
                             • <strong>iPhone (Safari):</strong>{' '}
                             {isBg
-                              ? 'Натиснете бутона Share (Споделяне) долу → "Add to Home Screen".'
-                              : 'Tap the Share button at the bottom → "Add to Home Screen".'}
+                              ? 'Бутон Share долу → "Add to Home Screen".'
+                              : 'Tap Share at the bottom → "Add to Home Screen".'}
                           </div>
                         </motion.div>
                       )}
@@ -735,104 +838,116 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
 
             {/* STEP 3: LIVE READINESS & CONNECTION VERIFICATION */}
             {(activeStep === 'all' || activeStep === 'verify') && (
-              <div className="rounded-2xl bg-[#0b1324]/80 border border-white/10 p-4 sm:p-5 space-y-3">
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 sm:p-5 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-4.5 h-4.5 text-emerald-400" />
-                    <h4 className="font-display text-xs sm:text-sm font-bold text-white">
+                    <div className="w-8 h-8 squircle-badge squircle-emerald">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <h4 className="font-display text-xs sm:text-sm font-bold ink-primary">
                       {isBg
-                        ? '3. Автоматична проверка на готовността на системата'
-                        : '3. Automated System & Network Readiness Check'}
+                        ? '3. Автоматична проверка на готовността'
+                        : '3. Automated System & Network Readiness'}
                     </h4>
                   </div>
-                  <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                  <span className="text-[11px] font-mono ink-muted tabular-nums">
                     {effectiveWsUri} • MAC {hasValidMac ? effectiveMac : isBg ? 'Неоткрит' : 'Unverified'}
                   </span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
-                  <div className="p-3 rounded-xl bg-[#070c18] border border-white/10 flex items-center gap-2.5">
+                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center gap-2.5">
                     {isDaemonReady ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                     ) : (
-                      <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                      <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
                     )}
                     <div className="min-w-0">
-                      <div className="font-semibold text-white truncate">
-                        {isBg ? 'PC Демон Сървър' : 'PC Daemon Listener'}
+                      <div className="font-display font-semibold ink-primary truncate">
+                        {isBg ? 'PC Демон' : 'PC Daemon Listener'}
                       </div>
                       <div
                         className={`text-[11px] font-mono truncate ${
-                          isDaemonReady ? 'text-emerald-300' : 'text-amber-300'
+                          isDaemonReady
+                            ? 'text-emerald-600 dark:text-emerald-300'
+                            : 'text-amber-600 dark:text-amber-300'
                         }`}
                       >
                         {isDaemonReady
                           ? `ONLINE (${effectiveIp}:${effectivePort})`
                           : serverReachable === false
                           ? isBg
-                            ? 'OFFLINE (Сървърът не отговаря)'
-                            : 'OFFLINE (Server Unreachable)'
+                            ? 'Офлайн (не отговаря)'
+                            : 'Offline (Unreachable)'
                           : isBg
-                          ? 'Офлайн / Непотвърден'
-                          : 'OFFLINE / UNVERIFIED'}
+                          ? 'Непотвърден'
+                          : 'Offline / Unverified'}
                       </div>
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-[#070c18] border border-white/10 flex items-center gap-2.5">
+                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center gap-2.5">
                     {hasValidMac ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                     ) : (
-                      <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                      <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
                     )}
                     <div className="min-w-0">
-                      <div className="font-semibold text-white truncate">
-                        {isBg ? 'Wake-on-LAN (UDP 9)' : 'Wake-on-LAN (UDP 9)'}
+                      <div className="font-display font-semibold ink-primary truncate">
+                        Wake-on-LAN (UDP 9)
                       </div>
                       <div
                         className={`text-[11px] font-mono truncate ${
-                          hasValidMac ? 'text-cyan-300' : 'text-amber-300'
+                          hasValidMac
+                            ? 'text-[var(--accent-primary)]'
+                            : 'text-amber-600 dark:text-amber-300'
                         }`}
                       >
-                        {hasValidMac ? effectiveMac : isBg ? 'Липсва валиден MAC' : 'MAC missing / unverified'}
+                        {hasValidMac ? effectiveMac : isBg ? 'Липсва MAC' : 'MAC unverified'}
                       </div>
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-[#070c18] border border-white/10 flex items-center gap-2.5">
+                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center gap-2.5">
                     {isDaemonReady ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                     ) : (
-                      <ShieldAlert className="w-4 h-4 text-slate-400 shrink-0" />
+                      <ShieldAlert className="w-4 h-4 ink-muted shrink-0" />
                     )}
                     <div className="min-w-0">
-                      <div className="font-semibold text-white truncate">
+                      <div className="font-display font-semibold ink-primary truncate">
                         {isBg ? 'AV-Safe Защита' : 'AV-Safe Integrity'}
                       </div>
                       <div
                         className={`text-[11px] font-mono truncate ${
-                          isDaemonReady ? 'text-emerald-300' : 'text-slate-400'
+                          isDaemonReady
+                            ? 'text-emerald-600 dark:text-emerald-300'
+                            : 'ink-muted'
                         }`}
                       >
                         {isDaemonReady
                           ? 'No UPX • HWND Verified'
                           : isBg
-                          ? 'Очаква проверка от демона'
-                          : 'Awaiting Daemon Health'}
+                          ? 'Очаква проверка'
+                          : 'Awaiting Daemon'}
                       </div>
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-[#070c18] border border-white/10 flex items-center gap-2.5">
-                    <Wifi className={`w-4 h-4 shrink-0 ${isConnected ? 'text-emerald-400' : 'text-cyan-400'}`} />
+                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center gap-2.5">
+                    <Wifi
+                      className={`w-4 h-4 shrink-0 ${
+                        isConnected ? 'text-emerald-500' : 'text-[var(--accent-primary)]'
+                      }`}
+                    />
                     <div className="min-w-0">
-                      <div className="font-semibold text-white truncate">
+                      <div className="font-display font-semibold ink-primary truncate">
                         {isBg ? 'Контролер Връзка' : 'Controller Channel'}
                       </div>
-                      <div className="text-[11px] text-cyan-300 font-mono truncate">
+                      <div className="text-[11px] text-[var(--accent-primary)] font-mono truncate">
                         {isConnected
                           ? isBg
-                            ? 'Свързан (WebSocket)'
+                            ? 'Свързан (Live WS)'
                             : 'Connected (Live WS)'
                           : isBg
                           ? 'Готов за сдвояване'
@@ -846,25 +961,25 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
           </div>
 
           {/* Footer */}
-          <div className="px-5 py-3.5 border-t border-white/10 bg-[#0b1324]/80 flex items-center justify-between gap-3 shrink-0">
-            <div className="text-[11px] text-slate-400 hidden sm:block">
+          <div className="px-5 py-3.5 border-t border-[var(--glass-border)] glass-liquid-subtle flex items-center justify-between gap-3 shrink-0">
+            <div className="text-[11px] ink-secondary hidden sm:block">
               {isBg
-                ? 'Съвет: Телефонът и компютърът трябва да са свързани към една и съща Wi-Fi мрежа.'
-                : 'Tip: Ensure both your phone and PC are connected to the same home Wi-Fi / LAN.'}
+                ? 'Съвет: Телефонът и компютърът трябва да са в една и съща Wi-Fi / LAN мрежа.'
+                : 'Tip: Ensure both your phone and PC are on the same home Wi-Fi / LAN.'}
             </div>
             <div className="flex items-center gap-2 ml-auto">
               <button
                 type="button"
                 onClick={handleOneTapAutoPair}
-                className="min-h-[42px] px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 font-display font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                className="min-h-[40px] px-4 py-2 rounded-full liquid-control-pill ink-primary font-display font-bold text-xs flex items-center gap-1.5 cursor-pointer"
               >
-                <Zap className="w-3.5 h-3.5 text-cyan-300" />
-                <span>{isBg ? 'Авто-Сдвои PC' : 'Auto-Pair Local PC'}</span>
+                <Zap className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                <span>{isBg ? 'Авто-сдвои PC' : 'Auto-Pair Local PC'}</span>
               </button>
               <button
                 type="button"
                 onClick={onClose}
-                className="min-h-[42px] px-5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white font-display font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
+                className="min-h-[40px] px-5 py-2 rounded-full liquid-hero-btn preserve-white font-display font-bold text-xs flex items-center gap-1.5 cursor-pointer"
               >
                 <span>{isBg ? 'Готово' : 'Done'}</span>
                 <ArrowRight className="w-3.5 h-3.5" />

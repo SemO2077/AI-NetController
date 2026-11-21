@@ -19,14 +19,13 @@ import sys
 import os
 import time
 import struct
-import socket
 import hashlib
 import hmac
 import base64
 import json
 import asyncio
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List, Set
+from typing import Optional, Tuple, Dict, List, Set
 
 # Ensure agent directory is in Python path
 AGENT_DIR = Path(__file__).resolve().parents[1]
@@ -473,8 +472,8 @@ class IsolatedHostDaemon:
         # Simulate Streaming Terminal Chunks
         chunks = [
             f"[CST-DAEMON] Initializing execution context for '{cmd_str}'...\n",
-            f"[OUTPUT] LAB-WORKSTATION-01 (Windows 11 Pro)\n",
-            f"[STATUS] Task completed successfully.\n"
+            "[OUTPUT] LAB-WORKSTATION-01 (Windows 11 Pro)\n",
+            "[STATUS] Task completed successfully.\n"
         ]
         for i, chunk in enumerate(chunks):
             chunk_data = json.dumps({

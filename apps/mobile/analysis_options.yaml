@@ -10,5 +10,8 @@ analyzer:
 linter:
   rules:
     avoid_print: true
+    cancel_subscriptions: true
+    close_sinks: true
+    unawaited_futures: true
     prefer_const_constructors: true
     unnecessary_await_in_return: true

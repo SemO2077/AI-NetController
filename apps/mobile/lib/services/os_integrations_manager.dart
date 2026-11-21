@@ -14,7 +14,7 @@ import '../security/network_validators.dart';
 
 /// Background entry point for 1-tap Home Screen Widget interactions
 @pragma('vm:entry-point')
-void widgetBackgroundCallback(Uri? uri) async {
+Future<void> widgetBackgroundCallback(Uri? uri) async {
   if (uri == null) return;
   if (uri.host == 'wake_pc' || uri.path.contains('wake')) {
     final String? mac = uri.queryParameters['mac']?.trim();
@@ -46,8 +46,10 @@ class OsIntegrationsManager {
 
   /// Initializes Quick Actions and Home Screen Widget listeners
   Future<void> initialize({Function(String actionType)? onAction}) async {
+    if (onAction != null) {
+      onQuickActionTriggered = onAction;
+    }
     if (_isInitialized) return;
-    onQuickActionTriggered = onAction;
 
     // 1. Setup Quick Actions (Launcher Shortcuts / App Icons)
     try {
@@ -93,6 +95,13 @@ class OsIntegrationsManager {
     }
 
     _isInitialized = true;
+  }
+
+  /// Detaches a previously registered quick action callback when the UI screen disposes.
+  void clearQuickActionHandler(Function(String actionType) handler) {
+    if (identical(onQuickActionTriggered, handler)) {
+      onQuickActionTriggered = null;
+    }
   }
 
   /// Synchronizes current fleet status to the native Home Screen Widget

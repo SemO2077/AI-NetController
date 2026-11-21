@@ -11,7 +11,6 @@ import os
 import sys
 import socket
 import unittest
-import platform
 
 _AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _AGENT_DIR not in sys.path:
@@ -20,14 +19,6 @@ if _AGENT_DIR not in sys.path:
 from windows_integration import (
     SingleInstanceGuard,
     check_port_available,
-    create_vbs_shortcut,
-    create_desktop_shortcut,
-    create_start_menu_shortcut,
-    remove_shortcuts,
-    set_windows_autostart,
-    register_windows_uninstaller,
-    unregister_windows_uninstaller,
-    perform_full_uninstall,
     IS_WINDOWS,
     APP_NAME,
 )

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import hashlib
 import json
@@ -40,7 +41,15 @@ def update_manifest(rel_tag: str) -> None:
     arm64_apk = os.path.join(rel_dir, f"AI_NetController_{rel_tag}_arm64-v8a.apk")
     univ_apk = os.path.join(rel_dir, f"AI_NetController_{rel_tag}.apk")
     if os.path.exists(arm64_apk) and not os.path.exists(univ_apk):
-        shutil.copy2(arm64_apk, univ_apk)
+        print(
+            f"[WARN] Universal APK missing ({os.path.basename(univ_apk)}); "
+            "not aliasing arm64-v8a split APK to avoid mislabeling ABI coverage."
+        )
+
+    patch_notes_src = os.path.join(ROOT_DIR, "PATCH_NOTES.md")
+    patch_notes_dst = os.path.join(rel_dir, "PATCH_NOTES.md")
+    if os.path.isfile(patch_notes_src) and not os.path.exists(patch_notes_dst):
+        shutil.copy2(patch_notes_src, patch_notes_dst)
 
     files_to_hash = [
         (f"AI_NetController_HostAgent_{rel_tag}_win64.exe", "Windows 10/11 x64 (Standalone Host Agent .EXE)", "exe"),
@@ -84,6 +93,7 @@ def update_manifest(rel_tag: str) -> None:
     manifest_path = os.path.join(rel_dir, "RELEASE_MANIFEST.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)
+        f.write("\n")
 
     print("[SUCCESS] Checksums and manifest regenerated:")
     for a in artifacts:

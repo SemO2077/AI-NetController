@@ -20,11 +20,12 @@ export default defineConfig(() => {
       rollupOptions: {
         output: {
           manualChunks(id) {
-            if (
-              id.includes('node_modules/motion') ||
-              id.includes('node_modules/framer-motion')
-            ) {
+            if (!id.includes('node_modules')) return;
+            if (id.includes('node_modules/motion') || id.includes('node_modules/framer-motion')) {
               return 'animation-vendor';
+            }
+            if (id.includes('node_modules/lucide-react')) {
+              return 'icons-vendor';
             }
           },
         },

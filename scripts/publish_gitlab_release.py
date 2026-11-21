@@ -197,6 +197,7 @@ def main():
     }
 
     uploaded_links = []
+    failed_uploads = []
     labels = {
         f"AI_NetController_HostAgent_{target_tag}_win64.exe": "Windows Host Agent (Standalone .EXE)",
         f"AI_NetController_HostAgent_{target_tag}_win64_portable.zip": "Windows Host Agent (Portable .ZIP)",
@@ -207,12 +208,14 @@ def main():
         "PATCH_NOTES.md": "Patch Notes (Markdown)",
     }
 
+    encoded_tag = urllib.parse.quote(target_tag, safe="")
     for fname in files_to_upload:
         fpath = os.path.join(assets_dir, fname)
         size_mb = os.path.getsize(fpath) / (1024 * 1024)
         print(f"[*] Uploading {fname} ({size_mb:.2f} MB) to GitLab Generic Packages...")
 
-        package_url = f"{api_base}/packages/generic/ainetcontroller/{urllib.parse.quote(target_tag)}/{urllib.parse.quote(fname)}"
+        encoded_fname = urllib.parse.quote(fname, safe="")
+        package_url = f"{api_base}/packages/generic/ainetcontroller/{encoded_tag}/{encoded_fname}"
         with open(fpath, "rb") as bf:
             file_data = bf.read()
 
@@ -234,9 +237,17 @@ def main():
                         "link_type": link_type,
                         "direct_asset_path": f"/downloads/{fname}",
                     })
+                else:
+                    print(f"    [ERROR] Unexpected status uploading {fname}: HTTP {resp.status}")
+                    failed_uploads.append(fname)
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="ignore")
-            print(f"    [WARN] Package upload status for {fname}: {e.code} {e.reason} {err_body}")
+            print(f"    [ERROR] Package upload failed for {fname}: {e.code} {e.reason} {err_body}")
+            failed_uploads.append(fname)
+
+    if failed_uploads:
+        print(f"[!] Failed to upload {len(failed_uploads)} artifact(s) to GitLab Generic Packages: {', '.join(failed_uploads)}")
+        sys.exit(1)
 
     if args.packages_only:
         if not uploaded_links:
@@ -255,7 +266,7 @@ def main():
         "| :--- | :--- | :--- |",
     ]
     for item in uploaded_links:
-        table_lines.append(f"| **{item['name']}** | `{item['link_type']}` | [{item['name'].split()[0]}]({item['url']}) |")
+        table_lines.append(f"| **{item['name']}** | `{item['link_type']}` | [Download]({item['url']}) |")
 
     full_description = notes_body + "\n" + "\n".join(table_lines) + "\n"
 
@@ -283,16 +294,54 @@ def main():
             print(f"  - Tag: {target_tag}")
             print(f"  - Total Assets Linked: {len(uploaded_links)}")
     except urllib.error.HTTPError as e:
-        if e.code == 409:  # Already exists, update release
-            print(f"[*] Release {target_tag} already exists. Updating...")
+        if e.code == 409:  # Already exists, update metadata and sync asset links via /assets/links
+            print(f"[*] Release {target_tag} already exists. Updating metadata and asset links...")
+            update_payload = {
+                "name": release_title,
+                "description": full_description,
+            }
             update_req = urllib.request.Request(
-                f"{api_base}/releases/{urllib.parse.quote(target_tag)}",
-                data=json.dumps(release_payload).encode("utf-8"),
+                f"{api_base}/releases/{encoded_tag}",
+                data=json.dumps(update_payload).encode("utf-8"),
                 headers={**headers, "Content-Type": "application/json"},
                 method="PUT",
             )
             with urllib.request.urlopen(update_req, timeout=120) as resp:
-                print(f"[SUCCESS] GitLab Release updated for {target_tag}")
+                resp.read()
+
+            links_endpoint = f"{api_base}/releases/{encoded_tag}/assets/links"
+            existing_links = []
+            try:
+                list_req = urllib.request.Request(links_endpoint, headers=headers, method="GET")
+                with urllib.request.urlopen(list_req, timeout=60) as resp:
+                    existing_links = json.loads(resp.read().decode("utf-8") or "[]")
+            except urllib.error.HTTPError as list_err:
+                print(f"[WARN] Could not list existing release links: {list_err.code}")
+
+            existing_by_name = {
+                lnk.get("name"): lnk.get("id")
+                for lnk in existing_links
+                if isinstance(lnk, dict) and lnk.get("name") and lnk.get("id")
+            }
+            for item in uploaded_links:
+                existing_id = existing_by_name.get(item["name"])
+                if existing_id is not None:
+                    del_req = urllib.request.Request(
+                        f"{links_endpoint}/{existing_id}",
+                        headers=headers,
+                        method="DELETE",
+                    )
+                    with urllib.request.urlopen(del_req, timeout=60) as resp:
+                        resp.read()
+                add_req = urllib.request.Request(
+                    links_endpoint,
+                    data=json.dumps(item).encode("utf-8"),
+                    headers={**headers, "Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(add_req, timeout=60) as resp:
+                    resp.read()
+            print(f"[SUCCESS] GitLab Release updated for {target_tag} ({len(uploaded_links)} asset links synced)")
         else:
             err_body = e.read().decode("utf-8", errors="ignore")
             print(f"[ERROR] Failed to create release: {e.code} - {err_body}")

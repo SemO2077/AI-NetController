@@ -29,10 +29,8 @@ import asyncio
 import logging
 import platform
 import threading
-import subprocess
 from typing import Dict, List, Optional, Tuple, Any
 from multiprocessing import Process, Event, shared_memory
-from concurrent.futures import ThreadPoolExecutor
 
 def _configure_import_paths():
     cand_dirs = []
@@ -62,10 +60,10 @@ def _configure_import_paths():
 _configure_import_paths()
 
 try:
-    from crypto_vault import HostCryptoVault, scrub_memory
+    from crypto_vault import HostCryptoVault
 except (ImportError, ModuleNotFoundError):
     try:
-        from agent.crypto_vault import HostCryptoVault, scrub_memory
+        from agent.crypto_vault import HostCryptoVault
     except (ImportError, ModuleNotFoundError) as err:
         import importlib.util
         cv_path = None
@@ -80,7 +78,6 @@ except (ImportError, ModuleNotFoundError):
             sys.modules["crypto_vault"] = cv_mod
             spec.loader.exec_module(cv_mod)
             HostCryptoVault = cv_mod.HostCryptoVault
-            scrub_memory = cv_mod.scrub_memory
         else:
             raise err
 
@@ -95,38 +92,32 @@ except (ImportError, ModuleNotFoundError):
 try:
     from windows_integration import (
         SingleInstanceGuard,
-        check_port_available,
         create_desktop_shortcut,
         create_start_menu_shortcut,
         show_uninstall_dialog,
         show_install_dialog,
         perform_full_uninstall,
         perform_full_install,
-        register_windows_uninstaller,
     )
 except (ImportError, ModuleNotFoundError):
     try:
         from agent.windows_integration import (
             SingleInstanceGuard,
-            check_port_available,
             create_desktop_shortcut,
             create_start_menu_shortcut,
             show_uninstall_dialog,
             show_install_dialog,
             perform_full_uninstall,
             perform_full_install,
-            register_windows_uninstaller,
         )
     except (ImportError, ModuleNotFoundError):
         SingleInstanceGuard = None
-        check_port_available = None
         create_desktop_shortcut = None
         create_start_menu_shortcut = None
         show_uninstall_dialog = None
         show_install_dialog = None
         perform_full_uninstall = None
         perform_full_install = None
-        register_windows_uninstaller = None
 
 # Logging Configuration
 logging.basicConfig(
@@ -220,6 +211,14 @@ class WindowsJobObjectGuard:
                     logger.info("Kernel Job Object guard initialized successfully.")
             except Exception as e:
                 logger.warning(f"Could not bind Windows Job Object: {e}")
+
+    def close(self) -> None:
+        if IS_WINDOWS and self.job_handle:
+            try:
+                kernel32.CloseHandle(self.job_handle)
+            except Exception:
+                pass
+            self.job_handle = None
 
 # ------------------------------------------------------------------------------
 # ACPI, NIC & WoWLAN Doctor
@@ -474,6 +473,9 @@ class WindowsSessionBridge:
 # Pre-allocated shared memory buffer size: 4K UHD RGBA = 3840 x 2160 x 4 = 33,177,600 bytes (~32 MB)
 SHM_BUFFER_SIZE = 34 * 1024 * 1024
 SHM_NAME = "cst_frame_shm_v1"
+_FRAME_HEADER_STRUCT = struct.Struct(">BBBBII")
+_SHM_SEQ_LEN_STRUCT = struct.Struct(">II")
+_SHM_SEQ_STRUCT = struct.Struct(">I")
 
 def screen_capture_worker_process(
     shm_name: str,
@@ -528,7 +530,12 @@ def screen_capture_worker_process(
             from PIL import Image
         except ImportError:
             Image = None
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
         import io
+        import zlib
         reusable_bio = io.BytesIO()
         frame_seq = 0
         last_raw_hash = 0
@@ -549,19 +556,17 @@ def screen_capture_worker_process(
                     mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
                     frame = sct.grab(mon)
                     raw_mv = memoryview(frame.raw)
-                    import zlib
-                    curr_hash = zlib.adler32(bytes(raw_mv[::2048]))
+                    curr_hash = zlib.adler32(raw_mv[::2048].tobytes())
                     if curr_hash != last_raw_hash or frame_seq == 0:
                         last_raw_hash = curr_hash
-                        if jpeg:
+                        if jpeg and np is not None:
                             try:
-                                import numpy as np
                                 bgra_arr = np.frombuffer(frame.raw, dtype=np.uint8).reshape((frame.height, frame.width, 4))
                                 data = jpeg.encode(bgra_arr, quality=65, pixel_format=3)
                             except Exception:
                                 data = None
                         if data is None and Image:
-                            img = Image.frombytes("RGB", frame.size, frame.bgra, "raw", "BGRX")
+                            img = Image.frombuffer("RGB", frame.size, frame.bgra, "raw", "BGRX", 0, 1)
                             reusable_bio.seek(0)
                             reusable_bio.truncate(0)
                             img.save(reusable_bio, format="JPEG", quality=60)
@@ -582,15 +587,15 @@ def screen_capture_worker_process(
                     if frame_seq == 0:
                         frame_seq = 2
                     # Mark odd sequence while writing to prevent torn reads
-                    struct.pack_into(">II", shm.buf, 0, frame_seq - 1, data_len)
+                    _SHM_SEQ_LEN_STRUCT.pack_into(shm.buf, 0, frame_seq - 1, data_len)
                     shm.buf[8:8 + data_len] = data
                     # Commit even sequence once write is complete
-                    struct.pack_into(">I", shm.buf, 0, frame_seq)
+                    _SHM_SEQ_STRUCT.pack_into(shm.buf, 0, frame_seq)
 
-            # Target ~30 FPS loop pacing (33ms)
+            # Target ~30 FPS loop pacing (33ms), waking immediately on stop
             elapsed = time.perf_counter() - start_t
             rem = max(0.001, 0.033 - elapsed)
-            time.sleep(rem)
+            stop_event.wait(rem)
     finally:
         if sct is not None:
             try:
@@ -620,8 +625,6 @@ class DaemonServer:
             )
         self.psk = resolved_psk.encode("utf-8")
         self.running = False
-        self.vault: Optional[HostCryptoVault] = None
-        self.thread_pool = ThreadPoolExecutor(max_workers=4)
 
         # Shared Memory & Worker Process
         self.shm: Optional[shared_memory.SharedMemory] = None
@@ -630,6 +633,7 @@ class DaemonServer:
         self.ready_event = Event()
         self.active_clients_event = Event()
         self._active_clients: set = set()
+        self._client_tasks: set = set()
         self._server_sock: Optional[socket.socket] = None
         atexit.register(self._cleanup_shm)
 
@@ -707,39 +711,49 @@ class DaemonServer:
             logger.info("All NIC power management & WoL parameters verified nominal.")
 
         # 2. Allocate Shared Memory & Spawn Frame Worker
+        sock: Optional[socket.socket] = None
         try:
-            self.shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=SHM_BUFFER_SIZE)
-        except FileExistsError:
-            self.shm = shared_memory.SharedMemory(name=SHM_NAME, create=False)
+            try:
+                self.shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=SHM_BUFFER_SIZE)
+            except FileExistsError:
+                self.shm = shared_memory.SharedMemory(name=SHM_NAME, create=False)
 
-        self.worker_process = Process(
-            target=screen_capture_worker_process,
-            args=(SHM_NAME, self.stop_event, self.ready_event, self.active_clients_event),
-            name="CST_CaptureWorker"
-        )
-        self.worker_process.start()
-        self.ready_event.wait(timeout=5.0)
+            self.worker_process = Process(
+                target=screen_capture_worker_process,
+                args=(SHM_NAME, self.stop_event, self.ready_event, self.active_clients_event),
+                name="CST_CaptureWorker"
+            )
+            self.worker_process.start()
+            self.ready_event.wait(timeout=5.0)
 
-        # 3. Create Async Server Loop
-        sock = self._bind_hardened_socket()
-        self._server_sock = sock
-        loop = asyncio.get_running_loop()
+            # 3. Create Async Server Loop
+            sock = self._bind_hardened_socket()
+            self._server_sock = sock
+            loop = asyncio.get_running_loop()
 
-        logger.info(f"Daemon Reactor active. Awaiting zero-trust peer connections...")
+            logger.info("Daemon Reactor active. Awaiting zero-trust peer connections...")
 
-        try:
             while self.running:
                 client_sock, addr = await loop.sock_accept(sock)
                 logger.info(f"Incoming connection established from {addr}")
-                asyncio.create_task(self._handle_client(client_sock, loop))
+                task = asyncio.create_task(self._handle_client(client_sock, loop))
+                self._client_tasks.add(task)
+                task.add_done_callback(self._client_tasks.discard)
         except (asyncio.CancelledError, OSError):
             pass
         finally:
             self._server_sock = None
-            try:
-                sock.close()
-            except Exception:
-                pass
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            pending_tasks = [t for t in list(self._client_tasks) if not t.done()]
+            for t in pending_tasks:
+                t.cancel()
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+            self._client_tasks.clear()
             self.stop()
 
     async def _handle_client(self, client_sock: socket.socket, loop: asyncio.AbstractEventLoop):
@@ -754,24 +768,21 @@ class DaemonServer:
             # 1. Send Opcode 0x06 Handshake Challenge (Canonical 0xC5 0x71 Framing)
             challenge = vault.create_handshake_challenge()
             # 12-byte binary header: [0xC5, 0x71, 0x06, Flags=0, Seq=0, Length]
-            header = struct.pack(">BBBBII", 0xC5, 0x71, 0x06, 0x00, 0, len(challenge))
+            header = _FRAME_HEADER_STRUCT.pack(0xC5, 0x71, 0x06, 0x00, 0, len(challenge))
             await loop.sock_sendall(client_sock, header + challenge)
 
             # 2. Receive Handshake Response (exact 12-byte header + payload)
             resp_header = await self._recv_exact(loop, client_sock, 12, timeout=3.0)
             if not resp_header:
-                client_sock.close()
                 return
 
-            m0, m1, opcode, _, _, payload_len = struct.unpack(">BBBBII", resp_header)
+            m0, m1, opcode, _, _, payload_len = _FRAME_HEADER_STRUCT.unpack(resp_header)
             if m0 != 0xC5 or m1 != 0x71 or opcode != 0x06 or payload_len <= 0 or payload_len > 4096:
-                client_sock.close()
                 return
 
             resp_payload = await self._recv_exact(loop, client_sock, payload_len, timeout=3.0)
             if not resp_payload or not vault.complete_handshake(resp_payload):
                 logger.error("Zero-Trust Handshake Authentication Failed. Dropping peer socket.")
-                client_sock.close()
                 return
 
             logger.info("Zero-Trust Ephemeral Curve25519 Session Established.")
@@ -782,21 +793,22 @@ class DaemonServer:
             last_sent_frame_seq = 0
             while self.running:
                 await asyncio.sleep(0.033)
-                if self.shm:
-                    seq1, frame_len = struct.unpack_from(">II", self.shm.buf, 0)
+                shm = self.shm
+                if shm is not None and self.running:
+                    seq1, frame_len = _SHM_SEQ_LEN_STRUCT.unpack_from(shm.buf, 0)
                     # Only read if seq1 is even (writer not active) and newer than last transmitted frame
                     if seq1 > 0 and (seq1 & 1) == 0 and seq1 != last_sent_frame_seq and 0 < frame_len < SHM_BUFFER_SIZE - 8:
-                        frame_bytes = bytes(self.shm.buf[8:8 + frame_len])
-                        seq2 = struct.unpack_from(">I", self.shm.buf, 0)[0]
+                        frame_bytes = bytes(shm.buf[8:8 + frame_len])
+                        seq2 = _SHM_SEQ_STRUCT.unpack_from(shm.buf, 0)[0]
                         if seq1 == seq2:
                             last_sent_frame_seq = seq1
                             next_seq = vault.tx_seq + 1
                             wire_len = len(frame_bytes) + 28  # 12B nonce + ciphertext + 16B tag
-                            hdr = struct.pack(">BBBBII", 0xC5, 0x71, 0x03, 0x02, next_seq, wire_len)
+                            hdr = _FRAME_HEADER_STRUCT.pack(0xC5, 0x71, 0x03, 0x02, next_seq, wire_len)
                             encrypted_payload, _ = vault.encrypt_frame(frame_bytes, aad=hdr, seq=next_seq)
                             await loop.sock_sendall(client_sock, hdr + encrypted_payload)
 
-        except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError):
+        except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError, asyncio.CancelledError):
             logger.info("Client disconnected or timed out.")
         except Exception as e:
             logger.error(f"Error handling peer: {e}")
@@ -820,12 +832,22 @@ class DaemonServer:
             except Exception:
                 pass
             self._server_sock = None
+        for csock in list(self._active_clients):
+            try:
+                csock.close()
+            except Exception:
+                pass
+        self._active_clients.clear()
         if self.worker_process:
             self.worker_process.join(timeout=3)
             if self.worker_process.is_alive():
                 self.worker_process.terminate()
+            self.worker_process = None
         self._cleanup_shm()
-        self.thread_pool.shutdown(wait=False)
+        try:
+            atexit.unregister(self._cleanup_shm)
+        except Exception:
+            pass
         logger.info("Host daemon shutdown complete.")
 
 async def _run_agent_services(ws_daemon: Any, daemon: Optional["DaemonServer"] = None) -> None:
@@ -901,8 +923,8 @@ def main():
 
     if "--create-shortcut" in sys.argv:
         if create_desktop_shortcut:
-            ok1, msg1 = create_desktop_shortcut()
-            ok2, msg2 = create_start_menu_shortcut() if create_start_menu_shortcut else (False, "")
+            _, msg1 = create_desktop_shortcut()
+            _, msg2 = create_start_menu_shortcut() if create_start_menu_shortcut else (False, "")
             print(f"Desktop shortcut: {msg1}")
             print(f"Start Menu shortcut: {msg2}")
         sys.exit(0)
@@ -994,6 +1016,7 @@ def main():
         except KeyboardInterrupt:
             _stop_all()
     finally:
+        job_guard.close()
         if guard:
             guard.release()
 
