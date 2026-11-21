@@ -49,6 +49,18 @@
 - **Automated Verification Suites**:
   - Added `agent/tests/test_screen_stream_and_hardening.py` and `apps/web/src/tests/verifyCryptoAndSecurity.ts` covering mutual ECDH, AEAD framing, replay defense, encrypted PIN pairing, AST firewall rules, and 60 FPS frame sync backpressure.
 
+### 5. Apple Liquid Glass Dual-Polarity UI & Redesigned Secondary Menus (`apps/web/`, `apps/mobile/`, `agent/`)
+- **Bright Daylight Glass & Vibrant Dark Polarity**: Refreshed Web Console, Flutter Mobile, and Python Desktop Host Agent to an Apple Liquid Glass aesthetic defaulting to **Bright Daylight Glass** with 1-tap toggle to **Vibrant Dark**, 6 hero accent presets, specular glass bezels, squircle badges, and Tailwind v4 `[data-theme="dark"]` polarity binding.
+- **Pill-Tabbed Settings Hub & Dedicated Security Audit Log**: Rebuilt `SettingsScreen.tsx` into 5 animated pill tabs (`Overview`, `Appearance`, `WoL & Energy`, `Audit & Logs`, `AI & Security`) with instant cross-settings live search, plus a dedicated `AuditLogViewer.tsx` strictly focused on shell executions, HITL firewall decisions, and PC daemon security events.
+- **Green WoL & Energy Efficiency Hub**: Rebuilt `WolEnergyCalculator.tsx`, `WolEnergyWeeklyChart.tsx`, `WolHistoryLogViewer.tsx`, and `WolModal.tsx` with always-open annual savings / kWh / CO₂ / % reduction KPIs, dual-mode Daylight/Dark bar charts, rich Magic Packet source/broadcast/RTT/SecureOn diagnostics, inline 2-step confirmations, and live MAC validation.
+- **Dual-Mode Telemetry, D3 Topology & Progressive-Disclosure Modals**: Adapted `NetworkTopologyGraph.tsx`, `HeartbeatSparkline.tsx`, `HostLatencySparkline.tsx`, all daily/control-center modals, Flutter secondary sheets (`onboarding_sheet.dart`, `pip_stream_viewer.dart`, `viewport_stream_widget.dart`), and Python desktop secondary dialogs to both Daylight and Dark glass polarities.
+
+### 6. Full-Stack Bug, Security, Performance & GitHub CI/CD Hardening
+- **Web Console & Express Server (`apps/web/`)**: Fixed LAN auth token alignment (`App.tsx` ↔ `server.ts`), tightened IPv6 SSRF validation to strict `2000::/3`, hardened encrypted PIN pairing and WebSocket worker socket races, made DPAPI config writes atomic, removed ~1,039 LOC of dead/duplicate code, lazy-loaded modals/Recharts/JSZip, and cut main entry bundle size by **54.8%** (`877.37 kB` → `396.14 kB`).
+- **Python Host Agent (`agent/`)**: Fixed `CyberColors.TEXT_MUTED` crash in `windows_integration.py`, 64-bit `ctypes` `HDESK`/`HWND` handle leaks, POSIX `O_EXCL`/`0600` config creation and `AI_CONFIG_DIR` isolation, file-writer resume/junction/DoS guards, TLS cert-key verification, and mousewheel listener leaks; accelerated 720p downscaling (`9.25 ms` → `5.20 ms`) and delta detection (`-35%`).
+- **Flutter Mobile (`apps/mobile/`)**: Fixed wakelock refcount leaks, `SamsungPillNavBar` 120Hz rebuilds, `PipStreamViewer` sensor error handling, and Hive preference resets; pruned 4 unused dependencies (16 transitive packages), enabled strict subscription/sink/future analyzer lints, and optimized zero-copy packet reassembly and Riverpod `.select(...)` scoping.
+- **GitHub Actions, Dependabot & Release Pipeline**: Hardened `.github/workflows/ci.yml` and `.github/workflows/release.yml` with explicit least-privilege `permissions:`, `concurrency:`, `persist-credentials: false`, CodeQL-safe `env:` tag validation, Node 24 actions, and `.github/dependabot.yml`; fixed `START_HERE_WINDOWS.bat` / `START_HERE_LINUX.sh` and GitHub/GitLab release publishers.
+
 ---
 
 ## Release Deliverables (`v0.80.0` / `0.80.00`)
