@@ -7,7 +7,7 @@ zeroconf>=0.154.0
 # Hardware Screen Capture & Image Compression
 mss>=10.2.0
 Pillow>=13.0.0
-numpy>=2.5.4
+numpy>=2.5.5
 PyTurboJPEG>=2.6.1
 
 # Cryptographic Engine Acceleration (RFC 7748 / RFC 8439)
