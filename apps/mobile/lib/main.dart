@@ -15,12 +15,16 @@ import 'security/secure_secret_store.dart';
 import 'services/app_preferences.dart';
 import 'services/file_transfer_engine.dart';
 import 'services/host_connection_client.dart';
+import 'services/lan_discovery_service.dart';
 import 'services/os_integrations_manager.dart';
 import 'theme/fluid_theme.dart';
 import 'ui/adaptive_layout_builder.dart';
+import 'ui/fullscreen_stream_page.dart';
 import 'ui/onboarding_sheet.dart';
 import 'ui/responsive_device_card.dart';
 import 'ui/viewport_stream_widget.dart';
+
+export 'ui/fullscreen_stream_page.dart';
 
 const String _kGhostDevicesBox = 'ghost_devices';
 const String _kSavedHostsKey = 'saved_hosts_v1';
@@ -1287,8 +1291,45 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     );
 
     final List<HostState> foundPcs = [];
+    final Set<String> discoveredIps = <String>{};
 
     try {
+      // Phase 1: Instant UDP LAN broadcast discovery (CST_DISCOVER_V1)
+      try {
+        final udpHosts = await LanDiscoveryService.discover(
+          timeout: const Duration(milliseconds: 1100),
+        );
+        if (!mounted) return;
+        for (final host in udpHosts) {
+          if (!NetworkValidators.isValidIpOrHost(host.ip)) continue;
+          if (!discoveredIps.add(host.ip)) continue;
+          final measuredMs = await _measureTcpLatency(host.ip, host.wsPort);
+          final safeName = NetworkValidators.sanitizeLabel(
+            host.hostname.trim().isNotEmpty
+                ? host.hostname
+                : 'Host PC (${host.ip})',
+          );
+          final hostId = 'PC-${host.ip.replaceAll('.', '-')}-${host.wsPort}';
+          foundPcs.add(
+            HostState(
+              id: hostId,
+              name: safeName,
+              ip: host.ip,
+              wsPort: host.wsPort,
+              mac: '00:00:00:00:00:00',
+              isOnline: true,
+              osName: host.os,
+              useTls: host.useTls,
+              certFingerprint: loadHostCertFingerprint(host.ip),
+              latencyMs: measuredMs ?? 1,
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint('UDP discovery notice: $e');
+      }
+
+      // Phase 2: Directed TCP/WebSocket subnet scan fallback for networks blocking UDP broadcast
       final Set<String> candidateIps = {
         for (final h in ref.read(fleetProvider))
           if (NetworkValidators.isValidIpOrHost(h.ip)) h.ip,
@@ -1323,6 +1364,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         debugPrint('Interface list notice: $e');
       }
 
+      candidateIps.removeAll(discoveredIps);
       final ipList = candidateIps.toList(growable: false);
       const chunkSize = 40;
       for (int i = 0; i < ipList.length; i += chunkSize) {
@@ -1453,12 +1495,23 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => FullscreenStreamPage(
-          host: host,
+          hostIp: host.ip,
+          hostName: host.name,
+          wsPort: host.wsPort,
           sharedSecret: effectiveSecret,
           useTls: host.useTls || prefs.preferTls,
           certFingerprint: effectiveFp.isNotEmpty ? effectiveFp : null,
           targetFps: prefs.targetFps,
           keepScreenAwake: prefs.keepScreenAwake,
+          initialInputMode: prefs.defaultInputMode,
+          autoLandscape: prefs.fullscreenAutoLandscape,
+          touchVisualFeedback: prefs.touchVisualFeedback,
+          hapticsEnabled: prefs.hapticsEnabled,
+          qualityPreset: prefs.streamQualityPreset,
+          trackpadSensitivity: prefs.trackpadSensitivity,
+          onQualityPresetChanged: (preset) => ref
+              .read(appPreferencesProvider.notifier)
+              .setStreamQualityPreset(preset),
           onTelemetry: (data) => ref
               .read(fleetProvider.notifier)
               .updateTelemetryByIp(host.ip, data),
@@ -3229,12 +3282,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       ramUsage: host.ramUsage,
       latencyMs: host.latencyMs,
       isSelected: isSelected,
+      useTls: host.useTls,
       onTap: () {
         ref.read(selectedHostIdProvider.notifier).state = host.id;
         if (host.isOnline) _openStreamScreen(host);
       },
       onWakeOnLan: () => _sendWakeOnLan(host.mac, targetIp: host.ip),
       onOpenStream: () => _openStreamScreen(host),
+      onOpenFullscreen: () => _openStreamScreen(host),
       onLongPress: () => _showHostActionsSheet(host),
       onMoreActions: () => _showHostActionsSheet(host),
     );
@@ -3297,7 +3352,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         builder: (context, constraints) {
           final cols = constraints.maxWidth < 460 ? 1 : 2;
           final extent =
-              (166.0 * FluidSize.getScaleFactor(context).clamp(0.92, 1.18))
+              (206.0 * FluidSize.getScaleFactor(context).clamp(0.92, 1.18))
                   .roundToDouble();
           return CustomScrollView(
             physics: const BouncingScrollPhysics(),
@@ -3368,11 +3423,13 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               ramUsage: host.ramUsage,
               latencyMs: host.latencyMs,
               isSelected: host.id == selectedId,
+              useTls: host.useTls,
               onTap: () {
                 ref.read(selectedHostIdProvider.notifier).state = host.id;
               },
               onWakeOnLan: () => _sendWakeOnLan(host.mac, targetIp: host.ip),
               onOpenStream: () => _openStreamScreen(host),
+              onOpenFullscreen: () => _openStreamScreen(host),
               onLongPress: () => _showHostActionsSheet(host),
               onMoreActions: () => _showHostActionsSheet(host),
             ),
@@ -3394,9 +3451,27 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       );
     }
 
-    final (preferTls, targetFps, keepScreenAwake) = ref.watch(
+    final (
+      preferTls,
+      targetFps,
+      keepScreenAwake,
+      defaultInputMode,
+      touchVisualFeedback,
+      hapticsEnabled,
+      streamQualityPreset,
+      trackpadSensitivity,
+    ) = ref.watch(
       appPreferencesProvider.select(
-        (p) => (p.preferTls, p.targetFps, p.keepScreenAwake),
+        (p) => (
+          p.preferTls,
+          p.targetFps,
+          p.keepScreenAwake,
+          p.defaultInputMode,
+          p.touchVisualFeedback,
+          p.hapticsEnabled,
+          p.streamQualityPreset,
+          p.trackpadSensitivity,
+        ),
       ),
     );
     final palette = context.palette;
@@ -3430,6 +3505,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           : loadHostCertFingerprint(host.ip),
                       targetFps: targetFps,
                       keepScreenAwake: keepScreenAwake,
+                      initialInputMode: defaultInputMode,
+                      touchVisualFeedback: touchVisualFeedback,
+                      hapticsEnabled: hapticsEnabled,
+                      qualityPreset: streamQualityPreset,
+                      trackpadSensitivity: trackpadSensitivity,
+                      onQualityPresetChanged: (preset) => ref
+                          .read(appPreferencesProvider.notifier)
+                          .setStreamQualityPreset(preset),
                       onTelemetry: (data) => ref
                           .read(fleetProvider.notifier)
                           .updateTelemetryByIp(host.ip, data),
@@ -4674,6 +4757,26 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           onChanged: prefsNotifier.setKeepScreenAwake,
         ),
         const SizedBox(height: 14),
+        _buildSectionHeader('TOUCHSCREEN & FULLSCREEN CONTROLS'),
+        const SizedBox(height: 8),
+        _buildTouchInputModeCard(prefs, prefsNotifier, primary),
+        _buildSettingsToggleTile(
+          icon: Icons.screen_rotation_rounded,
+          title: 'Auto-Landscape in Fullscreen',
+          subtitle: 'Automatically rotates to landscape when opening live PC control.',
+          value: prefs.fullscreenAutoLandscape,
+          onChanged: prefsNotifier.setFullscreenAutoLandscape,
+        ),
+        _buildSettingsToggleTile(
+          icon: Icons.touch_app_rounded,
+          title: 'Touch Visual Feedback',
+          subtitle: 'Shows animated tap ripples, cursor reticle, and long-press right-click ring.',
+          value: prefs.touchVisualFeedback,
+          onChanged: prefsNotifier.setTouchVisualFeedback,
+        ),
+        _buildStreamQualityPresetCard(prefs, prefsNotifier, primary),
+        _buildTrackpadSensitivityCard(prefs, prefsNotifier, primary),
+        const SizedBox(height: 14),
         _buildSectionHeader('MAINTENANCE & DIAGNOSTICS'),
         const SizedBox(height: 8),
         InkWell(
@@ -4712,7 +4815,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           subtitle:
               'Impeller Hardware Engine • AI-NET/3.0-SECURE Protocol',
           trailing: Text(
-            'v0.80.0',
+            'v0.85.0-alpha',
             style: TextStyle(
               color: context.palette.success,
               fontFamily: 'monospace',
@@ -4721,6 +4824,232 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildTouchInputModeCard(
+    AppPreferencesState prefs,
+    AppPreferencesNotifier prefsNotifier,
+    Color primary,
+  ) {
+    final palette = context.palette;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
+      decoration: BoxDecoration(
+        gradient: palette.cardBevelGradient(isSelected: false),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: palette.glassBorderIdle, width: 1.15),
+        boxShadow: palette.elevationShadows(isSelected: false),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const FluidSpecularBar(
+            isSelected: false,
+            height: 1.1,
+            margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
+          ),
+          Text(
+            'Default Remote Input Mode',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: palette.textPrimary,
+              fontSize: context.fluidFont(12.5),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Direct Touch moves the PC cursor directly under your finger; Trackpad uses relative glides.',
+            style: TextStyle(
+              color: palette.textSecondary,
+              fontSize: context.fluidFont(10.5),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final mode in RemoteInputMode.values)
+                ChoiceChip(
+                  key: ValueKey('input-mode-${mode.name}'),
+                  avatar: Icon(
+                    mode == RemoteInputMode.touchscreen
+                        ? Icons.touch_app_rounded
+                        : Icons.mouse_rounded,
+                    size: 15,
+                    color: prefs.defaultInputMode == mode
+                        ? primary
+                        : palette.textSecondary,
+                  ),
+                  label: Text(
+                    mode == RemoteInputMode.touchscreen
+                        ? 'Direct Touch'
+                        : 'Trackpad',
+                  ),
+                  selected: prefs.defaultInputMode == mode,
+                  selectedColor: primary.withValues(alpha: 0.22),
+                  labelStyle: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: prefs.defaultInputMode == mode
+                        ? FontWeight.bold
+                        : FontWeight.w600,
+                    color: prefs.defaultInputMode == mode
+                        ? primary
+                        : palette.textSecondary,
+                  ),
+                  onSelected: (_) {
+                    _hapticTap();
+                    prefsNotifier.setDefaultInputMode(mode);
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStreamQualityPresetCard(
+    AppPreferencesState prefs,
+    AppPreferencesNotifier prefsNotifier,
+    Color primary,
+  ) {
+    final palette = context.palette;
+    const labels = <String, String>{
+      'auto': 'Auto',
+      'low': 'Low',
+      'balanced': 'Balanced',
+      'crisp': 'Crisp',
+    };
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
+      decoration: BoxDecoration(
+        gradient: palette.cardBevelGradient(isSelected: false),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: palette.glassBorderIdle, width: 1.15),
+        boxShadow: palette.elevationShadows(isSelected: false),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const FluidSpecularBar(
+            isSelected: false,
+            height: 1.1,
+            margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
+          ),
+          Text(
+            'Stream Visual Quality Preset',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: palette.textPrimary,
+              fontSize: context.fluidFont(12.5),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Balances bandwidth vs desktop text crispness across Wi-Fi conditions.',
+            style: TextStyle(
+              color: palette.textSecondary,
+              fontSize: context.fluidFont(10.5),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: kValidStreamQualityPresets.map((preset) {
+              final active = prefs.streamQualityPreset == preset;
+              return ChoiceChip(
+                key: ValueKey('quality-preset-$preset'),
+                label: Text(labels[preset] ?? preset),
+                selected: active,
+                selectedColor: primary.withValues(alpha: 0.22),
+                labelStyle: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  fontWeight: active ? FontWeight.bold : FontWeight.w600,
+                  color: active ? primary : palette.textSecondary,
+                ),
+                onSelected: (_) {
+                  _hapticTap();
+                  prefsNotifier.setStreamQualityPreset(preset);
+                },
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTrackpadSensitivityCard(
+    AppPreferencesState prefs,
+    AppPreferencesNotifier prefsNotifier,
+    Color primary,
+  ) {
+    final palette = context.palette;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 10),
+      decoration: BoxDecoration(
+        gradient: palette.cardBevelGradient(isSelected: false),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: palette.glassBorderIdle, width: 1.15),
+        boxShadow: palette.elevationShadows(isSelected: false),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const FluidSpecularBar(
+            isSelected: false,
+            height: 1.1,
+            margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Trackpad Pointer Sensitivity',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: palette.textPrimary,
+                    fontSize: context.fluidFont(12.5),
+                  ),
+                ),
+              ),
+              Text(
+                '${prefs.trackpadSensitivity.toStringAsFixed(1)}x',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w800,
+                  color: primary,
+                  fontSize: context.fluidFont(11.5),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Cursor velocity gain when using Trackpad (PAD) mode.',
+            style: TextStyle(
+              color: palette.textSecondary,
+              fontSize: context.fluidFont(10.5),
+            ),
+          ),
+          Slider(
+            key: const ValueKey('trackpad-sensitivity-slider'),
+            value: prefs.trackpadSensitivity.clamp(0.6, 3.0),
+            min: 0.6,
+            max: 3.0,
+            divisions: 24,
+            activeColor: primary,
+            onChanged: prefsNotifier.setTrackpadSensitivity,
+          ),
+        ],
+      ),
     );
   }
 
@@ -4858,101 +5187,6 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ),
         ),
       ],
-    );
-  }
-}
-
-// =====================================================================
-// FULLSCREEN SCREEN STREAM PAGE (HARDENED & FLUID)
-// =====================================================================
-class FullscreenStreamPage extends StatefulWidget {
-  final HostState host;
-  final String sharedSecret;
-  final bool useTls;
-  final String? certFingerprint;
-  final int targetFps;
-  final bool keepScreenAwake;
-  final void Function(Map<String, dynamic> telemetry)? onTelemetry;
-
-  const FullscreenStreamPage({
-    super.key,
-    required this.host,
-    this.sharedSecret = '',
-    this.useTls = false,
-    this.certFingerprint,
-    this.targetFps = 30,
-    this.keepScreenAwake = true,
-    this.onTelemetry,
-  });
-
-  @override
-  State<FullscreenStreamPage> createState() => _FullscreenStreamPageState();
-}
-
-class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
-  @override
-  Widget build(BuildContext context) {
-    final effectiveSecret = widget.sharedSecret.trim().isNotEmpty
-        ? widget.sharedSecret.trim()
-        : (widget.host.sharedSecret.trim().isNotEmpty
-            ? widget.host.sharedSecret.trim()
-            : loadHostPairingSecret(widget.host.ip));
-    final resolvedFp = (widget.certFingerprint != null &&
-            widget.certFingerprint!.trim().isNotEmpty)
-        ? widget.certFingerprint!.trim()
-        : (widget.host.certFingerprint.trim().isNotEmpty
-            ? widget.host.certFingerprint.trim()
-            : loadHostCertFingerprint(widget.host.ip));
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        top: false,
-        bottom: false,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ViewportStreamWidget(
-                hostIp: widget.host.ip,
-                hostName: widget.host.name,
-                wsPort: widget.host.wsPort,
-                isInline: false,
-                sharedSecret: effectiveSecret,
-                useTls: widget.useTls || widget.host.useTls,
-                certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
-                targetFps: widget.targetFps,
-                keepScreenAwake: widget.keepScreenAwake,
-                onTelemetry: widget.onTelemetry,
-              ),
-            ),
-            Positioned(
-              top: MediaQuery.paddingOf(context).top + 8,
-              left: MediaQuery.paddingOf(context).left + 12,
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.65),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 40,
-                    minHeight: 40,
-                  ),
-                  icon: const Icon(
-                    Icons.arrow_back_rounded,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
