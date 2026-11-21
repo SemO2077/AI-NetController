@@ -25,6 +25,17 @@ class PairingResult {
   });
 }
 
+/// Lifecycle phase of a persistent host connection.
+enum HostConnectionPhase {
+  disconnected,
+  connecting,
+  authenticating,
+  securingVault,
+  connected,
+  reconnecting,
+  authFailed,
+}
+
 /// Immutable status snapshot of a persistent host connection.
 class HostConnectionSnapshot {
   final bool isConnecting;
@@ -33,6 +44,10 @@ class HostConnectionSnapshot {
   final bool isVaultEstablished;
   final int? latencyMs;
   final String? errorMessage;
+  final HostConnectionPhase phase;
+  final int reconnectAttempt;
+  final DateTime? connectedSince;
+  final String? errorHint;
 
   const HostConnectionSnapshot({
     this.isConnecting = false,
@@ -41,6 +56,10 @@ class HostConnectionSnapshot {
     this.isVaultEstablished = false,
     this.latencyMs,
     this.errorMessage,
+    this.phase = HostConnectionPhase.disconnected,
+    this.reconnectAttempt = 0,
+    this.connectedSince,
+    this.errorHint,
   });
 }
 
@@ -74,8 +93,12 @@ class HostConnectionClient {
   bool _mutualInFlight = false;
   int _controlSeq = 0;
   int _reconnectAttempt = 0;
+  int _connectionGeneration = 0;
   int? _latencyMs;
   String? _errorMessage;
+  String? _errorHint;
+  HostConnectionPhase _phase = HostConnectionPhase.disconnected;
+  DateTime? _connectedSince;
   Uint8List? _lastFrame;
   DateTime _lastInboundAt = DateTime.fromMillisecondsSinceEpoch(0);
   int _aeadDecryptErrors = 0;
@@ -127,6 +150,10 @@ class HostConnectionClient {
   bool get isVaultEstablished => _isVaultEstablished;
   int? get latencyMs => _latencyMs;
   String? get errorMessage => _errorMessage;
+  HostConnectionPhase get phase => _phase;
+  int get reconnectAttempt => _reconnectAttempt;
+  DateTime? get connectedSince => _connectedSince;
+  String? get errorHint => _errorHint;
   int get activeMonitorIndex => _activeMonitorIndex;
   Uint8List? get lastFrame => _lastFrame;
 
@@ -137,6 +164,10 @@ class HostConnectionClient {
         isVaultEstablished: _isVaultEstablished,
         latencyMs: _latencyMs,
         errorMessage: _errorMessage,
+        phase: _phase,
+        reconnectAttempt: _reconnectAttempt,
+        connectedSince: _connectedSince,
+        errorHint: _errorHint,
       );
 
   Stream<Uint8List> get frameStream => _frameCtrl.stream;
@@ -149,6 +180,108 @@ class HostConnectionClient {
       _displayEnumCtrl.stream;
   Stream<Map<String, dynamic>> get hitlChallengeStream => _hitlRawCtrl.stream;
   Stream<HostConnectionSnapshot> get stateStream => _stateCtrl.stream;
+
+  void _setError(String? message) {
+    final String? clean =
+        (message != null && message.trim().isNotEmpty) ? message.trim() : null;
+    _errorMessage = clean;
+    _errorHint = clean == null
+        ? null
+        : buildErrorHint(clean, port: port, useTls: useTls);
+  }
+
+  /// Derives an actionable human-readable troubleshooting tip from a transport
+  /// or handshake error string.
+  static String? buildErrorHint(
+    String? errorMessage, {
+    int port = 8765,
+    bool useTls = false,
+  }) {
+    if (errorMessage == null || errorMessage.trim().isEmpty) return null;
+    final String lower = errorMessage.toLowerCase();
+
+    if (lower.contains('pairing secret required')) {
+      return 'Enter the pairing secret or pair with the 6-digit PIN shown on the PC Host Agent before connecting.';
+    }
+    if (lower.contains('geofence') || lower.contains('subnet')) {
+      return 'Host subnet geofence blocked this connection. Connect your phone to the same LAN/Wi-Fi subnet as the PC.';
+    }
+    if (lower.contains('blacklisted') ||
+        lower.contains('rate limit') ||
+        lower.contains('too many')) {
+      return 'Host temporarily rate-limited this device after repeated failures. Wait briefly or restart the PC Host Agent.';
+    }
+    if (lower.contains('handshakeexception') ||
+        lower.contains('bad certificate') ||
+        lower.contains('certificate') ||
+        lower.contains('x509') ||
+        lower.contains('tls') ||
+        lower.contains('ssl')) {
+      return 'TLS certificate mismatch or untrusted cert. Re-pair the host to pin its new certificate, or toggle TLS in host settings.';
+    }
+    if (lower.contains('mutual cryptographic proof') ||
+        lower.contains('auth') ||
+        lower.contains('rejected') ||
+        lower.contains('unauthorized') ||
+        lower.contains('invalid secret') ||
+        lower.contains('invalid token') ||
+        lower.contains('origin not permitted')) {
+      return 'Pairing secret mismatch. Re-pair this device using a fresh 6-digit PIN from the PC Host Agent.';
+    }
+    if (lower.contains('aead') ||
+        lower.contains('downgrade') ||
+        lower.contains('unencrypted') ||
+        lower.contains('replay')) {
+      return 'Encrypted vault check failed. Tap Reconnect for a fresh ECDH session or re-pair if the issue persists.';
+    }
+    if (lower.contains('connection refused') ||
+        lower.contains('actively refused') ||
+        lower.contains('errno = 111') ||
+        lower.contains('errno = 10061')) {
+      return 'Connection refused on port $port. Confirm the PC Host Agent is running and Windows Firewall allows TCP port $port.';
+    }
+    if (lower.contains('timed out') ||
+        lower.contains('timeout') ||
+        lower.contains('no route to host') ||
+        lower.contains('network is unreachable') ||
+        lower.contains('host is down') ||
+        lower.contains('errno = 113') ||
+        lower.contains('errno = 10060') ||
+        lower.contains('errno = 10065')) {
+      return 'Host did not respond on port $port. Check Wi-Fi, allow TCP port $port in Windows Firewall, or send Wake-on-LAN if the PC is asleep.';
+    }
+    if (lower.contains('failed host lookup') ||
+        lower.contains('no such host') ||
+        lower.contains('nodename nor servname')) {
+      return 'Could not resolve host address. Verify the PC IP address or run LAN discovery again.';
+    }
+    if (lower.contains('heartbeat') ||
+        lower.contains('watchdog') ||
+        lower.contains('closed by host') ||
+        lower.contains('connection reset') ||
+        lower.contains('broken pipe') ||
+        lower.contains('socket')) {
+      return 'Connection dropped. Check Wi-Fi stability and confirm the PC Host Agent is still running on port $port.';
+    }
+    if (useTls) {
+      return 'Verify the PC Host Agent is running with TLS on port $port, firewall allows TCP port $port, and the pairing secret matches.';
+    }
+    return 'Verify the PC Host Agent is running on port $port, Windows Firewall allows TCP port $port, and both devices share the same Wi-Fi/LAN.';
+  }
+
+  /// Computes snappy LAN reconnect backoff delay in milliseconds:
+  /// `500ms, 1s, 2s, 4s, 8s` (capped at 8s) scaled by [jitterFactor] (`0.8..1.2`).
+  static int computeReconnectDelayMs(
+    int attemptIndex, {
+    double jitterFactor = 1.0,
+  }) {
+    final int clampedAttempt =
+        attemptIndex < 0 ? 0 : (attemptIndex > 4 ? 4 : attemptIndex);
+    final int baseMs = min(8000, 500 * (1 << clampedAttempt));
+    final double safeJitter =
+        jitterFactor.isFinite ? jitterFactor.clamp(0.8, 1.2) : 1.0;
+    return (baseMs * safeJitter).round();
+  }
 
   void _emitState() {
     if (!_stateCtrl.isClosed) {
@@ -199,6 +332,7 @@ class HostConnectionClient {
     try {
       final ws = await WebSocket.connect(uri.toString(), customClient: httpClient)
           .timeout(timeout);
+      ws.pingInterval = const Duration(seconds: 5);
       connected = true;
       return ws;
     } finally {
@@ -212,7 +346,7 @@ class HostConnectionClient {
     String ip, {
     int port = 8765,
     bool useTls = false,
-    Duration timeout = const Duration(milliseconds: 550),
+    Duration timeout = const Duration(milliseconds: 1000),
   }) async {
     WebSocket? ws;
     final HttpClient client = HttpClient()..connectionTimeout = timeout;
@@ -445,6 +579,60 @@ class HostConnectionClient {
     }
   }
 
+  /// Resets reconnect state, tears down any stale transport, and initiates an
+  /// immediate fresh connection handshake.
+  Future<void> reconnectNow({
+    Duration timeout = const Duration(seconds: 7),
+  }) {
+    if (_disposed) {
+      return Future<void>.error(
+        StateError('HostConnectionClient has been disposed'),
+      );
+    }
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempt = 0;
+    _manualDisconnect = false;
+    _authRejected = false;
+    final pendingCompleter = _connectCompleter;
+    _connectCompleter = null;
+    _cleanupTransportOnly();
+    _setError(null);
+    if (pendingCompleter != null && !pendingCompleter.isCompleted) {
+      pendingCompleter.completeError(
+        StateError('Reconnect requested by client.'),
+      );
+    }
+    return ensureConnected(timeout: timeout);
+  }
+
+  /// Notifies the client that the mobile app woke or returned to the foreground.
+  ///
+  /// When connected, immediately sends an encrypted RTT ping to verify socket
+  /// liveness; when disconnected or waiting to reconnect (and not manually
+  /// disconnected or auth-failed), immediately triggers [reconnectNow].
+  void notifyAppResumed() {
+    if (_disposed) return;
+    if (_isConnected &&
+        _isVaultEstablished &&
+        _crypto != null &&
+        _channel != null) {
+      if (DateTime.now().difference(_lastInboundAt).inSeconds >= 8) {
+        _lastInboundAt = DateTime.now().subtract(const Duration(seconds: 8));
+      }
+      if (!_sendPingNow()) {
+        unawaited(reconnectNow().catchError((_) {}));
+      }
+      return;
+    }
+    if (!_manualDisconnect &&
+        !_authRejected &&
+        !_isConnecting &&
+        sharedSecret.trim().isNotEmpty) {
+      unawaited(reconnectNow().catchError((_) {}));
+    }
+  }
+
   /// Ensures an authenticated, AEAD-upgraded session is open with the host.
   Future<void> ensureConnected({Duration timeout = const Duration(seconds: 7)}) async {
     if (_disposed) {
@@ -459,25 +647,34 @@ class HostConnectionClient {
 
     _manualDisconnect = false;
     _authRejected = false;
-    final Completer<void> completer = Completer<void>();
-    _connectCompleter = completer;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
 
     final String secret = sharedSecret.trim();
     if (secret.isEmpty) {
-      _errorMessage = 'Pairing secret required before connecting to host.';
-      _isConnecting = false;
+      _authRejected = true;
+      _cleanupTransportOnly();
+      _setError('Pairing secret required before connecting to host.');
+      _phase = HostConnectionPhase.authFailed;
       _emitState();
-      if (!completer.isCompleted) {
-        completer.completeError(StateError(_errorMessage!));
-      }
-      return completer.future;
+      throw StateError(_errorMessage!);
     }
 
+    final Completer<void> completer = Completer<void>();
+    // Guard against unhandled async errors if caller stops awaiting or times out.
+    unawaited(completer.future.catchError((_) {}));
+    _connectCompleter = completer;
+
     _cleanupTransportOnly();
+    final int gen = _connectionGeneration;
     _isConnecting = true;
-    _errorMessage = null;
+    _phase = _reconnectAttempt > 0
+        ? HostConnectionPhase.reconnecting
+        : HostConnectionPhase.connecting;
+    _setError(null);
     _emitState();
 
+    Timer? handshakeTimer;
     try {
       final uri = Uri(scheme: useTls ? 'wss' : 'ws', host: hostIp, port: port);
       final ws = await openRawWebSocket(
@@ -487,52 +684,87 @@ class HostConnectionClient {
       );
       if (_disposed ||
           _manualDisconnect ||
+          gen != _connectionGeneration ||
           _connectCompleter != completer ||
           completer.isCompleted) {
         unawaited(ws.close().catchError((_) {}));
         if (!completer.isCompleted) {
-          completer.completeError(StateError('Connection aborted before handshake'));
+          completer.completeError(
+            StateError('Connection aborted before handshake'),
+          );
         }
         return await completer.future;
       }
 
+      ws.pingInterval = const Duration(seconds: 5);
       _channel = IOWebSocketChannel(ws);
       _lastInboundAt = DateTime.now();
+      _phase = HostConnectionPhase.authenticating;
+      _emitState();
+
+      handshakeTimer = Timer(timeout, () {
+        if (!_disposed &&
+            gen == _connectionGeneration &&
+            !completer.isCompleted) {
+          _handleDisconnect(
+            'Vault handshake timed out ($hostIp:$port)',
+            completer,
+            errorOverride: TimeoutException('Handshake timeout with $hostIp:$port'),
+          );
+        }
+      });
 
       _subscription = _channel!.stream.listen(
-        (dynamic message) => _handleIncoming(message, secret, completer),
+        (dynamic message) {
+          if (gen != _connectionGeneration || _disposed) return;
+          _handleIncoming(message, secret, completer);
+        },
         onError: (Object err) {
+          if (gen != _connectionGeneration || _disposed) return;
           _handleDisconnect('Socket connection error: $err', completer);
         },
         onDone: () {
+          if (gen != _connectionGeneration || _disposed) return;
           _handleDisconnect('Connection closed by host.', completer);
         },
       );
 
-      return await completer.future.timeout(
-        timeout,
-        onTimeout: () {
-          _handleDisconnect('Vault handshake timed out ($hostIp:$port)', completer);
-          throw TimeoutException('Handshake timeout with $hostIp:$port');
-        },
-      );
+      return await completer.future;
     } catch (e) {
       if (_connectCompleter == completer) {
         _connectCompleter = null;
       }
+      final bool staleAttempt = gen != _connectionGeneration;
       final bool handledByDisconnect = completer.isCompleted;
       if (!handledByDisconnect) {
-        _cleanupTransportOnly();
-        if (!_manualDisconnect) {
-          _errorMessage = 'Failed to connect: $e';
+        if (!staleAttempt) {
+          _cleanupTransportOnly();
+          if (!_manualDisconnect) {
+            _setError('Failed to connect: $e');
+            if (!_disposed && !_authRejected) {
+              _scheduleReconnect();
+            } else {
+              _phase = _authRejected
+                  ? HostConnectionPhase.authFailed
+                  : HostConnectionPhase.disconnected;
+              _emitState();
+            }
+          } else {
+            _phase = HostConnectionPhase.disconnected;
+            _emitState();
+          }
         }
-        _emitState();
         completer.completeError(e);
-      }
-      if (!_disposed && !_manualDisconnect && !_authRejected) {
+      } else if (!staleAttempt &&
+          !_disposed &&
+          !_manualDisconnect &&
+          !_authRejected &&
+          !(_reconnectTimer?.isActive ?? false)) {
         _scheduleReconnect();
       }
       return completer.future;
+    } finally {
+      handshakeTimer?.cancel();
     }
   }
 
@@ -547,7 +779,7 @@ class HostConnectionClient {
     if (message is! Uint8List && message is! List<int>) {
       // Anti-downgrade: once ECDH vault is established, never accept plaintext JSON control frames.
       if (_isVaultEstablished) {
-        _errorMessage = 'Rejected unencrypted control frame after AEAD vault lock.';
+        _setError('Rejected unencrypted control frame after AEAD vault lock.');
         _emitState();
       }
       return;
@@ -568,6 +800,7 @@ class HostConnectionClient {
             (statusStr == 'OK_AUTHENTICATED' || statusStr == 'AUTH_OK')) {
           _isAuthenticated = true;
           _isConnected = true;
+          _phase = HostConnectionPhase.securingVault;
           _emitState();
 
           if (!_mutualInFlight) {
@@ -586,6 +819,10 @@ class HostConnectionClient {
           // IMPORTANT: Check 'OK_AUTHENTICATED' before length == 16 because
           // "OK_AUTHENTICATED" is itself 16 ASCII bytes.
           _authChallengeResponded = true;
+          if (_phase != HostConnectionPhase.authenticating) {
+            _phase = HostConnectionPhase.authenticating;
+            _emitState();
+          }
           final hmacSha256 = crypto_pkg.Hmac(crypto_pkg.sha256, utf8.encode(secret));
           final digest = hmacSha256.convert(packet.payload);
           _channel?.sink.add(packPacket(
@@ -617,8 +854,11 @@ class HostConnectionClient {
           _isConnecting = false;
           _reconnectAttempt = 0;
           _aeadDecryptErrors = 0;
-          _errorMessage = null;
+          _connectedSince = DateTime.now();
+          _phase = HostConnectionPhase.connected;
+          _setError(null);
           _startTimers();
+          _sendPingNow();
           requestKeyframe();
           requestDisplayEnum();
           _emitState();
@@ -646,8 +886,9 @@ class HostConnectionClient {
     // 2. Strict Post-Vault AEAD Gate (Zero Plaintext Tolerance)
     if ((packet.flags & ProtocolFlags.encrypted) == 0) {
       _aeadDecryptErrors++;
-      _errorMessage =
-          'Anti-downgrade guard: dropped unencrypted frame (op 0x${packet.opcode.toRadixString(16)})';
+      _setError(
+        'Anti-downgrade guard: dropped unencrypted frame (op 0x${packet.opcode.toRadixString(16)})',
+      );
       _emitState();
       if (_aeadDecryptErrors >= 3) {
         _handleDisconnect('Repeated unencrypted downgrade frames', connectCompleter);
@@ -658,7 +899,7 @@ class HostConnectionClient {
     final Uint8List? plaintext = _crypto?.decryptWirePacket(raw);
     if (plaintext == null) {
       _aeadDecryptErrors++;
-      _errorMessage = 'AEAD tag or replay check failed on host frame.';
+      _setError('AEAD tag or replay check failed on host frame.');
       _emitState();
       if (_aeadDecryptErrors >= 5) {
         _handleDisconnect('Persistent AEAD verification failure', connectCompleter);
@@ -767,7 +1008,7 @@ class HostConnectionClient {
       case BinaryOpcode.error:
         final err = utf8.decode(dispatchPayload, allowMalformed: true).trim();
         if (err.isNotEmpty) {
-          _errorMessage = err;
+          _setError(err);
           _emitState();
         }
         break;
@@ -794,7 +1035,7 @@ class HostConnectionClient {
       _channel!.sink.add(encryptedFrame);
       return true;
     } catch (e) {
-      _errorMessage = 'Encrypted transmit error: $e';
+      _setError('Encrypted transmit error: $e');
       _emitState();
       return false;
     }
@@ -818,10 +1059,118 @@ class HostConnectionClient {
       _channel!.sink.add(framed);
       return true;
     } catch (e) {
-      _errorMessage = 'Encrypted transmit error: $e';
+      _setError('Encrypted transmit error: $e');
       _emitState();
       return false;
     }
+  }
+
+  static int _encodeNormalizedCoord(double value) {
+    if (value.isNaN) return 0;
+    return (value.clamp(0.0, 1.0) * 65535).round().clamp(0, 65535);
+  }
+
+  /// Encodes a 6-byte `!BHHB` absolute cursor move payload (`type = 4`).
+  static Uint8List encodeAbsoluteMouseMove(double nx, double ny) {
+    final Uint8List buf = Uint8List(6);
+    final ByteData bd = ByteData.sublistView(buf);
+    bd.setUint8(0, 4);
+    bd.setUint16(1, _encodeNormalizedCoord(nx), Endian.big);
+    bd.setUint16(3, _encodeNormalizedCoord(ny), Endian.big);
+    bd.setUint8(5, 0);
+    return buf;
+  }
+
+  /// Encodes a 6-byte `!BHHB` absolute click payload (`type = 5`).
+  /// [buttonCode]: `1=left, 2=right, 3=middle, 4=double`.
+  static Uint8List encodeAbsoluteMouseClick(
+    double nx,
+    double ny, {
+    int buttonCode = 1,
+  }) {
+    final Uint8List buf = Uint8List(6);
+    final ByteData bd = ByteData.sublistView(buf);
+    bd.setUint8(0, 5);
+    bd.setUint16(1, _encodeNormalizedCoord(nx), Endian.big);
+    bd.setUint16(3, _encodeNormalizedCoord(ny), Endian.big);
+    bd.setUint8(5, buttonCode.clamp(1, 4));
+    return buf;
+  }
+
+  /// Encodes a 6-byte `!BHHB` absolute mouse button down/up payload (`type = 6`).
+  /// [actionCode]: `1=lDown, 2=lUp, 3=rDown, 4=rUp, 5=mDown, 6=mUp`.
+  static Uint8List encodeAbsoluteMouseButton(
+    double nx,
+    double ny, {
+    required int actionCode,
+  }) {
+    final Uint8List buf = Uint8List(6);
+    final ByteData bd = ByteData.sublistView(buf);
+    bd.setUint8(0, 6);
+    bd.setUint16(1, _encodeNormalizedCoord(nx), Endian.big);
+    bd.setUint16(3, _encodeNormalizedCoord(ny), Endian.big);
+    bd.setUint8(5, actionCode.clamp(1, 6));
+    return buf;
+  }
+
+  /// Encodes a 6-byte `!BhhB` 2D scroll payload (`type = 7`).
+  static Uint8List encodeScroll2D(int dx, int dy) {
+    final Uint8List buf = Uint8List(6);
+    final ByteData bd = ByteData.sublistView(buf);
+    bd.setUint8(0, 7);
+    bd.setInt16(1, dx.clamp(-5000, 5000), Endian.big);
+    bd.setInt16(3, dy.clamp(-5000, 5000), Endian.big);
+    bd.setUint8(5, 0);
+    return buf;
+  }
+
+  /// Moves the PC cursor directly to normalized monitor coordinates `(nx, ny)` in `[0.0, 1.0]`.
+  bool sendAbsoluteMouseMove(double nx, double ny) =>
+      sendEncrypted(BinaryOpcode.input, encodeAbsoluteMouseMove(nx, ny));
+
+  /// Moves and clicks at normalized coordinates `(nx, ny)` (`buttonCode`: 1=left, 2=right, 3=middle, 4=double).
+  bool sendAbsoluteMouseClick(double nx, double ny, {int buttonCode = 1}) =>
+      sendEncrypted(
+        BinaryOpcode.input,
+        encodeAbsoluteMouseClick(nx, ny, buttonCode: buttonCode),
+      );
+
+  /// Sends mouse button down/up at normalized coordinates `(nx, ny)`.
+  /// [actionCode]: `1=lDown, 2=lUp, 3=rDown, 4=rUp, 5=mDown, 6=mUp`.
+  bool sendAbsoluteMouseButton(
+    double nx,
+    double ny, {
+    required int actionCode,
+  }) =>
+      sendEncrypted(
+        BinaryOpcode.input,
+        encodeAbsoluteMouseButton(nx, ny, actionCode: actionCode),
+      );
+
+  /// Sends a 2D scroll delta (`dx` horizontal, `dy` vertical), clamped to `[-5000, 5000]`.
+  bool sendScroll2D(int dx, int dy) =>
+      sendEncrypted(BinaryOpcode.input, encodeScroll2D(dx, dy));
+
+  /// Sends encrypted viewport resolution, JPEG quality, and FPS tuning (`0x0A`).
+  bool sendViewportConfig({
+    required int width,
+    required int height,
+    required int quality,
+    required int fps,
+  }) {
+    return sendEncrypted(
+      BinaryOpcode.viewportResize,
+      Uint8List.fromList(
+        utf8.encode(
+          jsonEncode({
+            'width': width.clamp(160, 7680),
+            'height': height.clamp(90, 4320),
+            'quality': quality.clamp(10, 100),
+            'fps': fps.clamp(5, 60),
+          }),
+        ),
+      ),
+    );
   }
 
   /// Sends clipboard text (`0x07`) to overwrite the host PC clipboard.
@@ -999,26 +1348,37 @@ class HostConnectionClient {
     return next;
   }
 
+  bool _sendPingNow() {
+    if (_disposed ||
+        !_isVaultEstablished ||
+        _crypto == null ||
+        _channel == null) {
+      return false;
+    }
+    final Uint8List pkt = _crypto!.encryptWirePacket(
+      BinaryOpcode.ping,
+      Uint8List(0),
+    );
+    final int seq = ByteData.sublistView(pkt).getUint32(4, Endian.big);
+    if (_pendingPings.length >= 4) {
+      _pendingPings.remove(_pendingPings.keys.first)?.stop();
+    }
+    _pendingPings[seq] = Stopwatch()..start();
+    try {
+      _channel!.sink.add(pkt);
+      return true;
+    } catch (_) {
+      _pendingPings.remove(seq)?.stop();
+      return false;
+    }
+  }
+
   void _startTimers() {
     _pingTimer?.cancel();
     _watchdogTimer?.cancel();
 
     _pingTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (_disposed || !_isVaultEstablished || _crypto == null) return;
-      final Uint8List pkt = _crypto!.encryptWirePacket(
-        BinaryOpcode.ping,
-        Uint8List(0),
-      );
-      final int seq = ByteData.sublistView(pkt).getUint32(4, Endian.big);
-      if (_pendingPings.length >= 4) {
-        _pendingPings.remove(_pendingPings.keys.first)?.stop();
-      }
-      _pendingPings[seq] = Stopwatch()..start();
-      try {
-        _channel?.sink.add(pkt);
-      } catch (_) {
-        _pendingPings.remove(seq)?.stop();
-      }
+      _sendPingNow();
     });
 
     _watchdogTimer = Timer.periodic(const Duration(seconds: 3), (_) {
@@ -1030,8 +1390,11 @@ class HostConnectionClient {
     });
   }
 
-  void _handleDisconnect(String reason, Completer<void>? connectCompleter) {
-    final bool wasConnecting = _isConnecting;
+  void _handleDisconnect(
+    String reason,
+    Completer<void>? connectCompleter, {
+    Object? errorOverride,
+  }) {
     final String lower = reason.toLowerCase();
     final bool permanentAuthOrPolicyFailure = _authRejected ||
         lower.contains('auth') ||
@@ -1039,39 +1402,59 @@ class HostConnectionClient {
         lower.contains('geofence') ||
         lower.contains('pairing secret required') ||
         lower.contains('origin not permitted');
+    if (permanentAuthOrPolicyFailure) {
+      _authRejected = true;
+    }
     _cleanupTransportOnly();
-    _errorMessage = reason;
-    _emitState();
+    _setError(reason);
+
+    final bool willReconnect = !_disposed &&
+        !_manualDisconnect &&
+        !permanentAuthOrPolicyFailure;
+    if (willReconnect) {
+      _scheduleReconnect();
+    } else {
+      _phase = permanentAuthOrPolicyFailure
+          ? HostConnectionPhase.authFailed
+          : HostConnectionPhase.disconnected;
+      _emitState();
+    }
+
     if (connectCompleter != null) {
       if (_connectCompleter == connectCompleter) {
         _connectCompleter = null;
       }
       if (!connectCompleter.isCompleted) {
-        connectCompleter.completeError(StateError(reason));
+        connectCompleter.completeError(errorOverride ?? StateError(reason));
       }
-    }
-    if (!_disposed &&
-        !_manualDisconnect &&
-        !wasConnecting &&
-        !permanentAuthOrPolicyFailure) {
-      _scheduleReconnect();
     }
   }
 
   void _scheduleReconnect() {
-    if (_disposed || _manualDisconnect) return;
-    if (_reconnectTimer?.isActive ?? false) return;
-    final int baseSec = min(15, 1 << min(_reconnectAttempt, 4));
+    if (_disposed || _manualDisconnect || _authRejected) return;
+    if (_reconnectTimer?.isActive ?? false) {
+      _phase = HostConnectionPhase.reconnecting;
+      _emitState();
+      return;
+    }
+    final int attemptIndex = _reconnectAttempt;
     _reconnectAttempt++;
     final double jitter = 0.8 + (_rnd.nextDouble() * 0.4); // +/- 20%
-    final int delayMs = (baseSec * 1000 * jitter).round();
+    final int delayMs = computeReconnectDelayMs(
+      attemptIndex,
+      jitterFactor: jitter,
+    );
+    _phase = HostConnectionPhase.reconnecting;
+    _emitState();
     _reconnectTimer = Timer(Duration(milliseconds: delayMs), () {
-      if (_disposed || _manualDisconnect) return;
+      _reconnectTimer = null;
+      if (_disposed || _manualDisconnect || _authRejected) return;
       unawaited(ensureConnected().catchError((_) {}));
     });
   }
 
   void _cleanupTransportOnly() {
+    _connectionGeneration++;
     _pingTimer?.cancel();
     _pingTimer = null;
     _watchdogTimer?.cancel();
@@ -1086,8 +1469,10 @@ class HostConnectionClient {
     _authChallengeResponded = false;
     _isConnecting = false;
     _mutualInFlight = false;
+    _connectedSince = null;
+    _latencyMs = null;
     _lastFrame = null;
-    _subscription?.cancel();
+    unawaited(_subscription?.cancel());
     _subscription = null;
     try {
       _channel?.sink.close();
@@ -1102,9 +1487,8 @@ class HostConnectionClient {
   }
 
   void release() {
-    if (_retainCount > 0) {
-      _retainCount--;
-    }
+    if (_retainCount <= 0) return;
+    _retainCount--;
     if (_retainCount == 0) {
       disconnect();
     }
@@ -1114,13 +1498,15 @@ class HostConnectionClient {
     _manualDisconnect = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _reconnectAttempt = 0;
     final pendingCompleter = _connectCompleter;
     _connectCompleter = null;
+    _cleanupTransportOnly();
+    _phase = HostConnectionPhase.disconnected;
+    _emitState();
     if (pendingCompleter != null && !pendingCompleter.isCompleted) {
       pendingCompleter.completeError(StateError('Connection closed by client.'));
     }
-    _cleanupTransportOnly();
-    _emitState();
   }
 
   void dispose() {
