@@ -317,6 +317,12 @@ OP_DISPLAY_ENUM = 0x0D    # 13: Multi-Monitor Display Enumeration & Switching
 OP_FRAME_SYNC = 0xED      # 237: Keyframe / Stream Resynchronization Request
 OP_ERR = 0xEE             # 238: Structured Error Packet
 
+# LAN UDP Discovery protocol constants (never advertises secrets, PINs, or tokens)
+DEFAULT_DISCOVERY_UDP_PORT = 8766
+DISCOVERY_PROTOCOL_TOKEN = "CST_DISCOVER_V1"
+DISCOVERY_PROBE_BYTES = b"CST_DISCOVER_V1"
+AGENT_DISCOVERY_VERSION = "0.85.0-alpha"
+
 # Explicit environment secret override (optional, never hardcoded)
 _env_secret_raw = os.environ.get("AI_AGENT_SECRET") or os.environ.get("CST_AGENT_SECRET") or ""
 SHARED_SECRET = _env_secret_raw.strip().encode("utf-8")
@@ -328,8 +334,9 @@ CRITICAL_COMMAND_PATTERNS = {
     "rm -rf", "taskkill", "stop-process", "remove-item"
 }
 
-# Windows SendInput & Desktop Lock ctypes bindings (defined once at module level)
+# Windows SendInput, Cursor & Desktop Lock ctypes bindings (defined once at module level)
 _WIN_USER32_LOCK_BOUND = False
+_WIN_CURSOR_APIS_BOUND = False
 if platform.system() == "Windows":
     class _WIN_KEYBDINPUT(ctypes.Structure):
         _fields_ = [
@@ -355,6 +362,41 @@ if platform.system() == "Windows":
 
     class _WIN_INPUT(ctypes.Structure):
         _fields_ = [("type", wintypes.DWORD), ("u", _WIN_INPUT_UNION)]
+
+    class _WIN_POINT(ctypes.Structure):
+        _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+    class _WIN_CURSORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("flags", wintypes.DWORD),
+            ("hCursor", wintypes.HANDLE),
+            ("ptScreenPos", _WIN_POINT),
+        ]
+
+    class _WIN_ICONINFO(ctypes.Structure):
+        _fields_ = [
+            ("fIcon", wintypes.BOOL),
+            ("xHotspot", wintypes.DWORD),
+            ("yHotspot", wintypes.DWORD),
+            ("hbmMask", wintypes.HBITMAP),
+            ("hbmColor", wintypes.HBITMAP),
+        ]
+
+    class _WIN_BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ("biSize", wintypes.DWORD),
+            ("biWidth", wintypes.LONG),
+            ("biHeight", wintypes.LONG),
+            ("biPlanes", wintypes.WORD),
+            ("biBitCount", wintypes.WORD),
+            ("biCompression", wintypes.DWORD),
+            ("biSizeImage", wintypes.DWORD),
+            ("biXPelsPerMeter", wintypes.LONG),
+            ("biYPelsPerMeter", wintypes.LONG),
+            ("biClrUsed", wintypes.DWORD),
+            ("biClrImportant", wintypes.DWORD),
+        ]
 
 
 # =====================================================================
@@ -537,6 +579,404 @@ def parse_header(raw: bytes) -> Optional[Tuple[int, int, int, int]]:
     return opcode, flags, seq, length
 
 # =====================================================================
+# LIGHTWEIGHT HARDWARE CURSOR OVERLAY COMPOSITOR (WINDOWS + FALLBACK)
+# =====================================================================
+class CursorOverlayCompositor:
+    """
+    Safe, low-overhead mouse cursor compositor for screen capture pipelines.
+    - On Windows, MSS omits the hardware mouse cursor; this helper queries
+      GetCursorInfo/GetCursorPos and composites either the real Win32 cursor
+      icon (via DrawIconEx cached by hCursor, with exact alpha + XOR recovery)
+      or a crisp built-in high-contrast arrow overlay.
+    - Strictly guarded so headless/CI/Linux/non-interactive sessions never fail
+      and never mutate read-only or shared capture buffers in-place.
+    """
+    _FALLBACK_ARROW_TEMPLATE = (
+        "B...........",
+        "BB..........",
+        "BWB.........",
+        "BWWB........",
+        "BWWWB.......",
+        "BWWWWB......",
+        "BWWWWWB.....",
+        "BWWWWWWB....",
+        "BWWWWWWWB...",
+        "BWWWWWWWWB..",
+        "BWWWWWWWWWB.",
+        "BWWWWWWBBBB.",
+        "BWWWBWWB....",
+        "BWWB.BWWB...",
+        "BWB..BWWB...",
+        "BB....BWWB..",
+        "B.....BWWB..",
+        ".......BB...",
+    )
+    _MAX_SPRITE_CACHE = 32
+
+    def __init__(self) -> None:
+        self._sprite_cache: Dict[int, Tuple[Any, Any, int, int]] = {}
+        self._fallback_np: Optional[Tuple[Any, Any, int, int]] = None
+        self._fallback_pil: Optional[Tuple[Any, int, int]] = None
+        self._pil_cache: Dict[int, Tuple[Any, Any, int, int]] = {}
+
+    @staticmethod
+    def _ensure_win32_bindings() -> Tuple[Any, Any]:
+        global _WIN_CURSOR_APIS_BOUND
+        u32 = ctypes.windll.user32
+        g32 = ctypes.windll.gdi32
+        if not _WIN_CURSOR_APIS_BOUND:
+            try:
+                u32.GetCursorInfo.argtypes = [ctypes.c_void_p]
+                u32.GetCursorInfo.restype = wintypes.BOOL
+                u32.GetCursorPos.argtypes = [ctypes.c_void_p]
+                u32.GetCursorPos.restype = wintypes.BOOL
+                u32.GetIconInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+                u32.GetIconInfo.restype = wintypes.BOOL
+                u32.DrawIconEx.argtypes = [
+                    wintypes.HDC,
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    wintypes.HANDLE,
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    wintypes.UINT,
+                    wintypes.HBRUSH,
+                    wintypes.UINT,
+                ]
+                u32.DrawIconEx.restype = wintypes.BOOL
+                g32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+                g32.CreateCompatibleDC.restype = wintypes.HDC
+                g32.DeleteDC.argtypes = [wintypes.HDC]
+                g32.DeleteDC.restype = wintypes.BOOL
+                g32.CreateDIBSection.argtypes = [
+                    wintypes.HDC,
+                    ctypes.c_void_p,
+                    wintypes.UINT,
+                    ctypes.POINTER(ctypes.c_void_p),
+                    wintypes.HANDLE,
+                    wintypes.DWORD,
+                ]
+                g32.CreateDIBSection.restype = wintypes.HBITMAP
+                g32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+                g32.SelectObject.restype = wintypes.HGDIOBJ
+                g32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+                g32.DeleteObject.restype = wintypes.BOOL
+                _WIN_CURSOR_APIS_BOUND = True
+            except Exception:
+                pass
+        return u32, g32
+
+    def get_cursor_screen_state(self) -> Optional[Tuple[int, int, int]]:
+        """
+        Returns (screen_x, screen_y, hcursor) if cursor is visible on an interactive
+        Windows desktop, or None on headless/CI/non-Windows/hidden cursor.
+        """
+        if platform.system() != "Windows" or os.environ.get("AI_HEADLESS") == "1":
+            return None
+        try:
+            u32, _ = self._ensure_win32_bindings()
+            ci = _WIN_CURSORINFO()
+            ci.cbSize = ctypes.sizeof(_WIN_CURSORINFO)
+            ok = u32.GetCursorInfo(ctypes.byref(ci))
+            if isinstance(ok, (int, bool)) and ok:
+                # CURSOR_SHOWING = 0x00000001
+                if not (int(ci.flags) & 0x00000001):
+                    return None
+                return (
+                    int(ci.ptScreenPos.x),
+                    int(ci.ptScreenPos.y),
+                    int(ci.hCursor or 0),
+                )
+            pt = _WIN_POINT()
+            ok_pos = u32.GetCursorPos(ctypes.byref(pt))
+            if isinstance(ok_pos, (int, bool)) and ok_pos:
+                return (int(pt.x), int(pt.y), 0)
+        except Exception:
+            return None
+        return None
+
+    def get_monitor_cursor(
+        self,
+        mon_left: int,
+        mon_top: int,
+        mon_width: int,
+        mon_height: int,
+    ) -> Optional[Tuple[int, int, int]]:
+        """Maps desktop cursor into local monitor coordinates if inside bounds."""
+        state = self.get_cursor_screen_state()
+        if state is None:
+            return None
+        sx, sy, hcursor = state
+        rel_x = sx - mon_left
+        rel_y = sy - mon_top
+        if 0 <= rel_x < mon_width and 0 <= rel_y < mon_height:
+            return (rel_x, rel_y, hcursor)
+        return None
+
+    def _get_fallback_arrow_np(self) -> Optional[Tuple[Any, Any, int, int]]:
+        if np is None:
+            return None
+        if self._fallback_np is not None:
+            return self._fallback_np
+        h = len(self._FALLBACK_ARROW_TEMPLATE)
+        w = len(self._FALLBACK_ARROW_TEMPLATE[0])
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        for y, row in enumerate(self._FALLBACK_ARROW_TEMPLATE):
+            for x, ch in enumerate(row):
+                if ch == "B":
+                    rgba[y, x] = (12, 12, 16, 255)
+                elif ch == "W":
+                    rgba[y, x] = (255, 255, 255, 255)
+        self._fallback_np = (rgba, None, 0, 0)
+        return self._fallback_np
+
+    def _get_fallback_arrow_pil(self) -> Optional[Tuple[Any, int, int]]:
+        if Image is None:
+            return None
+        if self._fallback_pil is not None:
+            return self._fallback_pil
+        h = len(self._FALLBACK_ARROW_TEMPLATE)
+        w = len(self._FALLBACK_ARROW_TEMPLATE[0])
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        px = im.load()
+        for y, row in enumerate(self._FALLBACK_ARROW_TEMPLATE):
+            for x, ch in enumerate(row):
+                if ch == "B":
+                    px[x, y] = (12, 12, 16, 255)
+                elif ch == "W":
+                    px[x, y] = (255, 255, 255, 255)
+        self._fallback_pil = (im, 0, 0)
+        return self._fallback_pil
+
+    def _capture_win32_cursor_np(self, hcursor: int) -> Optional[Tuple[Any, Any, int, int]]:
+        """Captures an HCURSOR into a trimmed (RGBA, xor_mask, hx, hy) sprite via DrawIconEx."""
+        if (
+            platform.system() != "Windows"
+            or os.environ.get("AI_HEADLESS") == "1"
+            or not hcursor
+            or np is None
+        ):
+            return None
+        if hcursor in self._sprite_cache:
+            return self._sprite_cache[hcursor]
+
+        hdc = None
+        hbmp = None
+        old_obj = None
+        try:
+            u32, g32 = self._ensure_win32_bindings()
+            ii = _WIN_ICONINFO()
+            ok_info = u32.GetIconInfo(wintypes.HANDLE(hcursor), ctypes.byref(ii))
+            hx, hy = 0, 0
+            if isinstance(ok_info, (int, bool)) and ok_info:
+                hx = max(0, min(31, int(ii.xHotspot)))
+                hy = max(0, min(31, int(ii.yHotspot)))
+                if ii.hbmMask:
+                    g32.DeleteObject(ii.hbmMask)
+                if ii.hbmColor:
+                    g32.DeleteObject(ii.hbmColor)
+
+            size = 32
+            hdc = g32.CreateCompatibleDC(0)
+            if not hdc:
+                return None
+
+            bmi = _WIN_BITMAPINFOHEADER()
+            bmi.biSize = ctypes.sizeof(_WIN_BITMAPINFOHEADER)
+            bmi.biWidth = size
+            bmi.biHeight = -size  # top-down DIB
+            bmi.biPlanes = 1
+            bmi.biBitCount = 32
+            bmi.biCompression = 0  # BI_RGB
+
+            bits_ptr = ctypes.c_void_p()
+            hbmp = g32.CreateDIBSection(hdc, ctypes.byref(bmi), 0, ctypes.byref(bits_ptr), None, 0)
+            if not hbmp or not bits_ptr.value:
+                return None
+
+            old_obj = g32.SelectObject(hdc, hbmp)
+            buf_size = size * size * 4
+
+            # Pass 1: Draw onto pure black background
+            ctypes.memset(bits_ptr.value, 0, buf_size)
+            ok1 = u32.DrawIconEx(hdc, 0, 0, wintypes.HANDLE(hcursor), size, size, 0, 0, 0x0003)
+            if not (isinstance(ok1, (int, bool)) and ok1):
+                return None
+            black_bgra = np.frombuffer(ctypes.string_at(bits_ptr.value, buf_size), dtype=np.uint8).reshape((size, size, 4)).copy()
+
+            # Pass 2: Draw onto pure white background to recover true alpha + XOR pixels (e.g. I-Beam)
+            ctypes.memset(bits_ptr.value, 255, buf_size)
+            ok2 = u32.DrawIconEx(hdc, 0, 0, wintypes.HANDLE(hcursor), size, size, 0, 0, 0x0003)
+            if not (isinstance(ok2, (int, bool)) and ok2):
+                return None
+            white_bgra = np.frombuffer(ctypes.string_at(bits_ptr.value, buf_size), dtype=np.uint8).reshape((size, size, 4)).copy()
+
+            black_rgb = black_bgra[:, :, 2::-1]
+            white_rgb = white_bgra[:, :, 2::-1]
+            diff = white_rgb.astype(np.int16) - black_rgb.astype(np.int16)
+            xor_mask = np.any(diff < 0, axis=2)
+
+            alpha = np.clip(255 - np.max(np.maximum(diff, 0), axis=2), 0, 255).astype(np.uint8)
+            alpha[xor_mask] = 0
+
+            visible_mask = (alpha > 8) | xor_mask
+            if int(np.count_nonzero(visible_mask)) < 4:
+                return None
+
+            ys, xs = np.nonzero(visible_mask)
+            y0, y1 = int(ys.min()), int(ys.max()) + 1
+            x0, x1 = int(xs.min()), int(xs.max()) + 1
+
+            # Un-premultiply straight RGB for uniform alpha compositing
+            safe_a = np.maximum(alpha.astype(np.uint16), 1)[:, :, None]
+            straight_rgb = np.clip((black_rgb.astype(np.uint16) * 255) // safe_a, 0, 255).astype(np.uint8)
+            straight_rgb[alpha == 0] = 0
+
+            rgba = np.empty((y1 - y0, x1 - x0, 4), dtype=np.uint8)
+            rgba[:, :, :3] = straight_rgb[y0:y1, x0:x1]
+            rgba[:, :, 3] = alpha[y0:y1, x0:x1]
+            xor_crop = xor_mask[y0:y1, x0:x1].copy() if bool(np.any(xor_mask)) else None
+
+            sprite = (rgba, xor_crop, hx - x0, hy - y0)
+            if len(self._sprite_cache) >= self._MAX_SPRITE_CACHE:
+                self._sprite_cache.pop(next(iter(self._sprite_cache)), None)
+            self._sprite_cache[hcursor] = sprite
+            return sprite
+        except Exception:
+            return None
+        finally:
+            try:
+                _, g32 = self._ensure_win32_bindings()
+                if hdc and old_obj:
+                    g32.SelectObject(hdc, old_obj)
+                if hbmp:
+                    g32.DeleteObject(hbmp)
+                if hdc:
+                    g32.DeleteDC(hdc)
+            except Exception:
+                pass
+
+    def _resolve_np_sprite(self, hcursor: int = 0) -> Optional[Tuple[Any, Any, int, int]]:
+        if hcursor:
+            native = self._capture_win32_cursor_np(hcursor)
+            if native is not None:
+                return native
+        return self._get_fallback_arrow_np()
+
+    def composite_on_numpy(
+        self,
+        frame_arr: Any,
+        cursor_x: int,
+        cursor_y: int,
+        hcursor: int = 0,
+        is_bgr: bool = False,
+    ) -> bool:
+        """
+        Alpha-blends cursor sprite onto a writable numpy frame (H, W, 3) RGB or (H, W, 4) BGRA/BGRX.
+        Returns True if any cursor pixels were drawn.
+        """
+        if np is None or frame_arr is None:
+            return False
+        try:
+            if not getattr(frame_arr.flags, "writeable", False):
+                return False
+            fh, fw = int(frame_arr.shape[0]), int(frame_arr.shape[1])
+            if fh <= 0 or fw <= 0 or cursor_x < 0 or cursor_y < 0 or cursor_x >= fw or cursor_y >= fh:
+                return False
+            sprite = self._resolve_np_sprite(hcursor)
+            if sprite is None:
+                return False
+            rgba, xor_mask, hx, hy = sprite
+            sh, sw = int(rgba.shape[0]), int(rgba.shape[1])
+
+            dx0 = int(cursor_x) - int(hx)
+            dy0 = int(cursor_y) - int(hy)
+            fx0 = max(0, dx0)
+            fy0 = max(0, dy0)
+            fx1 = min(fw, dx0 + sw)
+            fy1 = min(fh, dy0 + sh)
+            if fx0 >= fx1 or fy0 >= fy1:
+                return False
+
+            sx0 = fx0 - dx0
+            sy0 = fy0 - dy0
+            sx1 = sx0 + (fx1 - fx0)
+            sy1 = sy0 + (fy1 - fy0)
+
+            roi = frame_arr[fy0:fy1, fx0:fx1, :3]
+            sp_rgb = rgba[sy0:sy1, sx0:sx1, :3]
+            if is_bgr:
+                sp_rgb = sp_rgb[:, :, ::-1]
+            sp_a = rgba[sy0:sy1, sx0:sx1, 3:4]
+
+            alpha16 = sp_a.astype(np.uint16)
+            inv_alpha16 = 255 - alpha16
+            blended = ((sp_rgb.astype(np.uint16) * alpha16 + roi.astype(np.uint16) * inv_alpha16 + 127) // 255).astype(np.uint8)
+            if xor_mask is not None:
+                xor_sub = xor_mask[sy0:sy1, sx0:sx1]
+                if bool(np.any(xor_sub)):
+                    blended[xor_sub] = 255 - roi[xor_sub]
+            roi[:] = blended
+            return True
+        except Exception:
+            return False
+
+    def composite_on_pil(
+        self,
+        img: Any,
+        cursor_x: int,
+        cursor_y: int,
+        hcursor: int = 0,
+    ) -> bool:
+        """Composites cursor sprite onto a Pillow RGB image cleanly without crashing on edges."""
+        if Image is None or img is None:
+            return False
+        try:
+            fw, fh = img.size
+            if fw <= 0 or fh <= 0 or cursor_x < 0 or cursor_y < 0 or cursor_x >= fw or cursor_y >= fh:
+                return False
+
+            pil_im = None
+            xor_mask = None
+            hx, hy = 0, 0
+            if hcursor and np is not None:
+                cached = self._pil_cache.get(hcursor)
+                if cached is not None:
+                    pil_im, xor_mask, hx, hy = cached
+                else:
+                    native = self._capture_win32_cursor_np(hcursor)
+                    if native is not None:
+                        rgba, xor_mask, hx, hy = native
+                        pil_im = Image.fromarray(rgba, mode="RGBA")
+                        if len(self._pil_cache) >= self._MAX_SPRITE_CACHE:
+                            self._pil_cache.pop(next(iter(self._pil_cache)), None)
+                        self._pil_cache[hcursor] = (pil_im, xor_mask, hx, hy)
+
+            if pil_im is None:
+                fb = self._get_fallback_arrow_pil()
+                if fb is None:
+                    return False
+                pil_im, hx, hy = fb
+
+            dx0 = int(cursor_x) - int(hx)
+            dy0 = int(cursor_y) - int(hy)
+            img.paste(pil_im, (dx0, dy0), pil_im)
+
+            if xor_mask is not None and np is not None:
+                ys, xs = np.nonzero(xor_mask)
+                px = img.load()
+                for sy, sx in zip(ys.tolist(), xs.tolist()):
+                    tx = dx0 + sx
+                    ty = dy0 + sy
+                    if 0 <= tx < fw and 0 <= ty < fh:
+                        r, g, b = px[tx, ty][:3]
+                        px[tx, ty] = (255 - r, 255 - g, 255 - b)
+            return True
+        except Exception:
+            return False
+
+
+# =====================================================================
 # HIGH-EFFICIENCY SCREEN CAPTURE PIPELINE (TURBOJPEG + ADAPTIVE THROTTLING)
 # =====================================================================
 class AdaptiveScreenPipeline:
@@ -577,6 +1017,9 @@ class AdaptiveScreenPipeline:
         self.last_stream_size: Optional[Tuple[int, int]] = None
         self._last_capture_err_log: float = 0.0
         self._consecutive_grab_errors: int = 0
+        self.show_cursor: bool = os.environ.get("AI_HIDE_CURSOR") != "1"
+        self.cursor_compositor = CursorOverlayCompositor()
+        self._last_cursor_state: Optional[Tuple[int, int, int]] = None
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ScreenEncoder")
         self.is_running = True
 
@@ -670,13 +1113,21 @@ class AdaptiveScreenPipeline:
             raw_shot = sct.grab(monitor)
             self._consecutive_grab_errors = 0
 
+            mon_left = int(monitor.get("left", 0))
+            mon_top = int(monitor.get("top", 0))
             w_shot, h_shot = int(raw_shot.width), int(raw_shot.height)
             self.last_capture_rect = (
-                int(monitor.get("left", 0)),
-                int(monitor.get("top", 0)),
+                mon_left,
+                mon_top,
                 w_shot,
                 h_shot,
             )
+
+            cursor_local: Optional[Tuple[int, int, int]] = None
+            if self.show_cursor:
+                cursor_local = self.cursor_compositor.get_monitor_cursor(mon_left, mon_top, w_shot, h_shot)
+            cursor_moved = cursor_local != self._last_cursor_state
+            self._last_cursor_state = cursor_local
 
             if self.last_frame_hash is None:
                 self._last_diff_sample = None
@@ -693,6 +1144,7 @@ class AdaptiveScreenPipeline:
                 current_hash = zlib.adler32(sample_bytes)
                 frame_unchanged = (
                     (not force_send)
+                    and (not cursor_moved)
                     and (self._last_diff_sample is not None)
                     and (sample_bytes == self._last_diff_sample)
                 )
@@ -719,7 +1171,7 @@ class AdaptiveScreenPipeline:
 
                 grid_changed_count = sum(1 for o, n in zip(self.grid_hashes, new_grid) if o != n) if self.grid_hashes else 64
                 self.grid_hashes = new_grid
-                frame_unchanged = (not force_send) and is_static and (grid_changed_count == 0)
+                frame_unchanged = (not force_send) and (not cursor_moved) and is_static and (grid_changed_count == 0)
 
             # Encode one settling frame on consecutive_static == 0, then short-circuit idle frames
             if frame_unchanged and self.consecutive_static >= 1:
@@ -732,6 +1184,11 @@ class AdaptiveScreenPipeline:
                 out_h = max(1, int(round(h_shot * scale)))
                 if out_w < w_shot or out_h < h_shot:
                     self.last_stream_size = (out_w, out_h)
+                    scaled_cursor: Optional[Tuple[int, int, int]] = None
+                    if cursor_local is not None:
+                        cx = max(0, min(out_w - 1, int(round(cursor_local[0] * out_w / max(1, w_shot)))))
+                        cy = max(0, min(out_h - 1, int(round(cursor_local[1] * out_h / max(1, h_shot)))))
+                        scaled_cursor = (cx, cy, cursor_local[2])
                     if self.turbo is not None and np is not None and img32 is not None:
                         cache_key = (w_shot, h_shot, out_w, out_h)
                         cached = self._resize_cache
@@ -743,6 +1200,14 @@ class AdaptiveScreenPipeline:
                             self._resize_cache = (cache_key, (yi_col, xi))
                         sub_bgra = img32[yi_col, xi].view(np.uint8).reshape((out_h, out_w, 4))
                         scaled_rgb = np.ascontiguousarray(sub_bgra[:, :, 2::-1])
+                        if scaled_cursor is not None:
+                            self.cursor_compositor.composite_on_numpy(
+                                scaled_rgb,
+                                scaled_cursor[0],
+                                scaled_cursor[1],
+                                hcursor=scaled_cursor[2],
+                                is_bgr=False,
+                            )
                         try:
                             encoded = self.turbo.encode(
                                 scaled_rgb,
@@ -763,6 +1228,13 @@ class AdaptiveScreenPipeline:
                             else Image.Resampling.NEAREST
                         )
                         img = img.resize((out_w, out_h), resample)
+                        if scaled_cursor is not None:
+                            self.cursor_compositor.composite_on_pil(
+                                img,
+                                scaled_cursor[0],
+                                scaled_cursor[1],
+                                hcursor=scaled_cursor[2],
+                            )
                         encoded = self._encode_jpeg_pillow(img)
                         self._last_encoded_frame = encoded
                         return encoded, frame_unchanged
@@ -774,6 +1246,15 @@ class AdaptiveScreenPipeline:
                 try:
                     if np is not None:
                         bgra_arr = np.frombuffer(raw_shot.raw, dtype=np.uint8).reshape((h_shot, w_shot, 4))
+                        if cursor_local is not None:
+                            bgra_arr = bgra_arr.copy()
+                            self.cursor_compositor.composite_on_numpy(
+                                bgra_arr,
+                                cursor_local[0],
+                                cursor_local[1],
+                                hcursor=cursor_local[2],
+                                is_bgr=True,
+                            )
                         encoded = self.turbo.encode(
                             bgra_arr,
                             quality=self.jpeg_quality,
@@ -787,6 +1268,13 @@ class AdaptiveScreenPipeline:
                     logger.debug(f"TurboJPEG encode fallback to Pillow: {tj_err}")
             if Image is not None:
                 img = Image.frombuffer("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX", 0, 1)
+                if cursor_local is not None:
+                    self.cursor_compositor.composite_on_pil(
+                        img,
+                        cursor_local[0],
+                        cursor_local[1],
+                        hcursor=cursor_local[2],
+                    )
                 encoded = self._encode_jpeg_pillow(img)
                 self._last_encoded_frame = encoded
                 return encoded, frame_unchanged
@@ -879,6 +1367,52 @@ class AstCommandInspector:
         return False, "Command passed security policy"
 
 # =====================================================================
+# LIGHTWEIGHT LAN UDP DISCOVERY RESPONDER (ZERO-SECRET BROADCAST REPLY)
+# =====================================================================
+class _LanDiscoveryProtocol(asyncio.DatagramProtocol):
+    """Responds to LAN UDP `CST_DISCOVER_V1` probes with public host metadata only."""
+
+    def __init__(self, daemon: "HostAgentDaemon") -> None:
+        self._daemon = daemon
+        self.transport: Optional[asyncio.DatagramTransport] = None
+        self._reply_history: Dict[str, List[float]] = {}
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self.transport = transport  # type: ignore[assignment]
+
+    def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
+        if not self._daemon.is_running or self._daemon.is_paused:
+            return
+        if not data or len(data) > 64:
+            return
+        if data != DISCOVERY_PROBE_BYTES and data.strip() != DISCOVERY_PROBE_BYTES:
+            return
+        sender_ip = addr[0] if addr else ""
+        if self._daemon._is_client_blacklisted(sender_ip):
+            return
+        if self._daemon.subnet_geofence_only and not is_local_or_private_ip(sender_ip):
+            return
+        now_mono = time.monotonic()
+        recent = [t for t in self._reply_history.get(sender_ip, []) if (now_mono - t) < 1.0]
+        if len(recent) >= 10:
+            return
+        recent.append(now_mono)
+        self._reply_history[sender_ip] = recent
+        if len(self._reply_history) > 256:
+            self._reply_history.pop(next(iter(self._reply_history)), None)
+        tr = self.transport
+        if tr is None or tr.is_closing():
+            return
+        try:
+            tr.sendto(self._daemon._build_discovery_response(), addr)
+        except Exception as exc:
+            logger.debug("UDP discovery reply failed to %s: %s", addr, exc)
+
+    def error_received(self, exc: Exception) -> None:
+        logger.debug("UDP discovery socket error: %s", exc)
+
+
+# =====================================================================
 # MAIN AI NETCONTROLLER HOST AGENT DAEMON
 # =====================================================================
 class HostAgentDaemon:
@@ -889,6 +1423,8 @@ class HostAgentDaemon:
         gui_state: Any = None,
         enable_tray: Optional[bool] = None,
         enable_mdns: Optional[bool] = None,
+        enable_udp_discovery: Optional[bool] = None,
+        discovery_port: Optional[int] = None,
     ):
         self.config = load_config() if load_config else {}
         self.host = host or self.config.get("bind_host", "0.0.0.0")
@@ -908,10 +1444,12 @@ class HostAgentDaemon:
         self._clients_explicit_sync: Set[WebSocketServerProtocol] = set()
         self._client_auth_ts: Dict[WebSocketServerProtocol, float] = {}
         self._client_frame_inflight: Set[WebSocketServerProtocol] = set()
+        self._client_frame_timeouts: Dict[WebSocketServerProtocol, int] = {}
         self._pair_init_attempts: Dict[str, List[float]] = {}
         self._ollama_sem: Optional[asyncio.Semaphore] = None
         self._lock_check_cache: Tuple[float, bool] = (0.0, False)
         self._stream_wake_event: Optional[asyncio.Event] = None
+        self._post_auth_wake_handles: Set[asyncio.TimerHandle] = set()
         self._background_tasks: List[asyncio.Task] = []
         self._background_task_set: Set[asyncio.Task] = set()
         self._owns_loop: bool = False
@@ -930,6 +1468,31 @@ class HostAgentDaemon:
         self._local_ip_cache: Tuple[float, str] = (0.0, "")
         self._disk_pct_cache: Tuple[float, float] = (0.0, 0.0)
         self.tls_fingerprint: str = ""
+        self._tls_active: bool = False
+        self._udp_discovery_transport: Optional[asyncio.DatagramTransport] = None
+        self._udp_discovery_port_bound: Optional[int] = None
+        if discovery_port is not None:
+            self.discovery_port: int = max(0, min(65535, int(discovery_port)))
+        else:
+            env_disc_port = (
+                os.environ.get("AI_DISCOVERY_PORT")
+                or os.environ.get("CST_DISCOVERY_PORT")
+                or ""
+            ).strip()
+            cfg_disc_port = self.config.get("discovery_port", DEFAULT_DISCOVERY_UDP_PORT)
+            raw_disc_port = env_disc_port if env_disc_port else cfg_disc_port
+            try:
+                parsed_dp = int(raw_disc_port)
+                self.discovery_port = parsed_dp if 0 <= parsed_dp <= 65535 else DEFAULT_DISCOVERY_UDP_PORT
+            except (TypeError, ValueError):
+                self.discovery_port = DEFAULT_DISCOVERY_UDP_PORT
+        if enable_udp_discovery is None:
+            self._enable_udp_discovery: bool = (
+                os.environ.get("AI_DISABLE_UDP_DISCOVERY") != "1"
+                and bool(self.config.get("udp_discovery_enabled", True))
+            )
+        else:
+            self._enable_udp_discovery = bool(enable_udp_discovery)
 
         # Persistent credentials & policies (CSPRNG only, never hardcoded fallbacks)
         self.pairing_pin: str = str(self.config.get("pairing_pin") or f"{secrets.randbelow(900000) + 100000}")
@@ -1018,6 +1581,110 @@ class HostAgentDaemon:
                 ev.set()
             else:
                 self.loop.call_soon_threadsafe(ev.set)
+
+    def _schedule_post_auth_keyframe_wake(self, delay_sec: float = 0.04) -> None:
+        """Schedules a rapid stream wake after vault handshake so clients get a keyframe promptly."""
+        loop = self.loop
+        if loop is None or not loop.is_running() or not self.is_running:
+            self._wake_stream()
+            return
+
+        handle_ref: List[Optional[asyncio.TimerHandle]] = [None]
+
+        def _fire() -> None:
+            h = handle_ref[0]
+            if h is not None:
+                self._post_auth_wake_handles.discard(h)
+            if self.is_running:
+                self._wake_stream()
+
+        def _arm() -> None:
+            if not self.is_running:
+                return
+            h = loop.call_later(max(0.0, float(delay_sec)), _fire)
+            handle_ref[0] = h
+            self._post_auth_wake_handles.add(h)
+
+        if threading.get_ident() == self._loop_thread_id:
+            _arm()
+        else:
+            loop.call_soon_threadsafe(_arm)
+
+    def _cancel_post_auth_wake_handles(self) -> None:
+        for h in list(self._post_auth_wake_handles):
+            try:
+                h.cancel()
+            except Exception:
+                pass
+        self._post_auth_wake_handles.clear()
+
+    def _get_effective_ws_port(self) -> int:
+        """Returns the live bound WebSocket TCP port."""
+        if self.port and int(self.port) > 0:
+            return int(self.port)
+        srv = self.server
+        socks = getattr(srv, "sockets", None) if srv is not None else None
+        if socks:
+            try:
+                return int(socks[0].getsockname()[1])
+            except Exception:
+                pass
+        return int(self.port or 8765)
+
+    def _build_discovery_response(self) -> bytes:
+        """Builds public zero-secret JSON discovery metadata (NEVER exposes PINs, tokens, or secrets)."""
+        payload = {
+            "protocol": DISCOVERY_PROTOCOL_TOKEN,
+            "hostname": self._hostname,
+            "ws_port": self._get_effective_ws_port(),
+            "tls": bool(self.tls_fingerprint or self._tls_active),
+            "os": self._os_name,
+            "version": AGENT_DISCOVERY_VERSION,
+        }
+        return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+    async def _start_udp_discovery(self) -> None:
+        """Starts lightweight LAN UDP discovery responder (default UDP 8766; skipped gracefully on bind failure)."""
+        if not self._enable_udp_discovery:
+            return
+        loop = self.loop or asyncio.get_running_loop()
+        bind_host = "127.0.0.1" if self.host in ("127.0.0.1", "localhost") else "0.0.0.0"
+        try:
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _LanDiscoveryProtocol(self),
+                local_addr=(bind_host, self.discovery_port),
+                family=socket.AF_INET,
+                allow_broadcast=True,
+            )
+            self._udp_discovery_transport = transport
+            sockname = transport.get_extra_info("sockname")
+            self._udp_discovery_port_bound = int(sockname[1]) if sockname else self.discovery_port
+            logger.info(
+                "LAN UDP Discovery Responder active on %s:%d (%s)",
+                bind_host,
+                self._udp_discovery_port_bound,
+                DISCOVERY_PROTOCOL_TOKEN,
+            )
+        except Exception as exc:
+            self._udp_discovery_transport = None
+            self._udp_discovery_port_bound = None
+            logger.warning(
+                "LAN UDP Discovery Responder skipped (could not bind UDP %s:%d): %s",
+                bind_host,
+                self.discovery_port,
+                exc,
+            )
+
+    def _close_udp_discovery(self) -> None:
+        """Closes LAN UDP discovery socket cleanly."""
+        tr = self._udp_discovery_transport
+        self._udp_discovery_transport = None
+        self._udp_discovery_port_bound = None
+        if tr is not None:
+            try:
+                tr.close()
+            except Exception:
+                pass
 
     @property
     def _pin_fail_count(self) -> int:
@@ -1402,6 +2069,7 @@ class HostAgentDaemon:
         elif self.require_tls and ssl_ctx is None:
             raise RuntimeError("require_tls=True but TLS manager is unavailable; refusing plaintext ws:// downgrade.")
 
+        self._tls_active = bool(ssl_ctx is not None)
         proto = "wss" if ssl_ctx else "ws"
         if websockets is not None:
             self.server = await websockets.serve(
@@ -1411,8 +2079,11 @@ class HostAgentDaemon:
                 ssl=ssl_ctx,
                 compression=None,
                 max_size=MAX_WIRE_FRAME_SIZE,
-                ping_interval=20,
-                ping_timeout=15
+                max_queue=64,
+                open_timeout=10,
+                ping_interval=10,
+                ping_timeout=10,
+                close_timeout=5,
             )
             logger.info(f"Binary WebSocket Listener active on {proto}://{self.host}:{self.port}")
         else:
@@ -1425,6 +2096,7 @@ class HostAgentDaemon:
             logger.info(f"Stdlib RFC-6455 WebSocket Listener active on {proto}://{self.host}:{self.port}")
 
         await self._start_mdns()
+        await self._start_udp_discovery()
         self._start_system_tray()
 
         self._background_tasks.append(asyncio.create_task(self._telemetry_heartbeat_loop()))
@@ -1459,6 +2131,12 @@ class HostAgentDaemon:
     async def _handle_stdlib_ws_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Zero-dependency RFC 6455 WebSocket fallback with Origin check, control frames, and write lock."""
         try:
+            sock = writer.get_extra_info("socket")
+            if sock is not None:
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except Exception:
+                    pass
             key = None
             origin_hdr = None
             header_lines = 0
@@ -1870,6 +2548,8 @@ class HostAgentDaemon:
             self._clients_explicit_sync.clear()
             self._client_auth_ts.clear()
             self._client_frame_inflight.clear()
+            self._client_frame_timeouts.clear()
+            self._cancel_post_auth_wake_handles()
             for v in self._client_vaults.values():
                 try:
                     v.close()
@@ -1988,6 +2668,13 @@ class HostAgentDaemon:
         try:
             self.clients.add(ws)
             self._ws_write_locks[ws] = asyncio.Lock()
+            ws_tr = getattr(ws, "transport", None)
+            ws_sock = ws_tr.get_extra_info("socket") if ws_tr is not None and hasattr(ws_tr, "get_extra_info") else None
+            if ws_sock is not None:
+                try:
+                    ws_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except Exception:
+                    pass
             logger.info("Client connected from %s", client_id)
 
             if self.chaos_shield:
@@ -2487,10 +3174,13 @@ class HostAgentDaemon:
                         async with self._get_ws_write_lock(ws):
                             if len(payload) >= 80 and vault.complete_handshake(payload):
                                 self._clients_need_keyframe.add(ws)
+                                self._clients_explicit_sync.add(ws)
                                 self._client_auth_ts[ws] = time.monotonic()
+                                self.screen_pipeline.force_keyframe = True
                                 await ws.send(pack_packet(OP_AUTH, b'OK_ECDH_VAULT', seq=seq, flags=0x01))
                                 vault_ok = True
                         if vault_ok:
+                            self._schedule_post_auth_keyframe_wake(delay_sec=0.04)
                             continue
                         self._record_auth_failure(client_ip, client_id)
                         vault.close()
@@ -2580,6 +3270,7 @@ class HostAgentDaemon:
             self._clients_explicit_sync.discard(ws)
             self._client_auth_ts.pop(ws, None)
             self._client_frame_inflight.discard(ws)
+            self._client_frame_timeouts.pop(ws, None)
             self._stream_paused_clients.discard(ws)
             was_authenticated = ws in self.authenticated_clients
             self.clients.discard(ws)
@@ -3072,9 +3763,103 @@ class HostAgentDaemon:
         except Exception as e:
             logger.debug("Clipboard sync error: %s", e)
 
+    def _get_active_capture_rect(self) -> Tuple[int, int, int, int]:
+        """Returns active monitor capture rect (left, top, width, height) with primary screen fallback."""
+        c_rect = getattr(self.screen_pipeline, "last_capture_rect", None)
+        if isinstance(c_rect, (tuple, list)) and len(c_rect) == 4:
+            try:
+                left, top, cap_w, cap_h = int(c_rect[0]), int(c_rect[1]), int(c_rect[2]), int(c_rect[3])
+                if cap_w > 0 and cap_h > 0:
+                    return left, top, cap_w, cap_h
+            except (TypeError, ValueError):
+                pass
+
+        mon_idx = int(getattr(self.screen_pipeline, "monitor_index", 1) or 1)
+        mm_bbox = getattr(self.multi_monitor, "_current_bbox", None) if self.multi_monitor is not None else None
+        if mon_idx > 1 and isinstance(mm_bbox, dict):
+            try:
+                mw = int(mm_bbox.get("width", 0))
+                mh = int(mm_bbox.get("height", 0))
+                if mw > 0 and mh > 0:
+                    return int(mm_bbox.get("left", 0)), int(mm_bbox.get("top", 0)), mw, mh
+            except (TypeError, ValueError):
+                pass
+
+        if pyautogui is not None and hasattr(pyautogui, "size"):
+            try:
+                sz = pyautogui.size()
+                if isinstance(sz, (tuple, list)) and len(sz) >= 2:
+                    sw, sh = sz[0], sz[1]
+                    if (
+                        isinstance(sw, (int, float))
+                        and isinstance(sh, (int, float))
+                        and not isinstance(sw, bool)
+                        and not isinstance(sh, bool)
+                        and math.isfinite(sw)
+                        and math.isfinite(sh)
+                        and sw > 0
+                        and sh > 0
+                    ):
+                        return 0, 0, int(sw), int(sh)
+            except Exception:
+                pass
+
+        if isinstance(mm_bbox, dict):
+            try:
+                mw = int(mm_bbox.get("width", 0))
+                mh = int(mm_bbox.get("height", 0))
+                if mw > 0 and mh > 0:
+                    return int(mm_bbox.get("left", 0)), int(mm_bbox.get("top", 0)), mw, mh
+            except (TypeError, ValueError):
+                pass
+
+        if platform.system() == "Windows":
+            try:
+                u32 = ctypes.windll.user32
+                sw = u32.GetSystemMetrics(0)
+                sh = u32.GetSystemMetrics(1)
+                if (
+                    isinstance(sw, int)
+                    and isinstance(sh, int)
+                    and not isinstance(sw, bool)
+                    and not isinstance(sh, bool)
+                    and sw > 0
+                    and sh > 0
+                ):
+                    return 0, 0, sw, sh
+            except Exception:
+                pass
+
+        t_res = getattr(self.screen_pipeline, "target_res", None)
+        if isinstance(t_res, (tuple, list)) and len(t_res) == 2:
+            try:
+                tw, th = int(t_res[0]), int(t_res[1])
+                if tw > 0 and th > 0:
+                    return 0, 0, tw, th
+            except (TypeError, ValueError):
+                pass
+
+        return 0, 0, 1920, 1080
+
+    def _map_normalized_xy(self, nx: Any, ny: Any) -> Tuple[int, int]:
+        """Maps normalized [0.0..1.0] coordinates linearly across the active capture monitor rect."""
+        fx = float(nx)
+        fy = float(ny)
+        clamped_x = 0.0 if not math.isfinite(fx) else max(0.0, min(1.0, fx))
+        clamped_y = 0.0 if not math.isfinite(fy) else max(0.0, min(1.0, fy))
+        left, top, cap_w, cap_h = self._get_active_capture_rect()
+        max_dx = max(0, cap_w - 1)
+        max_dy = max(0, cap_h - 1)
+        mx = left + int(round(clamped_x * max_dx))
+        my = top + int(round(clamped_y * max_dy))
+        return (
+            max(left, min(left + max_dx, mx)),
+            max(top, min(top + max_dy, my)),
+        )
+
     async def _process_virtual_input(self, payload: bytes, ws: Optional[WebSocketServerProtocol] = None):
         """
-        Opcode 0x08: Remote Virtual Input (Trackpad, Mouse & Keystroke Forwarding).
+        Opcode 0x08: Remote Virtual Input (Touchscreen Absolute, Trackpad Relative, Scroll & Keystrokes).
         """
         try:
             if ws is not None and not self._is_client_input_allowed(ws):
@@ -3101,23 +3886,78 @@ class HostAgentDaemon:
                     return default
                 return max(lo, min(hi, int(round(v))))
 
+            def _exec_hscroll(dx_val: int, tx: Optional[int] = None, ty: Optional[int] = None) -> None:
+                if dx_val == 0:
+                    return
+                hscroll_fn = getattr(pyautogui, "hscroll", None)
+                if callable(hscroll_fn):
+                    if tx is not None and ty is not None:
+                        hscroll_fn(dx_val, x=tx, y=ty, _pause=False)
+                    else:
+                        hscroll_fn(dx_val, _pause=False)
+
             if len(payload) == 6 and not payload.startswith(b'{'):
-                event_type, dx, dy, btn_code = struct.unpack("!BhhB", payload)
-                dx = max(-5000, min(5000, int(dx)))
-                dy = max(-5000, min(5000, int(dy)))
-                btn = "right" if btn_code == 2 else ("middle" if btn_code == 3 else "left")
-                def _exec_bin_input():
-                    if event_type == 1:
-                        pyautogui.moveRel(dx, dy, _pause=False)
-                    elif event_type == 2:
-                        if btn_code == 4:
-                            pyautogui.doubleClick(_pause=False)
-                        else:
-                            pyautogui.click(button=btn, _pause=False)
-                    elif event_type == 3:
-                        pyautogui.scroll(dy, _pause=False)
-                await loop.run_in_executor(None, _exec_bin_input)
-                self._wake_stream()
+                event_type = payload[0]
+                if event_type in (1, 2, 3, 7):
+                    _, dx, dy, btn_code = struct.unpack("!BhhB", payload)
+                    dx = max(-5000, min(5000, int(dx)))
+                    dy = max(-5000, min(5000, int(dy)))
+                    btn = "right" if btn_code == 2 else ("middle" if btn_code == 3 else "left")
+
+                    def _exec_bin_rel_input():
+                        if event_type == 1:
+                            pyautogui.moveRel(dx, dy, _pause=False)
+                        elif event_type == 2:
+                            if btn_code == 4:
+                                pyautogui.doubleClick(_pause=False)
+                            else:
+                                pyautogui.click(button=btn, _pause=False)
+                        elif event_type == 3:
+                            pyautogui.scroll(dy, _pause=False)
+                        elif event_type == 7:
+                            if dy != 0:
+                                pyautogui.scroll(dy, _pause=False)
+                            if dx != 0:
+                                _exec_hscroll(dx)
+
+                    await loop.run_in_executor(None, _exec_bin_rel_input)
+                    self._wake_stream()
+                    return
+
+                if event_type in (4, 5, 6):
+                    _, ux, uy, btn_code = struct.unpack("!BHHB", payload)
+                    tx, ty = self._map_normalized_xy(ux / 65535.0, uy / 65535.0)
+
+                    def _exec_bin_abs_input():
+                        if event_type == 4:
+                            pyautogui.moveTo(tx, ty, _pause=False)
+                        elif event_type == 5:
+                            if btn_code == 4:
+                                pyautogui.doubleClick(x=tx, y=ty, _pause=False)
+                            else:
+                                btn = "right" if btn_code == 2 else ("middle" if btn_code == 3 else "left")
+                                pyautogui.click(x=tx, y=ty, button=btn, _pause=False)
+                        elif event_type == 6:
+                            _btn_state_map = {
+                                1: ("down", "left"),
+                                2: ("up", "left"),
+                                3: ("down", "right"),
+                                4: ("up", "right"),
+                                5: ("down", "middle"),
+                                6: ("up", "middle"),
+                            }
+                            spec = _btn_state_map.get(btn_code)
+                            if spec is not None:
+                                state_dir, btn_name = spec
+                                if state_dir == "down":
+                                    pyautogui.mouseDown(x=tx, y=ty, button=btn_name, _pause=False)
+                                else:
+                                    pyautogui.mouseUp(x=tx, y=ty, button=btn_name, _pause=False)
+
+                    await loop.run_in_executor(None, _exec_bin_abs_input)
+                    self._wake_stream()
+                    return
+
                 return
 
             data = json.loads(payload.decode('utf-8'))
@@ -3144,6 +3984,13 @@ class HostAgentDaemon:
                         max(top, min(top + max(0, cap_h - 1), my)),
                     )
                 return int(round(rx)), int(round(ry))
+
+            def _resolve_target_xy() -> Optional[Tuple[int, int]]:
+                if "nx" in data and "ny" in data and data.get("nx") is not None and data.get("ny") is not None:
+                    return self._map_normalized_xy(data["nx"], data["ny"])
+                if "x" in data and "y" in data and data.get("x") is not None and data.get("y") is not None:
+                    return _map_xy(data["x"], data["y"])
+                return None
 
             def _type_unicode_safe(text_val: str) -> None:
                 if not text_val:
@@ -3203,7 +4050,10 @@ class HostAgentDaemon:
                         self._execute_media_command(media_cmd, steps=1)
                     return
                 if action == "move":
-                    if "x" in data and "y" in data and "dx" not in data and "dy" not in data:
+                    if "nx" in data and "ny" in data and data.get("nx") is not None and data.get("ny") is not None:
+                        tx, ty = self._map_normalized_xy(data["nx"], data["ny"])
+                        pyautogui.moveTo(tx, ty, _pause=False)
+                    elif "x" in data and "y" in data and "dx" not in data and "dy" not in data:
                         x, y = _map_xy(data.get("x", 0), data.get("y", 0))
                         pyautogui.moveTo(x, y, _pause=False)
                     else:
@@ -3211,56 +4061,91 @@ class HostAgentDaemon:
                         dy = _finite_float(data.get("dy", 0))
                         pyautogui.moveRel(dx, dy, _pause=False)
                 elif action in ("move_to", "mouse_move"):
-                    x, y = _map_xy(data.get("x", 0), data.get("y", 0))
+                    target = _resolve_target_xy()
+                    x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
                     pyautogui.moveTo(x, y, _pause=False)
                 elif action in ("click", "mouse_click"):
                     raw_btn = str(data.get("button", "left")).lower()
                     btn = raw_btn if raw_btn in ("left", "right", "middle", "double") else "left"
-                    x = data.get("x")
-                    y = data.get("y")
+                    target = _resolve_target_xy()
                     if btn == "double":
-                        if x is not None and y is not None:
-                            tx, ty = _map_xy(x, y)
-                            pyautogui.doubleClick(x=tx, y=ty, _pause=False)
+                        if target is not None:
+                            pyautogui.doubleClick(x=target[0], y=target[1], _pause=False)
                         else:
                             pyautogui.doubleClick(_pause=False)
-                    elif x is not None and y is not None:
-                        tx, ty = _map_xy(x, y)
-                        pyautogui.click(x=tx, y=ty, button=btn, _pause=False)
+                    elif target is not None:
+                        pyautogui.click(x=target[0], y=target[1], button=btn, _pause=False)
                     else:
                         pyautogui.click(button=btn, _pause=False)
                 elif action == "click_at":
-                    x, y = _map_xy(data.get("x", 0), data.get("y", 0))
+                    target = _resolve_target_xy()
+                    x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
                     raw_btn = str(data.get("button", "left")).lower()
-                    btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
-                    pyautogui.click(x=x, y=y, button=btn, _pause=False)
+                    if raw_btn == "double":
+                        pyautogui.doubleClick(x=x, y=y, _pause=False)
+                    else:
+                        btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
+                        pyautogui.click(x=x, y=y, button=btn, _pause=False)
                 elif action in ("double_click", "mouse_double_click", "dblclick"):
-                    x = data.get("x")
-                    y = data.get("y")
-                    if x is not None and y is not None:
-                        tx, ty = _map_xy(x, y)
-                        pyautogui.doubleClick(x=tx, y=ty, _pause=False)
+                    target = _resolve_target_xy()
+                    if target is not None:
+                        pyautogui.doubleClick(x=target[0], y=target[1], _pause=False)
                     else:
                         pyautogui.doubleClick(_pause=False)
                 elif action == "double_click_at":
-                    x, y = _map_xy(data.get("x", 0), data.get("y", 0))
+                    target = _resolve_target_xy()
+                    x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
                     pyautogui.doubleClick(x=x, y=y, _pause=False)
                 elif action == "right_click_at":
-                    x, y = _map_xy(data.get("x", 0), data.get("y", 0))
+                    target = _resolve_target_xy()
+                    x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
                     pyautogui.rightClick(x=x, y=y, _pause=False)
+                elif action in ("mouse_down", "mousedown"):
+                    raw_btn = str(data.get("button", "left")).lower()
+                    btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
+                    target = _resolve_target_xy()
+                    if target is not None:
+                        pyautogui.mouseDown(x=target[0], y=target[1], button=btn, _pause=False)
+                    else:
+                        pyautogui.mouseDown(button=btn, _pause=False)
+                elif action in ("mouse_up", "mouseup"):
+                    raw_btn = str(data.get("button", "left")).lower()
+                    btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
+                    target = _resolve_target_xy()
+                    if target is not None:
+                        pyautogui.mouseUp(x=target[0], y=target[1], button=btn, _pause=False)
+                    else:
+                        pyautogui.mouseUp(button=btn, _pause=False)
                 elif action in ("scroll", "mouse_scroll"):
                     dy = _clamp_int(data.get("dy", 0))
-                    x = data.get("x")
-                    y = data.get("y")
-                    if x is not None and y is not None:
-                        tx, ty = _map_xy(x, y)
-                        pyautogui.scroll(dy, x=tx, y=ty, _pause=False)
+                    dx = _clamp_int(data.get("dx", 0)) if "dx" in data and data.get("dx") is not None else 0
+                    target = _resolve_target_xy()
+                    if target is not None:
+                        if dy != 0 or dx == 0:
+                            pyautogui.scroll(dy, x=target[0], y=target[1], _pause=False)
+                        if dx != 0:
+                            _exec_hscroll(dx, target[0], target[1])
                     else:
-                        pyautogui.scroll(dy, _pause=False)
+                        if dy != 0 or dx == 0:
+                            pyautogui.scroll(dy, _pause=False)
+                        if dx != 0:
+                            _exec_hscroll(dx)
                 elif action == "scroll_at":
-                    x, y = _map_xy(data.get("x", 0), data.get("y", 0))
+                    target = _resolve_target_xy()
+                    x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
                     dy = _clamp_int(data.get("dy", 0))
-                    pyautogui.scroll(dy, x=x, y=y, _pause=False)
+                    dx = _clamp_int(data.get("dx", 0)) if "dx" in data and data.get("dx") is not None else 0
+                    if dy != 0 or dx == 0:
+                        pyautogui.scroll(dy, x=x, y=y, _pause=False)
+                    if dx != 0:
+                        _exec_hscroll(dx, x, y)
+                elif action in ("hscroll", "mouse_hscroll", "hscroll_at"):
+                    dx = _clamp_int(data.get("dx", 0))
+                    target = _resolve_target_xy()
+                    if target is not None:
+                        _exec_hscroll(dx, target[0], target[1])
+                    else:
+                        _exec_hscroll(dx)
                 elif action in ("type", "type_text", "keyboard_type"):
                     raw_text = str(data.get("text", ""))[:2048]
                     text = "".join(ch for ch in raw_text if ord(ch) >= 32 or ch in ("\n", "\t"))
@@ -3401,39 +4286,85 @@ class HostAgentDaemon:
         self.screen_pipeline._last_encoded_frame = None
         if self.multi_monitor:
             self.multi_monitor.switch_monitor(clamped)
+            selected = next((m for m in monitors if isinstance(m, dict) and int(m.get("index", 0)) == clamped), None)
+            if selected is not None:
+                try:
+                    mw = int(selected.get("width", 0))
+                    mh = int(selected.get("height", 0))
+                    if mw > 0 and mh > 0:
+                        self.screen_pipeline.last_capture_rect = (
+                            int(selected.get("left", 0)),
+                            int(selected.get("top", 0)),
+                            mw,
+                            mh,
+                        )
+                except (TypeError, ValueError):
+                    pass
         self._wake_stream()
 
     async def _process_viewport_resize(self, payload: bytes, ws: Optional[WebSocketServerProtocol] = None):
         """
         Handles 0x0A (VIEWPORT_RESIZE) control packet cleanly for both JSON and 8-byte binary structs.
-        Supports optional per-client `stream_enabled` and `fps` tuning.
+        Supports optional per-client `stream_enabled`, `quality`, `monitor`, and `fps` tuning.
         """
+        def _safe_int(val: Any) -> Optional[int]:
+            if val is None or isinstance(val, bool):
+                return None
+            try:
+                f = float(val)
+                if not math.isfinite(f):
+                    return None
+                return int(round(f))
+            except (TypeError, ValueError):
+                return None
+
         try:
             stripped = payload.lstrip()
             if stripped.startswith(b'{'):
                 data = json.loads(stripped.decode('utf-8'))
                 if not isinstance(data, dict):
                     return
+                needs_keyframe = False
                 if "width" in data and "height" in data:
-                    self.screen_pipeline.set_target_resolution(int(data["width"]), int(data["height"]))
+                    req_w = _safe_int(data.get("width"))
+                    req_h = _safe_int(data.get("height"))
+                    if req_w is not None and req_h is not None and req_w > 0 and req_h > 0:
+                        self.screen_pipeline.set_target_resolution(req_w, req_h)
+                        needs_keyframe = True
                 if "quality" in data:
-                    self.screen_pipeline.set_quality(int(data["quality"]))
+                    req_q = _safe_int(data.get("quality"))
+                    if req_q is not None:
+                        self.screen_pipeline.set_quality(req_q)
+                        needs_keyframe = True
                 if "monitor" in data:
-                    self._switch_active_monitor(int(data["monitor"]))
-                if "fps" in data and data["fps"] is not None:
-                    req_fps = max(5, min(60, int(data["fps"])))
-                    self.target_fps = req_fps
-                    self.screen_pipeline.set_target_fps(req_fps)
+                    req_mon = _safe_int(data.get("monitor"))
+                    if req_mon is not None:
+                        self._switch_active_monitor(req_mon)
+                        needs_keyframe = True
+                if "fps" in data:
+                    req_fps = _safe_int(data.get("fps"))
+                    if req_fps is not None:
+                        clamped_fps = max(5, min(60, req_fps))
+                        self.target_fps = clamped_fps
+                        self.screen_pipeline.set_target_fps(clamped_fps)
                 if ws is not None and "stream_enabled" in data:
                     if bool(data["stream_enabled"]):
                         self._stream_paused_clients.discard(ws)
                         self.screen_pipeline.force_keyframe = True
+                        needs_keyframe = True
                     else:
                         self._stream_paused_clients.add(ws)
+                        needs_keyframe = False
+                if needs_keyframe and ws is not None and ws not in self._stream_paused_clients:
+                    self._clients_need_keyframe.add(ws)
+                    self._clients_explicit_sync.add(ws)
                 self._wake_stream()
             elif len(payload) == 8:
                 width, height = struct.unpack('!II', payload)
                 self.screen_pipeline.set_target_resolution(width, height)
+                if ws is not None and ws not in self._stream_paused_clients:
+                    self._clients_need_keyframe.add(ws)
+                    self._clients_explicit_sync.add(ws)
                 self._wake_stream()
         except Exception as e:
             logger.debug("Viewport resize decode error: %s", e)
@@ -3580,9 +4511,25 @@ class HostAgentDaemon:
         self._client_frame_inflight.add(ws)
         try:
             await asyncio.wait_for(self._send_encrypted_or_plain(ws, OP_FRAME, frame_bytes), timeout=1.5)
+            self._client_frame_timeouts.pop(ws, None)
             self._clients_need_keyframe.discard(ws)
             self._clients_explicit_sync.discard(ws)
+        except asyncio.TimeoutError:
+            # Transient Wi-Fi stall: drop frame and resync keyframe without stripping auth state
+            strikes = self._client_frame_timeouts.get(ws, 0) + 1
+            self._client_frame_timeouts[ws] = strikes
+            self._clients_need_keyframe.add(ws)
+            if strikes >= 4:
+                self._client_frame_timeouts.pop(ws, None)
+                self.authenticated_clients.discard(ws)
+                self._clients_need_keyframe.discard(ws)
+                self._clients_explicit_sync.discard(ws)
+                try:
+                    self._track_task(ws.close(code=1001, reason="Video stream send timeout"))
+                except Exception:
+                    pass
         except Exception:
+            self._client_frame_timeouts.pop(ws, None)
             self.authenticated_clients.discard(ws)
             self._clients_need_keyframe.discard(ws)
             self._clients_explicit_sync.discard(ws)
@@ -3861,6 +4808,7 @@ class HostAgentDaemon:
         self._clients_explicit_sync.clear()
         self._client_auth_ts.clear()
         self._client_frame_inflight.clear()
+        self._client_frame_timeouts.clear()
         self._stream_paused_clients.clear()
         self.active_nonces.clear()
 
@@ -3898,7 +4846,9 @@ class HostAgentDaemon:
             pass
 
     async def _cleanup_loop_resources_async(self) -> None:
-        """Cancels background tasks, closes client sockets, awaits server close, and tears down mDNS."""
+        """Cancels background tasks, closes client sockets, awaits server close, and tears down mDNS/UDP."""
+        self._cancel_post_auth_wake_handles()
+        self._close_udp_discovery()
         tasks = [
             t for t in (list(self._background_tasks) + list(self._background_task_set))
             if not t.done()
@@ -3960,6 +4910,8 @@ class HostAgentDaemon:
         self._stop_tray_sync()
 
         def _cleanup_loop_resources_sync():
+            self._cancel_post_auth_wake_handles()
+            self._close_udp_discovery()
             for t in list(self._background_tasks) + list(self._background_task_set):
                 if not t.done():
                     t.cancel()
