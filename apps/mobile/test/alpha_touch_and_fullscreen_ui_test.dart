@@ -1,10 +1,21 @@
+import 'dart:io';
+
+import 'package:ai_netcontroller/main.dart' as app;
+import 'package:ai_netcontroller/services/app_preferences.dart';
+import 'package:ai_netcontroller/services/host_connection_client.dart';
 import 'package:ai_netcontroller/theme/fluid_theme.dart';
+import 'package:ai_netcontroller/ui/connection_diagnostics_sheet.dart';
+import 'package:ai_netcontroller/ui/fullscreen_stream_page.dart';
 import 'package:ai_netcontroller/ui/remote_keyboard_bar.dart';
 import 'package:ai_netcontroller/ui/responsive_device_card.dart';
 import 'package:ai_netcontroller/ui/touch_coordinate_mapper.dart';
 import 'package:ai_netcontroller/ui/touch_feedback_overlay.dart';
+import 'package:ai_netcontroller/ui/viewport_stream_widget.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 void main() {
   group('TouchCoordinateMapper', () {
@@ -558,6 +569,383 @@ void main() {
       await tester.pump();
       expect(tapCount, equals(2));
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('ConnectionDiagnosticsSheet', () {
+    testWidgets('displays phase, RTT, FPS, resolution, TLS/AEAD status, hint, and triggers actions', (tester) async {
+      int reconnectCount = 0;
+      int keyframeCount = 0;
+
+      // Exercise all HostConnectionPhase label mappings
+      for (final phase in HostConnectionPhase.values) {
+        expect(
+          ConnectionDiagnosticsSheet.phaseLabel(phase, reconnectAttempt: 2),
+          isNotEmpty,
+        );
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: CyberTheme.themeData,
+          home: Scaffold(
+            body: Builder(
+              builder: (ctx) => Center(
+                child: ElevatedButton(
+                  onPressed: () {
+                    ConnectionDiagnosticsSheet.show(
+                      ctx,
+                      hostName: 'Render-PC',
+                      hostIp: '192.168.1.50',
+                      wsPort: 8765,
+                      useTls: true,
+                      snapshot: HostConnectionSnapshot(
+                        isConnected: true,
+                        isAuthenticated: true,
+                        isVaultEstablished: true,
+                        latencyMs: 11,
+                        phase: HostConnectionPhase.connected,
+                        connectedSince: DateTime.now().subtract(
+                          const Duration(minutes: 2, seconds: 15),
+                        ),
+                        errorMessage: 'Transient frame drop',
+                        errorHint: 'Verify port 8765 firewall rule.',
+                      ),
+                      currentFps: 60,
+                      frameSize: const Size(1920, 1080),
+                      qualityPreset: 'crisp',
+                      onReconnect: () => reconnectCount++,
+                      onRequestKeyframe: () => keyframeCount++,
+                    );
+                  },
+                  child: const Text('Open Diag'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open Diag'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Connection Diagnostics'), findsOneWidget);
+      expect(find.text('Connected & Vault Locked'), findsOneWidget);
+      expect(find.text('11 ms'), findsOneWidget);
+      expect(find.text('60 FPS'), findsOneWidget);
+      expect(find.text('1920×1080'), findsOneWidget);
+      expect(find.text('AEAD Active'), findsOneWidget);
+      expect(find.text('WSS TLS + X25519'), findsOneWidget);
+      expect(find.text('Verify port 8765 firewall rule.'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('diagnostics-reconnect-btn')));
+      await tester.pumpAndSettle();
+      expect(reconnectCount, equals(1));
+
+      // Reopen to test Resync Frame action
+      await tester.tap(find.text('Open Diag'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('diagnostics-keyframe-btn')));
+      await tester.pumpAndSettle();
+      expect(keyframeCount, equals(1));
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('FullscreenStreamPage & ViewportStreamWidget Controls', () {
+    testWidgets('manages immersiveSticky, orientation cycling, collapsible HUD + restore pill, and clean SystemChrome restore on dispose', (tester) async {
+      final platformCalls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        platformCalls.add(call);
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: CyberTheme.themeData,
+          home: const FullscreenStreamPage(
+            hostIp: '127.0.0.1',
+            hostName: 'Gaming-Rig',
+            sharedSecret: '',
+            autoLandscape: true,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // 1. Entered immersiveSticky and requested landscape orientations
+      expect(
+        platformCalls.any(
+          (c) =>
+              c.method == 'SystemChrome.setEnabledSystemUIMode' &&
+              c.arguments == 'SystemUiMode.immersiveSticky',
+        ),
+        isTrue,
+      );
+      expect(
+        platformCalls.any(
+          (c) =>
+              c.method == 'SystemChrome.setPreferredOrientations' &&
+              c.arguments is List &&
+              (c.arguments as List).contains('DeviceOrientation.landscapeLeft'),
+        ),
+        isTrue,
+      );
+
+      // 2. Orientation switcher cycles LAND -> PORT -> AUTO
+      expect(find.text('LAND'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('viewport-rotate-btn')));
+      await tester.pump();
+      expect(find.text('PORT'), findsOneWidget);
+      expect(
+        platformCalls.last.arguments,
+        contains('DeviceOrientation.portraitUp'),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('viewport-rotate-btn')));
+      await tester.pump();
+      expect(find.text('AUTO'), findsOneWidget);
+      expect((platformCalls.last.arguments as List).length, equals(4));
+
+      // 3. Collapsible HUD hides header -> reveals draggable restore pill -> restores HUD
+      await tester.tap(find.byKey(const ValueKey('viewport-collapse-hud-btn')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('viewport-rotate-btn')), findsNothing);
+      final restorePill = find.byKey(const ValueKey('viewport-hud-restore-pill'));
+      expect(restorePill, findsOneWidget);
+
+      // Drag restore pill safely within bounds then tap to expand HUD
+      await tester.drag(restorePill, const Offset(40, 30));
+      await tester.pump();
+      await tester.tap(restorePill);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('viewport-rotate-btn')), findsOneWidget);
+
+      // 4. Unmount cleanly restores edgeToEdge + all 4 orientations
+      platformCalls.clear();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+
+      expect(
+        platformCalls.any(
+          (c) =>
+              c.method == 'SystemChrome.setEnabledSystemUIMode' &&
+              c.arguments == 'SystemUiMode.edgeToEdge',
+        ),
+        isTrue,
+      );
+      expect(
+        platformCalls.any(
+          (c) =>
+              c.method == 'SystemChrome.setPreferredOrientations' &&
+              c.arguments is List &&
+              (c.arguments as List).length == 4,
+        ),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('supports 2-finger pinch-to-zoom with 1-tap 1x reset badge, diagnostics sheet, and lifecycle resume', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: CyberTheme.themeData,
+          home: const Scaffold(
+            body: SizedBox(
+              width: 640,
+              height: 360,
+              child: ViewportStreamWidget(
+                hostIp: '127.0.0.1',
+                hostName: 'Lab-Box',
+                sharedSecret: '',
+                initialInputMode: RemoteInputMode.touchscreen,
+                qualityPreset: 'balanced',
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('viewport-zoom-reset-pill')), findsNothing);
+
+      // Simulate 2-finger spread (pinch out to zoom > 1.5x) on unobstructed touch surface
+      final surfaceTopLeft = tester.getTopLeft(
+        find.byKey(const ValueKey('viewport-touch-surface')),
+      );
+      final g1 = await tester.startGesture(surfaceTopLeft + const Offset(50, 300));
+      final g2 = await tester.startGesture(surfaceTopLeft + const Offset(110, 300));
+      await tester.pump();
+      await g1.moveBy(const Offset(-25, 0));
+      await g2.moveBy(const Offset(75, 0));
+      await tester.pump();
+      await g1.up();
+      await g2.up();
+      await tester.pump();
+
+      final resetPill = find.byKey(const ValueKey('viewport-zoom-reset-pill'));
+      expect(resetPill, findsOneWidget);
+
+      // 1-tap reset back to 1x hides reset pill
+      await tester.tap(resetPill);
+      await tester.pump();
+      expect(resetPill, findsNothing);
+
+      // App lifecycle resume triggers safely without errors
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+
+      // Tapping HUD header opens ConnectionDiagnosticsSheet
+      await tester.tap(find.byKey(const ValueKey('viewport-open-diagnostics-btn')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(find.text('Connection Diagnostics'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('Settings Tab Touchscreen & Fullscreen Preferences', () {
+    testWidgets('exposes all 5 new AppPreferences controls and updates state cleanly', (tester) async {
+      final tempDir = Directory.systemTemp.createTempSync('ai_net_alpha_ui_');
+      await tester.runAsync(() async {
+        Hive.init(tempDir.path);
+        await Hive.openBox('ghost_devices');
+        await Hive.openBox(kAppPrefsBoxName);
+        await Hive.openBox(kVaultSecretsBoxName);
+      });
+      addTearDown(() async {
+        await tester.runAsync(() async {
+          await Hive.close();
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+      });
+
+      tester.view.physicalSize = const Size(430, 932);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const app.AINetControllerApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Navigate to Settings tab
+      await tester.tap(find.byIcon(Icons.tune_rounded).last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final listFinder = find.byType(ListView).first;
+
+      // Scroll to Touchscreen & Fullscreen Controls section
+      await tester.scrollUntilVisible(
+        find.text('TOUCHSCREEN & FULLSCREEN CONTROLS'),
+        250,
+        scrollable: find.descendant(
+          of: listFinder,
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pump();
+
+      // 1. Switch input mode Touchscreen -> Trackpad
+      final trackpadChip = find.byKey(const ValueKey('input-mode-trackpad'));
+      await tester.ensureVisible(trackpadChip);
+      await tester.runAsync(() async {
+        await tester.tap(trackpadChip);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      });
+      await tester.pump();
+      expect(
+        container.read(appPreferencesProvider).defaultInputMode,
+        equals(RemoteInputMode.trackpad),
+      );
+
+      // 2. Toggle Auto-Landscape & Touch Visual Feedback
+      final autoLandFinder = find.text('Auto-Landscape in Fullscreen');
+      await tester.ensureVisible(autoLandFinder);
+      final autoLandSwitch = find.descendant(
+        of: find.ancestor(of: autoLandFinder, matching: find.byType(Row)).first,
+        matching: find.byType(Switch),
+      );
+      await tester.runAsync(() async {
+        await tester.tap(autoLandSwitch);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      });
+      await tester.pump();
+      expect(
+        container.read(appPreferencesProvider).fullscreenAutoLandscape,
+        isFalse,
+      );
+
+      final visualFbFinder = find.text('Touch Visual Feedback');
+      await tester.ensureVisible(visualFbFinder);
+      final visualFbSwitch = find.descendant(
+        of: find.ancestor(of: visualFbFinder, matching: find.byType(Row)).first,
+        matching: find.byType(Switch),
+      );
+      await tester.runAsync(() async {
+        await tester.tap(visualFbSwitch);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      });
+      await tester.pump();
+      expect(
+        container.read(appPreferencesProvider).touchVisualFeedback,
+        isFalse,
+      );
+
+      // 3. Select Stream Quality Preset = 'crisp'
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('quality-preset-crisp')),
+        220,
+        scrollable: find.descendant(
+          of: listFinder,
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const ValueKey('quality-preset-crisp')));
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      });
+      await tester.pump();
+      expect(
+        container.read(appPreferencesProvider).streamQualityPreset,
+        equals('crisp'),
+      );
+
+      // 4. Confirm Trackpad Sensitivity slider renders and is interactive
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('trackpad-sensitivity-slider')),
+        220,
+        scrollable: find.descendant(
+          of: listFinder,
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('trackpad-sensitivity-slider')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
     });
   });
 }
