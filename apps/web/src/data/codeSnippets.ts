@@ -11,25 +11,30 @@ export const CODE_SNIPPETS: CodeSnippetEntry[] = [
     filename: 'agent/build_exe.bat',
     language: 'bat',
     category: 'backend',
-    description: 'Windows Host Agent Builder (--onedir PyInstaller, zero UPX, Authenticode sign)',
+    description: 'Instant Windows Host Agent Builder (Warm-Cache PyInstaller --onedir + Standalone EXE, Zero UPX, Cached Authenticode Sign)',
     code: `@echo off
 cd /d "%~dp0"
-python -m venv venv
-call venv\\Scripts\\activate
-python -m pip install -r requirements.txt
-python -m PyInstaller --clean -y build_agent.spec
+"..\\.venv\\Scripts\\python.exe" "..\\scripts\\build_release_binaries.py" --exe-only %*
 `,
   },
   {
     filename: 'apps/mobile/build_apk.bat',
     language: 'bat',
     category: 'crossplatform',
-    description: 'Flutter Split-ABI Release APK Build Script',
+    description: 'Instant Flutter Split-ABI & Universal Release APK Builder (Auto JDK/SDK + Warm Gradle Cache)',
     code: `@echo off
 cd /d "%~dp0"
-call flutter clean
-call flutter pub get
-call flutter build apk --release --split-per-abi
+"..\\..\\.venv\\Scripts\\python.exe" "..\\..\\scripts\\build_android_app.py" %*
+`,
+  },
+  {
+    filename: 'LAUNCH_AND_TEST.bat',
+    language: 'bat',
+    category: 'backend',
+    description: 'Unified Daemon Launcher, Firewall/TLS/ADB Provisioner & Live E2E Probe Suite',
+    code: `@echo off
+cd /d "%~dp0"
+".venv\\Scripts\\python.exe" "scripts\\launch_and_test_daemon.py" %*
 `,
   },
   {

@@ -57,5 +57,5 @@ On Windows, child shell processes are bound to a single `WindowsJobSupervisor` J
 ## 4. Packaging & Verification Pipeline
 
 - **Windows Host Agent (`scripts/build_release_binaries.py`)**: Builds `--onedir` + standalone launcher artifacts via PyInstaller (`upx=False`), embeds manifests and icons, supports Authenticode signing and MSIX packaging (`agent/package_msix.ps1`), and writes `SHA256SUMS.txt` and `RELEASE_MANIFEST.json`.
-- **Android APK (`scripts/build_android_app.py`)**: Compiles and signs split/universal APKs aligned across version code `800` (`0.80.00-beta`) with embedded 3D Cyber-Glass launcher mipmaps.
+- **Android APK (`scripts/build_android_app.py`)**: Compiles and signs split/universal APKs aligned across version code `900` (`0.90.00-beta`) with embedded 3D Cyber-Glass launcher mipmaps.
 - **Automated Tests**: Independently verified suites across Node/TypeScript (`npm test`, `npm run lint`), Python unittest (`agent/tests/`), and Flutter (`apps/mobile/test/`, including live Python daemon E2E loopback tests).

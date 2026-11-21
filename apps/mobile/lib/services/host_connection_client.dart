@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto_pkg;
 import 'package:flutter/foundation.dart';
@@ -13,6 +12,7 @@ import '../protocol/binary_protocol.dart';
 import '../protocol/fragmentation_engine.dart';
 import '../security/biometric_security_gate.dart';
 import '../security/crypto_engine.dart';
+import 'frame_decrypt_isolate.dart';
 
 /// Result returned by an encrypted X25519 + ChaCha20-Poly1305 PIN pairing exchange.
 class PairingResult {
@@ -76,6 +76,7 @@ class HostConnectionClient {
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   CryptoEngine? _crypto;
+  FrameDecryptIsolate? _frameDecryptIsolate;
   Timer? _pingTimer;
   Timer? _watchdogTimer;
   Timer? _reconnectTimer;
@@ -100,9 +101,14 @@ class HostConnectionClient {
   HostConnectionPhase _phase = HostConnectionPhase.disconnected;
   DateTime? _connectedSince;
   Uint8List? _lastFrame;
+  int _lastFrameSeq = 0;
   DateTime _lastInboundAt = DateTime.fromMillisecondsSinceEpoch(0);
   int _aeadDecryptErrors = 0;
   int _retainCount = 0;
+  final ValueNotifier<int> frameKbPerSecNotifier = ValueNotifier<int>(0);
+  final List<({int tsMs, int bytes})> _throughputSamples =
+      <({int tsMs, int bytes})>[];
+  int _throughputWindowBytes = 0;
   final Map<int, Stopwatch> _pendingPings = <int, Stopwatch>{};
   final Set<String> _inFlightHitlIds = <String>{};
   final Random _rnd = Random.secure();
@@ -156,6 +162,7 @@ class HostConnectionClient {
   String? get errorHint => _errorHint;
   int get activeMonitorIndex => _activeMonitorIndex;
   Uint8List? get lastFrame => _lastFrame;
+  int get lastFrameSeq => _lastFrameSeq;
 
   HostConnectionSnapshot get snapshot => HostConnectionSnapshot(
         isConnecting: _isConnecting,
@@ -330,8 +337,11 @@ class HostConnectionClient {
     }
     bool connected = false;
     try {
-      final ws = await WebSocket.connect(uri.toString(), customClient: httpClient)
-          .timeout(timeout);
+      final ws = await WebSocket.connect(
+        uri.toString(),
+        customClient: httpClient,
+        compression: CompressionOptions.compressionOff,
+      ).timeout(timeout);
       ws.pingInterval = const Duration(seconds: 5);
       connected = true;
       return ws;
@@ -857,6 +867,7 @@ class HostConnectionClient {
           _connectedSince = DateTime.now();
           _phase = HostConnectionPhase.connected;
           _setError(null);
+          _spinUpFrameDecryptIsolate();
           _startTimers();
           _sendPingNow();
           requestKeyframe();
@@ -896,14 +907,33 @@ class HostConnectionClient {
       return;
     }
 
+    // 2a. Route non-fragmented encrypted OP_FRAME through the persistent decrypt isolate
+    final bool isNonFragmentedFrame = packet.opcode == BinaryOpcode.frame &&
+        (packet.flags & ProtocolFlags.isFragmented) == 0;
+    if (isNonFragmentedFrame && _frameDecryptIsolate != null) {
+      if (packet.payload.length < kNonceSize + kTagSize ||
+          raw.length < kHeaderSize + kNonceSize + kTagSize) {
+        _recordAeadError(connectCompleter);
+        return;
+      }
+      final ByteData nonceBd = ByteData.sublistView(
+        raw,
+        kHeaderSize,
+        kHeaderSize + kNonceSize,
+      );
+      final int epoch = nonceBd.getUint32(0, Endian.big);
+      final int nonceSeq = nonceBd.getUint64(4, Endian.big);
+      if (epoch != 0 || !(_crypto?.canAcceptInboundSeq(nonceSeq) ?? false)) {
+        _recordAeadError(connectCompleter);
+        return;
+      }
+      _frameDecryptIsolate!.enqueueEncryptedFrame(raw, packet.seq);
+      return;
+    }
+
     final Uint8List? plaintext = _crypto?.decryptWirePacket(raw);
     if (plaintext == null) {
-      _aeadDecryptErrors++;
-      _setError('AEAD tag or replay check failed on host frame.');
-      _emitState();
-      if (_aeadDecryptErrors >= 5) {
-        _handleDisconnect('Persistent AEAD verification failure', connectCompleter);
-      }
+      _recordAeadError(connectCompleter);
       return;
     }
     _aeadDecryptErrors = 0;
@@ -938,8 +968,7 @@ class HostConnectionClient {
         }
         break;
       case BinaryOpcode.frame:
-        _lastFrame = dispatchPayload;
-        if (!_frameCtrl.isClosed) _frameCtrl.add(dispatchPayload);
+        _deliverVideoFrame(dispatchPayload, dispatchSeq);
         break;
       case BinaryOpcode.telemetry:
         try {
@@ -1012,6 +1041,111 @@ class HostConnectionClient {
           _emitState();
         }
         break;
+    }
+  }
+
+  void _spinUpFrameDecryptIsolate() {
+    _frameDecryptIsolate?.dispose();
+    _frameDecryptIsolate = null;
+    final Uint8List? recvKeyCopy = _crypto?.copyRecvKeyForIsolate();
+    if (recvKeyCopy == null) return;
+
+    final int activeGen = _connectionGeneration;
+    try {
+      _frameDecryptIsolate = FrameDecryptIsolate(
+        recvKey: recvKeyCopy,
+        onFrameDecrypted: (int seq, Uint8List plaintext) {
+          if (_disposed ||
+              activeGen != _connectionGeneration ||
+              !_isVaultEstablished) {
+            return;
+          }
+          final int nonceSeq = _frameDecryptIsolate?.lastVerifiedNonceSeq ?? 0;
+          if (nonceSeq <= 0 || !(_crypto?.commitInboundSeq(nonceSeq) ?? false)) {
+            _recordAeadError(null);
+            return;
+          }
+          _aeadDecryptErrors = 0;
+          _deliverVideoFrame(plaintext, seq);
+        },
+        onFrameDropped: (int droppedSeq) {
+          if (_disposed ||
+              activeGen != _connectionGeneration ||
+              !_isVaultEstablished) {
+            return;
+          }
+          sendFrameAck(droppedSeq);
+        },
+        onDecryptError: (int seq, String reason) {
+          if (_disposed ||
+              activeGen != _connectionGeneration ||
+              !_isVaultEstablished) {
+            return;
+          }
+          if (reason == 'jpeg') {
+            final int nonceSeq = _frameDecryptIsolate?.lastVerifiedNonceSeq ?? 0;
+            if (nonceSeq > 0) {
+              _crypto?.commitInboundSeq(nonceSeq);
+            }
+            sendFrameAck(seq);
+            requestKeyframe();
+          } else {
+            _recordAeadError(null);
+          }
+        },
+      );
+    } finally {
+      zeroize(recvKeyCopy);
+    }
+  }
+
+  void _recordAeadError(Completer<void>? connectCompleter) {
+    _aeadDecryptErrors++;
+    _setError('AEAD tag or replay check failed on host frame.');
+    _emitState();
+    if (_aeadDecryptErrors >= 5) {
+      _handleDisconnect('Persistent AEAD verification failure', connectCompleter);
+    }
+  }
+
+  void _deliverVideoFrame(Uint8List frameBytes, int seq) {
+    _lastFrameSeq = seq;
+    _lastFrame = frameBytes;
+    _recordFrameThroughputBytes(frameBytes.length);
+    if (!_frameCtrl.isClosed) {
+      _frameCtrl.add(frameBytes);
+    }
+  }
+
+  void _pruneFrameThroughput(int nowMs) {
+    final int cutoffMs = nowMs - 1000;
+    while (_throughputSamples.isNotEmpty &&
+        _throughputSamples.first.tsMs < cutoffMs) {
+      _throughputWindowBytes -= _throughputSamples.first.bytes;
+      _throughputSamples.removeAt(0);
+    }
+    if (_throughputWindowBytes < 0) {
+      _throughputWindowBytes = 0;
+    }
+    final int kbPerSec = (_throughputWindowBytes / 1024).round();
+    if (!_disposed && frameKbPerSecNotifier.value != kbPerSec) {
+      frameKbPerSecNotifier.value = kbPerSec;
+    }
+  }
+
+  void _recordFrameThroughputBytes(int bytes) {
+    if (_disposed) return;
+    final int nowMs = DateTime.now().millisecondsSinceEpoch;
+    _throughputSamples.add((tsMs: nowMs, bytes: bytes));
+    _throughputWindowBytes += bytes;
+    _pruneFrameThroughput(nowMs);
+  }
+
+  void _resetFrameThroughput() {
+    _throughputSamples.clear();
+    _throughputWindowBytes = 0;
+    if (!_disposed && frameKbPerSecNotifier.value != 0) {
+      frameKbPerSecNotifier.value = 0;
     }
   }
 
@@ -1151,25 +1285,57 @@ class HostConnectionClient {
   bool sendScroll2D(int dx, int dy) =>
       sendEncrypted(BinaryOpcode.input, encodeScroll2D(dx, dy));
 
+  /// Sends an encrypted Client Frame Decode ACK (`0x0E`) containing the 4-byte
+  /// big-endian uint32 [frameSeq] to replenish host backpressure credit.
+  bool sendFrameAck(int frameSeq) {
+    final Uint8List buf = Uint8List(4);
+    ByteData.sublistView(buf).setUint32(0, frameSeq & 0xFFFFFFFF, Endian.big);
+    return sendEncrypted(BinaryOpcode.frameAck, buf);
+  }
+
   /// Sends encrypted viewport resolution, JPEG quality, and FPS tuning (`0x0A`).
   bool sendViewportConfig({
     required int width,
     required int height,
     required int quality,
     required int fps,
+    bool frameAck = true,
+    int? maxWidth,
+    int? maxHeight,
   }) {
+    final Map<String, dynamic> payload = <String, dynamic>{
+      'width': width.clamp(160, 7680),
+      'height': height.clamp(90, 4320),
+      'quality': quality.clamp(10, 100),
+      'fps': fps.clamp(5, 60),
+      'frame_ack': frameAck,
+      if (maxWidth != null) 'max_width': maxWidth.clamp(160, 7680),
+      if (maxHeight != null) 'max_height': maxHeight.clamp(90, 4320),
+    };
     return sendEncrypted(
       BinaryOpcode.viewportResize,
-      Uint8List.fromList(
-        utf8.encode(
-          jsonEncode({
-            'width': width.clamp(160, 7680),
-            'height': height.clamp(90, 4320),
-            'quality': quality.clamp(10, 100),
-            'fps': fps.clamp(5, 60),
-          }),
-        ),
-      ),
+      Uint8List.fromList(utf8.encode(jsonEncode(payload))),
+    );
+  }
+
+  /// Requests a single lightweight JPEG preview snapshot (`0x0A`) without
+  /// starting continuous desktop streaming.
+  bool requestSnapshot({
+    int maxWidth = 640,
+    int maxHeight = 360,
+    int quality = 55,
+  }) {
+    final Map<String, dynamic> payload = <String, dynamic>{
+      'snapshot': true,
+      'stream_enabled': false,
+      'width': maxWidth.clamp(160, 7680),
+      'height': maxHeight.clamp(90, 4320),
+      'quality': quality.clamp(10, 100),
+      'frame_ack': true,
+    };
+    return sendEncrypted(
+      BinaryOpcode.viewportResize,
+      Uint8List.fromList(utf8.encode(jsonEncode(payload))),
     );
   }
 
@@ -1383,6 +1549,7 @@ class HostConnectionClient {
 
     _watchdogTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (_disposed || !_isConnected) return;
+      _pruneFrameThroughput(DateTime.now().millisecondsSinceEpoch);
       final silenceSec = DateTime.now().difference(_lastInboundAt).inSeconds;
       if (silenceSec >= 12) {
         _handleDisconnect('Heartbeat watchdog timeout ($silenceSec s silence)', null);
@@ -1472,6 +1639,10 @@ class HostConnectionClient {
     _connectedSince = null;
     _latencyMs = null;
     _lastFrame = null;
+    _lastFrameSeq = 0;
+    _resetFrameThroughput();
+    _frameDecryptIsolate?.dispose();
+    _frameDecryptIsolate = null;
     unawaited(_subscription?.cancel());
     _subscription = null;
     try {
@@ -1510,8 +1681,12 @@ class HostConnectionClient {
   }
 
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
     disconnect();
+    _frameDecryptIsolate?.dispose();
+    _frameDecryptIsolate = null;
+    frameKbPerSecNotifier.dispose();
     unawaited(_frameSyncSub?.cancel());
     _reassembler.dispose();
     unawaited(_frameCtrl.close());

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# AI NetController — Linux / macOS Setup Launcher (Beta 0.80.00 / v0.80.0)
+# AI NetController — Linux / macOS Setup Launcher (Beta 0.90.00 / v0.90.0)
 # ==============================================================================
 set -e
 
 echo "============================================================================"
-echo "  AI NetController v0.80.0 (Beta 0.80.00) — Linux / macOS Setup Launcher"
+echo "  AI NetController v0.90.0 (Beta 0.90.00) — Linux / macOS Setup Launcher"
 echo "============================================================================"
 echo ""
 
@@ -48,6 +48,7 @@ echo "[2/4] Verifying LAN-scoped Linux firewall rules (RFC1918 only)..."
 if command -v ufw >/dev/null 2>&1 && sudo -n ufw status 2>/dev/null | grep -q "Status: active"; then
     for subnet in 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12; do
         sudo ufw allow from "$subnet" to any port 8765 proto tcp comment 'AI NetController Daemon (LAN)' 2>/dev/null || true
+        sudo ufw allow from "$subnet" to any port 8766 proto udp comment 'AI NetController Discovery (LAN)' 2>/dev/null || true
         sudo ufw allow from "$subnet" to any port 3000 proto tcp comment 'AI NetController Web (LAN)' 2>/dev/null || true
     done
 fi

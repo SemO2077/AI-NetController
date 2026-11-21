@@ -180,7 +180,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       AI NetController
                     </span>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-[var(--accent-primary)]/14 border border-[var(--accent-primary)]/30 text-[var(--accent-primary)] shrink-0">
-                      v0.80.0
+                      v0.90.0
                     </span>
                   </div>
                   <h2 className="text-sm font-display font-bold ink-primary truncate">

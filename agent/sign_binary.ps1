@@ -8,7 +8,9 @@ param(
     [string]$Thumbprint = $env:AI_CODESIGN_THUMBPRINT,
     [string]$TimestampUrl = "http://timestamp.digicert.com",
     [switch]$SkipTimestamp,
-    [switch]$AllowSelfSigned
+    [switch]$AllowSelfSigned,
+    [switch]$Force,
+    [switch]$SkipDefenderScan
 )
 
 Write-Host "=================================================================" -ForegroundColor Cyan
@@ -64,9 +66,26 @@ if (-Not $filesToSign -or $filesToSign.Count -eq 0) {
 
 Write-Host "[1/3] Signing $($filesToSign.Count) PE binary artifact(s) with SHA-256 Authenticode..." -ForegroundColor Cyan
 $signedCount = 0
+$cachedCount = 0
+$useTimestamp = (-Not $SkipTimestamp) -and (-Not ($AllowSelfSigned -and (-Not $Thumbprint))) -and [bool]$TimestampUrl
 foreach ($file in $filesToSign) {
+    $existing = Get-AuthenticodeSignature -FilePath $file.FullName
+    if (-Not $Force -and $existing -and $existing.SignerCertificate) {
+        # Preserve official CA-trusted signatures (e.g. Microsoft / Python Software Foundation on DLLs/PYDs)
+        if ($existing.Status -eq "Valid") {
+            $signedCount++
+            $cachedCount++
+            continue
+        }
+        if ($file.Extension -in @(".dll", ".pyd") -and ($existing.SignerCertificate.Thumbprint -eq $cert.Thumbprint) -and ($existing.Status -notin @("NotSigned", "HashMismatch", "UnknownError"))) {
+            $signedCount++
+            $cachedCount++
+            continue
+        }
+    }
+
     $sigResult = $null
-    if (-Not $SkipTimestamp -and $TimestampUrl) {
+    if ($useTimestamp) {
         try {
             $sigResult = Set-AuthenticodeSignature -FilePath $file.FullName -Certificate $cert -HashAlgorithm SHA256 -TimestampServer $TimestampUrl
         } catch {
@@ -85,13 +104,15 @@ foreach ($file in $filesToSign) {
     $signedCount++
 }
 
-Write-Host "[2/3] Signed & verified $signedCount/$($filesToSign.Count) binary files cleanly." -ForegroundColor Green
+Write-Host "[2/3] Signed & verified $signedCount/$($filesToSign.Count) binary files cleanly ($cachedCount cached, $($signedCount - $cachedCount) newly signed)." -ForegroundColor Green
 Write-Host "      Certificate Subject   : $($cert.Subject)" -ForegroundColor Green
 Write-Host "      Certificate Thumbprint: $($cert.Thumbprint)" -ForegroundColor Green
 
-# 3. Verify with Windows Defender CLI Scanner (if present)
+# 3. Verify with Windows Defender CLI Scanner (if present and not skipped)
 $defenderCli = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
-if (Test-Path $defenderCli) {
+if ($SkipDefenderScan) {
+    Write-Host "[3/3] Windows Defender scan skipped (-SkipDefenderScan)." -ForegroundColor Gray
+} elseif (Test-Path $defenderCli) {
     Write-Host "[3/3] Running Windows Defender Heuristic & Signature Scan on $($item.FullName)..." -ForegroundColor Cyan
     & $defenderCli -Scan -ScanType 3 -File $item.FullName
     if ($LASTEXITCODE -eq 0) {

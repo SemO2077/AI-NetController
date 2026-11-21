@@ -192,7 +192,7 @@ def setup_staging():
     rel_tag = _get_release_tag()
     rel_src = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
     if not os.path.exists(rel_src):
-        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.80.0")
+        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.90.0")
     if not os.path.exists(rel_src):
         rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.70.0")
     rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", rel_tag)
@@ -209,11 +209,11 @@ def _get_release_tag():
     if os.path.exists(pkg_json):
         try:
             with open(pkg_json, "r", encoding="utf-8") as f:
-                v = str(json.load(f).get("version", "0.80.0")).strip()
+                v = str(json.load(f).get("version", "0.90.0")).strip()
                 return f"v{v}" if not v.startswith("v") else v
         except Exception:
             pass
-    return "v0.80.0"
+    return "v0.90.0"
 
 
 def _get_version_name():
@@ -592,7 +592,304 @@ def distribute_apk(signed_apk):
 
     return dest_arm64
 
-if __name__ == "__main__":
+
+def _resolve_flutter_bin():
+    """Locates the Flutter SDK binary, preferring a direct SDK checkout over npm wrapper shims."""
+    exe_name = "flutter.bat" if IS_WIN else "flutter"
+    candidates = []
+    fl_root = os.environ.get("FLUTTER_ROOT", "").strip()
+    if fl_root:
+        candidates.append(os.path.join(fl_root, "bin", exe_name))
+
+    local_props = os.path.join(ROOT_DIR, "apps", "mobile", "android", "local.properties")
+    if os.path.isfile(local_props):
+        try:
+            with open(local_props, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("flutter.sdk="):
+                        sdk_val = line.strip().split("=", 1)[1].replace("\\\\", "\\")
+                        candidates.append(os.path.join(sdk_val, "bin", exe_name))
+        except Exception:
+            pass
+
+    if IS_WIN:
+        candidates.extend([
+            os.path.expanduser(r"~\flutter\bin\flutter.bat"),
+            r"C:\src\flutter\bin\flutter.bat",
+            r"C:\flutter\bin\flutter.bat",
+        ])
+    else:
+        candidates.extend([
+            os.path.expanduser("~/flutter/bin/flutter"),
+            "/opt/flutter/bin/flutter",
+            "/usr/local/flutter/bin/flutter",
+        ])
+
+    for cand in candidates:
+        if cand and os.path.isfile(cand):
+            return os.path.abspath(cand)
+
+    found = shutil.which("flutter")
+    return found or ""
+
+
+def _ensure_flutter_gradle_setup(flutter_bin: str) -> None:
+    """Ensures Gradle 9.5.0 / AGP 9.3.1 plugin repositories and local.properties are configured."""
+    init_d = os.path.join(os.path.expanduser("~"), ".gradle", "init.d")
+    os.makedirs(init_d, exist_ok=True)
+    init_gradle = os.path.join(init_d, "flutter-plugin-repos.init.gradle")
+    if not os.path.isfile(init_gradle):
+        try:
+            with open(init_gradle, "w", encoding="utf-8") as f:
+                f.write(
+                    "beforeSettings { s ->\n"
+                    "    s.pluginManagement {\n"
+                    "        repositories {\n"
+                    "            google()\n"
+                    "            mavenCentral()\n"
+                    "            gradlePluginPortal()\n"
+                    "        }\n"
+                    "    }\n"
+                    "}\n"
+                )
+        except Exception:
+            pass
+
+    local_props = os.path.join(ROOT_DIR, "apps", "mobile", "android", "local.properties")
+    fl_sdk_dir = os.path.dirname(os.path.dirname(os.path.abspath(flutter_bin)))
+    if not os.path.isfile(local_props) and os.path.isdir(SDK_DIR) and os.path.isdir(fl_sdk_dir):
+        try:
+            sdk_esc = SDK_DIR.replace("\\", "\\\\")
+            fl_esc = fl_sdk_dir.replace("\\", "\\\\")
+            with open(local_props, "w", encoding="utf-8") as f:
+                f.write(
+                    f"sdk.dir={sdk_esc}\n"
+                    f"flutter.sdk={fl_esc}\n"
+                    "flutter.buildMode=release\n"
+                    "flutter.versionName=0.90.0\n"
+                    "flutter.versionCode=900\n"
+                )
+        except Exception:
+            pass
+
+
+def _sync_release_manifest(rel_tag: str) -> None:
+    """Updates public/releases/<tag>/RELEASE_MANIFEST.json and SHA256SUMS.txt."""
+    updater = os.path.join(ROOT_DIR, "scripts", "update_release_manifest.py")
+    if os.path.isfile(updater):
+        subprocess.run([sys.executable, updater, "--tag", rel_tag], cwd=ROOT_DIR, check=False)
+
+
+def _try_adb_install(apk_path: str) -> bool:
+    """Installs the built APK onto a connected Android device/emulator via ADB if requested."""
+    adb_candidates = [
+        os.path.join(SDK_DIR, "platform-tools", "adb.exe" if IS_WIN else "adb"),
+        shutil.which("adb") or "",
+    ]
+    adb_bin = next((c for c in adb_candidates if c and os.path.isfile(c)), "")
+    if not adb_bin:
+        print("[WARN] adb not found in Android SDK platform-tools or PATH; skipping device install.")
+        return False
+
+    res = subprocess.run([adb_bin, "devices"], capture_output=True, text=True, check=False)
+    devices = [
+        line.split()[0]
+        for line in (res.stdout or "").splitlines()[1:]
+        if line.strip() and "\tdevice" in line
+    ]
+    if not devices:
+        print("[INFO] No connected Android device in 'device' state found via adb devices.")
+        return False
+
+    for serial in devices:
+        print(f"[*] Installing {os.path.basename(apk_path)} onto Android device {serial}...")
+        inst = subprocess.run([adb_bin, "-s", serial, "install", "-r", apk_path], check=False)
+        if inst.returncode == 0:
+            print(f"[OK] Installed APK on {serial} and configuring ADB reverse ports (8765, 3000)...")
+            subprocess.run([adb_bin, "-s", serial, "reverse", "tcp:8765", "tcp:8765"], check=False)
+            subprocess.run([adb_bin, "-s", serial, "reverse", "tcp:3000", "tcp:3000"], check=False)
+        else:
+            print(f"[WARN] adb install returned exit code {inst.returncode} for {serial}.")
+    return True
+
+
+def build_flutter_apks(
+    fast_arm64_only: bool = False,
+    clean: bool = False,
+    debug_mode: bool = False,
+    install_adb: bool = False,
+) -> str:
+    """
+    Instant incremental Native Flutter Android APK builder for apps/mobile.
+    Keeps Gradle & Dart caches warm by default (no flutter clean unless --clean is passed),
+    auto-configures JDK 17/21 and Android SDK, compiles arm64-v8a + Universal APKs,
+    and publishes artifacts to public/releases/<tag>/.
+    """
+    import time
+
+    t0 = time.perf_counter()
+    flutter_bin = _resolve_flutter_bin()
+    if not flutter_bin:
+        raise RuntimeError("Flutter SDK not found. Install Flutter 3.29+ or pass --webview-shell.")
+
+    mobile_dir = os.path.join(ROOT_DIR, "apps", "mobile")
+    _ensure_flutter_gradle_setup(flutter_bin)
+
+    fl_env = ENV.copy()
+    fl_bin_dir = os.path.dirname(os.path.abspath(flutter_bin))
+    fl_root_dir = os.path.dirname(fl_bin_dir)
+    fl_env["FLUTTER_ROOT"] = fl_root_dir
+    path_parts = [fl_bin_dir]
+    if os.path.isdir(JDK_DIR):
+        fl_env["JAVA_HOME"] = JDK_DIR
+        path_parts.append(os.path.join(JDK_DIR, "bin"))
+    if os.path.isdir(SDK_DIR):
+        fl_env["ANDROID_HOME"] = SDK_DIR
+        fl_env["ANDROID_SDK_ROOT"] = SDK_DIR
+        pt_dir = os.path.join(SDK_DIR, "platform-tools")
+        if os.path.isdir(pt_dir):
+            path_parts.append(pt_dir)
+    fl_env["PATH"] = os.pathsep.join(path_parts) + os.pathsep + fl_env.get("PATH", "")
+
+    print("=================================================================")
+    print(" AI NetController — Instant Native Flutter Android APK Builder")
+    print("=================================================================")
+    print(f"  Flutter SDK : {flutter_bin}")
+    print(f"  JAVA_HOME   : {fl_env.get('JAVA_HOME', 'system default')}")
+    print(f"  ANDROID_SDK : {fl_env.get('ANDROID_HOME', 'system default')}")
+    print(f"  Build Mode  : {'FAST arm64-v8a ONLY' if fast_arm64_only else ('DEBUG arm64-v8a' if debug_mode else 'FULL RELEASE (Split-ABI + Universal)')}")
+    print("=================================================================")
+
+    if clean:
+        print("[*] Running flutter clean (--clean requested)...")
+        subprocess.run([flutter_bin, "clean"], cwd=mobile_dir, env=fl_env, check=True)
+
+    pkg_cfg = os.path.join(mobile_dir, ".dart_tool", "package_config.json")
+    pubspec = os.path.join(mobile_dir, "pubspec.yaml")
+    registrant_java = os.path.join(
+        mobile_dir,
+        "android",
+        "app",
+        "src",
+        "main",
+        "java",
+        "io",
+        "flutter",
+        "plugins",
+        "GeneratedPluginRegistrant.java",
+    )
+    need_pub_get = (
+        clean
+        or not os.path.isfile(pkg_cfg)
+        or (os.path.isfile(pubspec) and os.path.getmtime(pubspec) > os.path.getmtime(pkg_cfg))
+    )
+    need_registrant_regen = need_pub_get or not os.path.isfile(registrant_java)
+    if not need_registrant_regen and not debug_mode:
+        try:
+            with open(registrant_java, "r", encoding="utf-8", errors="ignore") as rf:
+                reg_src = rf.read()
+            if "integration_test" in reg_src or "home_widget" in reg_src:
+                need_registrant_regen = True
+        except OSError:
+            need_registrant_regen = True
+
+    if need_pub_get:
+        print("[*] Resolving Dart/Flutter packages (flutter pub get)...")
+        subprocess.run([flutter_bin, "pub", "get"], cwd=mobile_dir, env=fl_env, check=True)
+    elif need_registrant_regen:
+        print("[*] Regenerating release plugin registrant (filtering dev_dependencies)...")
+    else:
+        print("[*] Package config up-to-date (.dart_tool/package_config.json cached; using --no-pub fast path).")
+
+    first_pub_args = [] if need_registrant_regen else ["--no-pub"]
+
+    apk_out_dir = os.path.join(mobile_dir, "build", "app", "outputs", "flutter-apk")
+    rel_tag = _get_release_tag()
+    rel_dir = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
+    os.makedirs(rel_dir, exist_ok=True)
+    dest_arm64 = os.path.join(rel_dir, f"AI_NetController_{rel_tag}_arm64-v8a.apk")
+    dest_univ = os.path.join(rel_dir, f"AI_NetController_{rel_tag}.apk")
+
+    if debug_mode:
+        print("[*] Building fast debug arm64-v8a APK...")
+        subprocess.run(
+            [flutter_bin, "build", "apk", "--debug", "--target-platform", "android-arm64", "--no-pub"],
+            cwd=mobile_dir,
+            env=fl_env,
+            check=True,
+        )
+        built_debug = os.path.join(apk_out_dir, "app-debug.apk")
+        if os.path.isfile(built_debug):
+            elapsed = time.perf_counter() - t0
+            print(f"\n[SUCCESS] Debug APK built in {elapsed:.1f}s: {built_debug}")
+            if install_adb:
+                _try_adb_install(built_debug)
+            return built_debug
+
+    if fast_arm64_only:
+        print("[*] Compiling Release arm64-v8a Split APK (incremental fast mode)...")
+        subprocess.run(
+            [
+                flutter_bin,
+                "build",
+                "apk",
+                "--release",
+                "--split-per-abi",
+                "--target-platform",
+                "android-arm64",
+                *first_pub_args,
+            ],
+            cwd=mobile_dir,
+            env=fl_env,
+            check=True,
+        )
+    else:
+        print("[1/2] Compiling Release Split-per-ABI APKs (arm64-v8a, armeabi-v7a, x86_64)...")
+        subprocess.run(
+            [flutter_bin, "build", "apk", "--release", "--split-per-abi", *first_pub_args],
+            cwd=mobile_dir,
+            env=fl_env,
+            check=True,
+        )
+        print("[2/2] Compiling Release Universal Multi-ABI APK...")
+        subprocess.run(
+            [flutter_bin, "build", "apk", "--release", "--no-pub"],
+            cwd=mobile_dir,
+            env=fl_env,
+            check=True,
+        )
+
+    src_arm64 = os.path.join(apk_out_dir, "app-arm64-v8a-release.apk")
+    src_univ = os.path.join(apk_out_dir, "app-release.apk")
+
+    if not os.path.isfile(src_arm64):
+        raise RuntimeError(f"Expected Flutter arm64-v8a APK not found at {src_arm64}")
+
+    shutil.copy2(src_arm64, dest_arm64)
+    if not fast_arm64_only and os.path.isfile(src_univ):
+        shutil.copy2(src_univ, dest_univ)
+    elif not os.path.isfile(dest_univ):
+        shutil.copy2(src_arm64, dest_univ)
+
+    _sync_release_manifest(rel_tag)
+    elapsed = time.perf_counter() - t0
+    arm64_mb = os.path.getsize(dest_arm64) / (1024 * 1024)
+    arm64_sha = sha256_file(dest_arm64)
+    print(f"\n[SUCCESS] Flutter Android APK(s) compiled & staged in {elapsed:.1f}s:")
+    print(f"  - arm64-v8a : {dest_arm64} ({arm64_mb:.2f} MB | SHA256={arm64_sha[:16]}...)")
+    if os.path.isfile(dest_univ):
+        univ_mb = os.path.getsize(dest_univ) / (1024 * 1024)
+        univ_sha = sha256_file(dest_univ)
+        print(f"  - Universal : {dest_univ} ({univ_mb:.2f} MB | SHA256={univ_sha[:16]}...)")
+
+    if install_adb:
+        _try_adb_install(dest_arm64)
+
+    return dest_arm64
+
+
+def build_webview_shell_apk() -> str:
+    """Compiles the lightweight embedded WebView shell APK using Android SDK build-tools."""
     ensure_web_dist()
     setup_staging()
     create_android_manifest()
@@ -602,5 +899,27 @@ if __name__ == "__main__":
     run_d8()
     compile_and_link_resources()
     apk = zipalign_and_sign()
-    distribute_apk(apk)
+    return distribute_apk(apk)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="AI NetController — Instant Android APK Builder")
+    parser.add_argument("--fast", "--arm64-only", action="store_true", dest="fast", help="Build only arm64-v8a release APK for instant turnaround")
+    parser.add_argument("--clean", action="store_true", help="Run flutter clean before building (disables incremental cache)")
+    parser.add_argument("--debug", action="store_true", help="Build debug arm64-v8a APK")
+    parser.add_argument("--install", "--adb", action="store_true", dest="install", help="Auto-install built APK to connected Android device via ADB")
+    parser.add_argument("--webview-shell", action="store_true", help="Build embedded WebView shell APK instead of native Flutter companion app")
+    args, _unknown = parser.parse_known_args()
+
+    if args.webview_shell or not _resolve_flutter_bin():
+        build_webview_shell_apk()
+    else:
+        build_flutter_apks(
+            fast_arm64_only=args.fast,
+            clean=args.clean,
+            debug_mode=args.debug,
+            install_adb=args.install,
+        )
     print(f"\n[ALL DONE] AI NetController Android APK ({_get_release_tag()} / {_get_version_name()}) built and verified.")

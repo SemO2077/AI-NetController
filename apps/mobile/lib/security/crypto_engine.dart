@@ -208,41 +208,43 @@ class X25519 {
   }
 }
 
-/// RFC 8439 ChaCha20-Poly1305 Implementation (Zero-Alloc 26-bit Limb Engine)
-class ChaCha20Poly1305 {
-  static final Uint32List _keyWords = Uint32List(8);
-  static final Uint32List _state = Uint32List(16);
-  static final Uint8List _blockBytes = Uint8List(64);
-  static final Uint8List _polyKey = Uint8List(32);
-  static final Uint8List _polyPad = Uint8List(16);
-  static final Uint8List _computedTag = Uint8List(16);
+/// Instance-based RFC 8439 ChaCha20-Poly1305 Implementation (Zero-Alloc 26-bit Limb Engine).
+///
+/// Each instance owns isolated scratch buffers so background isolates and main-thread
+/// control channels can encrypt/decrypt concurrently without shared mutable state.
+class ChaCha20Poly1305Cipher {
+  static final bool _isLittleEndian = Endian.host == Endian.little;
 
-  static int _le32(Uint8List b, int off) =>
-      b[off] | (b[off + 1] << 8) | (b[off + 2] << 16) | (b[off + 3] << 24);
+  final Uint32List _keyWords = Uint32List(8);
+  final Uint32List _state = Uint32List(16);
+  final Uint8List _blockBytes = Uint8List(64);
+  late final ByteData _blockBd = ByteData.sublistView(_blockBytes);
+  late final Uint32List _blockWords =
+      _blockBytes.buffer.asUint32List(_blockBytes.offsetInBytes, 16);
+  final Uint8List _polyKey = Uint8List(32);
+  late final ByteData _polyKeyBd = ByteData.sublistView(_polyKey);
+  final Uint8List _polyPad = Uint8List(16);
+  late final ByteData _polyPadBd = ByteData.sublistView(_polyPad);
+  final Uint8List _computedTag = Uint8List(16);
 
-  static void _storeLe32(Uint8List b, int off, int v) {
-    b[off] = v & 0xFF;
-    b[off + 1] = (v >> 8) & 0xFF;
-    b[off + 2] = (v >> 16) & 0xFF;
-    b[off + 3] = (v >> 24) & 0xFF;
-  }
-
-  static void _prepareKeyState(Uint8List key, Uint8List nonce) {
+  void _prepareKeyState(Uint8List key, Uint8List nonce) {
+    final ByteData keyBd = ByteData.sublistView(key);
+    final ByteData nonceBd = ByteData.sublistView(nonce);
     _state[0] = 0x61707865;
     _state[1] = 0x3320646e;
     _state[2] = 0x79622d32;
     _state[3] = 0x6b206574;
     for (int i = 0; i < 8; i++) {
-      final int w = _le32(key, i * 4);
+      final int w = keyBd.getUint32(i * 4, Endian.little);
       _keyWords[i] = w;
       _state[4 + i] = w;
     }
-    _state[13] = _le32(nonce, 0);
-    _state[14] = _le32(nonce, 4);
-    _state[15] = _le32(nonce, 8);
+    _state[13] = nonceBd.getUint32(0, Endian.little);
+    _state[14] = nonceBd.getUint32(4, Endian.little);
+    _state[15] = nonceBd.getUint32(8, Endian.little);
   }
 
-  static void _chachaBlockToScratch(int counter) {
+  void _chachaBlockToScratch(int counter) {
     const int m32 = 0xFFFFFFFF;
     final int s0 = _state[0];
     final int s1 = _state[1];
@@ -311,62 +313,122 @@ class ChaCha20Poly1305 {
       x9 = (x9 + x14) & m32; x4 ^= x9; x4 = ((x4 << 7) | (x4 >> 25)) & m32;
     }
 
-    _storeLe32(_blockBytes, 0, (x0 + s0) & m32);
-    _storeLe32(_blockBytes, 4, (x1 + s1) & m32);
-    _storeLe32(_blockBytes, 8, (x2 + s2) & m32);
-    _storeLe32(_blockBytes, 12, (x3 + s3) & m32);
-    _storeLe32(_blockBytes, 16, (x4 + s4) & m32);
-    _storeLe32(_blockBytes, 20, (x5 + s5) & m32);
-    _storeLe32(_blockBytes, 24, (x6 + s6) & m32);
-    _storeLe32(_blockBytes, 28, (x7 + s7) & m32);
-    _storeLe32(_blockBytes, 32, (x8 + s8) & m32);
-    _storeLe32(_blockBytes, 36, (x9 + s9) & m32);
-    _storeLe32(_blockBytes, 40, (x10 + s10) & m32);
-    _storeLe32(_blockBytes, 44, (x11 + s11) & m32);
-    _storeLe32(_blockBytes, 48, (x12 + s12) & m32);
-    _storeLe32(_blockBytes, 52, (x13 + s13) & m32);
-    _storeLe32(_blockBytes, 56, (x14 + s14) & m32);
-    _storeLe32(_blockBytes, 60, (x15 + s15) & m32);
+    if (_isLittleEndian) {
+      _blockWords[0] = (x0 + s0) & m32;
+      _blockWords[1] = (x1 + s1) & m32;
+      _blockWords[2] = (x2 + s2) & m32;
+      _blockWords[3] = (x3 + s3) & m32;
+      _blockWords[4] = (x4 + s4) & m32;
+      _blockWords[5] = (x5 + s5) & m32;
+      _blockWords[6] = (x6 + s6) & m32;
+      _blockWords[7] = (x7 + s7) & m32;
+      _blockWords[8] = (x8 + s8) & m32;
+      _blockWords[9] = (x9 + s9) & m32;
+      _blockWords[10] = (x10 + s10) & m32;
+      _blockWords[11] = (x11 + s11) & m32;
+      _blockWords[12] = (x12 + s12) & m32;
+      _blockWords[13] = (x13 + s13) & m32;
+      _blockWords[14] = (x14 + s14) & m32;
+      _blockWords[15] = (x15 + s15) & m32;
+    } else {
+      _blockBd.setUint32(0, (x0 + s0) & m32, Endian.little);
+      _blockBd.setUint32(4, (x1 + s1) & m32, Endian.little);
+      _blockBd.setUint32(8, (x2 + s2) & m32, Endian.little);
+      _blockBd.setUint32(12, (x3 + s3) & m32, Endian.little);
+      _blockBd.setUint32(16, (x4 + s4) & m32, Endian.little);
+      _blockBd.setUint32(20, (x5 + s5) & m32, Endian.little);
+      _blockBd.setUint32(24, (x6 + s6) & m32, Endian.little);
+      _blockBd.setUint32(28, (x7 + s7) & m32, Endian.little);
+      _blockBd.setUint32(32, (x8 + s8) & m32, Endian.little);
+      _blockBd.setUint32(36, (x9 + s9) & m32, Endian.little);
+      _blockBd.setUint32(40, (x10 + s10) & m32, Endian.little);
+      _blockBd.setUint32(44, (x11 + s11) & m32, Endian.little);
+      _blockBd.setUint32(48, (x12 + s12) & m32, Endian.little);
+      _blockBd.setUint32(52, (x13 + s13) & m32, Endian.little);
+      _blockBd.setUint32(56, (x14 + s14) & m32, Endian.little);
+      _blockBd.setUint32(60, (x15 + s15) & m32, Endian.little);
+    }
   }
 
-  static void _xorChunk(
-    Uint8List src,
+  void _xorChunk(
+    ByteData srcBd,
     int srcOffset,
-    Uint8List dst,
+    ByteData dstBd,
     int dstOffset,
-    Uint8List keystream,
     int count,
   ) {
     int i = 0;
-    final int fastLimit = count & ~3;
-    while (i < fastLimit) {
-      final int sOff = srcOffset + i;
-      final int dOff = dstOffset + i;
-      dst[dOff] = src[sOff] ^ keystream[i];
-      dst[dOff + 1] = src[sOff + 1] ^ keystream[i + 1];
-      dst[dOff + 2] = src[sOff + 2] ^ keystream[i + 2];
-      dst[dOff + 3] = src[sOff + 3] ^ keystream[i + 3];
-      i += 4;
+    if (_isLittleEndian) {
+      final int fast16 = count & ~15;
+      while (i < fast16) {
+        final int wIdx = i >> 2;
+        final int sOff = srcOffset + i;
+        final int dOff = dstOffset + i;
+        dstBd.setUint32(
+          dOff,
+          srcBd.getUint32(sOff, Endian.little) ^ _blockWords[wIdx],
+          Endian.little,
+        );
+        dstBd.setUint32(
+          dOff + 4,
+          srcBd.getUint32(sOff + 4, Endian.little) ^ _blockWords[wIdx + 1],
+          Endian.little,
+        );
+        dstBd.setUint32(
+          dOff + 8,
+          srcBd.getUint32(sOff + 8, Endian.little) ^ _blockWords[wIdx + 2],
+          Endian.little,
+        );
+        dstBd.setUint32(
+          dOff + 12,
+          srcBd.getUint32(sOff + 12, Endian.little) ^ _blockWords[wIdx + 3],
+          Endian.little,
+        );
+        i += 16;
+      }
+      final int fast4 = count & ~3;
+      while (i < fast4) {
+        dstBd.setUint32(
+          dstOffset + i,
+          srcBd.getUint32(srcOffset + i, Endian.little) ^ _blockWords[i >> 2],
+          Endian.little,
+        );
+        i += 4;
+      }
+    } else {
+      final int fast4 = count & ~3;
+      while (i < fast4) {
+        dstBd.setUint32(
+          dstOffset + i,
+          srcBd.getUint32(srcOffset + i, Endian.little) ^
+              _blockBd.getUint32(i, Endian.little),
+          Endian.little,
+        );
+        i += 4;
+      }
     }
     while (i < count) {
-      dst[dstOffset + i] = src[srcOffset + i] ^ keystream[i];
+      dstBd.setUint8(
+        dstOffset + i,
+        srcBd.getUint8(srcOffset + i) ^ _blockBytes[i],
+      );
       i++;
     }
   }
 
-  static void _computeAeadTagInto(
-    Uint8List polyKey,
+  void _computeAeadTagInto(
     Uint8List aad,
     Uint8List ctBuf,
+    ByteData ctBd,
     int ctOffset,
     int ctLen,
     Uint8List tagOut,
     int tagOutOffset,
   ) {
-    final int t0 = _le32(polyKey, 0);
-    final int t1 = _le32(polyKey, 4);
-    final int t2 = _le32(polyKey, 8);
-    final int t3 = _le32(polyKey, 12);
+    final int t0 = _polyKeyBd.getUint32(0, Endian.little);
+    final int t1 = _polyKeyBd.getUint32(4, Endian.little);
+    final int t2 = _polyKeyBd.getUint32(8, Endian.little);
+    final int t3 = _polyKeyBd.getUint32(12, Endian.little);
 
     final int r0 = t0 & 0x03FFFFFF;
     final int r1 = ((t0 >> 26) | (t1 << 6)) & 0x03FFFF03;
@@ -381,11 +443,11 @@ class ChaCha20Poly1305 {
 
     int h0 = 0, h1 = 0, h2 = 0, h3 = 0, h4 = 0;
 
-    void processBlock(Uint8List blk, int off) {
-      final int b0 = _le32(blk, off);
-      final int b1 = _le32(blk, off + 4);
-      final int b2 = _le32(blk, off + 8);
-      final int b3 = _le32(blk, off + 12);
+    void processBlock(ByteData blkBd, int off) {
+      final int b0 = blkBd.getUint32(off, Endian.little);
+      final int b1 = blkBd.getUint32(off + 4, Endian.little);
+      final int b2 = blkBd.getUint32(off + 8, Endian.little);
+      final int b3 = blkBd.getUint32(off + 12, Endian.little);
 
       h0 += b0 & 0x03FFFFFF;
       h1 += ((b0 >> 26) | (b1 << 6)) & 0x03FFFFFF;
@@ -407,10 +469,10 @@ class ChaCha20Poly1305 {
       c = h0 >> 26; h0 &= 0x03FFFFFF; h1 += c;
     }
 
-    void feedPadded(Uint8List src, int baseOff, int len) {
+    void feedPadded(Uint8List src, ByteData srcBd, int baseOff, int len) {
       int pos = 0;
       while (pos + 16 <= len) {
-        processBlock(src, baseOff + pos);
+        processBlock(srcBd, baseOff + pos);
         pos += 16;
       }
       final int rem = len - pos;
@@ -421,18 +483,19 @@ class ChaCha20Poly1305 {
         for (int i = rem; i < 16; i++) {
           _polyPad[i] = 0;
         }
-        processBlock(_polyPad, 0);
+        processBlock(_polyPadBd, 0);
       }
     }
 
-    feedPadded(aad, 0, aad.length);
-    feedPadded(ctBuf, ctOffset, ctLen);
+    final ByteData aadBd = ByteData.sublistView(aad);
+    feedPadded(aad, aadBd, 0, aad.length);
+    feedPadded(ctBuf, ctBd, ctOffset, ctLen);
 
-    _storeLe32(_polyPad, 0, aad.length & 0xFFFFFFFF);
-    _storeLe32(_polyPad, 4, (aad.length >> 32) & 0xFFFFFFFF);
-    _storeLe32(_polyPad, 8, ctLen & 0xFFFFFFFF);
-    _storeLe32(_polyPad, 12, (ctLen >> 32) & 0xFFFFFFFF);
-    processBlock(_polyPad, 0);
+    _polyPadBd.setUint32(0, aad.length & 0xFFFFFFFF, Endian.little);
+    _polyPadBd.setUint32(4, (aad.length >> 32) & 0xFFFFFFFF, Endian.little);
+    _polyPadBd.setUint32(8, ctLen & 0xFFFFFFFF, Endian.little);
+    _polyPadBd.setUint32(12, (ctLen >> 32) & 0xFFFFFFFF, Endian.little);
+    processBlock(_polyPadBd, 0);
 
     int c = h1 >> 26; h1 &= 0x03FFFFFF; h2 += c;
     c = h2 >> 26; h2 &= 0x03FFFFFF; h3 += c;
@@ -459,18 +522,22 @@ class ChaCha20Poly1305 {
     final int f2 = ((h2 >> 12) | (h3 << 14)) & 0xFFFFFFFF;
     final int f3 = ((h3 >> 18) | (h4 << 8)) & 0xFFFFFFFF;
 
-    final int p0 = f0 + _le32(polyKey, 16);
-    final int p1 = f1 + _le32(polyKey, 20) + ((p0 >> 32) & 0xFFFFFFFF);
-    final int p2 = f2 + _le32(polyKey, 24) + ((p1 >> 32) & 0xFFFFFFFF);
-    final int p3 = f3 + _le32(polyKey, 28) + ((p2 >> 32) & 0xFFFFFFFF);
+    final int p0 = f0 + _polyKeyBd.getUint32(16, Endian.little);
+    final int p1 =
+        f1 + _polyKeyBd.getUint32(20, Endian.little) + ((p0 >> 32) & 0xFFFFFFFF);
+    final int p2 =
+        f2 + _polyKeyBd.getUint32(24, Endian.little) + ((p1 >> 32) & 0xFFFFFFFF);
+    final int p3 =
+        f3 + _polyKeyBd.getUint32(28, Endian.little) + ((p2 >> 32) & 0xFFFFFFFF);
 
-    _storeLe32(tagOut, tagOutOffset, p0 & 0xFFFFFFFF);
-    _storeLe32(tagOut, tagOutOffset + 4, p1 & 0xFFFFFFFF);
-    _storeLe32(tagOut, tagOutOffset + 8, p2 & 0xFFFFFFFF);
-    _storeLe32(tagOut, tagOutOffset + 12, p3 & 0xFFFFFFFF);
+    final ByteData tagOutBd = ByteData.sublistView(tagOut);
+    tagOutBd.setUint32(tagOutOffset, p0 & 0xFFFFFFFF, Endian.little);
+    tagOutBd.setUint32(tagOutOffset + 4, p1 & 0xFFFFFFFF, Endian.little);
+    tagOutBd.setUint32(tagOutOffset + 8, p2 & 0xFFFFFFFF, Endian.little);
+    tagOutBd.setUint32(tagOutOffset + 12, p3 & 0xFFFFFFFF, Endian.little);
   }
 
-  static void _scrubScratch() {
+  void _scrubScratch() {
     for (int i = 0; i < 8; i++) {
       _keyWords[i] = 0;
     }
@@ -482,8 +549,14 @@ class ChaCha20Poly1305 {
     zeroize(_polyPad);
   }
 
+  /// Scrubs all internal scratch buffers held by this cipher instance.
+  void dispose() {
+    _scrubScratch();
+    zeroize(_computedTag);
+  }
+
   /// Encrypts [plaintext] directly into [out] at [outOffset], writing `[ciphertext][16B tag]`.
-  static void encryptInto(
+  void encryptInto(
     Uint8List key,
     Uint8List nonce,
     Uint8List plaintext,
@@ -492,7 +565,8 @@ class ChaCha20Poly1305 {
     Uint8List? aad,
   }) {
     if (key.length != 32 || nonce.length != 12) {
-      throw ArgumentError('ChaCha20-Poly1305 requires a 32-byte key and 12-byte nonce');
+      throw ArgumentError(
+          'ChaCha20-Poly1305 requires a 32-byte key and 12-byte nonce');
     }
     if (outOffset < 0 || outOffset + plaintext.length + 16 > out.length) {
       throw RangeError(
@@ -500,12 +574,12 @@ class ChaCha20Poly1305 {
       );
     }
     final Uint8List aadData = aad ?? Uint8List(0);
+    final ByteData srcBd = ByteData.sublistView(plaintext);
+    final ByteData dstBd = ByteData.sublistView(out);
     try {
       _prepareKeyState(key, nonce);
       _chachaBlockToScratch(0);
-      for (int i = 0; i < 32; i++) {
-        _polyKey[i] = _blockBytes[i];
-      }
+      _polyKey.setRange(0, 32, _blockBytes);
 
       final int ptLen = plaintext.length;
       int ctr = 1;
@@ -513,36 +587,44 @@ class ChaCha20Poly1305 {
       while (offset < ptLen) {
         _chachaBlockToScratch(ctr);
         final int take = min(64, ptLen - offset);
-        _xorChunk(plaintext, offset, out, outOffset + offset, _blockBytes, take);
+        _xorChunk(srcBd, offset, dstBd, outOffset + offset, take);
         offset += take;
         ctr++;
       }
 
-      _computeAeadTagInto(_polyKey, aadData, out, outOffset, ptLen, out, outOffset + ptLen);
+      _computeAeadTagInto(
+          aadData, out, dstBd, outOffset, ptLen, out, outOffset + ptLen);
     } finally {
       _scrubScratch();
     }
   }
 
-  static Uint8List encrypt(Uint8List key, Uint8List nonce, Uint8List plaintext, {Uint8List? aad}) {
+  Uint8List encrypt(Uint8List key, Uint8List nonce, Uint8List plaintext,
+      {Uint8List? aad}) {
     final Uint8List result = Uint8List(plaintext.length + 16);
     encryptInto(key, nonce, plaintext, result, 0, aad: aad);
     return result;
   }
 
-  static Uint8List? decrypt(Uint8List key, Uint8List nonce, Uint8List ciphertextAndTag, {Uint8List? aad}) {
-    if (key.length != 32 || nonce.length != 12 || ciphertextAndTag.length < 16) return null;
+  Uint8List? decrypt(
+      Uint8List key, Uint8List nonce, Uint8List ciphertextAndTag,
+      {Uint8List? aad}) {
+    if (key.length != 32 ||
+        nonce.length != 12 ||
+        ciphertextAndTag.length < 16) {
+      return null;
+    }
     final Uint8List aadData = aad ?? Uint8List(0);
     final int ctLen = ciphertextAndTag.length - 16;
+    final ByteData ctBd = ByteData.sublistView(ciphertextAndTag);
 
     try {
       _prepareKeyState(key, nonce);
       _chachaBlockToScratch(0);
-      for (int i = 0; i < 32; i++) {
-        _polyKey[i] = _blockBytes[i];
-      }
+      _polyKey.setRange(0, 32, _blockBytes);
 
-      _computeAeadTagInto(_polyKey, aadData, ciphertextAndTag, 0, ctLen, _computedTag, 0);
+      _computeAeadTagInto(
+          aadData, ciphertextAndTag, ctBd, 0, ctLen, _computedTag, 0);
 
       int diff = 0;
       for (int i = 0; i < 16; i++) {
@@ -553,12 +635,13 @@ class ChaCha20Poly1305 {
       }
 
       final Uint8List plaintext = Uint8List(ctLen);
+      final ByteData ptBd = ByteData.sublistView(plaintext);
       int ctr = 1;
       int offset = 0;
       while (offset < ctLen) {
         _chachaBlockToScratch(ctr);
         final int take = min(64, ctLen - offset);
-        _xorChunk(ciphertextAndTag, offset, plaintext, offset, _blockBytes, take);
+        _xorChunk(ctBd, offset, ptBd, offset, take);
         offset += take;
         ctr++;
       }
@@ -568,6 +651,31 @@ class ChaCha20Poly1305 {
       zeroize(_computedTag);
     }
   }
+}
+
+/// RFC 8439 ChaCha20-Poly1305 Static Facade (delegates to shared instance cipher)
+class ChaCha20Poly1305 {
+  static final ChaCha20Poly1305Cipher _shared = ChaCha20Poly1305Cipher();
+
+  /// Encrypts [plaintext] directly into [out] at [outOffset], writing `[ciphertext][16B tag]`.
+  static void encryptInto(
+    Uint8List key,
+    Uint8List nonce,
+    Uint8List plaintext,
+    Uint8List out,
+    int outOffset, {
+    Uint8List? aad,
+  }) =>
+      _shared.encryptInto(key, nonce, plaintext, out, outOffset, aad: aad);
+
+  static Uint8List encrypt(Uint8List key, Uint8List nonce, Uint8List plaintext,
+          {Uint8List? aad}) =>
+      _shared.encrypt(key, nonce, plaintext, aad: aad);
+
+  static Uint8List? decrypt(
+          Uint8List key, Uint8List nonce, Uint8List ciphertextAndTag,
+          {Uint8List? aad}) =>
+      _shared.decrypt(key, nonce, ciphertextAndTag, aad: aad);
 }
 
 /// RFC 5869 HKDF-SHA256 Extract step.
@@ -857,6 +965,27 @@ class CryptoEngine {
     final Uint8List aad = Uint8List.sublistView(rawWireFrame, 0, 12);
     final Uint8List payload = Uint8List.sublistView(rawWireFrame, 12);
     return decryptPacket(payload, aad: aad);
+  }
+
+  /// Returns a fresh 32-byte copy of the inbound decryption key for off-thread
+  /// isolate decryption, or `null` if the vault is not established or disposed.
+  Uint8List? copyRecvKeyForIsolate() {
+    if (_disposed || !_isEstablished || _kRecv == null) {
+      return null;
+    }
+    return Uint8List.fromList(_kRecv!);
+  }
+
+  /// Non-mutating anti-replay eligibility check for [seq] before off-thread AEAD decryption.
+  bool canAcceptInboundSeq(int seq) {
+    if (_disposed || !_isEstablished) return false;
+    return _replayGuard.canAccept(seq);
+  }
+
+  /// Commits [seq] into the replay guard only after off-thread AEAD verification succeeds.
+  bool commitInboundSeq(int seq) {
+    if (_disposed || !_isEstablished) return false;
+    return _replayGuard.validateAndUpdate(seq);
   }
 
   void dispose() {

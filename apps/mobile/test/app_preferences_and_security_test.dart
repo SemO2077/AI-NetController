@@ -5,7 +5,9 @@ import 'dart:typed_data';
 import 'package:ai_netcontroller/security/crypto_engine.dart' as engine;
 import 'package:ai_netcontroller/security/network_validators.dart';
 import 'package:ai_netcontroller/services/app_preferences.dart';
+import 'package:ai_netcontroller/services/history_store.dart';
 import 'package:ai_netcontroller/theme/fluid_theme.dart';
+import 'package:ai_netcontroller/ui/settings_command_deck.dart';
 import 'package:ai_netcontroller/main.dart' as app;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,7 +16,12 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 Future<void> _cleanupHiveTempDir(Directory tempDir) async {
   await Future<void>.delayed(const Duration(milliseconds: 50));
-  for (final name in [kAppPrefsBoxName, 'ghost_devices', kVaultSecretsBoxName]) {
+  for (final name in [
+    kAppPrefsBoxName,
+    'ghost_devices',
+    kVaultSecretsBoxName,
+    kHistoryBoxName,
+  ]) {
     if (Hive.isBoxOpen(name)) {
       await Hive.box(name).flush();
     }
@@ -81,11 +88,11 @@ void main() {
       final box = await Hive.openBox(kAppPrefsBoxName);
       final notifier = AppPreferencesNotifier(boxOverride: box);
 
-      await notifier.setTargetFps(120); // unsupported value -> default 30
+      await notifier.setTargetFps(120); // unsupported value -> default 60
       await notifier.setCustomScanPort(0); // invalid -> unchanged 8765
       await notifier.setCustomScanPort(70000); // invalid -> unchanged 8765
 
-      expect(notifier.state.targetFps, equals(30));
+      expect(notifier.state.targetFps, equals(60));
       expect(notifier.state.customScanPort, equals(8765));
 
       for (int i = 0; i < 30; i++) {
@@ -125,7 +132,7 @@ void main() {
       await reopenedBox.put('reducedMotion', 'not_a_bool');
       final recovered = AppPreferencesNotifier(boxOverride: reopenedBox).state;
       expect(recovered.themeMode, equals(AppThemeMode.daylight));
-      expect(recovered.targetFps, equals(30));
+      expect(recovered.targetFps, equals(60));
       expect(recovered.reducedMotion, isFalse);
     });
   });
@@ -320,6 +327,7 @@ void main() {
         await Hive.openBox('ghost_devices');
         await Hive.openBox(kAppPrefsBoxName);
         await Hive.openBox(kVaultSecretsBoxName);
+        await Hive.openBox(kHistoryBoxName);
       });
       addTearDown(() async {
         await tester.runAsync(() async {
@@ -350,8 +358,30 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
+      // Expand lower Appearance Studio Bento tile inside SettingsCommandDeck.
+      final settingsScrollable = find.descendant(
+        of: find.byType(SettingsCommandDeck),
+        matching: find.byType(Scrollable),
+      ).first;
+      final appearanceHubFinder =
+          find.byKey(const ValueKey('settings-hub-appearance'));
+      await tester.scrollUntilVisible(
+        appearanceHubFinder,
+        240,
+        scrollable: settingsScrollable,
+      );
+      await tester.pump();
+      await tester.tap(appearanceHubFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
       // Tap non-default accent swatch.
       final swatchFinder = find.byKey(ValueKey('accent-${secondAccent.name}'));
+      await tester.scrollUntilVisible(
+        swatchFinder,
+        200,
+        scrollable: settingsScrollable,
+      );
       await tester.ensureVisible(swatchFinder);
       await tester.runAsync(() async {
         await tester.tap(swatchFinder);
@@ -448,6 +478,16 @@ void main() {
       await tester.tap(find.byIcon(Icons.tune_rounded).first);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Command Deck'), findsOneWidget);
+      expect(find.text('OPERATIONAL COMMAND BENTO'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('APPEARANCE STUDIO (PERSISTENT)'),
+        240,
+        scrollable: find.descendant(
+          of: find.byType(SettingsCommandDeck),
+          matching: find.byType(Scrollable),
+        ).first,
+      );
       expect(find.text('APPEARANCE STUDIO (PERSISTENT)'), findsOneWidget);
 
       await tester.tap(find.byIcon(Icons.terminal_rounded).first);

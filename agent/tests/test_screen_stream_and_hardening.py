@@ -143,8 +143,8 @@ class TestAdaptiveScreenPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(jpg, b"\xff\xd8\xff\xe0\xff\xd9")
         self.pipeline.turbo.encode.assert_called_once()
         args, kwargs = self.pipeline.turbo.encode.call_args
-        self.assertEqual(args[0].shape, (240, 320, 3))
-        self.assertEqual(kwargs["pixel_format"], agent_mod.TJPF_RGB)
+        self.assertEqual(args[0].shape, (240, 320, 4))
+        self.assertEqual(kwargs["pixel_format"], agent_mod.TJPF_BGRX)
         self.assertEqual(kwargs["jpeg_subsample"], agent_mod.TJSAMP_420)
         self.assertEqual(kwargs["flags"], agent_mod.TJFLAG_FASTDCT)
         self.assertEqual(agent_mod.TJFLAG_FASTDCT, 2048)

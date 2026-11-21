@@ -1,8 +1,8 @@
 {
   "name": "ai-netcontroller",
   "private": true,
-  "version": "0.80.0",
-  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.80.00)",
+  "version": "0.90.0",
+  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.90.00)",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,7 +20,11 @@
     "dev": "tsx apps/web/server.ts",
     "start": "node -e \"const { spawnSync } = require('child_process'); const res = spawnSync(process.execPath, [require.resolve('tsx/cli'), 'apps/web/server.ts'], { stdio: 'inherit', env: { ...process.env, NODE_ENV: 'production' } }); process.exit(res.error ? 1 : (res.status ?? 1));\"",
     "build": "vite build --config apps/web/vite.config.ts apps/web",
+    "build:exe": "node -e \"const fs = require('node:fs'); const path = require('node:path'); const { spawnSync } = require('child_process'); const venvPy = process.platform === 'win32' ? path.join('.venv', 'Scripts', 'python.exe') : path.join('.venv', 'bin', 'python'); const py = fs.existsSync(venvPy) ? venvPy : (process.platform === 'win32' ? 'python' : 'python3'); const res = spawnSync(py, ['scripts/build_release_binaries.py', '--exe-only'], { stdio: 'inherit' }); process.exit(res.error ? 1 : (res.status ?? 1));\"",
+    "build:apk": "node -e \"const fs = require('node:fs'); const path = require('node:path'); const { spawnSync } = require('child_process'); const venvPy = process.platform === 'win32' ? path.join('.venv', 'Scripts', 'python.exe') : path.join('.venv', 'bin', 'python'); const py = fs.existsSync(venvPy) ? venvPy : (process.platform === 'win32' ? 'python' : 'python3'); const res = spawnSync(py, ['scripts/build_android_app.py'], { stdio: 'inherit' }); process.exit(res.error ? 1 : (res.status ?? 1));\"",
     "build:releases": "node -e \"const fs = require('node:fs'); const path = require('node:path'); const { spawnSync } = require('child_process'); const venvPy = process.platform === 'win32' ? path.join('.venv', 'Scripts', 'python.exe') : path.join('.venv', 'bin', 'python'); const py = fs.existsSync(venvPy) ? venvPy : (process.platform === 'win32' ? 'python' : 'python3'); const res = spawnSync(py, ['scripts/build_release_binaries.py'], { stdio: 'inherit' }); process.exit(res.error ? 1 : (res.status ?? 1));\"",
+    "launch:test": "node -e \"const fs = require('node:fs'); const path = require('node:path'); const { spawnSync } = require('child_process'); const venvPy = process.platform === 'win32' ? path.join('.venv', 'Scripts', 'python.exe') : path.join('.venv', 'bin', 'python'); const py = fs.existsSync(venvPy) ? venvPy : (process.platform === 'win32' ? 'python' : 'python3'); const res = spawnSync(py, ['scripts/launch_and_test_daemon.py'], { stdio: 'inherit' }); process.exit(res.error ? 1 : (res.status ?? 1));\"",
+    "verify:daemon": "node -e \"const fs = require('node:fs'); const path = require('node:path'); const { spawnSync } = require('child_process'); const venvPy = process.platform === 'win32' ? path.join('.venv', 'Scripts', 'python.exe') : path.join('.venv', 'bin', 'python'); const py = fs.existsSync(venvPy) ? venvPy : (process.platform === 'win32' ? 'python' : 'python3'); const res = spawnSync(py, ['scripts/launch_and_test_daemon.py', '--verify-only'], { stdio: 'inherit' }); process.exit(res.error ? 1 : (res.status ?? 1));\"",
     "preview": "vite preview --config apps/web/vite.config.ts apps/web",
     "clean": "node -e \"require('node:fs').rmSync('apps/web/dist', { recursive: true, force: true })\"",
     "lint": "tsc --noEmit -p apps/web/tsconfig.json",

@@ -40,6 +40,7 @@ enum StreamOpcode {
   llmStream(0x0B), // 11 (0x0B)
   fileTransfer(0x0C), // 12 (0x0C)
   displayEnum(0x0D), // 13 (0x0D)
+  frameAck(0x0E), // 14 (0x0E)
   frameSync(0xED), // 237 (0xED)
   error(0xEE); // 238 (0xEE)
 
@@ -115,6 +116,11 @@ class ViewportStreamWidget extends StatefulWidget {
   final bool hapticsEnabled;
   final String qualityPreset;
   final double trackpadSensitivity;
+  final bool instantTapMode;
+  final int longPressDelayMs;
+  final double scrollSensitivity;
+  final bool naturalScroll;
+  final bool pinchZoomEnabled;
   final bool collapsibleHud;
   final VoidCallback? onExitFullscreen;
   final VoidCallback? onCycleOrientation;
@@ -140,6 +146,11 @@ class ViewportStreamWidget extends StatefulWidget {
     this.hapticsEnabled = true,
     this.qualityPreset = 'auto',
     this.trackpadSensitivity = 1.6,
+    this.instantTapMode = true,
+    this.longPressDelayMs = 460,
+    this.scrollSensitivity = 1.6,
+    this.naturalScroll = false,
+    this.pinchZoomEnabled = true,
     this.collapsibleHud = false,
     this.onExitFullscreen,
     this.onCycleOrientation,
@@ -158,8 +169,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
   static const double _tapSlopPx = 11.0;
   static const Duration _doubleTapWindow = Duration(milliseconds: 220);
   static const Duration _singleTapCommitDelay = Duration(milliseconds: 175);
-  static const Duration _longPressDelay = Duration(milliseconds: 460);
   static const Duration _longPressRingDelay = Duration(milliseconds: 110);
+  static const Duration _inputCoalesceInterval = Duration(milliseconds: 8);
   static const Duration _hudAutoHideDelay = Duration(seconds: 6);
 
   bool _holdsWakelock = false;
@@ -189,10 +200,16 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
   // Viewport Resolution, Decoded Frame Size & Quality Tracking
   Size _lastContainerSize = Size.zero;
   Size? _decodedFrameSize;
+  int _lastRawPhysicalWidth = 0;
+  int _lastRawPhysicalHeight = 0;
   int _lastPhysicalWidth = 0;
   int _lastPhysicalHeight = 0;
+  int _lastCapMaxWidth = 1440;
+  int _lastCapMaxHeight = 810;
   int _lastSentPhysicalWidth = 0;
   int _lastSentPhysicalHeight = 0;
+  int _lastSentCapMaxWidth = 0;
+  int _lastSentCapMaxHeight = 0;
   int _lastSentQuality = 75;
   int _lastSentFps = 30;
   bool _resizeScheduled = false;
@@ -237,12 +254,13 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
   double _twoFingerMaxMidMove = 0.0;
   _TwoFingerMode _twoFingerMode = _TwoFingerMode.undecided;
 
-  // 16ms Coalesced Binary Input Buffers
+  // Leading-edge 8ms Coalesced Binary Input Buffers
   Offset? _pendingAbsMove;
   double _accumRelDx = 0.0;
   double _accumRelDy = 0.0;
   double _accumScrollDx = 0.0;
   double _accumScrollDy = 0.0;
+  DateTime _lastInputFlushAt = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _inputFlushTimer;
 
   // Isolated HUD Metrics (never trigger parent video canvas rebuilds)
@@ -329,6 +347,11 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
         !widget.touchVisualFeedback) {
       _feedbackController.clearAll();
     }
+    if (oldWidget.pinchZoomEnabled != widget.pinchZoomEnabled &&
+        !widget.pinchZoomEnabled &&
+        !_zoomTransform.isIdentity()) {
+      _zoomTransform = Matrix4.identity();
+    }
     if (oldWidget.hostIp != widget.hostIp ||
         oldWidget.wsPort != widget.wsPort ||
         oldWidget.sharedSecret.trim() != widget.sharedSecret.trim() ||
@@ -338,6 +361,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       _decodedFrameSize = null;
       _lastSentPhysicalWidth = 0;
       _lastSentPhysicalHeight = 0;
+      _lastSentCapMaxWidth = 0;
+      _lastSentCapMaxHeight = 0;
       _zoomTransform = Matrix4.identity();
       _connect(notify: false);
     } else if (oldWidget.targetFps != widget.targetFps) {
@@ -376,17 +401,54 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     return min(prefFps, govFps);
   }
 
+  Duration get _effectiveLongPressDelay =>
+      Duration(milliseconds: widget.longPressDelayMs.clamp(250, 700));
+
+  ({int width, int height, int maxW, int maxH}) _computeNegotiatedViewport(
+    int rawWidth,
+    int rawHeight,
+    ThermalConfig cfg,
+  ) {
+    final int? rtt = _latencyNotifier.value ?? _connectionSnapshot.latencyMs;
+    final bool autoStepDown = (rtt != null && rtt > 60) ||
+        cfg.targetFps <= 20 ||
+        cfg.isSnapshotOnlyMode;
+
+    final (int capW, int capH) = switch (_qualityPreset) {
+      'low' => (960, 540),
+      'balanced' => (1280, 720),
+      'crisp' => (1920, 1080),
+      _ => autoStepDown ? (1024, 576) : (1440, 810),
+    };
+
+    final int safeRawW = max(1, rawWidth);
+    final int safeRawH = max(1, rawHeight);
+    final double scale = min(1.0, min(capW / safeRawW, capH / safeRawH));
+    final int cappedW = (safeRawW * scale).round().clamp(160, capW);
+    final int cappedH = (safeRawH * scale).round().clamp(90, capH);
+    return (width: cappedW, height: cappedH, maxW: capW, maxH: capH);
+  }
+
   void _negotiateViewportIfReady() {
-    if (!mounted ||
-        !_isAuthenticated ||
-        _lastPhysicalWidth <= 0 ||
-        _lastPhysicalHeight <= 0) {
-      return;
-    }
+    if (!mounted || !_isAuthenticated) return;
+    final int rawW =
+        _lastRawPhysicalWidth > 0 ? _lastRawPhysicalWidth : _lastPhysicalWidth;
+    final int rawH =
+        _lastRawPhysicalHeight > 0 ? _lastRawPhysicalHeight : _lastPhysicalHeight;
+    if (rawW <= 0 || rawH <= 0) return;
+
+    final ThermalConfig cfg = ThermalGovernor.instance.currentConfig;
+    final capped = _computeNegotiatedViewport(rawW, rawH, cfg);
+    _lastPhysicalWidth = capped.width;
+    _lastPhysicalHeight = capped.height;
+    _lastCapMaxWidth = capped.maxW;
+    _lastCapMaxHeight = capped.maxH;
     _sendViewportNegotiation(
-      _lastPhysicalWidth,
-      _lastPhysicalHeight,
-      _qualityForThermalAndPreset(ThermalGovernor.instance.currentConfig),
+      capped.width,
+      capped.height,
+      _qualityForThermalAndPreset(cfg),
+      maxWidth: capped.maxW,
+      maxHeight: capped.maxH,
     );
   }
 
@@ -403,16 +465,34 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
   }
 
   void _onThermalConfigChanged() {
-    if (!mounted || !_isAuthenticated || _lastPhysicalWidth <= 0) return;
-    final int targetQuality =
-        _qualityForThermalAndPreset(ThermalGovernor.instance.currentConfig);
-    final int targetFps =
-        _effectiveTargetFps(ThermalGovernor.instance.currentConfig);
-    if (targetQuality != _lastSentQuality || targetFps != _lastSentFps) {
+    if (!mounted || !_isAuthenticated) return;
+    final int rawW =
+        _lastRawPhysicalWidth > 0 ? _lastRawPhysicalWidth : _lastPhysicalWidth;
+    final int rawH =
+        _lastRawPhysicalHeight > 0 ? _lastRawPhysicalHeight : _lastPhysicalHeight;
+    if (rawW <= 0 || rawH <= 0) return;
+
+    final ThermalConfig cfg = ThermalGovernor.instance.currentConfig;
+    final capped = _computeNegotiatedViewport(rawW, rawH, cfg);
+    _lastPhysicalWidth = capped.width;
+    _lastPhysicalHeight = capped.height;
+    _lastCapMaxWidth = capped.maxW;
+    _lastCapMaxHeight = capped.maxH;
+
+    final int targetQuality = _qualityForThermalAndPreset(cfg);
+    final int targetFps = _effectiveTargetFps(cfg);
+    if (targetQuality != _lastSentQuality ||
+        targetFps != _lastSentFps ||
+        (capped.width - _lastSentPhysicalWidth).abs() > 16 ||
+        (capped.height - _lastSentPhysicalHeight).abs() > 16 ||
+        capped.maxW != _lastSentCapMaxWidth ||
+        capped.maxH != _lastSentCapMaxHeight) {
       _sendViewportNegotiation(
-        _lastPhysicalWidth,
-        _lastPhysicalHeight,
+        capped.width,
+        capped.height,
         targetQuality,
+        maxWidth: capped.maxW,
+        maxHeight: capped.maxH,
       );
     }
   }
@@ -576,6 +656,18 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
         client.requestDisplayEnum();
         client.requestKeyframe();
         _armFrameRecoveryTimer();
+      } else if (snap.isVaultEstablished &&
+          _qualityPreset == 'auto' &&
+          _lastRawPhysicalWidth > 0) {
+        final capped = _computeNegotiatedViewport(
+          _lastRawPhysicalWidth,
+          _lastRawPhysicalHeight,
+          ThermalGovernor.instance.currentConfig,
+        );
+        if (capped.maxW != _lastSentCapMaxWidth ||
+            capped.maxH != _lastSentCapMaxHeight) {
+          _negotiateViewportIfReady();
+        }
       }
     });
 
@@ -630,6 +722,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       final now = DateTime.now();
       if (effectiveFps < 60 &&
           now.difference(_lastUiFrameAt).inMilliseconds < minIntervalMs) {
+        client.sendFrameAck(client.lastFrameSeq);
         return; // Respect configured target FPS and thermal throttle ceiling
       }
       _lastUiFrameAt = now;
@@ -667,7 +760,13 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     unawaited(client.reconnectNow().catchError((_) {}));
   }
 
-  void _sendViewportNegotiation(int width, int height, int quality) {
+  void _sendViewportNegotiation(
+    int width,
+    int height,
+    int quality, {
+    int? maxWidth,
+    int? maxHeight,
+  }) {
     final client = _client;
     if (client == null || !client.isVaultEstablished) return;
     final int fps = _effectiveTargetFps(ThermalGovernor.instance.currentConfig);
@@ -676,9 +775,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       height: height,
       quality: quality,
       fps: fps,
+      frameAck: true,
+      maxWidth: maxWidth ?? _lastCapMaxWidth,
+      maxHeight: maxHeight ?? _lastCapMaxHeight,
     )) {
       _lastSentPhysicalWidth = width;
       _lastSentPhysicalHeight = height;
+      _lastSentCapMaxWidth = maxWidth ?? _lastCapMaxWidth;
+      _lastSentCapMaxHeight = maxHeight ?? _lastCapMaxHeight;
       _lastSentQuality = quality;
       _lastSentFps = fps;
     }
@@ -716,19 +820,29 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     }
 
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    final physicalWidth = (renderWidth * dpr).round();
-    final physicalHeight = (renderHeight * dpr).round();
+    final int rawPhysicalWidth = (renderWidth * dpr).round();
+    final int rawPhysicalHeight = (renderHeight * dpr).round();
+    _lastRawPhysicalWidth = rawPhysicalWidth;
+    _lastRawPhysicalHeight = rawPhysicalHeight;
 
-    _lastPhysicalWidth = physicalWidth;
-    _lastPhysicalHeight = physicalHeight;
+    final ThermalConfig thermalCfg = ThermalGovernor.instance.currentConfig;
+    final capped = _computeNegotiatedViewport(
+      rawPhysicalWidth,
+      rawPhysicalHeight,
+      thermalCfg,
+    );
+    _lastPhysicalWidth = capped.width;
+    _lastPhysicalHeight = capped.height;
+    _lastCapMaxWidth = capped.maxW;
+    _lastCapMaxHeight = capped.maxH;
 
-    final int targetQuality =
-        _qualityForThermalAndPreset(ThermalGovernor.instance.currentConfig);
-    final int targetFps =
-        _effectiveTargetFps(ThermalGovernor.instance.currentConfig);
+    final int targetQuality = _qualityForThermalAndPreset(thermalCfg);
+    final int targetFps = _effectiveTargetFps(thermalCfg);
     final dimensionsChanged =
-        (physicalWidth - _lastSentPhysicalWidth).abs() > 16 ||
-            (physicalHeight - _lastSentPhysicalHeight).abs() > 16 ||
+        (capped.width - _lastSentPhysicalWidth).abs() > 16 ||
+            (capped.height - _lastSentPhysicalHeight).abs() > 16 ||
+            capped.maxW != _lastSentCapMaxWidth ||
+            capped.maxH != _lastSentCapMaxHeight ||
             targetQuality != _lastSentQuality ||
             targetFps != _lastSentFps;
     if (dimensionsChanged &&
@@ -744,6 +858,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
           _lastPhysicalWidth,
           _lastPhysicalHeight,
           targetQuality,
+          maxWidth: _lastCapMaxWidth,
+          maxHeight: _lastCapMaxHeight,
         );
       });
     }
@@ -770,6 +886,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
   }
 
   void _flushCoalescedInput() {
+    _lastInputFlushAt = DateTime.now();
     final client = _client;
     if (client == null || !client.isVaultEstablished) {
       _pendingAbsMove = null;
@@ -807,10 +924,29 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     }
   }
 
+  bool _hasPendingCoalescedInput() =>
+      _pendingAbsMove != null ||
+      _accumRelDx.abs() >= 1.0 ||
+      _accumRelDy.abs() >= 1.0 ||
+      _accumScrollDx.abs() >= 1.0 ||
+      _accumScrollDy.abs() >= 1.0;
+
+  void _onCoalesceWindowEnd() {
+    if (!mounted || !_hasPendingCoalescedInput()) return;
+    _flushCoalescedInput();
+  }
+
   void _scheduleInputFlush() {
     if (_inputFlushTimer?.isActive ?? false) return;
-    _inputFlushTimer =
-        Timer(const Duration(milliseconds: 16), _flushCoalescedInput);
+    final DateTime now = DateTime.now();
+    final Duration sinceLast = now.difference(_lastInputFlushAt);
+    if (sinceLast >= _inputCoalesceInterval) {
+      _flushCoalescedInput();
+      _inputFlushTimer = Timer(_inputCoalesceInterval, _onCoalesceWindowEnd);
+    } else {
+      final Duration remaining = _inputCoalesceInterval - sinceLast;
+      _inputFlushTimer = Timer(remaining, _onCoalesceWindowEnd);
+    }
   }
 
   void _sendVirtualInput(Map<String, dynamic> actionMap) {
@@ -978,6 +1114,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       // Arm long-press right-click (suppressed on double-tap-and-hold)
       if (!_isPotentialDoubleTap) {
         final Offset downPos = event.localPosition;
+        final Duration longPressDelay = _effectiveLongPressDelay;
         _longPressVisualTimer?.cancel();
         _longPressVisualTimer = Timer(_longPressRingDelay, () {
           if (!mounted || _primaryMovedBeyondSlop || _activePointers.length != 1) {
@@ -988,12 +1125,12 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
               : _visualPositionForMapped(_mapLocalPosition(downPos), downPos);
           _feedbackController.startLongPress(
             ringPos,
-            duration: _longPressDelay - _longPressRingDelay,
+            duration: longPressDelay - _longPressRingDelay,
           );
         });
 
         _longPressTimer?.cancel();
-        _longPressTimer = Timer(_longPressDelay, () {
+        _longPressTimer = Timer(longPressDelay, () {
           if (!mounted || _primaryMovedBeyondSlop || _activePointers.length != 1) {
             return;
           }
@@ -1055,19 +1192,21 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
           _twoFingerStartDist > 12.0 ? (dist / _twoFingerStartDist) : 1.0;
 
       if (_twoFingerMode == _TwoFingerMode.undecided) {
-        final bool alreadyZoomed = _twoFingerStartScale > 1.02;
+        final bool alreadyZoomed =
+            widget.pinchZoomEnabled && _twoFingerStartScale > 1.02;
         if (alreadyZoomed) {
           if (midMoveFromStart > 4.0 || (scaleRatio - 1.0).abs() > 0.04) {
             _twoFingerMode = _TwoFingerMode.zoomPan;
           }
-        } else if ((scaleRatio - 1.0).abs() > 0.10) {
+        } else if (widget.pinchZoomEnabled &&
+            (scaleRatio - 1.0).abs() > 0.10) {
           _twoFingerMode = _TwoFingerMode.zoomPan;
         } else if (midMoveFromStart > 10.0) {
           _twoFingerMode = _TwoFingerMode.scroll;
         }
       }
 
-      if (_twoFingerMode == _TwoFingerMode.zoomPan) {
+      if (_twoFingerMode == _TwoFingerMode.zoomPan && widget.pinchZoomEnabled) {
         final double nextScale =
             (_twoFingerStartScale * scaleRatio).clamp(1.0, 4.0);
         final Matrix4 nextTransform = TouchCoordinateMapper.computeZoomPanMatrix(
@@ -1079,8 +1218,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
         );
         setState(() => _zoomTransform = nextTransform);
       } else if (_twoFingerMode == _TwoFingerMode.scroll) {
-        _accumScrollDx += (-midDelta.dx) * 1.6;
-        _accumScrollDy += (-midDelta.dy) * 2.0;
+        final double dir = widget.naturalScroll ? 1.0 : -1.0;
+        final double sens = widget.scrollSensitivity.clamp(0.5, 3.0);
+        _accumScrollDx += (midDelta.dx * dir) * sens;
+        _accumScrollDy += (midDelta.dy * dir) * (sens * 1.25);
         _scheduleInputFlush();
       }
 
@@ -1137,7 +1278,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       return;
     }
 
-    // Direct Touchscreen / Drag cursor tracking (coalesced at 16ms)
+    // Direct Touchscreen / Drag cursor tracking (leading-edge 8ms coalesced)
     final MappedTouchPoint mapped = _mapLocalPosition(event.localPosition);
     _lastNormalizedPos = mapped.normalized;
     _pendingAbsMove = mapped.normalized;
@@ -1194,6 +1335,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
 
     if (pointer == _primaryPointerId) {
       _cancelLongPressTimers();
+      _inputFlushTimer?.cancel();
+      _inputFlushTimer = null;
       _flushCoalescedInput();
 
       if (_mouseButtonHeld) {
@@ -1220,26 +1363,50 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
           _lastTapUpAt = null;
           _lastTapUpPos = null;
           _hapticLight();
-          if (_inputMode == _StreamInputMode.trackpad) {
-            _feedbackController.triggerRipple(
-              localPosition,
-              style: TouchRippleStyle.doubleTap,
-            );
-            _sendRelativeMouseClick('double');
+          if (widget.instantTapMode) {
+            if (_inputMode == _StreamInputMode.trackpad) {
+              _feedbackController.triggerRipple(
+                localPosition,
+                style: TouchRippleStyle.doubleTap,
+              );
+              _sendRelativeMouseClick('left');
+            } else {
+              final MappedTouchPoint mapped = _mapLocalPosition(localPosition);
+              _lastNormalizedPos = mapped.normalized;
+              final Offset visualPos =
+                  _visualPositionForMapped(mapped, localPosition);
+              _feedbackController.triggerRipple(
+                visualPos,
+                style: TouchRippleStyle.doubleTap,
+              );
+              _client?.sendAbsoluteMouseClick(
+                mapped.nx,
+                mapped.ny,
+                buttonCode: 1,
+              );
+            }
           } else {
-            final MappedTouchPoint mapped = _mapLocalPosition(localPosition);
-            _lastNormalizedPos = mapped.normalized;
-            final Offset visualPos =
-                _visualPositionForMapped(mapped, localPosition);
-            _feedbackController.triggerRipple(
-              visualPos,
-              style: TouchRippleStyle.doubleTap,
-            );
-            _client?.sendAbsoluteMouseClick(
-              mapped.nx,
-              mapped.ny,
-              buttonCode: 4,
-            );
+            if (_inputMode == _StreamInputMode.trackpad) {
+              _feedbackController.triggerRipple(
+                localPosition,
+                style: TouchRippleStyle.doubleTap,
+              );
+              _sendRelativeMouseClick('double');
+            } else {
+              final MappedTouchPoint mapped = _mapLocalPosition(localPosition);
+              _lastNormalizedPos = mapped.normalized;
+              final Offset visualPos =
+                  _visualPositionForMapped(mapped, localPosition);
+              _feedbackController.triggerRipple(
+                visualPos,
+                style: TouchRippleStyle.doubleTap,
+              );
+              _client?.sendAbsoluteMouseClick(
+                mapped.nx,
+                mapped.ny,
+                buttonCode: 4,
+              );
+            }
           }
         } else {
           _lastTapUpAt = DateTime.now();
@@ -1256,10 +1423,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
             style: TouchRippleStyle.tap,
           );
 
-          // Brief disambiguation prevents a 3-click sequence on double-tap
-          _pendingSingleTapTimer?.cancel();
-          _pendingSingleTapTimer = Timer(_singleTapCommitDelay, () {
-            if (!mounted) return;
+          if (widget.instantTapMode) {
+            // Zero-delay instant click on finger-up
             if (wasTrackpad) {
               _sendRelativeMouseClick('left');
             } else {
@@ -1269,7 +1434,22 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                 buttonCode: 1,
               );
             }
-          });
+          } else {
+            // Brief disambiguation prevents a 3-click sequence on double-tap
+            _pendingSingleTapTimer?.cancel();
+            _pendingSingleTapTimer = Timer(_singleTapCommitDelay, () {
+              if (!mounted) return;
+              if (wasTrackpad) {
+                _sendRelativeMouseClick('left');
+              } else {
+                _client?.sendAbsoluteMouseClick(
+                  mapped.nx,
+                  mapped.ny,
+                  buttonCode: 1,
+                );
+              }
+            });
+          }
         }
         _feedbackController.clearCursor();
       } else {
@@ -1452,6 +1632,20 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                                   frameStream: _frameController.stream,
                                   initialFrame: _client?.lastFrame,
                                   fit: _videoFit,
+                                  onFramePresented: () {
+                                    final client = _client;
+                                    if (client != null &&
+                                        client.isVaultEstablished) {
+                                      client.sendFrameAck(client.lastFrameSeq);
+                                    }
+                                  },
+                                  onFrameDropped: () {
+                                    final client = _client;
+                                    if (client != null &&
+                                        client.isVaultEstablished) {
+                                      client.sendFrameAck(client.lastFrameSeq);
+                                    }
+                                  },
                                   onFrameSizeChanged: (Size frameSize) {
                                     if (!mounted) return;
                                     if (_decodedFrameSize != frameSize) {
@@ -1485,10 +1679,13 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                   // 2. Connection / Handshake / Actionable Error Status Overlay
                   if (!_hasReceivedFrame)
                     Positioned.fill(
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 360),
-                          child: _buildStatusOverlay(context),
+                      child: IgnorePointer(
+                        ignoring: !_isStatusOverlayInteractive,
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 360),
+                            child: _buildStatusOverlay(context),
+                          ),
                         ),
                       ),
                     ),
@@ -1971,16 +2168,27 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     );
   }
 
-  Widget _buildStatusOverlay(BuildContext context) {
-    final palette = context.palette;
+  bool get _showStatusSpinner {
     final HostConnectionPhase phase = _connectionSnapshot.phase;
-    final bool showSpinner = _isConnecting ||
+    return _isConnecting ||
         phase == HostConnectionPhase.connecting ||
         phase == HostConnectionPhase.authenticating ||
         phase == HostConnectionPhase.securingVault ||
         phase == HostConnectionPhase.reconnecting;
+  }
 
-    if (showSpinner) {
+  bool get _isStatusOverlayInteractive {
+    if (_showStatusSpinner) {
+      return _connectionSnapshot.phase == HostConnectionPhase.reconnecting;
+    }
+    return _errorMessage != null;
+  }
+
+  Widget _buildStatusOverlay(BuildContext context) {
+    final palette = context.palette;
+    final HostConnectionPhase phase = _connectionSnapshot.phase;
+
+    if (_showStatusSpinner) {
       final String phaseText = ConnectionDiagnosticsSheet.phaseLabel(
         phase,
         reconnectAttempt: _connectionSnapshot.reconnectAttempt,
@@ -2131,14 +2339,17 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       );
     }
 
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Text(
-        'Awaiting incoming video frames...',
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: palette.textSecondary,
-          fontSize: context.fluidFont(12),
+    return IgnorePointer(
+      ignoring: true,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Text(
+          'Awaiting incoming video frames...',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: palette.textSecondary,
+            fontSize: context.fluidFont(12),
+          ),
         ),
       ),
     );

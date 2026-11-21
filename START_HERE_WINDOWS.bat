@@ -3,7 +3,7 @@ setlocal
 title AI NetController -- PC ^& Phone Setup Launcher
 color 0B
 echo ============================================================================
-echo   AI NetController v0.80.0 ^(Beta 0.80.00^) -- PC ^& Phone Setup Launcher
+echo   AI NetController v0.90.0 ^(Beta 0.90.00^) -- PC ^& Phone Setup Launcher
 echo ============================================================================
 echo.
 
@@ -38,10 +38,14 @@ if defined PYTHON_BIN (
     echo [!] Python not found in PATH or .venv. Will use prebuilt AI_NetController_HostAgent.exe if available.
 )
 
-echo [2/4] Configuring Windows Private LAN Firewall rules ^(Ports 8765, 3000, UDP 9^)...
+echo [2/4] Configuring Windows Private LAN Firewall rules ^(Ports 8765, UDP 8766, 3000, UDP 9^)...
 netsh advfirewall firewall show rule name="AI NetController Daemon" >nul 2>nul
 if errorlevel 1 (
     netsh advfirewall firewall add rule name="AI NetController Daemon" dir=in action=allow protocol=TCP localport=8765 profile=private >nul 2>nul
+)
+netsh advfirewall firewall show rule name="AI NetController Discovery" >nul 2>nul
+if errorlevel 1 (
+    netsh advfirewall firewall add rule name="AI NetController Discovery" dir=in action=allow protocol=UDP localport=8766 profile=private >nul 2>nul
 )
 netsh advfirewall firewall show rule name="AI NetController Web" >nul 2>nul
 if errorlevel 1 (
@@ -54,16 +58,16 @@ if errorlevel 1 (
 
 echo [3/4] Starting AI NetController Host Agent Desktop Control Center GUI...
 set "PYTHONPATH=%CD%;%CD%\agent;%PYTHONPATH%"
-if exist "agent\dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe" (
-    start "AI NetController Host Agent" "agent\dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe"
-) else if exist "agent\dist\AI_NetController_HostAgent_standalone.exe" (
-    start "AI NetController Host Agent" "agent\dist\AI_NetController_HostAgent_standalone.exe"
-) else if defined PYTHON_BIN (
+if defined PYTHON_BIN (
     if exist "agent\agent.py" (
         start "AI NetController Host Agent" "%PYTHON_BIN%" "agent\agent.py"
     ) else if exist "agent\agent_daemon.py" (
         start "AI NetController Host Agent" "%PYTHON_BIN%" "agent\agent_daemon.py"
     )
+) else if exist "agent\dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe" (
+    start "AI NetController Host Agent" "agent\dist\AI_NetController_HostAgent\AI_NetController_HostAgent.exe"
+) else if exist "agent\dist\AI_NetController_HostAgent_standalone.exe" (
+    start "AI NetController Host Agent" "agent\dist\AI_NetController_HostAgent_standalone.exe"
 ) else (
     echo [!] Host Agent skipped: install Python 3.11+ or build the Windows executable first.
 )

@@ -51,6 +51,11 @@ class FullscreenStreamPage extends StatefulWidget {
   final bool hapticsEnabled;
   final String qualityPreset;
   final double trackpadSensitivity;
+  final bool instantTapMode;
+  final int longPressDelayMs;
+  final double scrollSensitivity;
+  final bool naturalScroll;
+  final bool pinchZoomEnabled;
   final void Function(Map<String, dynamic> telemetry)? onTelemetry;
   final ValueChanged<String>? onQualityPresetChanged;
 
@@ -70,6 +75,11 @@ class FullscreenStreamPage extends StatefulWidget {
     this.hapticsEnabled = true,
     this.qualityPreset = 'auto',
     this.trackpadSensitivity = 1.6,
+    this.instantTapMode = true,
+    this.longPressDelayMs = 460,
+    this.scrollSensitivity = 1.6,
+    this.naturalScroll = false,
+    this.pinchZoomEnabled = true,
     this.onTelemetry,
     this.onQualityPresetChanged,
   });
@@ -158,6 +168,11 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
         hapticsEnabled: widget.hapticsEnabled,
         qualityPreset: widget.qualityPreset,
         trackpadSensitivity: widget.trackpadSensitivity,
+        instantTapMode: widget.instantTapMode,
+        longPressDelayMs: widget.longPressDelayMs,
+        scrollSensitivity: widget.scrollSensitivity,
+        naturalScroll: widget.naturalScroll,
+        pinchZoomEnabled: widget.pinchZoomEnabled,
         collapsibleHud: true,
         onExitFullscreen: () => Navigator.of(context).maybePop(),
         onCycleOrientation: _cycleOrientation,

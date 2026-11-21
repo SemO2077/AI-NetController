@@ -171,10 +171,10 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "filename": "PATCH_NOTES.md",
     "language": "markdown",
     "category": "docs",
-    "description": "Beta v0.80.00 Release Patch Notes — Full Security Hardening, 60 FPS Hardware Screen Streaming, Mutual ECDH/AEAD Vault, Encrypted PIN Pairing & Ergonomic Control UX",
-    "code": `# Patch Notes — AI NetController v0.80.0 (Beta 0.80.00)
+    "description": "Beta v0.90.00 Release Patch Notes — Full Security Hardening, 60 FPS Hardware Screen Streaming, Mutual ECDH/AEAD Vault, Encrypted PIN Pairing & Ergonomic Control UX",
+    "code": `# Patch Notes — AI NetController v0.90.0 (Beta 0.90.00)
 
-**Version:** Beta 0.80.00 (v0.80.0)
+**Version:** Beta 0.90.00 (v0.90.0)
 **Protocol Version:** AI-NET/3.0-SECURE
 
 ## 1. Zero-Bufferbloat 60 FPS Screen Streaming & Multi-Monitor Parity (agent/, apps/web/, apps/mobile/)

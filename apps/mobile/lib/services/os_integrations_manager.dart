@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:home_widget/home_widget.dart';
+import 'package:flutter/services.dart';
 import 'package:quick_actions/quick_actions.dart';
 import '../security/network_validators.dart';
 
@@ -10,7 +10,7 @@ import '../security/network_validators.dart';
 /// Capabilities:
 /// 1. RFC 826 Gratuitous ARP builder & 102-Byte IEEE 802.3 UDP Magic Packet (Ports 7 and 9)
 /// 2. Android Quick Settings & Launcher Shortcuts (quick_actions)
-/// 3. Android/iOS Home Screen Widgets with Background Isolate 1-Tap WoL (home_widget)
+/// 3. Native Android Home Widget Preferences Channel & 1-Tap WoL Background Entrypoint
 
 /// Background entry point for 1-tap Home Screen Widget interactions
 @pragma('vm:entry-point')
@@ -26,20 +26,74 @@ Future<void> widgetBackgroundCallback(Uri? uri) async {
     }
 
     // Directly execute Gratuitous ARP + Magic Packet in background isolate
+    final int? parsedPort = int.tryParse(uri.queryParameters['port'] ?? '');
+    final int safePort =
+        (parsedPort != null && NetworkValidators.isValidPort(parsedPort))
+        ? parsedPort
+        : 9;
+    final String? customBroadcast = uri.queryParameters['broadcast']?.trim();
+    final int safeBurst =
+        (int.tryParse(uri.queryParameters['burst'] ?? '') ?? 1).clamp(1, 5);
+
     await OsIntegrationsManager.instance.sendGratuitousArpAndWake(
       targetMac: mac,
       targetIp: ip,
       routerIp: routerIp ?? '',
+      port: safePort,
+      customBroadcastIp: customBroadcast,
+      burstCount: safeBurst,
     );
   }
+}
+
+/// Detailed telemetry and target outcome for a Wake-on-LAN dispatch attempt.
+@immutable
+class WolDispatchResult {
+  final bool success;
+  final String mac;
+  final List<String> targets;
+  final int port;
+  final int burstCount;
+  final int latencyMs;
+  final String? error;
+
+  const WolDispatchResult({
+    required this.success,
+    required this.mac,
+    required this.targets,
+    required this.port,
+    required this.burstCount,
+    required this.latencyMs,
+    this.error,
+  });
+
+  @override
+  String toString() =>
+      'WolDispatchResult(success: $success, mac: $mac, targets: $targets, '
+      'port: $port, burstCount: $burstCount, latencyMs: $latencyMs, error: $error)';
 }
 
 class OsIntegrationsManager {
   static final OsIntegrationsManager instance = OsIntegrationsManager._internal();
   OsIntegrationsManager._internal();
 
+  static const MethodChannel _widgetChannel = MethodChannel(
+    'com.cst.autonomouslan/home_widget',
+  );
+
   final QuickActions _quickActions = const QuickActions();
   bool _isInitialized = false;
+
+  Future<void> _saveWidgetData(String id, Object? data) async {
+    try {
+      await _widgetChannel.invokeMethod<bool>('saveWidgetData', <String, Object?>{
+        'id': id,
+        'data': data,
+      });
+    } on MissingPluginException {
+      // Non-Android / unit test environment without platform channel registered
+    }
+  }
 
   /// Callback hook when launcher shortcut or QS tile is triggered
   Function(String actionType)? onQuickActionTriggered;
@@ -86,10 +140,13 @@ class OsIntegrationsManager {
       debugPrint('QuickActions init error: $e');
     }
 
-    // 2. Setup Home Screen Widget Background Communication
+    // 2. Setup Home Screen Widget Native Channel
     try {
-      await HomeWidget.setAppGroupId('group.com.cst.netcontroller');
-      await HomeWidget.registerInteractivityCallback(widgetBackgroundCallback);
+      await _widgetChannel.invokeMethod<bool>('setAppGroupId', <String, String>{
+        'groupId': 'group.com.cst.netcontroller',
+      });
+    } on MissingPluginException {
+      // No-op in headless/test hosts
     } catch (e) {
       debugPrint('HomeWidget init error: $e');
     }
@@ -104,7 +161,7 @@ class OsIntegrationsManager {
     }
   }
 
-  /// Synchronizes current fleet status to the native Home Screen Widget
+  /// Synchronizes current fleet status to the native Home Screen Widget preferences channel
   Future<void> updateHomeScreenWidget({
     required String hostName,
     required String hostIp,
@@ -114,31 +171,31 @@ class OsIntegrationsManager {
     required double ramUsage,
   }) async {
     try {
-      await HomeWidget.saveWidgetData<String>('target_name', hostName);
-      await HomeWidget.saveWidgetData<String>('target_ip', hostIp);
-      await HomeWidget.saveWidgetData<String>('target_mac', hostMac);
-      await HomeWidget.saveWidgetData<bool>('is_online', isOnline);
-      await HomeWidget.saveWidgetData<String>(
-        'status_text',
-        isOnline ? 'ONLINE' : 'OFFLINE',
-      );
-      await HomeWidget.saveWidgetData<String>(
+      await _saveWidgetData('target_name', hostName);
+      await _saveWidgetData('target_ip', hostIp);
+      await _saveWidgetData('target_mac', hostMac);
+      await _saveWidgetData('is_online', isOnline);
+      await _saveWidgetData('status_text', isOnline ? 'ONLINE' : 'OFFLINE');
+      await _saveWidgetData(
         'metrics_text',
         isOnline
             ? 'CPU ${cpuUsage.toStringAsFixed(0)}% • RAM ${ramUsage.toStringAsFixed(0)}%'
             : 'Ready for WoL',
       );
-      await HomeWidget.saveWidgetData<String>(
+      await _saveWidgetData(
         'last_updated',
         '${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}',
       );
 
-      // Trigger native widget refresh on Android / iOS
-      await HomeWidget.updateWidget(
-        name: 'CstStatusWidgetProvider',
-        androidName: 'CstStatusWidgetProvider',
-        iOSName: 'CstStatusWidget',
-      );
+      try {
+        await _widgetChannel.invokeMethod<bool>('updateWidget', <String, String>{
+          'name': 'CstStatusWidgetProvider',
+          'androidName': 'CstStatusWidgetProvider',
+          'iOSName': 'CstStatusWidget',
+        });
+      } on MissingPluginException {
+        // No-op in headless/test hosts
+      }
     } catch (e) {
       debugPrint('HomeWidget sync error: $e');
     }
@@ -193,54 +250,177 @@ class OsIntegrationsManager {
   }
 
   /// Broadcasts a standard 102-byte Wake-on-LAN Magic Packet (`6x 0xFF + 16x MAC`)
-  /// across global broadcast and directed subnet broadcast (UDP ports 7 and [port]).
+  /// across global broadcast and directed subnet broadcast (or [customBroadcastIp]).
   Future<bool> sendGratuitousArpAndWake({
     required String targetMac,
     required String targetIp,
     required String routerIp,
     int port = 9,
+    String? customBroadcastIp,
+    int burstCount = 1,
+    bool sendBothPorts = true,
   }) async {
+    final WolDispatchResult result = await sendWakePacketDetailed(
+      targetMac: targetMac,
+      targetIp: targetIp,
+      routerIp: routerIp,
+      port: port,
+      customBroadcastIp: customBroadcastIp,
+      burstCount: burstCount,
+      sendBothPorts: sendBothPorts,
+    );
+    return result.success;
+  }
+
+  /// Sends `1..5` staggered (25ms) 102-byte Wake-on-LAN Magic Packet bursts,
+  /// honoring [customBroadcastIp] if it is a valid IPv4 address or falling back
+  /// to `255.255.255.255` plus directed `/24` subnet broadcast, and returns a
+  /// detailed [WolDispatchResult] with elapsed latency.
+  Future<WolDispatchResult> sendWakePacketDetailed({
+    required String targetMac,
+    String targetIp = '',
+    String routerIp = '',
+    int port = 9,
+    String? customBroadcastIp,
+    int burstCount = 1,
+    bool sendBothPorts = true,
+    bool sendGratuitousArp = true,
+  }) async {
+    final Stopwatch stopwatch = Stopwatch()..start();
+    final int safeBurstCount = burstCount.clamp(1, 5);
     final Uint8List? macBytes = NetworkValidators.parseMacBytes(targetMac);
+    final String normalizedMac =
+        NetworkValidators.normalizeMac(targetMac) ?? targetMac.trim();
+
     if (macBytes == null || !NetworkValidators.isValidPort(port)) {
-      debugPrint('WoL aborted: invalid MAC ($targetMac) or port ($port)');
-      return false;
+      stopwatch.stop();
+      final String reason = macBytes == null
+          ? 'Invalid MAC address ($targetMac)'
+          : 'Invalid UDP port ($port)';
+      debugPrint('WoL aborted: $reason');
+      return WolDispatchResult(
+        success: false,
+        mac: normalizedMac,
+        targets: const <String>[],
+        port: port,
+        burstCount: safeBurstCount,
+        latencyMs: stopwatch.elapsedMilliseconds,
+        error: reason,
+      );
     }
 
-    RawDatagramSocket? socket;
-    try {
-      socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      socket.broadcastEnabled = true;
-
-      // Generate standard 102-byte Magic Packet: 6x 0xFF + 16x MAC
-      final Uint8List magicPacket = Uint8List(102);
-      magicPacket.fillRange(0, 6, 0xFF);
-      for (int i = 0; i < 16; i++) {
-        magicPacket.setRange(6 + (i * 6), 12 + (i * 6), macBytes);
-      }
-
-      final InternetAddress globalBroadcast = InternetAddress('255.255.255.255');
-      socket.send(magicPacket, globalBroadcast, port);
-      if (port != 7) {
-        socket.send(magicPacket, globalBroadcast, 7);
-      }
-
-      // Also send directed /24 subnet broadcast using targetIp or routerIp
-      final String subnetSeed =
-          NetworkValidators.isValidIpv4(targetIp) ? targetIp : routerIp;
+    // Build target broadcast list: honor custom IPv4 override when valid,
+    // otherwise fall back to global broadcast + directed /24 subnet broadcast.
+    final List<String> targetIps = <String>[];
+    final String trimmedOverride = customBroadcastIp?.trim() ?? '';
+    if (trimmedOverride.isNotEmpty &&
+        NetworkValidators.isValidIpv4(trimmedOverride)) {
+      targetIps.add(trimmedOverride);
+    } else {
+      targetIps.add('255.255.255.255');
+      final String subnetSeed = NetworkValidators.isValidIpv4(targetIp)
+          ? targetIp.trim()
+          : routerIp.trim();
       if (NetworkValidators.isValidIpv4(subnetSeed)) {
         final String directed = NetworkValidators.deriveBroadcastIp(subnetSeed);
         if (directed != '255.255.255.255') {
-          try {
-            socket.send(magicPacket, InternetAddress(directed), port);
-          } catch (_) {}
+          targetIps.add(directed);
+        }
+      }
+    }
+
+    // Generate standard 102-byte Magic Packet: 6x 0xFF + 16x MAC
+    final Uint8List magicPacket = Uint8List(102);
+    magicPacket.fillRange(0, 6, 0xFF);
+    for (int i = 0; i < 16; i++) {
+      magicPacket.setRange(6 + (i * 6), 12 + (i * 6), macBytes);
+    }
+
+    final List<int> ports = (sendBothPorts && port != 7)
+        ? <int>[port, 7]
+        : <int>[port];
+
+    RawDatagramSocket? socket;
+    StreamSubscription<RawSocketEvent>? socketSub;
+    Completer<void>? writeReady;
+    final List<String> sentTargets = <String>[];
+    String? lastSocketError;
+    try {
+      final RawDatagramSocket udpSocket =
+          await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket = udpSocket;
+      udpSocket.broadcastEnabled = true;
+      socketSub = udpSocket.listen((RawSocketEvent event) {
+        if (event == RawSocketEvent.write) {
+          final completer = writeReady;
+          if (completer != null && !completer.isCompleted) {
+            completer.complete();
+          }
+        }
+      });
+
+      Future<int> sendWithWriteWait(InternetAddress addr, int targetPort) async {
+        int sent = udpSocket.send(magicPacket, addr, targetPort);
+        if (sent > 0) return sent;
+        final completer = Completer<void>();
+        writeReady = completer;
+        udpSocket.writeEventsEnabled = true;
+        await completer.future.timeout(
+          const Duration(milliseconds: 25),
+          onTimeout: () {},
+        );
+        if (identical(writeReady, completer)) {
+          writeReady = null;
+        }
+        return udpSocket.send(magicPacket, addr, targetPort);
+      }
+
+      for (int burst = 0; burst < safeBurstCount; burst++) {
+        if (burst > 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 25));
+        }
+        for (final String target in targetIps) {
+          final InternetAddress addr = InternetAddress(target);
+          for (final int targetPort in ports) {
+            try {
+              final int sent = await sendWithWriteWait(addr, targetPort);
+              if (sent > 0 && !sentTargets.contains(target)) {
+                sentTargets.add(target);
+              }
+            } catch (e) {
+              lastSocketError = e.toString();
+            }
+          }
         }
       }
 
-      return true;
+      stopwatch.stop();
+      final bool ok = sentTargets.isNotEmpty;
+      return WolDispatchResult(
+        success: ok,
+        mac: normalizedMac,
+        targets: List<String>.unmodifiable(sentTargets),
+        port: port,
+        burstCount: safeBurstCount,
+        latencyMs: stopwatch.elapsedMilliseconds,
+        error: ok
+            ? null
+            : (lastSocketError ?? 'No WoL broadcast packets could be sent'),
+      );
     } catch (e) {
+      stopwatch.stop();
       debugPrint('WoL packet broadcast error: $e');
-      return false;
+      return WolDispatchResult(
+        success: false,
+        mac: normalizedMac,
+        targets: List<String>.unmodifiable(sentTargets),
+        port: port,
+        burstCount: safeBurstCount,
+        latencyMs: stopwatch.elapsedMilliseconds,
+        error: e.toString(),
+      );
     } finally {
+      await socketSub?.cancel();
       socket?.close();
     }
   }

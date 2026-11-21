@@ -14,14 +14,18 @@ import 'security/network_validators.dart';
 import 'security/secure_secret_store.dart';
 import 'services/app_preferences.dart';
 import 'services/file_transfer_engine.dart';
+import 'services/history_store.dart';
 import 'services/host_connection_client.dart';
 import 'services/lan_discovery_service.dart';
 import 'services/os_integrations_manager.dart';
 import 'theme/fluid_theme.dart';
 import 'ui/adaptive_layout_builder.dart';
+import 'ui/connection_diagnostics_sheet.dart';
 import 'ui/fullscreen_stream_page.dart';
+import 'ui/host_snapshot_preview.dart';
 import 'ui/onboarding_sheet.dart';
 import 'ui/responsive_device_card.dart';
+import 'ui/settings_command_deck.dart';
 import 'ui/viewport_stream_widget.dart';
 
 export 'ui/fullscreen_stream_page.dart';
@@ -825,6 +829,7 @@ void main() async {
       _openHiveBoxSafely(_kGhostDevicesBox),
       _openHiveBoxSafely(kAppPrefsBoxName),
       _openHiveBoxSafely(kVaultSecretsBoxName),
+      _openHiveBoxSafely(kHistoryBoxName),
     ]);
   } catch (e) {
     debugPrint('Hive storage bootstrap warning: $e');
@@ -892,6 +897,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       MethodChannel('com.cst.autonomouslan/deeplink');
 
   int _currentTabIndex = 0;
+  String? _expandedHostId;
   final TextEditingController _commandController = TextEditingController();
   final TextEditingController _fleetSearchController = TextEditingController();
   final List<CommandLogItem> _commandLogs = [];
@@ -1148,9 +1154,46 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     return ref.read(globalPairingSecretProvider).trim();
   }
 
+  Future<WolDispatchResult> _dispatchWolCore({
+    required String targetMac,
+    String targetIp = '',
+    String hostName = '',
+    int port = 9,
+    String? customBroadcastIp,
+    int burstCount = 1,
+    bool sendGratuitousArp = true,
+  }) {
+    _hapticTap();
+    final String trimmedBroadcast = customBroadcastIp?.trim() ?? '';
+    return OsIntegrationsManager.instance.sendWakePacketDetailed(
+      targetMac: targetMac,
+      targetIp: targetIp.trim(),
+      port: port,
+      customBroadcastIp: trimmedBroadcast.isNotEmpty &&
+              NetworkValidators.isValidIpv4(trimmedBroadcast)
+          ? trimmedBroadcast
+          : null,
+      burstCount: burstCount,
+      sendBothPorts: port == 9,
+      sendGratuitousArp: sendGratuitousArp,
+    );
+  }
+
+  String _resolveHostNameForWol(String normalizedMac, String? targetIp) {
+    final cleanIp = targetIp?.trim() ?? '';
+    for (final host in ref.read(fleetProvider)) {
+      if (NetworkValidators.normalizeMac(host.mac) == normalizedMac ||
+          (cleanIp.isNotEmpty && host.ip.trim() == cleanIp)) {
+        return host.name;
+      }
+    }
+    return '';
+  }
+
   Future<void> _sendWakeOnLan(
     String mac, {
     String? targetIp,
+    String? hostName,
     bool silent = false,
   }) async {
     final normalizedMac = NetworkValidators.normalizeMac(mac);
@@ -1165,26 +1208,75 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       return;
     }
 
-    try {
-      _hapticTap();
-      await OsIntegrationsManager.instance.sendGratuitousArpAndWake(
-        targetMac: normalizedMac,
-        targetIp: targetIp?.trim() ?? '',
-        routerIp: '',
-      );
+    final prefs = ref.read(appPreferencesProvider);
+    final cleanIp = targetIp?.trim() ?? '';
+    final resolvedHostName = (hostName != null && hostName.trim().isNotEmpty)
+        ? hostName.trim()
+        : _resolveHostNameForWol(normalizedMac, cleanIp);
+    final broadcastOverride = prefs.wolBroadcastOverride.trim();
 
-      if (!silent) {
-        final subnetHint = (targetIp != null && targetIp.trim().isNotEmpty)
-            ? ' & ${NetworkValidators.deriveBroadcastIp(targetIp)}'
-            : '';
-        _showToast(
-          'WoL Magic Packet dispatched to $normalizedMac (255.255.255.255$subnetHint)',
-          accentColor: CyberColors.warning,
-        );
+    try {
+      final result = await _dispatchWolCore(
+        targetMac: normalizedMac,
+        targetIp: cleanIp,
+        hostName: resolvedHostName,
+        port: prefs.wolPort,
+        customBroadcastIp:
+            broadcastOverride.isNotEmpty ? broadcastOverride : null,
+        burstCount: prefs.wolBurstCount,
+        sendGratuitousArp: prefs.wolSendGratuitousArp,
+      );
+      if (!mounted) return;
+      await ref.read(historyProvider.notifier).recordWol(
+            mac: result.mac.isNotEmpty ? result.mac : normalizedMac,
+            hostName: resolvedHostName,
+            hostIp: cleanIp,
+            success: result.success,
+            port: result.port,
+            broadcastIp: broadcastOverride,
+            burstCount: result.burstCount,
+            latencyMs: result.latencyMs,
+            targets: result.targets,
+            error: result.error,
+            extraMeta: <String, dynamic>{'garp': prefs.wolSendGratuitousArp},
+          );
+
+      if (!silent && mounted) {
+        if (result.success) {
+          final targetsText = result.targets.isNotEmpty
+              ? result.targets.join(', ')
+              : '255.255.255.255';
+          _showToast(
+            'WoL Magic Packet dispatched to $normalizedMac ($targetsText · UDP ${result.port})',
+            accentColor: CyberColors.warning,
+          );
+        } else {
+          _showToast(
+            'Wake-on-LAN dispatch failed: ${result.error ?? 'unknown error'}',
+            accentColor: _kDangerColor,
+          );
+        }
       }
     } catch (e) {
       debugPrint('WoL Socket Error: $e');
-      if (!silent) {
+      if (mounted) {
+        unawaited(
+          ref.read(historyProvider.notifier).recordWol(
+                mac: normalizedMac,
+                hostName: resolvedHostName,
+                hostIp: cleanIp,
+                success: false,
+                port: prefs.wolPort,
+                broadcastIp: broadcastOverride,
+                burstCount: prefs.wolBurstCount,
+                error: e.toString(),
+                extraMeta: <String, dynamic>{
+                  'garp': prefs.wolSendGratuitousArp,
+                },
+              ),
+        );
+      }
+      if (!silent && mounted) {
         _showToast(
           'Wake-on-LAN dispatch failed: $e',
           accentColor: _kDangerColor,
@@ -1208,7 +1300,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     }
 
     for (final host in targets) {
-      await _sendWakeOnLan(host.mac, targetIp: host.ip, silent: true);
+      await _sendWakeOnLan(
+        host.mac,
+        targetIp: host.ip,
+        hostName: host.name,
+        silent: true,
+      );
     }
     _showToast(
       'Sent Wake-on-LAN packets to ${targets.length} sleeping workstation(s).',
@@ -1243,6 +1340,22 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ms,
           isOnline: ms != null,
         );
+    unawaited(
+      ref.read(historyProvider.notifier).recordConnection(
+            hostIp: host.ip,
+            hostName: host.name,
+            mac: host.mac,
+            success: ms != null,
+            event: ms != null
+                ? 'TCP reachability ping succeeded (${ms}ms)'
+                : 'Host did not respond to TCP ping on port ${host.wsPort}',
+            port: host.wsPort,
+            latencyMs: ms,
+            title: ms != null
+                ? 'Reachable: ${host.name}'
+                : 'Unreachable: ${host.name}',
+          ),
+    );
     _showToast(
       ms != null
           ? '${host.name} (${host.ip}:${host.wsPort}) reachable in ${ms}ms'
@@ -1261,12 +1374,29 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         hosts.map((host) async {
           final ms = await _measureTcpLatency(host.ip, host.wsPort);
           if (!mounted) return;
-          if (ms != null) onlineCount++;
+          final wasOnline = host.isOnline;
+          final isNowOnline = ms != null;
+          if (isNowOnline) onlineCount++;
           ref.read(fleetProvider.notifier).updateLatencyByIp(
                 host.ip,
                 ms,
-                isOnline: ms != null,
+                isOnline: isNowOnline,
               );
+          if (wasOnline != isNowOnline) {
+            unawaited(
+              ref.read(historyProvider.notifier).recordConnection(
+                    hostIp: host.ip,
+                    hostName: host.name,
+                    mac: host.mac,
+                    success: isNowOnline,
+                    event: isNowOnline
+                        ? 'Host came online during fleet ping (${ms}ms)'
+                        : 'Host went offline during fleet ping',
+                    port: host.wsPort,
+                    latencyMs: ms,
+                  ),
+            );
+          }
         }),
       );
       _showToast(
@@ -1491,6 +1621,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     final effectiveFp = host.certFingerprint.trim().isNotEmpty
         ? host.certFingerprint.trim()
         : loadHostCertFingerprint(host.ip);
+    unawaited(
+      ref.read(historyProvider.notifier).recordConnection(
+            hostIp: host.ip,
+            hostName: host.name,
+            mac: host.mac,
+            success: true,
+            status: 'info',
+            event:
+                'Opened fullscreen stream (${prefs.targetFps}fps · ${prefs.streamQualityPreset})',
+            port: host.wsPort,
+            latencyMs: host.latencyMs,
+            title: 'Stream Session · ${host.name}',
+          ),
+    );
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1509,6 +1653,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           hapticsEnabled: prefs.hapticsEnabled,
           qualityPreset: prefs.streamQualityPreset,
           trackpadSensitivity: prefs.trackpadSensitivity,
+          instantTapMode: prefs.instantTapMode,
+          longPressDelayMs: prefs.longPressDelayMs,
+          scrollSensitivity: prefs.scrollSensitivity,
+          naturalScroll: prefs.naturalScroll,
+          pinchZoomEnabled: prefs.pinchZoomEnabled,
           onQualityPresetChanged: (preset) => ref
               .read(appPreferencesProvider.notifier)
               .setStreamQualityPreset(preset),
@@ -1906,8 +2055,38 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       useTls: host.useTls || prefs.preferTls,
       certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
     );
-    await client.ensureConnected(timeout: const Duration(seconds: 7));
-    return client;
+    final wasEstablished = client.isVaultEstablished;
+    try {
+      await client.ensureConnected(timeout: const Duration(seconds: 7));
+      if (!wasEstablished && client.isVaultEstablished && mounted) {
+        unawaited(
+          ref.read(historyProvider.notifier).recordConnection(
+                hostIp: host.ip,
+                hostName: host.name,
+                mac: host.mac,
+                success: true,
+                event: 'Encrypted WebSocket session established',
+                port: host.wsPort,
+                latencyMs: client.latencyMs ?? host.latencyMs,
+              ),
+        );
+      }
+      return client;
+    } catch (e) {
+      if (mounted) {
+        unawaited(
+          ref.read(historyProvider.notifier).recordConnection(
+                hostIp: host.ip,
+                hostName: host.name,
+                mac: host.mac,
+                success: false,
+                event: 'WebSocket connection failed: $e',
+                port: host.wsPort,
+              ),
+        );
+      }
+      rethrow;
+    }
   }
 
   Future<void> _showHostClipboardActions(HostState host) async {
@@ -2511,6 +2690,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         false;
 
     if (!confirmed || !mounted) return;
+    if (_expandedHostId == host.id) {
+      setState(() => _expandedHostId = null);
+    }
     ref.read(fleetProvider.notifier).removeHost(host.id, purgeSecret: true);
     if (ref.read(selectedHostIdProvider) == host.id) {
       final remaining = ref.read(fleetProvider);
@@ -2637,13 +2819,26 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         riskReason,
         biometricArmed: prefs.biometricLockEnabled,
       );
-      if (!authorized || !mounted) {
-        _showToast(
-          'Command blocked by operator HITL guard.',
-          accentColor: CyberColors.warning,
-        );
+      if (!authorized) {
+        if (mounted) {
+          unawaited(
+            ref.read(historyProvider.notifier).recordCommand(
+                  command: trimmed,
+                  hostName: targetHost?.name ?? '',
+                  hostIp: targetHost?.ip ?? '',
+                  mac: targetHost?.mac ?? '',
+                  success: false,
+                  detail: 'Blocked by operator HITL guard: $trimmed',
+                ),
+          );
+          _showToast(
+            'Command blocked by operator HITL guard.',
+            accentColor: CyberColors.warning,
+          );
+        }
         return;
       }
+      if (!mounted) return;
     }
 
     unawaited(
@@ -2706,10 +2901,24 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         'Pairing secret required. Open Settings or Add Workstation to pair this PC.',
         isError: true,
       );
+      if (mounted) {
+        unawaited(
+          ref.read(historyProvider.notifier).recordCommand(
+                command: trimmed,
+                hostName: targetHost.name,
+                hostIp: targetHost.ip,
+                mac: targetHost.mac,
+                success: false,
+                detail: 'Pairing secret required for $trimmed',
+              ),
+        );
+      }
       return;
     }
 
     HostConnectionClient? retainedClient;
+    bool wasVaultEstablished = false;
+    final Stopwatch cmdWatch = Stopwatch()..start();
     try {
       final resolvedFp = targetHost.certFingerprint.trim().isNotEmpty
           ? targetHost.certFingerprint.trim()
@@ -2722,6 +2931,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         certFingerprint: resolvedFp.isNotEmpty ? resolvedFp : null,
       )..retain();
       retainedClient = client;
+      wasVaultEstablished = client.isVaultEstablished;
 
       final lowerCmd = trimmed.toLowerCase();
       if (lowerCmd.startsWith('ai:') || lowerCmd.startsWith('ollama:')) {
@@ -2729,9 +2939,35 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         if (prompt.isEmpty) {
           updateLatestStatus('Provide a prompt after ai: or ollama:.',
               isError: true);
+          if (mounted) {
+            unawaited(
+              ref.read(historyProvider.notifier).recordCommand(
+                    command: trimmed,
+                    hostName: targetHost.name,
+                    hostIp: targetHost.ip,
+                    mac: targetHost.mac,
+                    success: false,
+                    detail: 'Provide a prompt after ai: or ollama:.',
+                  ),
+            );
+          }
           return;
         }
         await client.ensureConnected(timeout: const Duration(seconds: 7));
+        if (!wasVaultEstablished && client.isVaultEstablished && mounted) {
+          wasVaultEstablished = true;
+          unawaited(
+            ref.read(historyProvider.notifier).recordConnection(
+                  hostIp: targetHost.ip,
+                  hostName: targetHost.name,
+                  mac: targetHost.mac,
+                  success: true,
+                  event: 'Encrypted WebSocket session established',
+                  port: targetHost.wsPort,
+                  latencyMs: client.latencyMs ?? targetHost.latencyMs,
+                ),
+          );
+        }
         final buf = StringBuffer();
         final done = Completer<void>();
         Timer? idleTimer;
@@ -2743,6 +2979,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         }
 
         bool hadError = false;
+        String? ollamaErrorMsg;
         final sub = client.llmTokenStream.listen((token) {
           if (token.trimLeft().startsWith('{')) {
             try {
@@ -2754,9 +2991,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                 }
                 if (parsed['error'] != null) {
                   hadError = true;
+                  ollamaErrorMsg = parsed['error'].toString();
                   final prefix = buf.isEmpty ? '' : '[Ollama Stream]\n${buf.toString()}\n\n';
                   updateLatestStatus(
-                    '${prefix}Ollama Error: ${parsed['error']}',
+                    '${prefix}Ollama Error: $ollamaErrorMsg',
                     isError: true,
                   );
                   if (!done.isCompleted) done.complete();
@@ -2774,15 +3012,46 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           if (!client.sendOllamaPrompt(prompt)) {
             updateLatestStatus('Unable to dispatch encrypted Ollama prompt.',
                 isError: true);
+            if (mounted) {
+              unawaited(
+                ref.read(historyProvider.notifier).recordCommand(
+                      command: trimmed,
+                      hostName: targetHost.name,
+                      hostIp: targetHost.ip,
+                      mac: targetHost.mac,
+                      success: false,
+                      detail: 'Unable to dispatch encrypted Ollama prompt.',
+                    ),
+              );
+            }
             return;
           }
           updateLatestStatus('[Ollama Stream] Awaiting host AI tokens...');
           resetIdle(const Duration(seconds: 12));
           await done.future;
-          if (buf.isEmpty && !hadError) {
+          cmdWatch.stop();
+          final bool timedOutNoReply = buf.isEmpty && !hadError;
+          if (timedOutNoReply) {
             updateLatestStatus(
               'No response from host Ollama bridge within 12s.',
               isError: true,
+            );
+          }
+          if (mounted) {
+            final bool ok = !hadError && !timedOutNoReply;
+            unawaited(
+              ref.read(historyProvider.notifier).recordCommand(
+                    command: trimmed,
+                    hostName: targetHost.name,
+                    hostIp: targetHost.ip,
+                    mac: targetHost.mac,
+                    success: ok,
+                    latencyMs: cmdWatch.elapsedMilliseconds,
+                    detail: ok
+                        ? trimmed
+                        : (ollamaErrorMsg ??
+                            'No response from host Ollama bridge within 12s.'),
+                  ),
             );
           }
         } finally {
@@ -2796,14 +3065,74 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         trimmed,
         timeout: const Duration(seconds: 45),
       );
+      cmdWatch.stop();
+      if (!wasVaultEstablished && client.isVaultEstablished && mounted) {
+        wasVaultEstablished = true;
+        unawaited(
+          ref.read(historyProvider.notifier).recordConnection(
+                hostIp: targetHost.ip,
+                hostName: targetHost.name,
+                mac: targetHost.mac,
+                success: true,
+                event: 'Encrypted WebSocket session established',
+                port: targetHost.wsPort,
+                latencyMs: client.latencyMs ?? targetHost.latencyMs,
+              ),
+        );
+      }
       final out = res.output.trim();
       final failed = res.exitCode != 0 || res.status == 'error' || res.status == 'timeout';
       updateLatestStatus(
         '[${res.status} • exit ${res.exitCode}] ${out.isNotEmpty ? out : "(no output)"}',
         isError: failed,
       );
+      if (mounted) {
+        final String trimmedOut =
+            out.length > 360 ? '${out.substring(0, 360)}…' : out;
+        unawaited(
+          ref.read(historyProvider.notifier).recordCommand(
+                command: trimmed,
+                hostName: targetHost.name,
+                hostIp: targetHost.ip,
+                mac: targetHost.mac,
+                success: !failed,
+                exitCode: res.exitCode,
+                latencyMs: cmdWatch.elapsedMilliseconds,
+                detail: trimmedOut.isNotEmpty
+                    ? '$trimmed\n$trimmedOut'
+                    : trimmed,
+                extraMeta: <String, dynamic>{'status': res.status},
+              ),
+        );
+      }
     } catch (e) {
+      cmdWatch.stop();
       updateLatestStatus('Dispatch error: $e', isError: true);
+      if (mounted) {
+        if (!wasVaultEstablished) {
+          unawaited(
+            ref.read(historyProvider.notifier).recordConnection(
+                  hostIp: targetHost.ip,
+                  hostName: targetHost.name,
+                  mac: targetHost.mac,
+                  success: false,
+                  event: 'Session handshake failed: $e',
+                  port: targetHost.wsPort,
+                ),
+          );
+        }
+        unawaited(
+          ref.read(historyProvider.notifier).recordCommand(
+                command: trimmed,
+                hostName: targetHost.name,
+                hostIp: targetHost.ip,
+                mac: targetHost.mac,
+                success: false,
+                latencyMs: cmdWatch.elapsedMilliseconds,
+                detail: '$trimmed — Dispatch error: $e',
+              ),
+        );
+      }
     } finally {
       retainedClient?.release();
     }
@@ -2926,7 +3255,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       case 1:
         return _buildTerminalCommandsTab(selectedHost, hosts: hosts);
       case 2:
-        return _buildSettingsTab();
+        return _buildSettingsTab(hosts);
       default:
         return _buildCompactListFleet(hosts);
     }
@@ -3271,7 +3600,198 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     );
   }
 
+  Future<void> _sendQuickAudioAction(
+    HostState host,
+    String action, {
+    required String successMessage,
+  }) async {
+    _hapticTap();
+    HostConnectionClient? client;
+    try {
+      client = await _acquireConnectedClient(host);
+      if (client == null || !mounted) return;
+      client.retain();
+      try {
+        final sent = client.sendAudioCommand(action);
+        if (sent) {
+          _showToast(
+            successMessage,
+            accentColor: action == 'lock_pc' ? CyberColors.warning : null,
+          );
+        } else {
+          _showToast(
+            'Unable to send $action to ${host.name}: vault not ready.',
+            accentColor: CyberColors.warning,
+          );
+        }
+      } finally {
+        client.release();
+      }
+    } catch (e) {
+      _showToast(
+        'Failed to send $action to ${host.name}: $e',
+        accentColor: _kDangerColor,
+      );
+    }
+  }
+
+  void _openHostDiagnostics(HostState host) {
+    _hapticTap();
+    final prefs = ref.read(appPreferencesProvider);
+    final secret = _resolveSecretForHost(host);
+    final effectiveFp = host.certFingerprint.trim().isNotEmpty
+        ? host.certFingerprint.trim()
+        : loadHostCertFingerprint(host.ip);
+    final effectiveTls = host.useTls || prefs.preferTls;
+
+    HostConnectionClient? pooledClient;
+    HostConnectionSnapshot snap;
+    if (secret.isNotEmpty &&
+        NetworkValidators.isValidIpOrHost(host.ip) &&
+        NetworkValidators.isValidPort(host.wsPort)) {
+      pooledClient = HostConnectionPool.instance.acquire(
+        hostIp: host.ip,
+        port: host.wsPort,
+        sharedSecret: secret,
+        useTls: effectiveTls,
+        certFingerprint: effectiveFp.isNotEmpty ? effectiveFp : null,
+      );
+      snap = pooledClient.snapshot;
+      if (snap.phase == HostConnectionPhase.disconnected && host.isOnline) {
+        snap = HostConnectionSnapshot(
+          latencyMs: host.latencyMs,
+          phase: HostConnectionPhase.disconnected,
+        );
+      }
+    } else {
+      snap = HostConnectionSnapshot(
+        latencyMs: host.latencyMs,
+        phase: secret.isEmpty
+            ? HostConnectionPhase.authFailed
+            : HostConnectionPhase.disconnected,
+        errorMessage: secret.isEmpty
+            ? 'Pairing secret required before connecting to ${host.name}.'
+            : null,
+      );
+    }
+
+    unawaited(
+      ConnectionDiagnosticsSheet.show(
+        context,
+        hostName: host.name,
+        hostIp: host.ip,
+        wsPort: host.wsPort,
+        useTls: effectiveTls,
+        snapshot: snap,
+        currentFps: prefs.targetFps,
+        qualityPreset: prefs.streamQualityPreset,
+        onReconnect: () {
+          if (pooledClient != null) {
+            unawaited(
+              pooledClient.reconnectNow().then((_) {
+                if (!mounted) return;
+                ref.read(historyProvider.notifier).recordConnection(
+                      hostIp: host.ip,
+                      hostName: host.name,
+                      mac: host.mac,
+                      success: true,
+                      event: 'Manual reconnect succeeded',
+                      port: host.wsPort,
+                      latencyMs: pooledClient?.latencyMs,
+                    );
+              }).catchError((Object e) {
+                if (!mounted) return;
+                ref.read(historyProvider.notifier).recordConnection(
+                      hostIp: host.ip,
+                      hostName: host.name,
+                      mac: host.mac,
+                      success: false,
+                      event: 'Manual reconnect failed: $e',
+                      port: host.wsPort,
+                    );
+                _showToast(
+                  'Reconnect failed: $e',
+                  accentColor: _kDangerColor,
+                );
+              }),
+            );
+          } else {
+            unawaited(_showHostEditorDialog(existing: host));
+          }
+        },
+        onRequestKeyframe: pooledClient != null
+            ? () {
+                pooledClient?.requestKeyframe();
+              }
+            : null,
+      ),
+    );
+  }
+
+  Future<void> _rerunHistoryCommand(ActivityHistoryEntry entry) async {
+    final rawCmd = entry.meta['command']?.toString().trim() ?? '';
+    final cmd = rawCmd.isNotEmpty ? rawCmd : entry.detail.trim();
+    if (cmd.isEmpty) {
+      _showToast(
+        'No command payload to re-run.',
+        accentColor: CyberColors.warning,
+      );
+      return;
+    }
+    final hosts = ref.read(fleetProvider);
+    final selectedId = ref.read(selectedHostIdProvider);
+    HostState? targetHost;
+    if (entry.hostIp.trim().isNotEmpty) {
+      targetHost =
+          hosts.where((h) => h.ip.trim() == entry.hostIp.trim()).firstOrNull;
+    }
+    targetHost ??= hosts.where((h) => h.id == selectedId).firstOrNull;
+    targetHost ??= hosts.isNotEmpty ? hosts.first : null;
+    if (targetHost != null) {
+      ref.read(selectedHostIdProvider.notifier).state = targetHost.id;
+    }
+    setState(() => _currentTabIndex = 1);
+    await _dispatchCommand(cmd, targetHost);
+  }
+
+  void _importSanitizedHosts(List<Map<String, dynamic>> rawHosts) {
+    final fleetNotifier = ref.read(fleetProvider.notifier);
+    final existingByIp = <String, HostState>{
+      for (final h in ref.read(fleetProvider)) h.ip: h,
+    };
+    for (final raw in rawHosts) {
+      final parsed = HostState.fromSavedMap(raw);
+      if (parsed == null) continue;
+      final existing = existingByIp[parsed.ip];
+      if (existing != null) {
+        fleetNotifier.editHost(
+          existing.id,
+          name: parsed.name,
+          ip: parsed.ip,
+          wsPort: parsed.wsPort,
+          mac: parsed.mac,
+          useTls: parsed.useTls,
+        );
+      } else {
+        fleetNotifier.addHost(parsed);
+      }
+    }
+  }
+
   Widget _buildDeviceCardFor(HostState host, {bool isSelected = false}) {
+    final prefs = ref.watch(
+      appPreferencesProvider.select(
+        (p) => (
+          preferTls: p.preferTls,
+          cardSnapshotIntervalSec: p.cardSnapshotIntervalSec,
+        ),
+      ),
+    );
+    final effectiveFp = host.certFingerprint.trim().isNotEmpty
+        ? host.certFingerprint.trim()
+        : loadHostCertFingerprint(host.ip);
+    final effectiveSecret = _resolveSecretForHost(host);
+
     return ResponsiveDeviceCard(
       id: host.id,
       name: host.name,
@@ -3282,14 +3802,69 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       ramUsage: host.ramUsage,
       latencyMs: host.latencyMs,
       isSelected: isSelected,
-      useTls: host.useTls,
+      useTls: host.useTls || prefs.preferTls,
+      isExpanded: _expandedHostId == host.id,
+      onToggleExpand: () {
+        _hapticTap();
+        ref.read(selectedHostIdProvider.notifier).state = host.id;
+        setState(() {
+          _expandedHostId = _expandedHostId == host.id ? null : host.id;
+        });
+      },
+      expandedPreview: HostSnapshotPreview(
+        hostId: host.id,
+        hostName: host.name,
+        hostIp: host.ip,
+        wsPort: host.wsPort,
+        sharedSecret: effectiveSecret,
+        useTls: host.useTls || prefs.preferTls,
+        certFingerprint: effectiveFp.isNotEmpty ? effectiveFp : null,
+        isOnline: host.isOnline,
+        mac: host.mac,
+        refreshIntervalSec: prefs.cardSnapshotIntervalSec,
+        onTapFullscreen: () => _openStreamScreen(host),
+        onWakeOnLan: () => _sendWakeOnLan(
+          host.mac,
+          targetIp: host.ip,
+          hostName: host.name,
+        ),
+      ),
+      osName: host.osName,
+      cpuCores: host.cpuCores,
+      ramUsedGb: host.ramUsedGb,
+      ramTotalGb: host.ramTotalGb,
+      diskUsage: host.diskUsage,
+      uptimeSec: host.uptimeSec,
+      wsPort: host.wsPort,
+      viewOnlyMode: host.viewOnlyMode,
       onTap: () {
         ref.read(selectedHostIdProvider.notifier).state = host.id;
         if (host.isOnline) _openStreamScreen(host);
       },
-      onWakeOnLan: () => _sendWakeOnLan(host.mac, targetIp: host.ip),
+      onWakeOnLan: () => _sendWakeOnLan(
+        host.mac,
+        targetIp: host.ip,
+        hostName: host.name,
+      ),
       onOpenStream: () => _openStreamScreen(host),
       onOpenFullscreen: () => _openStreamScreen(host),
+      onOpenTerminal: () {
+        _hapticTap();
+        ref.read(selectedHostIdProvider.notifier).state = host.id;
+        setState(() => _currentTabIndex = 1);
+      },
+      onSyncClipboard: () => _showHostClipboardActions(host),
+      onToggleMute: () => _sendQuickAudioAction(
+        host,
+        'mute',
+        successMessage: 'Toggled mute on ${host.name}.',
+      ),
+      onLockPc: () => _sendQuickAudioAction(
+        host,
+        'lock_pc',
+        successMessage: 'Sent lock_pc command to ${host.name}.',
+      ),
+      onOpenDiagnostics: () => _openHostDiagnostics(host),
       onLongPress: () => _showHostActionsSheet(host),
       onMoreActions: () => _showHostActionsSheet(host),
     );
@@ -3330,67 +3905,75 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   // -------------------------------------------------------------------
-  // 2. MEDIUM FLEET VIEW (2-COLUMN ADAPTIVE GRID)
+  // 2. MEDIUM FLEET VIEW (RESPONSIVE NON-CLIPPING 2-COLUMN LAYOUT)
   // -------------------------------------------------------------------
   Widget _buildMediumGridFleet(List<HostState> hosts) {
     final filtered = _filteredHosts(hosts);
     final pad = FluidSize.pagePadding(context);
-    if (hosts.isEmpty) {
-      return ListView(
-        padding: pad,
-        children: [
-          _buildOnboardingBanner(),
-          _buildFleetToolbar(hosts),
-          _buildEmptyFleetState(),
-        ],
-      );
-    }
 
-    return Padding(
-      padding: pad,
+    return RefreshIndicator(
+      onRefresh: hosts.isEmpty ? _scanForPcs : _pingAllHosts,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final cols = constraints.maxWidth < 460 ? 1 : 2;
-          final extent =
-              (206.0 * FluidSize.getScaleFactor(context).clamp(0.92, 1.18))
-                  .roundToDouble();
-          return CustomScrollView(
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildOnboardingBanner(),
-                    _buildFleetToolbar(hosts),
-                  ],
+          final isTwoCol = constraints.maxWidth >= 460;
+          final List<Widget> fleetItems;
+          if (hosts.isEmpty) {
+            fleetItems = [_buildEmptyFleetState()];
+          } else if (filtered.isEmpty) {
+            fleetItems = const [
+              Padding(
+                padding: EdgeInsets.symmetric(vertical: 28),
+                child: Center(
+                  child: Text(
+                    'No workstations match the current filter.',
+                    style: TextStyle(color: CyberColors.textSecondary),
+                  ),
                 ),
               ),
-              if (filtered.isEmpty)
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 28),
-                    child: Center(
-                      child: Text(
-                        'No workstations match the current filter.',
-                        style: TextStyle(color: CyberColors.textSecondary),
-                      ),
+            ];
+          } else if (!isTwoCol) {
+            fleetItems = [
+              for (final host in filtered) _buildDeviceCardFor(host),
+            ];
+          } else {
+            fleetItems = <Widget>[];
+            int i = 0;
+            while (i < filtered.length) {
+              final current = filtered[i];
+              if (current.id == _expandedHostId) {
+                fleetItems.add(_buildDeviceCardFor(current));
+                i += 1;
+                continue;
+              }
+              final hasPair = i + 1 < filtered.length &&
+                  filtered[i + 1].id != _expandedHostId;
+              fleetItems.add(
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: _buildDeviceCardFor(current)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: hasPair
+                          ? _buildDeviceCardFor(filtered[i + 1])
+                          : const SizedBox.shrink(),
                     ),
-                  ),
-                )
-              else
-                SliverGrid(
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: cols,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                    mainAxisExtent: extent,
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => _buildDeviceCardFor(filtered[index]),
-                    childCount: filtered.length,
-                  ),
+                  ],
                 ),
+              );
+              i += hasPair ? 2 : 1;
+            }
+          }
+
+          return ListView(
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
+            ),
+            padding: pad,
+            children: [
+              _buildOnboardingBanner(),
+              _buildFleetToolbar(hosts),
+              ...fleetItems,
             ],
           );
         },
@@ -3411,27 +3994,21 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         _buildFleetToolbar(hosts),
         if (hosts.isEmpty)
           _buildEmptyFleetState()
+        else if (filtered.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 28),
+            child: Center(
+              child: Text(
+                'No workstations match the current filter.',
+                style: TextStyle(color: CyberColors.textSecondary),
+              ),
+            ),
+          )
         else
           ...filtered.map(
-            (host) => ResponsiveDeviceCard(
-              id: host.id,
-              name: host.name,
-              ip: host.ip,
-              mac: host.mac,
-              isOnline: host.isOnline,
-              cpuUsage: host.cpuUsage,
-              ramUsage: host.ramUsage,
-              latencyMs: host.latencyMs,
+            (host) => _buildDeviceCardFor(
+              host,
               isSelected: host.id == selectedId,
-              useTls: host.useTls,
-              onTap: () {
-                ref.read(selectedHostIdProvider.notifier).state = host.id;
-              },
-              onWakeOnLan: () => _sendWakeOnLan(host.mac, targetIp: host.ip),
-              onOpenStream: () => _openStreamScreen(host),
-              onOpenFullscreen: () => _openStreamScreen(host),
-              onLongPress: () => _showHostActionsSheet(host),
-              onMoreActions: () => _showHostActionsSheet(host),
             ),
           ),
       ],
@@ -3460,6 +4037,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       hapticsEnabled,
       streamQualityPreset,
       trackpadSensitivity,
+      instantTapMode,
+      longPressDelayMs,
+      scrollSensitivity,
+      naturalScroll,
+      pinchZoomEnabled,
     ) = ref.watch(
       appPreferencesProvider.select(
         (p) => (
@@ -3471,6 +4053,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           p.hapticsEnabled,
           p.streamQualityPreset,
           p.trackpadSensitivity,
+          p.instantTapMode,
+          p.longPressDelayMs,
+          p.scrollSensitivity,
+          p.naturalScroll,
+          p.pinchZoomEnabled,
         ),
       ),
     );
@@ -3510,6 +4097,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       hapticsEnabled: hapticsEnabled,
                       qualityPreset: streamQualityPreset,
                       trackpadSensitivity: trackpadSensitivity,
+                      instantTapMode: instantTapMode,
+                      longPressDelayMs: longPressDelayMs,
+                      scrollSensitivity: scrollSensitivity,
+                      naturalScroll: naturalScroll,
+                      pinchZoomEnabled: pinchZoomEnabled,
                       onQualityPresetChanged: (preset) => ref
                           .read(appPreferencesProvider.notifier)
                           .setStreamQualityPreset(preset),
@@ -3559,8 +4151,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                                       ? Colors.white
                                       : Colors.black,
                                 ),
-                                onPressed: () =>
-                                    _sendWakeOnLan(host.mac, targetIp: host.ip),
+                                onPressed: () => _sendWakeOnLan(
+                                  host.mac,
+                                  targetIp: host.ip,
+                                  hostName: host.name,
+                                ),
                               ),
                             ],
                           ),
@@ -4201,12 +4796,6 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     );
   }
 
-  String _formatEnumLabel(Enum value) {
-    final raw = value.name;
-    if (raw.isEmpty) return raw;
-    return '${raw[0].toUpperCase()}${raw.substring(1)}';
-  }
-
   Widget _buildTelemetrySummaryStrip(HostState host) {
     final primary = Theme.of(context).colorScheme.primary;
     final palette = context.palette;
@@ -4268,889 +4857,41 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     );
   }
 
-  Widget _buildAppearanceStudioCard(AppPreferencesState prefs) {
-    final prefsNotifier = ref.read(appPreferencesProvider.notifier);
-    final palette = context.palette;
-    final primary = palette.primary;
-    final disableAnim = MediaQuery.disableAnimationsOf(context);
-    final dur = disableAnim ? Duration.zero : const Duration(milliseconds: 220);
-
-    return Container(
-      decoration: BoxDecoration(
-        gradient: palette.cardBevelGradient(isSelected: false),
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: palette.glassBorderIdle, width: 1.2),
-        boxShadow: palette.elevationShadows(isSelected: false),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const FluidSpecularBar(
-              isSelected: true,
-              height: 1.2,
-              margin: EdgeInsets.only(left: 8, right: 8, bottom: 12),
-            ),
-            Row(
-              children: [
-                Icon(
-                  prefs.themeMode == AppThemeMode.daylight
-                      ? Icons.wb_sunny_rounded
-                      : Icons.nightlight_round,
-                  color: prefs.themeMode == AppThemeMode.daylight
-                      ? const Color(0xFFF59E0B)
-                      : primary,
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Liquid Glass Polarity',
-                    style: TextStyle(
-                      color: palette.textPrimary,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 13.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: AppThemeMode.values.map((mode) {
-                final selected = prefs.themeMode == mode;
-                final isSun = mode == AppThemeMode.daylight;
-                return Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.only(right: isSun ? 8 : 0),
-                    child: FluidPressScale(
-                      pressedScale: 0.94,
-                      onTap: () {
-                        _hapticTap();
-                        prefsNotifier.setThemeMode(mode);
-                      },
-                      child: AnimatedContainer(
-                        key: ValueKey('theme-mode-${mode.name}'),
-                        duration: dur,
-                        curve: Curves.easeOutCubic,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          gradient: selected ? palette.heroGradient : null,
-                          color: selected
-                              ? null
-                              : palette.surfaceElevated.withValues(alpha: 0.45),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: selected
-                                ? Colors.white.withValues(alpha: 0.55)
-                                : palette.glassBorderIdle,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              isSun
-                                  ? Icons.wb_sunny_rounded
-                                  : Icons.nightlight_round,
-                              size: 16,
-                              color: selected
-                                  ? Colors.white
-                                  : (isSun
-                                      ? const Color(0xFFF59E0B)
-                                      : palette.primary),
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                mode.label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: selected
-                                      ? Colors.white
-                                      : palette.textPrimary,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Icon(Icons.palette_rounded, color: primary, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Hero Accent Palette (Saved Across Restarts)',
-                    style: TextStyle(
-                      color: palette.textPrimary,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 13.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: CyberAccentPreset.values.map((preset) {
-                final swatchColor = preset.resolvedPrimary(prefs.themeMode);
-                final isSelected = prefs.accent == preset;
-                return Semantics(
-                  button: true,
-                  selected: isSelected,
-                  label: 'Theme color ${_formatEnumLabel(preset)}',
-                  child: InkWell(
-                    key: ValueKey('accent-${preset.name}'),
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: () {
-                      _hapticTap();
-                      prefsNotifier.setAccent(preset);
-                    },
-                    child: AnimatedScale(
-                      scale: isSelected ? 1.05 : 1.0,
-                      duration: dur,
-                      curve: Curves.easeOutBack,
-                      child: AnimatedContainer(
-                        duration: dur,
-                        curve: Curves.easeOutCubic,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          gradient: isSelected
-                              ? LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    swatchColor,
-                                    preset.resolvedSecondary(prefs.themeMode),
-                                  ],
-                                )
-                              : null,
-                          color: isSelected
-                              ? null
-                              : palette.surfaceElevated.withValues(alpha: 0.45),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: isSelected
-                                ? Colors.white.withValues(alpha: 0.55)
-                                : palette.glassBorderIdle,
-                            width: isSelected ? 1.4 : 1,
-                          ),
-                          boxShadow: isSelected
-                              ? [
-                                  BoxShadow(
-                                    color: swatchColor.withValues(alpha: 0.32),
-                                    blurRadius: 12,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ]
-                              : null,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 14,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: isSelected ? Colors.white : swatchColor,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: swatchColor.withValues(alpha: 0.45),
-                                    blurRadius: 6,
-                                  ),
-                                ],
-                              ),
-                              child: isSelected
-                                  ? Icon(
-                                      Icons.check_rounded,
-                                      size: 10,
-                                      color: swatchColor,
-                                    )
-                                  : null,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              _formatEnumLabel(preset),
-                              style: TextStyle(
-                                color: isSelected
-                                    ? Colors.white
-                                    : palette.textPrimary,
-                                fontWeight: isSelected
-                                    ? FontWeight.w800
-                                    : FontWeight.w600,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Optical Glass Finish',
-              style: TextStyle(
-                color: palette.textSecondary,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: GlassIntensity.values.map((intensity) {
-                final selected = prefs.glassIntensity == intensity;
-                return ChoiceChip(
-                  label: Text(intensity.label),
-                  selected: selected,
-                  selectedColor: primary.withValues(alpha: 0.22),
-                  labelStyle: TextStyle(
-                    color: selected ? primary : palette.textSecondary,
-                    fontWeight: selected ? FontWeight.bold : FontWeight.w600,
-                    fontSize: 12,
-                  ),
-                  onSelected: (_) {
-                    _hapticTap();
-                    prefsNotifier.setGlassIntensity(intensity);
-                  },
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Reduced Motion & Animations',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: palette.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Minimizes spring motion and aurora effects for battery savings.',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: palette.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Switch.adaptive(
-                  activeTrackColor: primary.withValues(alpha: 0.5),
-                  activeThumbColor: primary,
-                  value: prefs.reducedMotion,
-                  onChanged: prefsNotifier.setReducedMotion,
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSettingsTab() {
+  Widget _buildSettingsTab(List<HostState> hosts) {
     final savedSecret = ref.watch(globalPairingSecretProvider);
-    final prefs = ref.watch(appPreferencesProvider);
-    final prefsNotifier = ref.read(appPreferencesProvider.notifier);
-    final primary = Theme.of(context).colorScheme.primary;
-    final hasSecret = savedSecret.trim().isNotEmpty;
+    final hasSecret = savedSecret.trim().isNotEmpty ||
+        hosts.any((h) => h.sharedSecret.trim().isNotEmpty);
 
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: FluidSize.pagePadding(context),
-      children: [
-        _buildSectionHeader('APPEARANCE STUDIO (PERSISTENT)'),
-        const SizedBox(height: 8),
-        _buildAppearanceStudioCard(prefs),
-        const SizedBox(height: 20),
-        _buildSectionHeader('SECURITY & CREDENTIAL VAULT'),
-        const SizedBox(height: 8),
-        InkWell(
-          onTap: _showPairingSecretDialog,
-          borderRadius: BorderRadius.circular(16),
-          child: _buildSettingsTile(
-            icon: Icons.vpn_key_rounded,
-            title: 'Workstation Pairing Token / PIN',
-            subtitle: hasSecret
-                ? 'Configured in protected local vault — tap to rotate or pair via PIN'
-                : 'Not configured — tap to enter token or 6-digit PC PIN',
-            trailing: Icon(
-              hasSecret ? Icons.verified_user_rounded : Icons.edit_rounded,
-              color: hasSecret ? CyberColors.success : CyberColors.warning,
-              size: 20,
+    return SettingsCommandDeck(
+      hosts: hosts
+          .map(
+            (h) => SettingsHostSummary(
+              id: h.id,
+              name: h.name,
+              ip: h.ip,
+              wsPort: h.wsPort,
+              mac: h.mac,
+              isOnline: h.isOnline,
+              osName: h.osName,
+              useTls: h.useTls,
             ),
-          ),
-        ),
-        _buildSettingsToggleTile(
-          icon: Icons.enhanced_encryption_rounded,
-          title: 'E2E AEAD Payload Vault (Mutual ECDH)',
-          subtitle: 'Mutual X25519 + ChaCha20-Poly1305 AEAD is active for control & video frames.',
-          value: prefs.enableE2eVault,
-          onChanged: prefsNotifier.setEnableE2eVault,
-        ),
-        _buildSettingsToggleTile(
-          icon: Icons.lock_rounded,
-          title: 'Prefer WSS/TLS WebSocket Transport',
-          subtitle: 'Uses wss:// instead of ws:// when host supports TLS certs.',
-          value: prefs.preferTls,
-          onChanged: prefsNotifier.setPreferTls,
-        ),
-        _buildSettingsToggleTile(
-          icon: Icons.fingerprint_rounded,
-          title: 'Arm Biometric HITL Guard Notice',
-          subtitle: 'Highlights hardware verification prompts for high-risk shell commands.',
-          value: prefs.biometricLockEnabled,
-          onChanged: prefsNotifier.setBiometricLockEnabled,
-        ),
-        if (hasSecret)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _kDangerColor,
-                side: BorderSide(
-                  color: _kDangerColor.withValues(alpha: 0.4),
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              icon: const Icon(Icons.delete_sweep_rounded, size: 18),
-              label: const Text('Purge All Saved Pairing Secrets'),
-              onPressed: _confirmPurgeAllSecrets,
-            ),
-          ),
-        const SizedBox(height: 14),
-        _buildSectionHeader('STREAMING & NETWORK PREFERENCES'),
-        const SizedBox(height: 8),
-        InkWell(
-          onTap: () => _showDiscoveryPortDialog(prefs.customScanPort),
-          borderRadius: BorderRadius.circular(16),
-          child: _buildSettingsTile(
-            icon: Icons.wifi_tethering_rounded,
-            title: 'LAN Discovery & Default WebSocket Port',
-            subtitle: 'Tap to customize port scanned for AI NetController agents.',
-            trailing: Text(
-              'PORT ${prefs.customScanPort}',
-              style: TextStyle(color: primary, fontFamily: 'monospace'),
-            ),
-          ),
-        ),
-        Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
-          decoration: BoxDecoration(
-            gradient: context.palette.cardBevelGradient(isSelected: false),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: context.palette.glassBorderIdle,
-              width: 1.15,
-            ),
-            boxShadow: context.palette.elevationShadows(isSelected: false),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const FluidSpecularBar(
-                isSelected: false,
-                height: 1.1,
-                margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
-              ),
-              Text(
-                'Target Stream Frame Rate',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: context.palette.textPrimary,
-                  fontSize: context.fluidFont(12.5),
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                'Persisted decode & frame pacing cap for battery/smoothness.',
-                style: TextStyle(
-                  color: context.palette.textSecondary,
-                  fontSize: context.fluidFont(10.5),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: const [15, 30, 60].map((fps) {
-                  final active = prefs.targetFps == fps;
-                  return ChoiceChip(
-                    label: Text('${fps}fps'),
-                    selected: active,
-                    selectedColor: primary.withValues(alpha: 0.24),
-                    labelStyle: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 11,
-                      fontWeight: active ? FontWeight.bold : FontWeight.w600,
-                      color: active ? primary : context.palette.textSecondary,
-                    ),
-                    onSelected: (_) => prefsNotifier.setTargetFps(fps),
-                  );
-                }).toList(),
-              ),
-            ],
-          ),
-        ),
-        _buildSettingsTile(
-          icon: Icons.bolt_rounded,
-          title: 'Wake-on-LAN Directed Broadcast',
-          subtitle: 'Sends Magic Packets to subnet broadcast & 255.255.255.255',
-          trailing: Text(
-            'UDP 9',
-            style: TextStyle(
-              color: context.palette.warning,
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        _buildSettingsToggleTile(
-          icon: Icons.vibration_rounded,
-          title: 'Haptic Touch Feedback',
-          subtitle: 'Subtle tactile vibration when interacting with controls.',
-          value: prefs.hapticsEnabled,
-          onChanged: prefsNotifier.setHapticsEnabled,
-        ),
-        _buildSettingsToggleTile(
-          icon: Icons.wb_sunny_rounded,
-          title: 'Keep Screen Awake During Stream',
-          subtitle: 'Prevents display sleep while viewing live PC stream.',
-          value: prefs.keepScreenAwake,
-          onChanged: prefsNotifier.setKeepScreenAwake,
-        ),
-        const SizedBox(height: 14),
-        _buildSectionHeader('TOUCHSCREEN & FULLSCREEN CONTROLS'),
-        const SizedBox(height: 8),
-        _buildTouchInputModeCard(prefs, prefsNotifier, primary),
-        _buildSettingsToggleTile(
-          icon: Icons.screen_rotation_rounded,
-          title: 'Auto-Landscape in Fullscreen',
-          subtitle: 'Automatically rotates to landscape when opening live PC control.',
-          value: prefs.fullscreenAutoLandscape,
-          onChanged: prefsNotifier.setFullscreenAutoLandscape,
-        ),
-        _buildSettingsToggleTile(
-          icon: Icons.touch_app_rounded,
-          title: 'Touch Visual Feedback',
-          subtitle: 'Shows animated tap ripples, cursor reticle, and long-press right-click ring.',
-          value: prefs.touchVisualFeedback,
-          onChanged: prefsNotifier.setTouchVisualFeedback,
-        ),
-        _buildStreamQualityPresetCard(prefs, prefsNotifier, primary),
-        _buildTrackpadSensitivityCard(prefs, prefsNotifier, primary),
-        const SizedBox(height: 14),
-        _buildSectionHeader('MAINTENANCE & DIAGNOSTICS'),
-        const SizedBox(height: 8),
-        InkWell(
-          onTap: () => AdaptiveOnboardingSheet.show(
-            context,
-            onCompleted: () => prefsNotifier.setOnboardingCompleted(true),
-          ),
-          borderRadius: BorderRadius.circular(16),
-          child: _buildSettingsTile(
-            icon: Icons.explore_rounded,
-            title: 'Interactive Quick-Start Guide',
-            subtitle: 'Review touch gestures, E2E vault security, and WoL setup.',
-            trailing: Icon(Icons.chevron_right_rounded, color: primary),
-          ),
-        ),
-        InkWell(
-          onTap: () async {
-            await prefsNotifier.resetDefaults();
-            _showToast('Preferences restored to default settings.');
-          },
-          borderRadius: BorderRadius.circular(16),
-          child: _buildSettingsTile(
-            icon: Icons.restart_alt_rounded,
-            title: 'Reset Theme & Network Preferences',
-            subtitle:
-                'Restores Bright Daylight & Iridescent Violet defaults (keeps paired hosts).',
-            trailing: Icon(
-              Icons.restore_rounded,
-              color: context.palette.textSecondary,
-            ),
-          ),
-        ),
-        _buildSettingsTile(
-          icon: Icons.verified_rounded,
-          title: 'AI NetController Mobile',
-          subtitle:
-              'Impeller Hardware Engine • AI-NET/3.0-SECURE Protocol',
-          trailing: Text(
-            'v0.85.0-alpha',
-            style: TextStyle(
-              color: context.palette.success,
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTouchInputModeCard(
-    AppPreferencesState prefs,
-    AppPreferencesNotifier prefsNotifier,
-    Color primary,
-  ) {
-    final palette = context.palette;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
-      decoration: BoxDecoration(
-        gradient: palette.cardBevelGradient(isSelected: false),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: palette.glassBorderIdle, width: 1.15),
-        boxShadow: palette.elevationShadows(isSelected: false),
+          )
+          .toList(growable: false),
+      savedGlobalSecret: savedSecret,
+      hasConfiguredSecretOverride: hasSecret,
+      onOpenPairingDialog: _showPairingSecretDialog,
+      onOpenDiscoveryPortDialog: _showDiscoveryPortDialog,
+      onConfirmPurgeAllSecrets: _confirmPurgeAllSecrets,
+      onOpenOnboardingGuide: () => AdaptiveOnboardingSheet.show(
+        context,
+        onCompleted: () =>
+            ref.read(appPreferencesProvider.notifier).setOnboardingCompleted(true),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const FluidSpecularBar(
-            isSelected: false,
-            height: 1.1,
-            margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
-          ),
-          Text(
-            'Default Remote Input Mode',
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              color: palette.textPrimary,
-              fontSize: context.fluidFont(12.5),
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Direct Touch moves the PC cursor directly under your finger; Trackpad uses relative glides.',
-            style: TextStyle(
-              color: palette.textSecondary,
-              fontSize: context.fluidFont(10.5),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final mode in RemoteInputMode.values)
-                ChoiceChip(
-                  key: ValueKey('input-mode-${mode.name}'),
-                  avatar: Icon(
-                    mode == RemoteInputMode.touchscreen
-                        ? Icons.touch_app_rounded
-                        : Icons.mouse_rounded,
-                    size: 15,
-                    color: prefs.defaultInputMode == mode
-                        ? primary
-                        : palette.textSecondary,
-                  ),
-                  label: Text(
-                    mode == RemoteInputMode.touchscreen
-                        ? 'Direct Touch'
-                        : 'Trackpad',
-                  ),
-                  selected: prefs.defaultInputMode == mode,
-                  selectedColor: primary.withValues(alpha: 0.22),
-                  labelStyle: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: prefs.defaultInputMode == mode
-                        ? FontWeight.bold
-                        : FontWeight.w600,
-                    color: prefs.defaultInputMode == mode
-                        ? primary
-                        : palette.textSecondary,
-                  ),
-                  onSelected: (_) {
-                    _hapticTap();
-                    prefsNotifier.setDefaultInputMode(mode);
-                  },
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStreamQualityPresetCard(
-    AppPreferencesState prefs,
-    AppPreferencesNotifier prefsNotifier,
-    Color primary,
-  ) {
-    final palette = context.palette;
-    const labels = <String, String>{
-      'auto': 'Auto',
-      'low': 'Low',
-      'balanced': 'Balanced',
-      'crisp': 'Crisp',
-    };
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
-      decoration: BoxDecoration(
-        gradient: palette.cardBevelGradient(isSelected: false),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: palette.glassBorderIdle, width: 1.15),
-        boxShadow: palette.elevationShadows(isSelected: false),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const FluidSpecularBar(
-            isSelected: false,
-            height: 1.1,
-            margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
-          ),
-          Text(
-            'Stream Visual Quality Preset',
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              color: palette.textPrimary,
-              fontSize: context.fluidFont(12.5),
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Balances bandwidth vs desktop text crispness across Wi-Fi conditions.',
-            style: TextStyle(
-              color: palette.textSecondary,
-              fontSize: context.fluidFont(10.5),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: kValidStreamQualityPresets.map((preset) {
-              final active = prefs.streamQualityPreset == preset;
-              return ChoiceChip(
-                key: ValueKey('quality-preset-$preset'),
-                label: Text(labels[preset] ?? preset),
-                selected: active,
-                selectedColor: primary.withValues(alpha: 0.22),
-                labelStyle: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                  fontWeight: active ? FontWeight.bold : FontWeight.w600,
-                  color: active ? primary : palette.textSecondary,
-                ),
-                onSelected: (_) {
-                  _hapticTap();
-                  prefsNotifier.setStreamQualityPreset(preset);
-                },
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTrackpadSensitivityCard(
-    AppPreferencesState prefs,
-    AppPreferencesNotifier prefsNotifier,
-    Color primary,
-  ) {
-    final palette = context.palette;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.fromLTRB(14, 11, 14, 10),
-      decoration: BoxDecoration(
-        gradient: palette.cardBevelGradient(isSelected: false),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: palette.glassBorderIdle, width: 1.15),
-        boxShadow: palette.elevationShadows(isSelected: false),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const FluidSpecularBar(
-            isSelected: false,
-            height: 1.1,
-            margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Trackpad Pointer Sensitivity',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: palette.textPrimary,
-                    fontSize: context.fluidFont(12.5),
-                  ),
-                ),
-              ),
-              Text(
-                '${prefs.trackpadSensitivity.toStringAsFixed(1)}x',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w800,
-                  color: primary,
-                  fontSize: context.fluidFont(11.5),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Cursor velocity gain when using Trackpad (PAD) mode.',
-            style: TextStyle(
-              color: palette.textSecondary,
-              fontSize: context.fluidFont(10.5),
-            ),
-          ),
-          Slider(
-            key: const ValueKey('trackpad-sensitivity-slider'),
-            value: prefs.trackpadSensitivity.clamp(0.6, 3.0),
-            min: 0.6,
-            max: 3.0,
-            divisions: 24,
-            activeColor: primary,
-            onChanged: prefsNotifier.setTrackpadSensitivity,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSettingsToggleTile({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-  }) {
-    final primary = Theme.of(context).colorScheme.primary;
-    return _buildSettingsTile(
-      icon: icon,
-      title: title,
-      subtitle: subtitle,
-      trailing: Switch.adaptive(
-        value: value,
-        activeTrackColor: primary.withValues(alpha: 0.5),
-        activeThumbColor: primary,
-        onChanged: onChanged,
-      ),
-    );
-  }
-
-  Widget _buildSettingsTile({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required Widget trailing,
-  }) {
-    final palette = context.palette;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
-        decoration: BoxDecoration(
-          gradient: palette.cardBevelGradient(isSelected: false),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: palette.glassBorderIdle, width: 1.15),
-          boxShadow: palette.elevationShadows(isSelected: false),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const FluidSpecularBar(
-              isSelected: false,
-              height: 1.1,
-              margin: EdgeInsets.only(left: 6, right: 6, bottom: 10),
-            ),
-            Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    gradient: palette.heroGradient,
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.55),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: palette.primary.withValues(alpha: 0.28),
-                        blurRadius: 10,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: Icon(icon, color: Colors.white, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: palette.textPrimary,
-                          fontSize: context.fluidFont(12.5),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          color: palette.textSecondary,
-                          fontSize: context.fluidFont(10.5),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                trailing,
-              ],
-            ),
-          ],
-        ),
-      ),
+      onImportSanitizedHosts: _importSanitizedHosts,
+      onRerunCommand: _rerunHistoryCommand,
+      onDispatchWol: _dispatchWolCore,
+      onToast: (message, {Color? accentColor}) =>
+          _showToast(message, accentColor: accentColor),
     );
   }
 

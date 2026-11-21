@@ -12,9 +12,14 @@ Features:
 import ctypes
 import io
 import logging
+import os
 import platform
+import sys
 import threading
+import types
 from typing import Dict, List, Optional, Tuple, Any
+
+_STREAMER_DIR = os.path.dirname(os.path.abspath(__file__))
 
 try:
     import mss
@@ -31,11 +36,65 @@ try:
 except ImportError:
     np = None
 
+dxcam = None
+bettercam = None
+if platform.system() == "Windows" and os.environ.get("AI_HEADLESS") != "1":
+    try:
+        import dxcam  # type: ignore[no-redef]
+    except Exception:
+        dxcam = None
+    if dxcam is None:
+        try:
+            import bettercam  # type: ignore[no-redef]
+        except Exception:
+            bettercam = None
+
 try:
-    from turbojpeg import TurboJPEG, TJSAMP_420
-    _TURBO_JPEG_INSTANCE = TurboJPEG()
-except Exception:
-    _TURBO_JPEG_INSTANCE = None
+    from turbojpeg import TurboJPEG, TJPF_BGRX, TJSAMP_420, TJFLAG_FASTDCT
+except ImportError:
+    try:
+        from turbojpeg import TurboJPEG, TJSAMP_420
+        TJPF_BGRX = 3
+        TJFLAG_FASTDCT = 2048
+    except Exception:
+        TurboJPEG = None
+        TJPF_BGRX = 3
+        TJSAMP_420 = 2
+        TJFLAG_FASTDCT = 2048
+
+
+def _discover_turbojpeg():
+    """Probes bundled and standard Windows libjpeg-turbo paths before default lookup."""
+    if TurboJPEG is None:
+        return None
+    candidates: List[str] = []
+    env_dll = os.environ.get("TURBOJPEG_DLL", "").strip()
+    if env_dll:
+        candidates.append(env_dll)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "turbojpeg.dll"))
+    if getattr(sys, "executable", None):
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "turbojpeg.dll"))
+    candidates.append(os.path.join(_STREAMER_DIR, "turbojpeg.dll"))
+    if platform.system() == "Windows":
+        candidates.extend([
+            r"C:\libjpeg-turbo64\bin\turbojpeg.dll",
+            r"C:\libjpeg-turbo\bin\turbojpeg.dll",
+        ])
+    for cand in candidates:
+        if cand and os.path.isfile(cand):
+            try:
+                return TurboJPEG(cand)
+            except Exception:
+                pass
+    try:
+        return TurboJPEG()
+    except Exception:
+        return None
+
+
+_TURBO_JPEG_INSTANCE = _discover_turbojpeg()
 
 logger = logging.getLogger("MultiMonitorStreamer")
 
@@ -85,8 +144,79 @@ class MultiMonitorStreamer:
         self._current_bbox: Dict[str, int] = {}
         self._dominant_hex_color: str = "#00F0FF"  # Default Neon Cyan
         self._has_extracted_color: bool = False
+        self._dxgi_cam: Any = None
+        self._dxgi_mon_idx: Optional[int] = None
+        self._dxgi_disabled: bool = False
+        self._last_dxgi_arr: Optional[Any] = None
 
         self._refresh_monitors_list()
+
+    def _can_use_dxgi(self) -> bool:
+        if platform.system() != "Windows" or os.environ.get("AI_HEADLESS") == "1":
+            return False
+        if self._dxgi_disabled or np is None or (dxcam is None and bettercam is None):
+            return False
+        if mss is None or type(mss) is not types.ModuleType:
+            return False
+        local_sct = getattr(self._tls, "sct", None)
+        if local_sct is not None and type(local_sct).__module__.split(".")[0] != "mss":
+            return False
+        if self._sct is not None and type(self._sct).__module__.split(".")[0] != "mss":
+            return False
+        get_sct_fn = getattr(self, "_get_thread_sct", None)
+        if getattr(get_sct_fn, "__func__", None) is not MultiMonitorStreamer._get_thread_sct:
+            return False
+        return True
+
+    def _release_dxgi_cam(self) -> None:
+        cam = self._dxgi_cam
+        self._dxgi_cam = None
+        self._dxgi_mon_idx = None
+        self._last_dxgi_arr = None
+        if cam is not None:
+            for m_name in ("stop", "release", "close"):
+                fn = getattr(cam, m_name, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+
+    def _grab_dxgi_frame(self, monitor_idx: int, expected_w: int, expected_h: int) -> Optional[Any]:
+        if not self._can_use_dxgi():
+            return None
+        dxgi_mod = dxcam if dxcam is not None else bettercam
+        if dxgi_mod is None:
+            return None
+        try:
+            if self._dxgi_cam is None or self._dxgi_mon_idx != monitor_idx:
+                self._release_dxgi_cam()
+                out_idx = max(0, int(monitor_idx) - 1)
+                self._dxgi_cam = dxgi_mod.create(output_idx=out_idx, output_color="BGRA")
+                self._dxgi_mon_idx = monitor_idx
+            arr = self._dxgi_cam.grab() if self._dxgi_cam is not None else None
+            if arr is None:
+                if (
+                    self._last_dxgi_arr is not None
+                    and self._last_dxgi_arr.shape[:2] == (expected_h, expected_w)
+                ):
+                    return self._last_dxgi_arr
+                return None
+            if not isinstance(arr, np.ndarray) or arr.ndim != 3 or arr.shape[2] != 4:
+                return None
+            if expected_w > 0 and expected_h > 0 and arr.shape[:2] != (expected_h, expected_w):
+                self._release_dxgi_cam()
+                self._dxgi_disabled = True
+                return None
+            if not arr.flags.c_contiguous:
+                arr = np.ascontiguousarray(arr)
+            self._last_dxgi_arr = arr
+            return arr
+        except Exception as exc:
+            logger.debug("DXGI capture fallback to MSS (%s)", exc)
+            self._release_dxgi_cam()
+            self._dxgi_disabled = True
+            return None
 
     def _get_thread_sct(self):
         if not mss:
@@ -115,7 +245,8 @@ class MultiMonitorStreamer:
                 pass
 
     def close(self) -> None:
-        """Closes all GDI / X11 MSS handles allocated by this streamer."""
+        """Closes all GDI / X11 MSS and DXGI handles allocated by this streamer."""
+        self._release_dxgi_cam()
         with self._lock:
             scts = list(self._all_scts)
             self._all_scts.clear()
@@ -184,6 +315,7 @@ class MultiMonitorStreamer:
             if 1 <= monitor_index < len(self._sct.monitors):
                 self._active_monitor_index = monitor_index
                 self._current_bbox = self._sct.monitors[monitor_index].copy()
+                self._release_dxgi_cam()
                 logger.info(f"Switched capture display to Monitor {monitor_index}: {self._current_bbox}")
                 return True
             else:
@@ -192,7 +324,8 @@ class MultiMonitorStreamer:
 
     def capture_frame(self, quality: int = DEFAULT_JPEG_QUALITY) -> Optional[Tuple[bytes, int, int]]:
         """
-        Captures raw frame from active monitor and compresses to JPEG via TurboJPEG or PIL.
+        Captures raw frame from active monitor (DXGI Desktop Duplication when available, else MSS)
+        and compresses to JPEG via TurboJPEG or PIL.
         Returns: (jpeg_bytes, width, height) or None on failure.
         """
         sct = self._get_thread_sct()
@@ -203,11 +336,29 @@ class MultiMonitorStreamer:
         with self._lock:
             fallback_mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
             bbox = self._current_bbox.copy() if self._current_bbox else fallback_mon
+            active_idx = self._active_monitor_index
 
         try:
-            # High-speed hardware screen grab
-            raw_sct_img = sct.grab(bbox)
-            width, height = raw_sct_img.width, raw_sct_img.height
+            dxgi_arr = self._grab_dxgi_frame(
+                active_idx,
+                int(bbox.get("width", 0)),
+                int(bbox.get("height", 0)),
+            )
+            if dxgi_arr is not None:
+                height, width = int(dxgi_arr.shape[0]), int(dxgi_arr.shape[1])
+                raw_for_color = memoryview(dxgi_arr.ravel())
+                raw_sct_img = None
+                bgra_arr = dxgi_arr
+            else:
+                # High-speed hardware screen grab fallback via MSS
+                raw_sct_img = sct.grab(bbox)
+                width, height = raw_sct_img.width, raw_sct_img.height
+                raw_for_color = raw_sct_img.raw
+                bgra_arr = (
+                    np.frombuffer(raw_sct_img.raw, dtype=np.uint8).reshape((height, width, 4))
+                    if np is not None
+                    else None
+                )
 
             # Run dynamic color extraction on the first captured frame
             should_extract = False
@@ -216,17 +367,17 @@ class MultiMonitorStreamer:
                     self._has_extracted_color = True
                     should_extract = True
             if should_extract:
-                self._extract_dominant_color_fast(raw_sct_img.raw, width, height)
+                self._extract_dominant_color_fast(raw_for_color, width, height)
 
             # 1. Prefer TurboJPEG SIMD hardware compression (<3ms encoding)
-            if _TURBO_JPEG_INSTANCE and np is not None:
+            if _TURBO_JPEG_INSTANCE and bgra_arr is not None:
                 try:
-                    bgra_arr = np.frombuffer(raw_sct_img.raw, dtype=np.uint8).reshape((height, width, 4))
                     jpeg_bytes = _TURBO_JPEG_INSTANCE.encode(
                         bgra_arr,
                         quality=clamped_quality,
-                        pixel_format=3,  # TJPF_BGRX (constant 3 for 4-byte BGRA/BGRX)
-                        jpeg_subsample=TJSAMP_420
+                        pixel_format=TJPF_BGRX,
+                        jpeg_subsample=TJSAMP_420,
+                        flags=TJFLAG_FASTDCT,
                     )
                     return jpeg_bytes, width, height
                 except Exception as tj_err:
@@ -234,7 +385,8 @@ class MultiMonitorStreamer:
 
             # 2. Fallback to Pillow (zero-copy frombuffer + thread-local reusable BytesIO)
             if Image:
-                img = Image.frombuffer("RGB", raw_sct_img.size, raw_sct_img.bgra, "raw", "BGRX", 0, 1)
+                raw_src = bgra_arr if dxgi_arr is not None else raw_sct_img.bgra
+                img = Image.frombuffer("RGB", (width, height), raw_src, "raw", "BGRX", 0, 1)
                 buf = getattr(self._tls, "bio", None)
                 if buf is None:
                     buf = io.BytesIO()

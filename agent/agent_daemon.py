@@ -119,6 +119,12 @@ except (ImportError, ModuleNotFoundError):
         perform_full_uninstall = None
         perform_full_install = None
 
+# Guard sys.stdout / sys.stderr in PyInstaller console=False (windowed) builds
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 # Logging Configuration
 logging.basicConfig(
     level=logging.INFO,
@@ -941,10 +947,24 @@ def main():
     job_guard = WindowsJobObjectGuard()
     ws_daemon = None
     try:
+        HostAgentDaemon = None
         try:
             from agent import HostAgentDaemon
         except (ImportError, ModuleNotFoundError):
-            from agent.agent import HostAgentDaemon
+            try:
+                from agent.agent import HostAgentDaemon
+            except (ImportError, ModuleNotFoundError):
+                import importlib.util
+                for base in sys.path:
+                    cand = os.path.join(base, "agent.py")
+                    if os.path.isfile(cand):
+                        spec = importlib.util.spec_from_file_location("agent_core", cand)
+                        if spec and spec.loader:
+                            mod = importlib.util.module_from_spec(spec)
+                            sys.modules["agent_core"] = mod
+                            spec.loader.exec_module(mod)
+                            HostAgentDaemon = getattr(mod, "HostAgentDaemon", None)
+                            break
         if HostAgentDaemon:
             ws_daemon = HostAgentDaemon(host=bind_host, port=bind_port)
     except Exception as e:

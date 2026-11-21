@@ -2,12 +2,14 @@ import 'dart:io';
 
 import 'package:ai_netcontroller/main.dart' as app;
 import 'package:ai_netcontroller/services/app_preferences.dart';
+import 'package:ai_netcontroller/services/history_store.dart';
 import 'package:ai_netcontroller/services/host_connection_client.dart';
 import 'package:ai_netcontroller/theme/fluid_theme.dart';
 import 'package:ai_netcontroller/ui/connection_diagnostics_sheet.dart';
 import 'package:ai_netcontroller/ui/fullscreen_stream_page.dart';
 import 'package:ai_netcontroller/ui/remote_keyboard_bar.dart';
 import 'package:ai_netcontroller/ui/responsive_device_card.dart';
+import 'package:ai_netcontroller/ui/settings_command_deck.dart';
 import 'package:ai_netcontroller/ui/touch_coordinate_mapper.dart';
 import 'package:ai_netcontroller/ui/touch_feedback_overlay.dart';
 import 'package:ai_netcontroller/ui/viewport_stream_widget.dart';
@@ -817,6 +819,7 @@ void main() {
         await Hive.openBox('ghost_devices');
         await Hive.openBox(kAppPrefsBoxName);
         await Hive.openBox(kVaultSecretsBoxName);
+        await Hive.openBox(kHistoryBoxName);
       });
       addTearDown(() async {
         await tester.runAsync(() async {
@@ -851,97 +854,87 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
-      final listFinder = find.byType(ListView).first;
+      final settingsScrollable = find.descendant(
+        of: find.byType(SettingsCommandDeck),
+        matching: find.byType(Scrollable),
+      ).first;
 
-      // Scroll to Touchscreen & Fullscreen Controls section
-      await tester.scrollUntilVisible(
-        find.text('TOUCHSCREEN & FULLSCREEN CONTROLS'),
-        250,
-        scrollable: find.descendant(
-          of: listFinder,
-          matching: find.byType(Scrollable),
-        ),
-      );
-      await tester.pump();
+      Future<void> scrollCenterAndTap(Finder target, {double delta = 220}) async {
+        await tester.scrollUntilVisible(
+          target,
+          delta,
+          scrollable: settingsScrollable,
+        );
+        await tester.pump();
+        await Scrollable.ensureVisible(
+          tester.element(target),
+          alignment: 0.35,
+        );
+        await tester.pump();
+        await tester.runAsync(() async {
+          await tester.tap(target);
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+        });
+        await tester.pump();
+      }
 
-      // 1. Switch input mode Touchscreen -> Trackpad
-      final trackpadChip = find.byKey(const ValueKey('input-mode-trackpad'));
-      await tester.ensureVisible(trackpadChip);
-      await tester.runAsync(() async {
-        await tester.tap(trackpadChip);
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-      });
-      await tester.pump();
-      expect(
-        container.read(appPreferencesProvider).defaultInputMode,
-        equals(RemoteInputMode.trackpad),
-      );
-
-      // 2. Toggle Auto-Landscape & Touch Visual Feedback
-      final autoLandFinder = find.text('Auto-Landscape in Fullscreen');
-      await tester.ensureVisible(autoLandFinder);
-      final autoLandSwitch = find.descendant(
-        of: find.ancestor(of: autoLandFinder, matching: find.byType(Row)).first,
-        matching: find.byType(Switch),
-      );
-      await tester.runAsync(() async {
-        await tester.tap(autoLandSwitch);
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-      });
-      await tester.pump();
-      expect(
-        container.read(appPreferencesProvider).fullscreenAutoLandscape,
-        isFalse,
-      );
-
-      final visualFbFinder = find.text('Touch Visual Feedback');
-      await tester.ensureVisible(visualFbFinder);
-      final visualFbSwitch = find.descendant(
-        of: find.ancestor(of: visualFbFinder, matching: find.byType(Row)).first,
-        matching: find.byType(Switch),
-      );
-      await tester.runAsync(() async {
-        await tester.tap(visualFbSwitch);
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-      });
-      await tester.pump();
-      expect(
-        container.read(appPreferencesProvider).touchVisualFeedback,
-        isFalse,
-      );
-
-      // 3. Select Stream Quality Preset = 'crisp'
-      await tester.scrollUntilVisible(
+      // 1. Streaming hub (default active) -> select Stream Quality Preset = 'crisp'
+      await scrollCenterAndTap(
         find.byKey(const ValueKey('quality-preset-crisp')),
-        220,
-        scrollable: find.descendant(
-          of: listFinder,
-          matching: find.byType(Scrollable),
-        ),
       );
-      await tester.runAsync(() async {
-        await tester.tap(find.byKey(const ValueKey('quality-preset-crisp')));
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-      });
-      await tester.pump();
       expect(
         container.read(appPreferencesProvider).streamQualityPreset,
         equals('crisp'),
       );
 
-      // 4. Confirm Trackpad Sensitivity slider renders and is interactive
-      await tester.scrollUntilVisible(
-        find.byKey(const ValueKey('trackpad-sensitivity-slider')),
-        220,
-        scrollable: find.descendant(
-          of: listFinder,
-          matching: find.byType(Scrollable),
-        ),
+      // 2. Switch Bento hub to Touch & Controls
+      await scrollCenterAndTap(
+        find.byKey(const ValueKey('settings-hub-touch')),
+        delta: -220,
+      );
+      expect(find.text('TOUCH & CONTROLS'), findsOneWidget);
+
+      // 3. Switch input mode Touchscreen -> Trackpad
+      await scrollCenterAndTap(
+        find.byKey(const ValueKey('input-mode-trackpad')),
       );
       expect(
-        find.byKey(const ValueKey('trackpad-sensitivity-slider')),
-        findsOneWidget,
+        container.read(appPreferencesProvider).defaultInputMode,
+        equals(RemoteInputMode.trackpad),
       );
+
+      // 4. Toggle Auto-Landscape & Touch Visual Feedback
+      await scrollCenterAndTap(
+        find.byKey(const ValueKey('auto-landscape-switch')),
+      );
+      expect(
+        container.read(appPreferencesProvider).fullscreenAutoLandscape,
+        isFalse,
+      );
+
+      await scrollCenterAndTap(
+        find.byKey(const ValueKey('touch-visual-feedback-switch')),
+      );
+      expect(
+        container.read(appPreferencesProvider).touchVisualFeedback,
+        isFalse,
+      );
+
+      // 5. Confirm Trackpad Sensitivity slider renders and is interactive
+      final sliderFinder =
+          find.byKey(const ValueKey('trackpad-sensitivity-slider'));
+      await tester.scrollUntilVisible(
+        sliderFinder,
+        220,
+        scrollable: settingsScrollable,
+      );
+      await tester.pump();
+      await Scrollable.ensureVisible(
+        tester.element(sliderFinder),
+        alignment: 0.35,
+      );
+      await tester.pump();
+      expect(sliderFinder, findsOneWidget);
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());

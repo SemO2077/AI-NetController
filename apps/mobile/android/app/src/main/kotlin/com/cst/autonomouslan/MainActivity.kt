@@ -22,6 +22,8 @@ class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val KEYSTORE_CHANNEL = "com.cst.autonomouslan/keystore"
         private const val DEEPLINK_CHANNEL = "com.cst.autonomouslan/deeplink"
+        private const val WIDGET_CHANNEL = "com.cst.autonomouslan/home_widget"
+        private const val WIDGET_PREFS_NAME = "ai_net_home_widget_prefs"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val MASTER_KEY_ALIAS = "ai_netcontroller_master_aes_v1"
         private const val PREFS_NAME = "ai_net_keystore_prefs"
@@ -34,6 +36,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val keystoreLock = Any()
     private var deeplinkChannel: MethodChannel? = null
     private var keystoreChannel: MethodChannel? = null
+    private var widgetChannel: MethodChannel? = null
     private var pendingInitialUri: String? = null
 
     private fun extractPairingUri(intent: Intent?): String? {
@@ -96,6 +99,45 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
         }
+        widgetChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WIDGET_CHANNEL).also { ch ->
+            ch.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setAppGroupId" -> {
+                        val groupId = call.argument<String>("groupId") ?: ""
+                        getSharedPreferences(WIDGET_PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("app_group_id", groupId)
+                            .apply()
+                        result.success(true)
+                    }
+                    "saveWidgetData" -> {
+                        val id = call.argument<String>("id")
+                        if (id.isNullOrEmpty()) {
+                            result.success(false)
+                        } else {
+                            val prefs = getSharedPreferences(WIDGET_PREFS_NAME, Context.MODE_PRIVATE)
+                            val editor = prefs.edit()
+                            val data = call.argument<Any>("data")
+                            when (data) {
+                                null -> editor.remove(id)
+                                is Boolean -> editor.putBoolean(id, data)
+                                is Int -> editor.putInt(id, data)
+                                is Long -> editor.putLong(id, data)
+                                is Float -> editor.putFloat(id, data)
+                                is Double -> editor.putFloat(id, data.toFloat())
+                                else -> editor.putString(id, data.toString())
+                            }
+                            editor.apply()
+                            result.success(true)
+                        }
+                    }
+                    "updateWidget" -> {
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
@@ -103,6 +145,8 @@ class MainActivity : FlutterFragmentActivity() {
         deeplinkChannel = null
         keystoreChannel?.setMethodCallHandler(null)
         keystoreChannel = null
+        widgetChannel?.setMethodCallHandler(null)
+        widgetChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 

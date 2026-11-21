@@ -1351,7 +1351,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                     {isBg ? 'Системен & AI Център' : 'System & AI Center'}
                   </div>
                   <div className="text-[11px] text-cyan-400 font-mono font-semibold truncate mt-0.5">
-                    Beta v0.80.0 • AI-NET/3.0
+                    Beta v0.90.0 • AI-NET/3.0
                   </div>
                 </div>
               </motion.button>

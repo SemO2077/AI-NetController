@@ -117,7 +117,7 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
       })
       .catch((err) => {
         if (err?.name === 'AbortError') return;
-        fetch('/releases/v0.80.0/RELEASE_MANIFEST.json', { signal: controller.signal })
+        fetch('/releases/v0.90.0/RELEASE_MANIFEST.json', { signal: controller.signal })
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
           .then((m) => setManifest(m))
           .catch(() => {});
@@ -263,8 +263,8 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
     }
   };
 
-  const ghReleaseCommands = `# 1. Tag and push v0.80.0 (Beta 0.80.00)
-git tag -a v0.80.0 -m "AI NetController v0.80.0 (Beta 0.80.00)"
+  const ghReleaseCommands = `# 1. Tag and push v0.90.0 (Beta 0.90.00)
+git tag -a v0.90.0 -m "AI NetController v0.90.0 (Beta 0.90.00)"
 git push origin main --tags
 git push gitlab main --tags
 
@@ -307,7 +307,7 @@ python scripts/publish_release.py --platform all`;
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'ai_netcontroller_v0.80.0_source_and_builders.zip';
+      a.download = 'ai_netcontroller_v0.90.0_source_and_builders.zip';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -321,31 +321,31 @@ python scripts/publish_release.py --platform all`;
 
   const artifacts: ReleaseArtifact[] = manifest?.artifacts || [
     {
-      filename: 'AI_NetController_HostAgent_v0.80.0_win64.exe',
+      filename: 'AI_NetController_HostAgent_v0.90.0_win64.exe',
       kind: 'exe',
       platform: 'Windows 10/11 x64 (Standalone Host Agent .EXE)',
       sizeBytes: 0,
       sizeFormatted: 'Build Required',
       sha256: 'not_built_yet',
-      downloadUrl: '/releases/v0.80.0/AI_NetController_HostAgent_v0.80.0_win64.exe',
+      downloadUrl: '/releases/v0.90.0/AI_NetController_HostAgent_v0.90.0_win64.exe',
     },
     {
-      filename: 'AI_NetController_v0.80.0_arm64-v8a.apk',
+      filename: 'AI_NetController_v0.90.0_arm64-v8a.apk',
       kind: 'apk',
       platform: 'Android 10-15 arm64-v8a (Mobile Controller .APK)',
       sizeBytes: 0,
       sizeFormatted: 'Build Required',
       sha256: 'not_built_yet',
-      downloadUrl: '/releases/v0.80.0/AI_NetController_v0.80.0_arm64-v8a.apk',
+      downloadUrl: '/releases/v0.90.0/AI_NetController_v0.90.0_arm64-v8a.apk',
     },
     {
-      filename: 'AI_NetController_HostAgent_v0.80.0_win64_portable.zip',
+      filename: 'AI_NetController_HostAgent_v0.90.0_win64_portable.zip',
       kind: 'zip',
       platform: 'Windows Portable Agent Bundle + Internal Runtime (.ZIP)',
       sizeBytes: 0,
       sizeFormatted: 'Build Required',
       sha256: 'not_built_yet',
-      downloadUrl: '/releases/v0.80.0/AI_NetController_HostAgent_v0.80.0_win64_portable.zip',
+      downloadUrl: '/releases/v0.90.0/AI_NetController_HostAgent_v0.90.0_win64_portable.zip',
     },
   ];
 
@@ -453,7 +453,7 @@ python scripts/publish_release.py --platform all`;
                   {isBg ? 'Бинарни релийзи и сорс код' : 'Release Binaries & Source Code'}
                 </h2>
                 <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[10px] font-mono font-bold shrink-0">
-                  v0.80.0
+                  v0.90.0
                 </span>
                 {rebuildMessage && (
                   <span className="text-[11px] font-mono text-[var(--accent-primary)] font-semibold">
@@ -547,8 +547,8 @@ python scripts/publish_release.py --platform all`;
                   <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
                   <span>
                     {isBg
-                      ? 'Официални компилирани пакети (v0.80.0)'
-                      : 'Official Packaged Release Binaries (v0.80.0)'}
+                      ? 'Официални компилирани пакети (v0.90.0)'
+                      : 'Official Packaged Release Binaries (v0.90.0)'}
                   </span>
                 </h3>
                 <p className="text-xs ink-secondary break-words">
@@ -570,7 +570,7 @@ python scripts/publish_release.py --platform all`;
                   <span>{isBg ? 'PC Демон GUI' : 'PC Daemon GUI'}</span>
                 </button>
                 <a
-                  href="/releases/v0.80.0/SHA256SUMS.txt"
+                  href="/releases/v0.90.0/SHA256SUMS.txt"
                   download="SHA256SUMS.txt"
                   className="min-h-[36px] px-3 py-1.5 rounded-full liquid-control-pill text-xs font-mono font-semibold ink-primary flex items-center gap-1.5 transition"
                 >
@@ -759,7 +759,7 @@ python scripts/publish_release.py --platform all`;
                 >
                   <span className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-emerald-500 shrink-0" />
-                    <span>PATCH_NOTES.md (v0.80.0)</span>
+                    <span>PATCH_NOTES.md (v0.90.0)</span>
                   </span>
                   {showPatchNotes ? (
                     <ChevronUp className="w-4 h-4 ink-muted shrink-0" />
@@ -861,8 +861,8 @@ python scripts/publish_release.py --platform all`;
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
             <span>
               {isBg
-                ? 'v0.80.0 Бинарни пакети (.APK & .EXE) • UTF-8'
-                : 'v0.80.0 Release Pipeline (.APK & .EXE) • UTF-8'}
+                ? 'v0.90.0 Бинарни пакети (.APK & .EXE) • UTF-8'
+                : 'v0.90.0 Release Pipeline (.APK & .EXE) • UTF-8'}
             </span>
           </div>
           <span>AI-NET/3.0-SECURE</span>

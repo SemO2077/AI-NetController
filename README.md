@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/SemO2077/AI-NetController/actions/workflows/ci.yml/badge.svg)](https://github.com/SemO2077/AI-NetController/actions/workflows/ci.yml)
 [![GitLab Pipeline](https://gitlab.com/ryu-group7483245/ai-netcontroller/badges/main/pipeline.svg)](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/pipelines)
-[![Release v0.80.0](https://img.shields.io/badge/release-v0.80.0--beta-00f0ff)](https://github.com/SemO2077/AI-NetController/releases/tag/v0.80.0)
-[![GitLab Release v0.80.0](https://img.shields.io/badge/gitlab_release-v0.80.0--beta-fc6d26)](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.80.0)
+[![Release v0.90.0](https://img.shields.io/badge/release-v0.90.0--beta-00f0ff)](https://github.com/SemO2077/AI-NetController/releases/tag/v0.90.0)
+[![GitLab Release v0.90.0](https://img.shields.io/badge/gitlab_release-v0.90.0--beta-fc6d26)](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.90.0)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Low-latency workstation fleet manager, Wake-on-LAN orchestrator, and authenticated remote desktop bridge built across a Python host daemon (`agent/`), an Android/Flutter companion (`apps/mobile/`), and a local React + Express web console (`apps/web/`).
@@ -45,8 +45,11 @@ python agent/agent.py
 ```
 
 Or launch directly from the root scripts:
-- **Windows:** `START_HERE_WINDOWS.bat`
+- **Windows (Launch Daemon + Full Setup & Live Test Suite):** `LAUNCH_AND_TEST.bat` (or `python scripts/launch_and_test_daemon.py`)
+- **Windows (Quick PC & Phone Launcher):** `START_HERE_WINDOWS.bat`
 - **Linux/macOS:** `./START_HERE_LINUX.sh`
+- **Instant Windows `.EXE` Builder:** `BUILD_EXE.bat` (or `agent\build_exe.bat` / `npm run build:exe`)
+- **Instant Android `.APK` Builder:** `BUILD_APK.bat` (or `apps\mobile\build_apk.bat` / `npm run build:apk`)
 
 Useful daemon flags: `--headless`, `--port 8765`, `--install`, `--uninstall`, `--create-shortcut`. Configuration is saved to `%LOCALAPPDATA%\AI NetController\config.json` (Windows) or `~/.ai_netcontroller/config.json` (POSIX).
 
@@ -71,7 +74,7 @@ By default, the Express server binds `127.0.0.1:3000` (`ALLOW_LAN_WEB=true` expo
 
 ### 3. Mobile Companion (`apps/mobile/`)
 
-Requires Flutter 3.29+ / Dart 3.7+ to develop or test from source. Pre-built signed APKs and Windows binaries are published under [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.80.0) and [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.80.0).
+Requires Flutter 3.29+ / Dart 3.7+ to develop or test from source. Pre-built signed APKs and Windows binaries are published under [GitHub Releases](https://github.com/SemO2077/AI-NetController/releases/tag/v0.90.0) and [GitLab Releases](https://gitlab.com/ryu-group7483245/ai-netcontroller/-/releases/v0.90.0).
 
 ```bash
 cd apps/mobile
@@ -123,7 +126,7 @@ AI-NetController/
 ├── .github/                    # GitHub Actions CI/Release workflows, Dependabot & templates
 ├── .gitlab/                    # GitLab issue/MR templates
 ├── .gitlab-ci.yml              # GitLab CI/CD pipeline
-├── PATCH_NOTES.md              # v0.80.0 (Beta 0.80.00) changelog
+├── PATCH_NOTES.md              # v0.90.0 (Beta 0.90.00) changelog
 └── package.json                # Node scripts & version metadata
 ```
 
@@ -134,7 +137,7 @@ AI-NetController/
 - [Setup & Pairing Guide](docs/SETUP_GUIDE.md)
 - [Compilation & Release Packaging Guide](docs/COMPILATION_GUIDE.md)
 - [Contributing Guide](CONTRIBUTING.md)
-- [v0.80.0 Release Notes](PATCH_NOTES.md)
+- [v0.90.0 Release Notes](PATCH_NOTES.md)
 
 ## License
 

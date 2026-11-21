@@ -15,6 +15,7 @@ Security & Architecture Hardening:
 import asyncio
 import ctypes
 from ctypes import wintypes
+import functools
 import hashlib
 import hmac
 import io
@@ -31,6 +32,7 @@ import struct
 import sys
 import threading
 import time
+import types
 import zlib
 import base64
 import ipaddress
@@ -86,6 +88,19 @@ except ImportError:
     TJPF_BGRX = 3
     TJSAMP_420 = 2
     TJFLAG_FASTDCT = 2048
+
+dxcam = None
+bettercam = None
+if platform.system() == "Windows" and os.environ.get("AI_HEADLESS") != "1":
+    try:
+        import dxcam  # type: ignore[no-redef]
+    except Exception:
+        dxcam = None
+    if dxcam is None:
+        try:
+            import bettercam  # type: ignore[no-redef]
+        except Exception:
+            bettercam = None
 
 try:
     from zeroconf import IPVersion, ServiceInfo
@@ -279,6 +294,12 @@ except ImportError:
         build_server_ssl_context = None  # type: ignore[assignment]
         compute_cert_fingerprint = None  # type: ignore[assignment]
 
+# Guard sys.stdout / sys.stderr in PyInstaller console=False (windowed) builds
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 # Configure logging with high-performance minimal formatter
 logging.basicConfig(
     level=logging.INFO,
@@ -314,6 +335,7 @@ OP_VIEWPORT_RESIZE = 0x0A # 10: Viewport Bounds Negotiation
 OP_LLM_STREAM = 0x0B      # 11: Local LLM Chunk Stream
 OP_FILE_TRANSFER = 0x0C   # 12: Chunked Zero-Trust File Transfer
 OP_DISPLAY_ENUM = 0x0D    # 13: Multi-Monitor Display Enumeration & Switching
+OP_FRAME_ACK = 0x0E       # 14: Client Frame Decode ACK (Backpressure Credit)
 OP_FRAME_SYNC = 0xED      # 237: Keyframe / Stream Resynchronization Request
 OP_ERR = 0xEE             # 238: Structured Error Packet
 
@@ -397,6 +419,217 @@ if platform.system() == "Windows":
             ("biClrUsed", wintypes.DWORD),
             ("biClrImportant", wintypes.DWORD),
         ]
+
+_WIN_USER32_INPUT_BOUND = False
+_SM_XVIRTUALSCREEN = 76
+_SM_YVIRTUALSCREEN = 77
+_SM_CXVIRTUALSCREEN = 78
+_SM_CYVIRTUALSCREEN = 79
+_MOUSEEVENTF_MOVE = 0x0001
+_MOUSEEVENTF_LEFTDOWN = 0x0002
+_MOUSEEVENTF_LEFTUP = 0x0004
+_MOUSEEVENTF_RIGHTDOWN = 0x0008
+_MOUSEEVENTF_RIGHTUP = 0x0010
+_MOUSEEVENTF_MIDDLEDOWN = 0x0020
+_MOUSEEVENTF_MIDDLEUP = 0x0040
+_MOUSEEVENTF_WHEEL = 0x0800
+_MOUSEEVENTF_HWHEEL = 0x1000
+_MOUSEEVENTF_VIRTUALDESK = 0x4000
+_MOUSEEVENTF_ABSOLUTE = 0x8000
+_WIN_MOUSE_BUTTON_FLAGS = {
+    "left": (_MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP),
+    "right": (_MOUSEEVENTF_RIGHTDOWN, _MOUSEEVENTF_RIGHTUP),
+    "middle": (_MOUSEEVENTF_MIDDLEDOWN, _MOUSEEVENTF_MIDDLEUP),
+}
+
+
+def _should_use_win32_sendinput() -> bool:
+    """Uses Win32 SendInput only on real Windows sessions when pyautogui/ctypes are not mocked."""
+    if platform.system() != "Windows":
+        return False
+    if os.environ.get("AI_HEADLESS") == "1":
+        return False
+    if pyautogui is None or not isinstance(pyautogui, types.ModuleType) or type(pyautogui) is not types.ModuleType:
+        return False
+    if getattr(pyautogui, "__name__", "") != "pyautogui":
+        return False
+    if type(getattr(pyautogui, "moveTo", None)) is not types.FunctionType:
+        return False
+    if type(ctypes) is not types.ModuleType:
+        return False
+    return True
+
+
+def _ensure_win32_sendinput():
+    global _WIN_USER32_INPUT_BOUND
+    u32 = ctypes.windll.user32
+    if not _WIN_USER32_INPUT_BOUND:
+        u32.SendInput.argtypes = [wintypes.UINT, ctypes.c_void_p, ctypes.c_int]
+        u32.SendInput.restype = wintypes.UINT
+        u32.GetSystemMetrics.argtypes = [ctypes.c_int]
+        u32.GetSystemMetrics.restype = ctypes.c_int
+        _WIN_USER32_INPUT_BOUND = True
+    return u32
+
+
+def _win32_virtual_desktop_coords(x: int, y: int) -> Tuple[int, int]:
+    u32 = _ensure_win32_sendinput()
+    vx = int(u32.GetSystemMetrics(_SM_XVIRTUALSCREEN))
+    vy = int(u32.GetSystemMetrics(_SM_YVIRTUALSCREEN))
+    vw = int(u32.GetSystemMetrics(_SM_CXVIRTUALSCREEN))
+    vh = int(u32.GetSystemMetrics(_SM_CYVIRTUALSCREEN))
+    if vw <= 0:
+        vw = max(1, int(u32.GetSystemMetrics(0)))
+    if vh <= 0:
+        vh = max(1, int(u32.GetSystemMetrics(1)))
+    nx = max(0, min(65535, ((int(x) - vx) * 65536 + vw - 1) // max(1, vw)))
+    ny = max(0, min(65535, ((int(y) - vy) * 65536 + vh - 1) // max(1, vh)))
+    return nx, ny
+
+
+def _win32_send_mouse_events(events: List[Tuple[int, int, int, int]]) -> bool:
+    if platform.system() != "Windows" or not events:
+        return False
+    try:
+        u32 = _ensure_win32_sendinput()
+        arr = (_WIN_INPUT * len(events))(
+            *(
+                _WIN_INPUT(
+                    type=0,
+                    u=_WIN_INPUT_UNION(
+                        mi=_WIN_MOUSEINPUT(
+                            dx=int(dx),
+                            dy=int(dy),
+                            mouseData=int(data) & 0xFFFFFFFF,
+                            dwFlags=int(flags),
+                            time=0,
+                            dwExtraInfo=0,
+                        )
+                    ),
+                )
+                for dx, dy, data, flags in events
+            )
+        )
+        sent = int(u32.SendInput(len(events), ctypes.byref(arr), ctypes.sizeof(_WIN_INPUT)))
+        return sent == len(events)
+    except Exception:
+        return False
+
+
+def _win32_mouse_move_abs(x: int, y: int) -> bool:
+    try:
+        nx, ny = _win32_virtual_desktop_coords(x, y)
+        return _win32_send_mouse_events([
+            (nx, ny, 0, _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK)
+        ])
+    except Exception:
+        return False
+
+
+def _win32_mouse_button_abs(x: int, y: int, button: str = "left", down: bool = True) -> bool:
+    try:
+        down_flag, up_flag = _WIN_MOUSE_BUTTON_FLAGS.get(button, _WIN_MOUSE_BUTTON_FLAGS["left"])
+        nx, ny = _win32_virtual_desktop_coords(x, y)
+        btn_flag = down_flag if down else up_flag
+        return _win32_send_mouse_events([
+            (nx, ny, 0, _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK | btn_flag)
+        ])
+    except Exception:
+        return False
+
+
+def _win32_mouse_click_abs(x: int, y: int, button: str = "left", double: bool = False) -> bool:
+    try:
+        is_double = bool(double or button == "double")
+        btn_name = "left" if is_double else button
+        down_flag, up_flag = _WIN_MOUSE_BUTTON_FLAGS.get(btn_name, _WIN_MOUSE_BUTTON_FLAGS["left"])
+        nx, ny = _win32_virtual_desktop_coords(x, y)
+        abs_move = _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK
+        events = [
+            (nx, ny, 0, abs_move | down_flag),
+            (nx, ny, 0, up_flag),
+        ]
+        if is_double:
+            events.extend([
+                (nx, ny, 0, down_flag),
+                (nx, ny, 0, up_flag),
+            ])
+        return _win32_send_mouse_events(events)
+    except Exception:
+        return False
+
+
+def _win32_mouse_click_current(button: str = "left", double: bool = False) -> bool:
+    try:
+        is_double = bool(double or button == "double")
+        btn_name = "left" if is_double else button
+        down_flag, up_flag = _WIN_MOUSE_BUTTON_FLAGS.get(btn_name, _WIN_MOUSE_BUTTON_FLAGS["left"])
+        events = [(0, 0, 0, down_flag), (0, 0, 0, up_flag)]
+        if is_double:
+            events.extend([(0, 0, 0, down_flag), (0, 0, 0, up_flag)])
+        return _win32_send_mouse_events(events)
+    except Exception:
+        return False
+
+
+def _win32_mouse_button_current(button: str = "left", down: bool = True) -> bool:
+    try:
+        down_flag, up_flag = _WIN_MOUSE_BUTTON_FLAGS.get(button, _WIN_MOUSE_BUTTON_FLAGS["left"])
+        return _win32_send_mouse_events([(0, 0, 0, down_flag if down else up_flag)])
+    except Exception:
+        return False
+
+
+def _win32_mouse_move_rel(dx: int, dy: int) -> bool:
+    try:
+        return _win32_send_mouse_events([(int(dx), int(dy), 0, _MOUSEEVENTF_MOVE)])
+    except Exception:
+        return False
+
+
+def _win32_mouse_scroll(dy: int, dx: int = 0, x: Optional[int] = None, y: Optional[int] = None) -> bool:
+    try:
+        events: List[Tuple[int, int, int, int]] = []
+        if x is not None and y is not None:
+            nx, ny = _win32_virtual_desktop_coords(x, y)
+            events.append((nx, ny, 0, _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK))
+        if int(dy) != 0:
+            events.append((0, 0, int(dy) & 0xFFFFFFFF, _MOUSEEVENTF_WHEEL))
+        if int(dx) != 0:
+            events.append((0, 0, int(dx) & 0xFFFFFFFF, _MOUSEEVENTF_HWHEEL))
+        if not events:
+            return True
+        return _win32_send_mouse_events(events)
+    except Exception:
+        return False
+
+
+def _discover_turbojpeg() -> Any:
+    """Probes bundled and standard Windows libjpeg-turbo paths before default discovery."""
+    if TurboJPEG is None:
+        return None
+    candidates: List[str] = []
+    env_dll = os.environ.get("TURBOJPEG_DLL", "").strip()
+    if env_dll:
+        candidates.append(env_dll)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "turbojpeg.dll"))
+    if getattr(sys, "executable", None):
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "turbojpeg.dll"))
+    candidates.append(os.path.join(_AGENT_DIR, "turbojpeg.dll"))
+    if platform.system() == "Windows":
+        candidates.extend([
+            r"C:\libjpeg-turbo64\bin\turbojpeg.dll",
+            r"C:\libjpeg-turbo\bin\turbojpeg.dll",
+        ])
+    for cand in candidates:
+        if cand and os.path.isfile(cand):
+            try:
+                return TurboJPEG(cand)
+            except Exception:
+                pass
+    return TurboJPEG()
 
 
 # =====================================================================
@@ -1027,7 +1260,7 @@ class AdaptiveScreenPipeline:
         self.turbo = None
         if TurboJPEG:
             try:
-                self.turbo = TurboJPEG()
+                self.turbo = _discover_turbojpeg()
                 logger.info("Hardware TurboJPEG acceleration loaded successfully")
             except Exception as e:
                 logger.info(f"TurboJPEG fallback to Pillow: {e}")
@@ -1037,6 +1270,114 @@ class AdaptiveScreenPipeline:
         self._worker_scts = []
         self._sct_lock = threading.Lock()
         self._resize_cache: Optional[Tuple[Tuple[int, int, int, int], Any]] = None
+        self._snapshot_resize_cache: Optional[Tuple[Tuple[int, int, int, int], Any]] = None
+        self._work_bgra: Optional[Any] = None
+        self._scaled_bgrx: Optional[Any] = None
+        self._snapshot_bgrx: Optional[Any] = None
+        self._dxgi_cam: Any = None
+        self._dxgi_mon_idx: Optional[int] = None
+        self._dxgi_disabled: bool = False
+        self._last_dxgi_arr: Optional[Any] = None
+
+    def _is_real_mss(self) -> bool:
+        if mss is None or type(mss) is not types.ModuleType:
+            return False
+        local_sct = getattr(self._local, "sct", None)
+        if local_sct is not None and type(local_sct).__module__.split(".")[0] != "mss":
+            return False
+        get_mss_fn = getattr(self, "_get_mss", None)
+        if getattr(get_mss_fn, "__func__", None) is not AdaptiveScreenPipeline._get_mss:
+            return False
+        return True
+
+    def _can_use_dxgi(self) -> bool:
+        if platform.system() != "Windows" or os.environ.get("AI_HEADLESS") == "1":
+            return False
+        if self._dxgi_disabled or np is None or (dxcam is None and bettercam is None):
+            return False
+        return self._is_real_mss()
+
+    def _release_dxgi_cam(self) -> None:
+        cam = self._dxgi_cam
+        self._dxgi_cam = None
+        self._dxgi_mon_idx = None
+        self._last_dxgi_arr = None
+        if cam is not None:
+            for m_name in ("stop", "release", "close"):
+                fn = getattr(cam, m_name, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+
+    def _grab_dxgi_frame(self, monitor_idx: int, expected_w: int, expected_h: int) -> Optional[Any]:
+        if not self._can_use_dxgi():
+            return None
+        dxgi_mod = dxcam if dxcam is not None else bettercam
+        if dxgi_mod is None:
+            return None
+        try:
+            if self._dxgi_cam is None or self._dxgi_mon_idx != monitor_idx:
+                self._release_dxgi_cam()
+                out_idx = max(0, int(monitor_idx) - 1)
+                self._dxgi_cam = dxgi_mod.create(output_idx=out_idx, output_color="BGRA")
+                self._dxgi_mon_idx = monitor_idx
+            arr = self._dxgi_cam.grab() if self._dxgi_cam is not None else None
+            if arr is None:
+                if (
+                    self._last_dxgi_arr is not None
+                    and (expected_w <= 0 or expected_h <= 0 or self._last_dxgi_arr.shape[:2] == (expected_h, expected_w))
+                ):
+                    return self._last_dxgi_arr
+                return None
+            if not isinstance(arr, np.ndarray) or arr.ndim != 3 or arr.shape[2] != 4:
+                return None
+            if expected_w > 0 and expected_h > 0 and arr.shape[:2] != (expected_h, expected_w):
+                self._release_dxgi_cam()
+                self._dxgi_disabled = True
+                return None
+            if not arr.flags.c_contiguous:
+                arr = np.ascontiguousarray(arr)
+            self._last_dxgi_arr = arr
+            return arr
+        except Exception as exc:
+            logger.debug("DXGI capture fallback to MSS: %s", exc)
+            self._release_dxgi_cam()
+            self._dxgi_disabled = True
+            return None
+
+    def _grab_raw_monitor_frame(self) -> Optional[Tuple[Optional[Any], Optional[Any], int, int, int, int]]:
+        """Captures active monitor via DXGI Desktop Duplication when available, else thread-local MSS."""
+        sct = self._get_mss()
+        monitors = getattr(sct, "monitors", None) if sct is not None else None
+        idx = self.monitor_index
+        monitor = None
+        mon_left, mon_top, exp_w, exp_h = 0, 0, 0, 0
+        if monitors:
+            idx = self.monitor_index if 1 <= self.monitor_index < len(monitors) else (1 if len(monitors) > 1 else 0)
+            monitor = monitors[idx]
+            mon_left = int(monitor.get("left", 0))
+            mon_top = int(monitor.get("top", 0))
+            exp_w = int(monitor.get("width", 0))
+            exp_h = int(monitor.get("height", 0))
+
+        dxgi_arr = self._grab_dxgi_frame(idx, exp_w, exp_h)
+        if dxgi_arr is not None:
+            h_shot, w_shot = int(dxgi_arr.shape[0]), int(dxgi_arr.shape[1])
+            return dxgi_arr, None, mon_left, mon_top, w_shot, h_shot
+
+        if not sct or not monitors or monitor is None:
+            return None
+        raw_shot = sct.grab(monitor)
+        return (
+            None,
+            raw_shot,
+            int(monitor.get("left", 0)),
+            int(monitor.get("top", 0)),
+            int(raw_shot.width),
+            int(raw_shot.height),
+        )
 
     def _get_mss(self):
         """Returns thread-local mss instance."""
@@ -1089,7 +1430,7 @@ class AdaptiveScreenPipeline:
             return
         self.target_fps = clamped
 
-    def _encode_jpeg_pillow(self, img: Any) -> bytes:
+    def _encode_jpeg_pillow(self, img: Any, quality: Optional[int] = None) -> bytes:
         buf = getattr(self._local, 'bio_buf', None)
         if buf is None:
             buf = io.BytesIO()
@@ -1097,25 +1438,215 @@ class AdaptiveScreenPipeline:
         else:
             buf.seek(0)
             buf.truncate(0)
-        img.save(buf, format="JPEG", quality=self.jpeg_quality, optimize=False, subsampling=2)
+        q = self.jpeg_quality if quality is None else max(15, min(95, int(quality)))
+        img.save(buf, format="JPEG", quality=q, optimize=False, subsampling=2)
         return buf.getvalue()
+
+    def _downscale_and_encode_bgrx(
+        self,
+        buf_attr: str,
+        cache_attr: str,
+        img32: Optional[Any],
+        raw_shot: Optional[Any],
+        w_shot: int,
+        h_shot: int,
+        out_w: int,
+        out_h: int,
+        scaled_cursor: Optional[Tuple[int, int, int]],
+        quality: int,
+        prefer_bilinear_pil: bool = False,
+    ) -> Optional[bytes]:
+        """Downsamples directly into a reusable contiguous (out_h, out_w, 4) BGRX buffer and encodes."""
+        if np is not None and img32 is not None:
+            cache_key = (w_shot, h_shot, out_w, out_h)
+            cached = getattr(self, cache_attr, None)
+            if cached is not None and cached[0] == cache_key and isinstance(cached[1], tuple):
+                yi_col, xi = cached[1]
+            else:
+                yi_col = ((np.arange(out_h, dtype=np.intp) * h_shot) // out_h)[:, None]
+                xi = (np.arange(out_w, dtype=np.intp) * w_shot) // out_w
+                setattr(self, cache_attr, (cache_key, (yi_col, xi)))
+
+            bgrx_buf = getattr(self, buf_attr, None)
+            if bgrx_buf is None or bgrx_buf.shape != (out_h, out_w, 4):
+                bgrx_buf = np.empty((out_h, out_w, 4), dtype=np.uint8)
+                setattr(self, buf_attr, bgrx_buf)
+
+            scaled_u32 = bgrx_buf.view(np.uint32).reshape((out_h, out_w))
+            scaled_u32[:] = img32[yi_col, xi]
+
+            if scaled_cursor is not None:
+                self.cursor_compositor.composite_on_numpy(
+                    bgrx_buf,
+                    scaled_cursor[0],
+                    scaled_cursor[1],
+                    hcursor=scaled_cursor[2],
+                    is_bgr=True,
+                )
+
+            if self.turbo is not None:
+                try:
+                    return self.turbo.encode(
+                        bgrx_buf,
+                        quality=quality,
+                        pixel_format=TJPF_BGRX,
+                        jpeg_subsample=TJSAMP_420,
+                        flags=TJFLAG_FASTDCT,
+                    )
+                except Exception as tj_err:
+                    logger.debug(f"TurboJPEG resized encode fallback to Pillow: {tj_err}")
+
+            if Image is not None:
+                img = Image.frombuffer("RGB", (out_w, out_h), bgrx_buf, "raw", "BGRX", 0, 1)
+                return self._encode_jpeg_pillow(img, quality=quality)
+
+        if Image is not None and raw_shot is not None:
+            img = Image.frombuffer("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX", 0, 1)
+            resample = Image.Resampling.BILINEAR if prefer_bilinear_pil else Image.Resampling.NEAREST
+            img = img.resize((out_w, out_h), resample)
+            if scaled_cursor is not None:
+                self.cursor_compositor.composite_on_pil(
+                    img,
+                    scaled_cursor[0],
+                    scaled_cursor[1],
+                    hcursor=scaled_cursor[2],
+                )
+            return self._encode_jpeg_pillow(img, quality=quality)
+
+        return None
+
+    def _encode_full_res_frame(
+        self,
+        buf_attr: str,
+        dxgi_arr: Optional[Any],
+        raw_shot: Optional[Any],
+        bgra_arr: Optional[Any],
+        w_shot: int,
+        h_shot: int,
+        cursor_local: Optional[Tuple[int, int, int]],
+        quality: int,
+    ) -> Optional[bytes]:
+        """Encodes a 1:1 native frame using zero-copy / preallocated buffer with TurboJPEG or Pillow."""
+        cursor_composited_in_work = False
+        work_buf = None
+        if self.turbo is not None and bgra_arr is not None:
+            try:
+                encode_arr = bgra_arr
+                if cursor_local is not None:
+                    work_buf = getattr(self, buf_attr, None)
+                    if work_buf is None or work_buf.shape != (h_shot, w_shot, 4):
+                        work_buf = np.empty((h_shot, w_shot, 4), dtype=np.uint8)
+                        setattr(self, buf_attr, work_buf)
+                    np.copyto(work_buf, bgra_arr)
+                    self.cursor_compositor.composite_on_numpy(
+                        work_buf,
+                        cursor_local[0],
+                        cursor_local[1],
+                        hcursor=cursor_local[2],
+                        is_bgr=True,
+                    )
+                    encode_arr = work_buf
+                    cursor_composited_in_work = True
+                return self.turbo.encode(
+                    encode_arr,
+                    quality=quality,
+                    pixel_format=TJPF_BGRX,
+                    jpeg_subsample=TJSAMP_420,
+                    flags=TJFLAG_FASTDCT,
+                )
+            except Exception as tj_err:
+                logger.debug(f"TurboJPEG encode fallback to Pillow: {tj_err}")
+        if Image is not None:
+            if cursor_composited_in_work and work_buf is not None:
+                img = Image.frombuffer("RGB", (w_shot, h_shot), work_buf, "raw", "BGRX", 0, 1)
+            else:
+                raw_src = bgra_arr if dxgi_arr is not None else raw_shot.bgra
+                img = Image.frombuffer("RGB", (w_shot, h_shot), raw_src, "raw", "BGRX", 0, 1)
+                if cursor_local is not None:
+                    self.cursor_compositor.composite_on_pil(
+                        img,
+                        cursor_local[0],
+                        cursor_local[1],
+                        hcursor=cursor_local[2],
+                    )
+            return self._encode_jpeg_pillow(img, quality=quality)
+        return None
+
+    def capture_snapshot(self, max_width: int = 640, max_height: int = 360, quality: int = 55) -> Optional[bytes]:
+        """
+        Grabs and downscales a lightweight preview JPEG cleanly without mutating
+        active stream target_res, jpeg_quality, or delta hash state.
+        """
+        max_w = max(160, min(1920, int(max_width)))
+        max_h = max(90, min(1080, int(max_height)))
+        snap_quality = max(15, min(95, int(quality)))
+        try:
+            grabbed = self._grab_raw_monitor_frame()
+            if grabbed is None:
+                return None
+            dxgi_arr, raw_shot, mon_left, mon_top, w_shot, h_shot = grabbed
+
+            cursor_local: Optional[Tuple[int, int, int]] = None
+            if self.show_cursor:
+                cursor_local = self.cursor_compositor.get_monitor_cursor(mon_left, mon_top, w_shot, h_shot)
+
+            img32 = None
+            bgra_arr = None
+            if dxgi_arr is not None and np is not None:
+                bgra_arr = dxgi_arr
+                img32 = dxgi_arr.view(np.uint32).reshape((h_shot, w_shot))
+            elif raw_shot is not None and np is not None:
+                bgra_arr = np.frombuffer(raw_shot.raw, dtype=np.uint8).reshape((h_shot, w_shot, 4))
+                img32 = np.frombuffer(raw_shot.bgra, dtype=np.uint32).reshape((h_shot, w_shot))
+
+            scale = min(1.0, max_w / max(1, w_shot), max_h / max(1, h_shot))
+            out_w = max(1, int(round(w_shot * scale)))
+            out_h = max(1, int(round(h_shot * scale)))
+            if out_w < w_shot or out_h < h_shot:
+                scaled_cursor: Optional[Tuple[int, int, int]] = None
+                if cursor_local is not None:
+                    cx = max(0, min(out_w - 1, int(round(cursor_local[0] * out_w / max(1, w_shot)))))
+                    cy = max(0, min(out_h - 1, int(round(cursor_local[1] * out_h / max(1, h_shot)))))
+                    scaled_cursor = (cx, cy, cursor_local[2])
+                return self._downscale_and_encode_bgrx(
+                    "_snapshot_bgrx",
+                    "_snapshot_resize_cache",
+                    img32,
+                    raw_shot,
+                    w_shot,
+                    h_shot,
+                    out_w,
+                    out_h,
+                    scaled_cursor,
+                    snap_quality,
+                    prefer_bilinear_pil=True,
+                )
+
+            return self._encode_full_res_frame(
+                "_snapshot_bgrx",
+                dxgi_arr,
+                raw_shot,
+                bgra_arr,
+                w_shot,
+                h_shot,
+                cursor_local,
+                snap_quality,
+            )
+        except Exception as e:
+            logger.debug(f"Snapshot capture error: {e}")
+            self._reset_local_mss()
+            return None
 
     def _grab_and_compress(self) -> Tuple[Optional[bytes], bool]:
         """Worker function running inside ThreadPoolExecutor."""
-        sct = self._get_mss()
-        if not sct or not getattr(sct, "monitors", None):
-            return None, False
-
         force_send = self.force_keyframe
         try:
-            idx = self.monitor_index if 1 <= self.monitor_index < len(sct.monitors) else (1 if len(sct.monitors) > 1 else 0)
-            monitor = sct.monitors[idx]
-            raw_shot = sct.grab(monitor)
+            grabbed = self._grab_raw_monitor_frame()
+            if grabbed is None:
+                return None, False
+            dxgi_arr, raw_shot, mon_left, mon_top, w_shot, h_shot = grabbed
             self._consecutive_grab_errors = 0
 
-            mon_left = int(monitor.get("left", 0))
-            mon_top = int(monitor.get("top", 0))
-            w_shot, h_shot = int(raw_shot.width), int(raw_shot.height)
             self.last_capture_rect = (
                 mon_left,
                 mon_top,
@@ -1138,8 +1669,14 @@ class AdaptiveScreenPipeline:
 
             # Fast 2D strided multi-channel frame delta detector (covers all 4 BGRA bytes across full viewport)
             img32 = None
+            bgra_arr = None
             if np is not None:
-                img32 = np.frombuffer(raw_shot.bgra, dtype=np.uint32).reshape((h_shot, w_shot))
+                if dxgi_arr is not None:
+                    bgra_arr = dxgi_arr
+                    img32 = dxgi_arr.view(np.uint32).reshape((h_shot, w_shot))
+                else:
+                    bgra_arr = np.frombuffer(raw_shot.raw, dtype=np.uint8).reshape((h_shot, w_shot, 4))
+                    img32 = np.frombuffer(raw_shot.bgra, dtype=np.uint32).reshape((h_shot, w_shot))
                 sample_bytes = img32[::8, ::16].tobytes()
                 current_hash = zlib.adler32(sample_bytes)
                 frame_unchanged = (
@@ -1189,93 +1726,36 @@ class AdaptiveScreenPipeline:
                         cx = max(0, min(out_w - 1, int(round(cursor_local[0] * out_w / max(1, w_shot)))))
                         cy = max(0, min(out_h - 1, int(round(cursor_local[1] * out_h / max(1, h_shot)))))
                         scaled_cursor = (cx, cy, cursor_local[2])
-                    if self.turbo is not None and np is not None and img32 is not None:
-                        cache_key = (w_shot, h_shot, out_w, out_h)
-                        cached = self._resize_cache
-                        if cached is not None and cached[0] == cache_key and isinstance(cached[1], tuple):
-                            yi_col, xi = cached[1]
-                        else:
-                            yi_col = ((np.arange(out_h, dtype=np.intp) * h_shot) // out_h)[:, None]
-                            xi = (np.arange(out_w, dtype=np.intp) * w_shot) // out_w
-                            self._resize_cache = (cache_key, (yi_col, xi))
-                        sub_bgra = img32[yi_col, xi].view(np.uint8).reshape((out_h, out_w, 4))
-                        scaled_rgb = np.ascontiguousarray(sub_bgra[:, :, 2::-1])
-                        if scaled_cursor is not None:
-                            self.cursor_compositor.composite_on_numpy(
-                                scaled_rgb,
-                                scaled_cursor[0],
-                                scaled_cursor[1],
-                                hcursor=scaled_cursor[2],
-                                is_bgr=False,
-                            )
-                        try:
-                            encoded = self.turbo.encode(
-                                scaled_rgb,
-                                quality=self.jpeg_quality,
-                                pixel_format=TJPF_RGB,
-                                jpeg_subsample=TJSAMP_420,
-                                flags=TJFLAG_FASTDCT,
-                            )
-                            self._last_encoded_frame = encoded
-                            return encoded, frame_unchanged
-                        except Exception as tj_err:
-                            logger.debug(f"TurboJPEG resized encode fallback to Pillow: {tj_err}")
-                    if Image is not None:
-                        img = Image.frombuffer("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX", 0, 1)
-                        resample = (
-                            Image.Resampling.BILINEAR
-                            if (force_send or frame_unchanged)
-                            else Image.Resampling.NEAREST
-                        )
-                        img = img.resize((out_w, out_h), resample)
-                        if scaled_cursor is not None:
-                            self.cursor_compositor.composite_on_pil(
-                                img,
-                                scaled_cursor[0],
-                                scaled_cursor[1],
-                                hcursor=scaled_cursor[2],
-                            )
-                        encoded = self._encode_jpeg_pillow(img)
+                    encoded = self._downscale_and_encode_bgrx(
+                        "_scaled_bgrx",
+                        "_resize_cache",
+                        img32,
+                        raw_shot,
+                        w_shot,
+                        h_shot,
+                        out_w,
+                        out_h,
+                        scaled_cursor,
+                        self.jpeg_quality,
+                        prefer_bilinear_pil=bool(force_send or frame_unchanged),
+                    )
+                    if encoded is not None:
                         self._last_encoded_frame = encoded
                         return encoded, frame_unchanged
 
             self.last_stream_size = (w_shot, h_shot)
 
-            # Zero-copy encode for 1:1 desktop resolution via libjpeg-turbo SIMD
-            if self.turbo:
-                try:
-                    if np is not None:
-                        bgra_arr = np.frombuffer(raw_shot.raw, dtype=np.uint8).reshape((h_shot, w_shot, 4))
-                        if cursor_local is not None:
-                            bgra_arr = bgra_arr.copy()
-                            self.cursor_compositor.composite_on_numpy(
-                                bgra_arr,
-                                cursor_local[0],
-                                cursor_local[1],
-                                hcursor=cursor_local[2],
-                                is_bgr=True,
-                            )
-                        encoded = self.turbo.encode(
-                            bgra_arr,
-                            quality=self.jpeg_quality,
-                            pixel_format=TJPF_BGRX,
-                            jpeg_subsample=TJSAMP_420,
-                            flags=TJFLAG_FASTDCT,
-                        )
-                        self._last_encoded_frame = encoded
-                        return encoded, frame_unchanged
-                except Exception as tj_err:
-                    logger.debug(f"TurboJPEG encode fallback to Pillow: {tj_err}")
-            if Image is not None:
-                img = Image.frombuffer("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX", 0, 1)
-                if cursor_local is not None:
-                    self.cursor_compositor.composite_on_pil(
-                        img,
-                        cursor_local[0],
-                        cursor_local[1],
-                        hcursor=cursor_local[2],
-                    )
-                encoded = self._encode_jpeg_pillow(img)
+            encoded = self._encode_full_res_frame(
+                "_work_bgra",
+                dxgi_arr,
+                raw_shot,
+                bgra_arr,
+                w_shot,
+                h_shot,
+                cursor_local,
+                self.jpeg_quality,
+            )
+            if encoded is not None:
                 self._last_encoded_frame = encoded
                 return encoded, frame_unchanged
             return None, False
@@ -1283,6 +1763,7 @@ class AdaptiveScreenPipeline:
             self._consecutive_grab_errors += 1
             if force_send:
                 self.force_keyframe = True
+            self._release_dxgi_cam()
             self._reset_local_mss()
             now_mono = time.monotonic()
             if (now_mono - self._last_capture_err_log) >= 15.0:
@@ -1306,11 +1787,15 @@ class AdaptiveScreenPipeline:
 
     def close(self):
         """Shuts down executor and releases thread-local resources cleanly (idempotent)."""
-        if not self.is_running and not self._worker_scts:
+        if not self.is_running and not self._worker_scts and self._dxgi_cam is None:
             return
         self.is_running = False
-        # Wait for in-flight grab tasks to finish before closing mss handles
+        # Wait for in-flight grab tasks to finish before closing mss / dxgi handles
         self.executor.shutdown(wait=True, cancel_futures=True)
+        self._release_dxgi_cam()
+        self._work_bgra = None
+        self._scaled_bgrx = None
+        self._snapshot_bgrx = None
         try:
             with self._sct_lock:
                 for sct in self._worker_scts:
@@ -1445,6 +1930,18 @@ class HostAgentDaemon:
         self._client_auth_ts: Dict[WebSocketServerProtocol, float] = {}
         self._client_frame_inflight: Set[WebSocketServerProtocol] = set()
         self._client_frame_timeouts: Dict[WebSocketServerProtocol, int] = {}
+        self._client_ack_capable: Set[WebSocketServerProtocol] = set()
+        self._client_unacked_frames: Dict[WebSocketServerProtocol, int] = {}
+        self._client_last_frame_sent_ts: Dict[WebSocketServerProtocol, float] = {}
+        self._client_credit_waiting: Set[WebSocketServerProtocol] = set()
+        self._crypto_executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="CryptoTx"
+        )
+        self._input_executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="InputInject"
+        )
+        self._latest_abs_move: Optional[Tuple[int, int]] = None
+        self._abs_move_drain_task: Optional[asyncio.Task] = None
         self._pair_init_attempts: Dict[str, List[float]] = {}
         self._ollama_sem: Optional[asyncio.Semaphore] = None
         self._lock_check_cache: Tuple[float, bool] = (0.0, False)
@@ -2033,7 +2530,7 @@ class HostAgentDaemon:
         self.loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
         self._stream_wake_event = asyncio.Event()
-        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.80.0)...")
+        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.90.0)...")
 
         # Initialize TLS BEFORE mDNS so TXT records accurately advertise tls=1 and full SHA-256 fp
         ssl_ctx = None
@@ -2095,8 +2592,8 @@ class HostAgentDaemon:
             )
             logger.info(f"Stdlib RFC-6455 WebSocket Listener active on {proto}://{self.host}:{self.port}")
 
-        await self._start_mdns()
         await self._start_udp_discovery()
+        await self._start_mdns()
         self._start_system_tray()
 
         self._background_tasks.append(asyncio.create_task(self._telemetry_heartbeat_loop()))
@@ -2321,7 +2818,7 @@ class HostAgentDaemon:
 
             desc = {
                 'os': platform.system(),
-                'version': '0.80.0',
+                'version': '0.90.0',
                 'ai': 'ollama-bridge',
                 'hostname': hostname,
                 'tls': '1' if self.tls_fingerprint else '0',
@@ -2474,7 +2971,7 @@ class HostAgentDaemon:
                 pystray.MenuItem("Open Control Center", _show_gui, default=True),
                 pystray.MenuItem("Install / Customize PC Features...", _install),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("AI NetController Beta 0.80.00", lambda: None, enabled=False),
+                pystray.MenuItem("AI NetController Beta 0.90.00", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Port: {self.port} (WebSocket)", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
@@ -3234,6 +3731,9 @@ class HostAgentDaemon:
                 elif opcode == OP_DISPLAY_ENUM:
                     await self._process_display_enum(ws, payload, seq)
 
+                elif opcode == OP_FRAME_ACK:
+                    await self._process_frame_ack(ws, payload)
+
                 elif opcode == OP_FRAME_SYNC:
                     self._trigger_keyframe_resync(ws)
 
@@ -3271,6 +3771,10 @@ class HostAgentDaemon:
             self._client_auth_ts.pop(ws, None)
             self._client_frame_inflight.discard(ws)
             self._client_frame_timeouts.pop(ws, None)
+            self._client_ack_capable.discard(ws)
+            self._client_unacked_frames.pop(ws, None)
+            self._client_last_frame_sent_ts.pop(ws, None)
+            self._client_credit_waiting.discard(ws)
             self._stream_paused_clients.discard(ws)
             was_authenticated = ws in self.authenticated_clients
             self.clients.discard(ws)
@@ -3339,6 +3843,35 @@ class HostAgentDaemon:
             await self._send_error(ws, "Invalid HMAC signature")
             await ws.close(code=1008, reason="Authentication failed")
 
+    async def _process_frame_ack(self, ws: WebSocketServerProtocol, payload: bytes) -> None:
+        """Processes OP_FRAME_ACK (0x0E) decode acknowledgments and releases frame credits."""
+        acked_seq: Optional[int] = None
+        try:
+            stripped = payload.lstrip()
+            if len(payload) == 4 and not stripped.startswith(b'{'):
+                acked_seq = struct.unpack("!I", payload)[0]
+            elif stripped.startswith(b'{'):
+                data = json.loads(stripped.decode("utf-8"))
+                if isinstance(data, dict) and "ack_seq" in data:
+                    raw_val = data.get("ack_seq")
+                    if raw_val is not None and not isinstance(raw_val, bool):
+                        f_val = float(raw_val)
+                        if math.isfinite(f_val) and f_val >= 0:
+                            acked_seq = int(round(f_val))
+        except Exception:
+            acked_seq = None
+
+        if acked_seq is None:
+            return
+
+        self._client_ack_capable.add(ws)
+        prev_unacked = self._client_unacked_frames.get(ws, 0)
+        self._client_unacked_frames[ws] = max(0, prev_unacked - 1)
+        was_waiting = ws in self._client_credit_waiting
+        self._client_credit_waiting.discard(ws)
+        if prev_unacked >= 2 or was_waiting:
+            self._wake_stream()
+
     def _trigger_keyframe_resync(self, ws: Optional[WebSocketServerProtocol] = None) -> None:
         if ws is not None:
             self._clients_need_keyframe.add(ws)
@@ -3359,7 +3892,23 @@ class HostAgentDaemon:
                 # AAD binds the exact outer 12-byte wire header (wire_len = len(payload) + 12B nonce + 16B Poly1305 tag)
                 wire_len = len(payload) + 28
                 aad = _HEADER_STRUCT.pack(MAGIC, opcode, 0x02, seq, wire_len)
-                enc_payload, _ = vault.encrypt_frame(payload, aad=aad)
+                crypto_exec = self._crypto_executor
+                if (
+                    opcode == OP_FRAME
+                    and len(payload) >= 16384
+                    and crypto_exec is not None
+                    and self.is_running
+                ):
+                    loop = asyncio.get_running_loop()
+                    try:
+                        enc_payload, _ = await loop.run_in_executor(
+                            crypto_exec,
+                            functools.partial(vault.encrypt_frame, payload, aad=aad),
+                        )
+                    except RuntimeError:
+                        enc_payload, _ = vault.encrypt_frame(payload, aad=aad)
+                else:
+                    enc_payload, _ = vault.encrypt_frame(payload, aad=aad)
                 await ws.send(pack_packet(opcode, enc_payload, seq=seq, flags=0x02))
                 return
             await ws.send(pack_packet(opcode, payload, seq=seq))
@@ -3857,6 +4406,50 @@ class HostAgentDaemon:
             max(top, min(top + max_dy, my)),
         )
 
+    async def _run_on_input_executor(self, fn: Any, *args: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        executor = self._input_executor
+        if executor is not None and self.is_running:
+            try:
+                return await loop.run_in_executor(executor, fn, *args)
+            except RuntimeError:
+                pass
+        return await loop.run_in_executor(None, fn, *args)
+
+    @staticmethod
+    def _execute_abs_move(tx: int, ty: int) -> None:
+        if _should_use_win32_sendinput():
+            if _win32_mouse_move_abs(tx, ty):
+                return
+        if pyautogui is not None:
+            pyautogui.moveTo(tx, ty, _pause=False)
+
+    async def _drain_abs_moves(self) -> None:
+        try:
+            while self._latest_abs_move is not None and self.is_running:
+                coords = self._latest_abs_move
+                self._latest_abs_move = None
+                tx, ty = coords
+                await self._run_on_input_executor(self._execute_abs_move, tx, ty)
+                self._wake_stream()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("Abs move drain error: %s", exc)
+
+    async def _flush_pending_abs_move(self) -> None:
+        task = self._abs_move_drain_task
+        if task is not None and not task.done():
+            try:
+                await task
+            except Exception:
+                pass
+        pending = self._latest_abs_move
+        if pending is not None:
+            self._latest_abs_move = None
+            await self._run_on_input_executor(self._execute_abs_move, pending[0], pending[1])
+            self._wake_stream()
+
     async def _process_virtual_input(self, payload: bytes, ws: Optional[WebSocketServerProtocol] = None):
         """
         Opcode 0x08: Remote Virtual Input (Touchscreen Absolute, Trackpad Relative, Scroll & Keystrokes).
@@ -3871,8 +4464,6 @@ class HostAgentDaemon:
             if not pyautogui:
                 logger.debug("pyautogui not installed - input forwarding skipped")
                 return
-
-            loop = asyncio.get_running_loop()
 
             def _finite_float(val: Any, lo: float = -5000.0, hi: float = 5000.0, default: float = 0.0) -> float:
                 v = float(val)
@@ -3905,37 +4496,61 @@ class HostAgentDaemon:
                     btn = "right" if btn_code == 2 else ("middle" if btn_code == 3 else "left")
 
                     def _exec_bin_rel_input():
+                        use_w32 = _should_use_win32_sendinput()
                         if event_type == 1:
+                            if use_w32 and _win32_mouse_move_rel(dx, dy):
+                                return
                             pyautogui.moveRel(dx, dy, _pause=False)
                         elif event_type == 2:
+                            if use_w32 and _win32_mouse_click_current(btn, double=(btn_code == 4)):
+                                return
                             if btn_code == 4:
                                 pyautogui.doubleClick(_pause=False)
                             else:
                                 pyautogui.click(button=btn, _pause=False)
                         elif event_type == 3:
+                            if use_w32 and _win32_mouse_scroll(dy):
+                                return
                             pyautogui.scroll(dy, _pause=False)
                         elif event_type == 7:
+                            if use_w32 and _win32_mouse_scroll(dy, dx=dx):
+                                return
                             if dy != 0:
                                 pyautogui.scroll(dy, _pause=False)
                             if dx != 0:
                                 _exec_hscroll(dx)
 
-                    await loop.run_in_executor(None, _exec_bin_rel_input)
+                    await self._run_on_input_executor(_exec_bin_rel_input)
                     self._wake_stream()
                     return
 
                 if event_type in (4, 5, 6):
                     _, ux, uy, btn_code = struct.unpack("!BHHB", payload)
                     tx, ty = self._map_normalized_xy(ux / 65535.0, uy / 65535.0)
+                    if event_type == 4:
+                        if ws is not None:
+                            self._latest_abs_move = (tx, ty)
+                            if self._abs_move_drain_task is None or self._abs_move_drain_task.done():
+                                self._abs_move_drain_task = self._track_task(self._drain_abs_moves())
+                            return
+                        await self._run_on_input_executor(self._execute_abs_move, tx, ty)
+                        self._wake_stream()
+                        return
+
+                    if ws is not None:
+                        await self._flush_pending_abs_move()
 
                     def _exec_bin_abs_input():
-                        if event_type == 4:
-                            pyautogui.moveTo(tx, ty, _pause=False)
-                        elif event_type == 5:
+                        use_w32 = _should_use_win32_sendinput()
+                        if event_type == 5:
                             if btn_code == 4:
+                                if use_w32 and _win32_mouse_click_abs(tx, ty, button="left", double=True):
+                                    return
                                 pyautogui.doubleClick(x=tx, y=ty, _pause=False)
                             else:
                                 btn = "right" if btn_code == 2 else ("middle" if btn_code == 3 else "left")
+                                if use_w32 and _win32_mouse_click_abs(tx, ty, button=btn, double=False):
+                                    return
                                 pyautogui.click(x=tx, y=ty, button=btn, _pause=False)
                         elif event_type == 6:
                             _btn_state_map = {
@@ -3949,12 +4564,14 @@ class HostAgentDaemon:
                             spec = _btn_state_map.get(btn_code)
                             if spec is not None:
                                 state_dir, btn_name = spec
+                                if use_w32 and _win32_mouse_button_abs(tx, ty, button=btn_name, down=(state_dir == "down")):
+                                    return
                                 if state_dir == "down":
                                     pyautogui.mouseDown(x=tx, y=ty, button=btn_name, _pause=False)
                                 else:
                                     pyautogui.mouseUp(x=tx, y=ty, button=btn_name, _pause=False)
 
-                    await loop.run_in_executor(None, _exec_bin_abs_input)
+                    await self._run_on_input_executor(_exec_bin_abs_input)
                     self._wake_stream()
                     return
 
@@ -4041,6 +4658,7 @@ class HostAgentDaemon:
                 pyautogui.write(text_val, _pause=False)
 
             def _exec_json_input():
+                use_w32 = _should_use_win32_sendinput()
                 if action == "media":
                     if not self.audio_control_enabled:
                         logger.info("Media command via OP_INPUT ignored: disabled by host audio policy.")
@@ -4052,80 +4670,103 @@ class HostAgentDaemon:
                 if action == "move":
                     if "nx" in data and "ny" in data and data.get("nx") is not None and data.get("ny") is not None:
                         tx, ty = self._map_normalized_xy(data["nx"], data["ny"])
-                        pyautogui.moveTo(tx, ty, _pause=False)
+                        if not (use_w32 and _win32_mouse_move_abs(tx, ty)):
+                            pyautogui.moveTo(tx, ty, _pause=False)
                     elif "x" in data and "y" in data and "dx" not in data and "dy" not in data:
                         x, y = _map_xy(data.get("x", 0), data.get("y", 0))
-                        pyautogui.moveTo(x, y, _pause=False)
+                        if not (use_w32 and _win32_mouse_move_abs(x, y)):
+                            pyautogui.moveTo(x, y, _pause=False)
                     else:
                         dx = _finite_float(data.get("dx", 0))
                         dy = _finite_float(data.get("dy", 0))
-                        pyautogui.moveRel(dx, dy, _pause=False)
+                        if not (use_w32 and _win32_mouse_move_rel(int(round(dx)), int(round(dy)))):
+                            pyautogui.moveRel(dx, dy, _pause=False)
                 elif action in ("move_to", "mouse_move"):
                     target = _resolve_target_xy()
                     x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
-                    pyautogui.moveTo(x, y, _pause=False)
+                    if not (use_w32 and _win32_mouse_move_abs(x, y)):
+                        pyautogui.moveTo(x, y, _pause=False)
                 elif action in ("click", "mouse_click"):
                     raw_btn = str(data.get("button", "left")).lower()
                     btn = raw_btn if raw_btn in ("left", "right", "middle", "double") else "left"
                     target = _resolve_target_xy()
-                    if btn == "double":
-                        if target is not None:
+                    if target is not None:
+                        if use_w32 and _win32_mouse_click_abs(target[0], target[1], button=btn, double=(btn == "double")):
+                            return
+                        if btn == "double":
                             pyautogui.doubleClick(x=target[0], y=target[1], _pause=False)
                         else:
-                            pyautogui.doubleClick(_pause=False)
-                    elif target is not None:
-                        pyautogui.click(x=target[0], y=target[1], button=btn, _pause=False)
+                            pyautogui.click(x=target[0], y=target[1], button=btn, _pause=False)
                     else:
-                        pyautogui.click(button=btn, _pause=False)
+                        if use_w32 and _win32_mouse_click_current(btn, double=(btn == "double")):
+                            return
+                        if btn == "double":
+                            pyautogui.doubleClick(_pause=False)
+                        else:
+                            pyautogui.click(button=btn, _pause=False)
                 elif action == "click_at":
                     target = _resolve_target_xy()
                     x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
                     raw_btn = str(data.get("button", "left")).lower()
                     if raw_btn == "double":
-                        pyautogui.doubleClick(x=x, y=y, _pause=False)
+                        if not (use_w32 and _win32_mouse_click_abs(x, y, button="left", double=True)):
+                            pyautogui.doubleClick(x=x, y=y, _pause=False)
                     else:
                         btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
-                        pyautogui.click(x=x, y=y, button=btn, _pause=False)
+                        if not (use_w32 and _win32_mouse_click_abs(x, y, button=btn, double=False)):
+                            pyautogui.click(x=x, y=y, button=btn, _pause=False)
                 elif action in ("double_click", "mouse_double_click", "dblclick"):
                     target = _resolve_target_xy()
                     if target is not None:
-                        pyautogui.doubleClick(x=target[0], y=target[1], _pause=False)
+                        if not (use_w32 and _win32_mouse_click_abs(target[0], target[1], button="left", double=True)):
+                            pyautogui.doubleClick(x=target[0], y=target[1], _pause=False)
                     else:
-                        pyautogui.doubleClick(_pause=False)
+                        if not (use_w32 and _win32_mouse_click_current("left", double=True)):
+                            pyautogui.doubleClick(_pause=False)
                 elif action == "double_click_at":
                     target = _resolve_target_xy()
                     x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
-                    pyautogui.doubleClick(x=x, y=y, _pause=False)
+                    if not (use_w32 and _win32_mouse_click_abs(x, y, button="left", double=True)):
+                        pyautogui.doubleClick(x=x, y=y, _pause=False)
                 elif action == "right_click_at":
                     target = _resolve_target_xy()
                     x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
-                    pyautogui.rightClick(x=x, y=y, _pause=False)
+                    if not (use_w32 and _win32_mouse_click_abs(x, y, button="right", double=False)):
+                        pyautogui.rightClick(x=x, y=y, _pause=False)
                 elif action in ("mouse_down", "mousedown"):
                     raw_btn = str(data.get("button", "left")).lower()
                     btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
                     target = _resolve_target_xy()
                     if target is not None:
-                        pyautogui.mouseDown(x=target[0], y=target[1], button=btn, _pause=False)
+                        if not (use_w32 and _win32_mouse_button_abs(target[0], target[1], button=btn, down=True)):
+                            pyautogui.mouseDown(x=target[0], y=target[1], button=btn, _pause=False)
                     else:
-                        pyautogui.mouseDown(button=btn, _pause=False)
+                        if not (use_w32 and _win32_mouse_button_current(button=btn, down=True)):
+                            pyautogui.mouseDown(button=btn, _pause=False)
                 elif action in ("mouse_up", "mouseup"):
                     raw_btn = str(data.get("button", "left")).lower()
                     btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
                     target = _resolve_target_xy()
                     if target is not None:
-                        pyautogui.mouseUp(x=target[0], y=target[1], button=btn, _pause=False)
+                        if not (use_w32 and _win32_mouse_button_abs(target[0], target[1], button=btn, down=False)):
+                            pyautogui.mouseUp(x=target[0], y=target[1], button=btn, _pause=False)
                     else:
-                        pyautogui.mouseUp(button=btn, _pause=False)
+                        if not (use_w32 and _win32_mouse_button_current(button=btn, down=False)):
+                            pyautogui.mouseUp(button=btn, _pause=False)
                 elif action in ("scroll", "mouse_scroll"):
                     dy = _clamp_int(data.get("dy", 0))
                     dx = _clamp_int(data.get("dx", 0)) if "dx" in data and data.get("dx") is not None else 0
                     target = _resolve_target_xy()
                     if target is not None:
+                        if use_w32 and _win32_mouse_scroll(dy, dx=dx, x=target[0], y=target[1]):
+                            return
                         if dy != 0 or dx == 0:
                             pyautogui.scroll(dy, x=target[0], y=target[1], _pause=False)
                         if dx != 0:
                             _exec_hscroll(dx, target[0], target[1])
                     else:
+                        if use_w32 and _win32_mouse_scroll(dy, dx=dx):
+                            return
                         if dy != 0 or dx == 0:
                             pyautogui.scroll(dy, _pause=False)
                         if dx != 0:
@@ -4135,6 +4776,8 @@ class HostAgentDaemon:
                     x, y = target if target is not None else _map_xy(data.get("x", 0), data.get("y", 0))
                     dy = _clamp_int(data.get("dy", 0))
                     dx = _clamp_int(data.get("dx", 0)) if "dx" in data and data.get("dx") is not None else 0
+                    if use_w32 and _win32_mouse_scroll(dy, dx=dx, x=x, y=y):
+                        return
                     if dy != 0 or dx == 0:
                         pyautogui.scroll(dy, x=x, y=y, _pause=False)
                     if dx != 0:
@@ -4143,8 +4786,12 @@ class HostAgentDaemon:
                     dx = _clamp_int(data.get("dx", 0))
                     target = _resolve_target_xy()
                     if target is not None:
+                        if use_w32 and _win32_mouse_scroll(0, dx=dx, x=target[0], y=target[1]):
+                            return
                         _exec_hscroll(dx, target[0], target[1])
                     else:
+                        if use_w32 and _win32_mouse_scroll(0, dx=dx):
+                            return
                         _exec_hscroll(dx)
                 elif action in ("type", "type_text", "keyboard_type"):
                     raw_text = str(data.get("text", ""))[:2048]
@@ -4189,7 +4836,9 @@ class HostAgentDaemon:
                     if keys and (not valid_keyset or all(k in valid_keyset for k in keys)):
                         pyautogui.hotkey(*keys, _pause=False)
 
-            await loop.run_in_executor(None, _exec_json_input)
+            if ws is not None:
+                await self._flush_pending_abs_move()
+            await self._run_on_input_executor(_exec_json_input)
             self._wake_stream()
         except Exception as e:
             logger.debug("Virtual input injection error: %s", e)
@@ -4305,7 +4954,8 @@ class HostAgentDaemon:
     async def _process_viewport_resize(self, payload: bytes, ws: Optional[WebSocketServerProtocol] = None):
         """
         Handles 0x0A (VIEWPORT_RESIZE) control packet cleanly for both JSON and 8-byte binary structs.
-        Supports optional per-client `stream_enabled`, `quality`, `monitor`, and `fps` tuning.
+        Supports optional per-client `stream_enabled`, `frame_ack`, `max_width`/`max_height`,
+        `snapshot`, `quality`, `monitor`, and `fps` tuning.
         """
         def _safe_int(val: Any) -> Optional[int]:
             if val is None or isinstance(val, bool):
@@ -4325,11 +4975,73 @@ class HostAgentDaemon:
                 if not isinstance(data, dict):
                     return
                 needs_keyframe = False
+                if ws is not None and "frame_ack" in data:
+                    if bool(data["frame_ack"]):
+                        self._client_ack_capable.add(ws)
+                    else:
+                        self._client_ack_capable.discard(ws)
+                        self._client_unacked_frames.pop(ws, None)
+                        self._client_last_frame_sent_ts.pop(ws, None)
+                        self._client_credit_waiting.discard(ws)
+
+                if ws is not None and "stream_enabled" in data:
+                    if bool(data["stream_enabled"]):
+                        self._stream_paused_clients.discard(ws)
+                        self.screen_pipeline.force_keyframe = True
+                        needs_keyframe = True
+                    else:
+                        self._stream_paused_clients.add(ws)
+                        needs_keyframe = False
+
+                if bool(data.get("snapshot")):
+                    # Snapshot requests must never mutate active stream target_res or global quality.
+                    max_w = _safe_int(data.get("max_width")) or _safe_int(data.get("width")) or 640
+                    max_h = _safe_int(data.get("max_height")) or _safe_int(data.get("height")) or 360
+                    snap_q = _safe_int(data.get("quality"))
+                    if snap_q is None:
+                        snap_q = 55
+                    max_w = max(160, min(1920, max_w))
+                    max_h = max(90, min(1080, max_h))
+                    snap_q = max(15, min(95, snap_q))
+                    if ws is not None:
+                        loop = asyncio.get_running_loop()
+                        snap_exec = self.screen_pipeline.executor if self.screen_pipeline.is_running else None
+                        try:
+                            snap_bytes = await loop.run_in_executor(
+                                snap_exec,
+                                self.screen_pipeline.capture_snapshot,
+                                max_w,
+                                max_h,
+                                snap_q,
+                            )
+                        except RuntimeError:
+                            snap_bytes = self.screen_pipeline.capture_snapshot(max_w, max_h, snap_q)
+                        if snap_bytes:
+                            await self._send_encrypted_or_plain(ws, OP_FRAME, snap_bytes)
+                    if needs_keyframe and ws is not None and ws not in self._stream_paused_clients:
+                        self._clients_need_keyframe.add(ws)
+                        self._clients_explicit_sync.add(ws)
+                        self._wake_stream()
+                    return
+
+                cap_w = _safe_int(data.get("max_width"))
+                cap_h = _safe_int(data.get("max_height"))
                 if "width" in data and "height" in data:
                     req_w = _safe_int(data.get("width"))
                     req_h = _safe_int(data.get("height"))
                     if req_w is not None and req_h is not None and req_w > 0 and req_h > 0:
+                        if cap_w is not None and cap_w > 0:
+                            req_w = min(req_w, cap_w)
+                        if cap_h is not None and cap_h > 0:
+                            req_h = min(req_h, cap_h)
                         self.screen_pipeline.set_target_resolution(req_w, req_h)
+                        needs_keyframe = True
+                elif (cap_w is not None and cap_w > 0) or (cap_h is not None and cap_h > 0):
+                    cur_w, cur_h = self.screen_pipeline.target_res
+                    next_w = min(cur_w, cap_w) if (cap_w is not None and cap_w > 0) else cur_w
+                    next_h = min(cur_h, cap_h) if (cap_h is not None and cap_h > 0) else cur_h
+                    if (next_w, next_h) != (cur_w, cur_h):
+                        self.screen_pipeline.set_target_resolution(next_w, next_h)
                         needs_keyframe = True
                 if "quality" in data:
                     req_q = _safe_int(data.get("quality"))
@@ -4347,14 +5059,8 @@ class HostAgentDaemon:
                         clamped_fps = max(5, min(60, req_fps))
                         self.target_fps = clamped_fps
                         self.screen_pipeline.set_target_fps(clamped_fps)
-                if ws is not None and "stream_enabled" in data:
-                    if bool(data["stream_enabled"]):
-                        self._stream_paused_clients.discard(ws)
-                        self.screen_pipeline.force_keyframe = True
-                        needs_keyframe = True
-                    else:
-                        self._stream_paused_clients.add(ws)
-                        needs_keyframe = False
+                if ws is not None and "stream_enabled" in data and not bool(data["stream_enabled"]):
+                    needs_keyframe = False
                 if needs_keyframe and ws is not None and ws not in self._stream_paused_clients:
                     self._clients_need_keyframe.add(ws)
                     self._clients_explicit_sync.add(ws)
@@ -4519,11 +5225,17 @@ class HostAgentDaemon:
             strikes = self._client_frame_timeouts.get(ws, 0) + 1
             self._client_frame_timeouts[ws] = strikes
             self._clients_need_keyframe.add(ws)
+            if ws in self._client_ack_capable:
+                self._client_unacked_frames[ws] = max(0, self._client_unacked_frames.get(ws, 0) - 1)
             if strikes >= 4:
                 self._client_frame_timeouts.pop(ws, None)
                 self.authenticated_clients.discard(ws)
                 self._clients_need_keyframe.discard(ws)
                 self._clients_explicit_sync.discard(ws)
+                self._client_ack_capable.discard(ws)
+                self._client_unacked_frames.pop(ws, None)
+                self._client_last_frame_sent_ts.pop(ws, None)
+                self._client_credit_waiting.discard(ws)
                 try:
                     self._track_task(ws.close(code=1001, reason="Video stream send timeout"))
                 except Exception:
@@ -4533,24 +5245,54 @@ class HostAgentDaemon:
             self.authenticated_clients.discard(ws)
             self._clients_need_keyframe.discard(ws)
             self._clients_explicit_sync.discard(ws)
+            self._client_ack_capable.discard(ws)
+            self._client_unacked_frames.pop(ws, None)
+            self._client_last_frame_sent_ts.pop(ws, None)
+            self._client_credit_waiting.discard(ws)
         finally:
             self._client_frame_inflight.discard(ws)
 
     def _dispatch_frame_to_clients(self, targets: List[WebSocketServerProtocol], frame_bytes: bytes) -> int:
         dispatched = 0
+        now_mono = time.monotonic()
         for ws in targets:
             if ws in self._client_frame_inflight:
                 continue
             tr = getattr(ws, "transport", None)
             if tr is not None and hasattr(tr, "get_write_buffer_size"):
                 try:
-                    if tr.get_write_buffer_size() > 262_144:
+                    if tr.get_write_buffer_size() > 131_072:
                         continue
                 except Exception:
                     pass
+            if ws in self._client_ack_capable:
+                unacked = self._client_unacked_frames.get(ws, 0)
+                if unacked >= 2:
+                    last_sent = self._client_last_frame_sent_ts.get(ws, 0.0)
+                    if (now_mono - last_sent) < 0.35:
+                        self._client_credit_waiting.add(ws)
+                        self._clients_need_keyframe.add(ws)
+                        continue
+                    # Stall timeout >= 0.35s: reset unacked count so stream never deadlocks
+                    self._client_unacked_frames[ws] = 0
+                self._client_credit_waiting.discard(ws)
+                self._client_unacked_frames[ws] = self._client_unacked_frames.get(ws, 0) + 1
+                self._client_last_frame_sent_ts[ws] = now_mono
             self._track_task(self._send_frame_guarded(ws, frame_bytes))
             dispatched += 1
         return dispatched
+
+    @staticmethod
+    def _compute_stream_sleep_dt(consecutive_static: int, target_fps: int, work_dt: float) -> float:
+        """Computes progressive backoff sleep preserving full FPS for active burst (<10 static frames)."""
+        clamped_fps = max(5, min(60, int(target_fps or 60)))
+        if consecutive_static < 10:
+            return max(0.001, (1.0 / float(clamped_fps)) - max(0.0, float(work_dt)))
+        if consecutive_static <= 20:
+            return 0.04
+        if consecutive_static <= 40:
+            return 0.08
+        return 0.16
 
     async def _screen_stream_loop(self):
         """Streams desktop frames at deadline-paced adaptive framerates with lock-pause, backpressure, and idle wake."""
@@ -4627,20 +5369,21 @@ class HostAgentDaemon:
                         self.screen_pipeline.force_keyframe = True
                         self.screen_pipeline.consecutive_static = 0
 
-            if self.screen_pipeline.consecutive_static >= 1:
-                ev = self._stream_wake_event
-                if ev is not None:
-                    if not ev.is_set():
-                        try:
-                            await asyncio.wait_for(ev.wait(), timeout=0.45)
-                        except asyncio.TimeoutError:
-                            pass
-                else:
-                    await asyncio.sleep(0.45)
+            target_fps = max(5, min(60, int(getattr(self.screen_pipeline, "target_fps", self.target_fps) or 60)))
+            work_dt = time.perf_counter() - frame_start
+            sleep_dt = self._compute_stream_sleep_dt(
+                self.screen_pipeline.consecutive_static,
+                target_fps,
+                work_dt,
+            )
+            ev = self._stream_wake_event
+            if ev is not None:
+                if not ev.is_set():
+                    try:
+                        await asyncio.wait_for(ev.wait(), timeout=sleep_dt)
+                    except asyncio.TimeoutError:
+                        pass
             else:
-                target_fps = max(5, min(60, int(getattr(self.screen_pipeline, "target_fps", self.target_fps) or 60)))
-                work_dt = time.perf_counter() - frame_start
-                sleep_dt = max(0.001, (1.0 / float(target_fps)) - work_dt)
                 await asyncio.sleep(sleep_dt)
 
     def _get_primary_mac(self) -> str:
@@ -4724,7 +5467,7 @@ class HostAgentDaemon:
                     "disk_percent": disk_pct,
                     "capture_fps": self.capture_fps,
                     "os": self._os_name,
-                    "version": "0.80.0",
+                    "version": "0.90.0",
                     "protocol": "CST/3.0",
                     "local_ip": self._get_local_ip(),
                     "mac": self._get_primary_mac(),
@@ -4809,16 +5552,30 @@ class HostAgentDaemon:
         self._client_auth_ts.clear()
         self._client_frame_inflight.clear()
         self._client_frame_timeouts.clear()
+        self._client_ack_capable.clear()
+        self._client_unacked_frames.clear()
+        self._client_last_frame_sent_ts.clear()
+        self._client_credit_waiting.clear()
+        self._latest_abs_move = None
+        self._abs_move_drain_task = None
         self._stream_paused_clients.clear()
         self.active_nonces.clear()
 
     def _close_sync_handles(self) -> None:
-        """Releases file writers, screen encoder thread pools, monitor handles, and job objects."""
+        """Releases file writers, executors, screen encoder thread pools, monitor handles, and job objects."""
         if self.file_writer:
             try:
                 self.file_writer.abort_all()
             except Exception:
                 pass
+        for attr in ("_crypto_executor", "_input_executor"):
+            exec_obj = getattr(self, attr, None)
+            if exec_obj is not None:
+                setattr(self, attr, None)
+                try:
+                    exec_obj.shutdown(wait=True, cancel_futures=True)
+                except Exception:
+                    pass
         self.screen_pipeline.close()
         if self.multi_monitor:
             try:

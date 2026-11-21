@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [v0.90.0] (Beta 0.90.00) - 2026-11-22
+
+### Performance, Screen Streaming & Low-Latency Input
+- **Zero-Copy Strided `BGRX` Capture, Dynamic `TurboJPEG` Discovery & Credit-Based `OP_FRAME_ACK` (`0x0E`) (`agent/agent.py`, `agent/multi_monitor_streamer.py`)**:
+  - Added optional Windows DXGI Desktop Duplication (`dxcam` / `bettercam`) with thread-local `mss` fallback, reusable `(out_h, out_w, 4)` `TJPF_BGRX` downscale and `_work_bgra` cursor buffers, automatic `libturbojpeg` DLL discovery (`_discover_turbojpeg`), progressive static-frame backoff (`16ms..160ms` max), and off-loop `CryptoTx` thread-pool ChaCha20-Poly1305 encryption for `OP_FRAME >= 16 KiB`.
+  - Added a 2-frame credit window (`OP_FRAME_ACK = 0x0E` with `frame_seq` and `decode_time_us`, `350ms` stall reset, and `128 KiB` socket write-buffer cap) and snapshot-only `OP_VIEWPORT_RESIZE` (`"snapshot": true`) capture (`capture_snapshot`).
+- **Direct Win32 `SendInput` & Coalesced 60Hz Binary Touch Injection (`agent/agent.py`)**:
+  - Added `InputInject` direct `ctypes.windll.user32.SendInput` mouse/keyboard synthesis on Windows (`0..65535` normalized coordinates across single and virtual multi-monitor desktops) and non-blocking latest-move coalescing for binary pointer move frames (`event_type == 4`).
+- **Mobile Background Decrypt Isolate & Immediate Frame Ack (`apps/mobile/lib/services/frame_decrypt_isolate.dart`, `host_connection_client.dart`, `zero_gc_video_pipeline.dart`)**:
+  - Offloaded `CST_ECDH_V2` ChaCha20-Poly1305 decryption and `PacketReassembler` chunk stitching for `OP_FRAME` packets onto a persistent Dart background `Isolate` (`FrameDecryptIsolate`), removed socket pause/resume stalls on video frames, decoupled `OP_FRAME_ACK` / `OP_FRAME_SYNC` to fire immediately after `ui.instantiateImageCodec`, and raised touch move dispatch to `60Hz` (`16ms`).
+
+### Mobile Fleet Cards, Direct Touchscreen & Command-Deck Settings Redesign
+- **Direct Touchscreen Control, Immersive Fullscreen & Remote Keyboard Bar (`apps/mobile/lib/ui/touch_coordinate_mapper.dart`, `touch_feedback_overlay.dart`, `fullscreen_stream_page.dart`, `remote_keyboard_bar.dart`, `viewport_stream_widget.dart`)**:
+  - Added Direct Touchscreen absolute coordinate mapping (pinch-to-zoom `1.0x–4.0x`, 2-finger pan/scroll, tap, double-tap, long-press right-click with radial hold ring, 1-finger drag) alongside relative Trackpad mode, `FullscreenStreamPage` with auto-collapsing translucent HUD, and slide-up `RemoteKeyboardBar` with sticky modifiers (`Ctrl`, `Alt`, `Shift`, `Win`), `F1–F12`, arrows, and system shortcut macros.
+- **Expandable Home Screen PC Cards with Live Screen Preview (`apps/mobile/lib/ui/responsive_device_card.dart`, `host_snapshot_preview.dart`, `main.dart`)**:
+  - Added single-accordion inline card expansion on the Fleet Home screen revealing an auto-refreshing 16:9 `HostSnapshotPreview` (1-tap launch to `FullscreenStreamPage`, manual refresh, offline WoL fallback), detailed CPU/RAM/IP/MAC/OS/Latency telemetry grid, and quick action pills.
+- **Ground-Up Settings Command-Deck Hub, Dedicated WoL Hub & Unified Activity History (`apps/mobile/lib/ui/settings_command_deck.dart`, `wol_hub_panel.dart`, `activity_history_panel.dart`, `services/history_store.dart`, `services/app_preferences.dart`)**:
+  - Rebuilt the Settings tab into a 5-section Command-Deck (`Quick Ops`, `Remote & Stream`, `Security & AI`, `Appearance`, `System & Backup`) with instant search, `"Modified"` badges, per-section reset, and **Appearance Studio** positioned in the lower half (`Section 4`).
+  - Added `WolHubPanel` (saved target picker, custom MAC/Broadcast/Port dispatch, Wake All Fleet, persistent Recent WoL Dispatches with 1-tap Re-Send), Hive-backed `ActivityHistoryPanel` (`All`, `Commands`, `Connections`, `WoL` with 1-tap Re-Run/Copy & JSON export), advanced touch/stream preferences, and secret-stripping JSON Config Backup & Restore.
+
+### Discovery, Tooling & Build Hardening
+- **Zero-Config LAN UDP Discovery (`CST_DISCOVER_V1`) & 5-Stage Connection Diagnostics (`agent/agent.py`, `apps/mobile/lib/services/lan_discovery_service.dart`, `ui/connection_diagnostics_sheet.dart`)**:
+  - Added UDP 8766 broadcast/unicast discovery responder and interactive 5-stage connection diagnostics sheet.
+- **1-Click Builders, Live Verification Orchestrator & Flutter 3.50 / AGP 9.3.1 Built-in Kotlin Compliance (`BUILD_APK.bat`, `BUILD_EXE.bat`, `LAUNCH_AND_TEST.bat`, `scripts/launch_and_test_daemon.py`, `apps/mobile/android/`)**:
+  - Added root convenience builders and live E2E daemon verification script, removed imperative `id "kotlin-android"` from `apps/mobile/android/app/build.gradle`, replaced legacy `home_widget` plugin with native `MethodChannel("com.cst.autonomouslan/home_widget")` in `MainActivity.kt`, and hardened `--no-pub` release plugin registrant regeneration.
+- **Unified `v0.90.0` (`Beta 0.90.00` / `0.90.00`) Release**: Bumped all Node/Web (`0.90.0`), Python Host Agent (`0.90.0` / PE & MSIX `0.90.0.0`), Flutter/Android (`0.90.0+900` / `versionCode 900` / `0.90.00-beta`), documentation, and release artifacts/manifests.
+
+---
+
 ## [v0.80.0] (Beta 0.80.00) - 2026-11-19
 
 ### Security & Hardening

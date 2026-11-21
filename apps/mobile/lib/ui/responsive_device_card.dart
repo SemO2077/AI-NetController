@@ -114,6 +114,24 @@ class ResponsiveDeviceCard extends StatefulWidget {
   final VoidCallback? onOpenFullscreen;
   final VoidCallback? onMoreActions;
 
+  // Expandable card telemetry, snapshot preview & quick actions
+  final bool isExpanded;
+  final VoidCallback? onToggleExpand;
+  final Widget? expandedPreview;
+  final String osName;
+  final int cpuCores;
+  final double ramUsedGb;
+  final double ramTotalGb;
+  final int diskUsage;
+  final int uptimeSec;
+  final int wsPort;
+  final bool viewOnlyMode;
+  final VoidCallback? onOpenTerminal;
+  final VoidCallback? onSyncClipboard;
+  final VoidCallback? onToggleMute;
+  final VoidCallback? onLockPc;
+  final VoidCallback? onOpenDiagnostics;
+
   const ResponsiveDeviceCard({
     super.key,
     required this.id,
@@ -133,6 +151,22 @@ class ResponsiveDeviceCard extends StatefulWidget {
     this.onOpenStream,
     this.onOpenFullscreen,
     this.onMoreActions,
+    this.isExpanded = false,
+    this.onToggleExpand,
+    this.expandedPreview,
+    this.osName = '',
+    this.cpuCores = 0,
+    this.ramUsedGb = 0.0,
+    this.ramTotalGb = 0.0,
+    this.diskUsage = 0,
+    this.uptimeSec = 0,
+    this.wsPort = 8765,
+    this.viewOnlyMode = false,
+    this.onOpenTerminal,
+    this.onSyncClipboard,
+    this.onToggleMute,
+    this.onLockPc,
+    this.onOpenDiagnostics,
   });
 
   @override
@@ -191,6 +225,24 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     return palette.warning;
   }
 
+  static String _formatGb(double gb) {
+    if ((gb - gb.roundToDouble()).abs() < 0.05) {
+      return gb.toStringAsFixed(0);
+    }
+    return gb.toStringAsFixed(1);
+  }
+
+  static String _formatUptime(int totalSeconds) {
+    if (totalSeconds <= 0) return '--';
+    final int days = totalSeconds ~/ 86400;
+    final int hours = (totalSeconds % 86400) ~/ 3600;
+    final int mins = (totalSeconds % 3600) ~/ 60;
+    if (days > 0) return '${days}d ${hours}h ${mins}m';
+    if (hours > 0) return '${hours}h ${mins}m';
+    if (mins > 0) return '${mins}m';
+    return '${totalSeconds}s';
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
@@ -201,6 +253,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
         disableAnim ? Duration.zero : const Duration(milliseconds: 240);
     final VoidCallback? openControlCallback =
         widget.onOpenFullscreen ?? widget.onOpenStream;
+    final VoidCallback? cardTapCallback = widget.onToggleExpand ?? widget.onTap;
     final String statusLabel = widget.connectionStatusLabel ??
         (isOnline ? 'Online' : 'Sleeping');
 
@@ -211,7 +264,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
           onTapDown: _onTapDown,
           onTapUp: _onTapUp,
           onTapCancel: _onTapCancel,
-          onTap: widget.onTap,
+          onTap: cardTapCallback,
           onLongPress: widget.onLongPress,
           child: ScaleTransition(
             scale: _scaleAnimation,
@@ -309,7 +362,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               ),
                             ),
                           ),
-                          SizedBox(width: isCompactCard ? 9 : 11),
+                          SizedBox(width: isCompactCard ? 8 : 11),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -338,7 +391,8 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                           ),
                           if (isOnline &&
                               openControlCallback != null &&
-                              !showFullOnlineCta)
+                              !showFullOnlineCta) ...[
+                            const SizedBox(width: 4),
                             _ActionOrbButton(
                               key: ValueKey(
                                 'device-card-touch-cta-${widget.id}',
@@ -347,10 +401,11 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               icon: Icons.touch_app_rounded,
                               color: palette.primary,
                               onPressed: openControlCallback,
-                            )
-                          else if (!isOnline &&
+                            ),
+                          ] else if (!isOnline &&
                               widget.onWakeOnLan != null &&
-                              !showFullOfflineCta)
+                              !showFullOfflineCta) ...[
+                            const SizedBox(width: 4),
                             _ActionOrbButton(
                               key: ValueKey('device-card-wol-cta-${widget.id}'),
                               tooltip: 'Send Wake-on-LAN Magic Packet',
@@ -358,6 +413,16 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               color: palette.warning,
                               onPressed: widget.onWakeOnLan!,
                             ),
+                          ],
+                          const SizedBox(width: 4),
+                          _ExpandChevronButton(
+                            key: ValueKey('device-card-expand-${widget.id}'),
+                            hostName: widget.name,
+                            isExpanded: widget.isExpanded,
+                            duration: animDuration,
+                            palette: palette,
+                            onPressed: cardTapCallback,
+                          ),
                           if (widget.onMoreActions != null) ...[
                             const SizedBox(width: 2),
                             IconButton(
@@ -367,9 +432,14 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                                 size: 18,
                                 color: palette.textSecondary,
                               ),
+                              style: IconButton.styleFrom(
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                minimumSize: const Size(26, 30),
+                                padding: EdgeInsets.zero,
+                              ),
                               constraints: const BoxConstraints(
-                                minWidth: 28,
-                                minHeight: 34,
+                                minWidth: 26,
+                                minHeight: 30,
                               ),
                               padding: EdgeInsets.zero,
                               onPressed: widget.onMoreActions,
@@ -440,6 +510,24 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                           onPressed: widget.onWakeOnLan!,
                         ),
                       ],
+                      AnimatedSize(
+                        duration: animDuration,
+                        curve: Curves.easeOutCubic,
+                        alignment: Alignment.topCenter,
+                        child: AnimatedOpacity(
+                          opacity: widget.isExpanded ? 1.0 : 0.0,
+                          duration: animDuration,
+                          curve: Curves.easeOutCubic,
+                          child: widget.isExpanded
+                              ? _buildExpandedDrawer(
+                                  context: context,
+                                  palette: palette,
+                                  isCompact: isCompactCard,
+                                  openControlCallback: openControlCallback,
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                      ),
                     ],
                   ),
                 );
@@ -449,6 +537,283 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
         ),
       ),
     );
+  }
+
+  Widget _buildExpandedDrawer({
+    required BuildContext context,
+    required CyberPalette palette,
+    required bool isCompact,
+    required VoidCallback? openControlCallback,
+  }) {
+    final List<Widget> quickActions = _buildQuickActionPills(
+      palette: palette,
+      openControlCallback: openControlCallback,
+    );
+
+    return Padding(
+      padding: EdgeInsets.only(top: isCompact ? 10.0 : 12.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            height: 1,
+            color: palette.dividerColor,
+          ),
+          SizedBox(height: isCompact ? 9.0 : 11.0),
+          if (widget.expandedPreview != null) ...[
+            widget.expandedPreview!,
+            SizedBox(height: isCompact ? 9.0 : 11.0),
+          ],
+          _buildTelemetryGrid(
+            context: context,
+            palette: palette,
+            isCompact: isCompact,
+          ),
+          if (quickActions.isNotEmpty) ...[
+            SizedBox(height: isCompact ? 9.0 : 11.0),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final double maxWidth = constraints.maxWidth.isFinite
+                    ? constraints.maxWidth
+                    : 260.0;
+                return Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: quickActions
+                      .map(
+                        (pill) => ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: maxWidth),
+                          child: pill,
+                        ),
+                      )
+                      .toList(growable: false),
+                );
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTelemetryGrid({
+    required BuildContext context,
+    required CyberPalette palette,
+    required bool isCompact,
+  }) {
+    final String osText =
+        widget.osName.trim().isNotEmpty ? widget.osName.trim() : 'Unknown OS';
+    final String cpuText = widget.cpuCores > 0
+        ? '${widget.cpuUsage}% • ${widget.cpuCores} cores'
+        : '${widget.cpuUsage}%';
+    final String ramText = widget.ramTotalGb > 0
+        ? '${_formatGb(widget.ramUsedGb)}/${_formatGb(widget.ramTotalGb)} GB (${widget.ramUsage}%)'
+        : '${widget.ramUsage}%';
+    final String diskText = '${widget.diskUsage}%';
+    final String uptimeText = _formatUptime(widget.uptimeSec);
+    final String trimmedMac = widget.mac.trim();
+    final String macText =
+        trimmedMac.isNotEmpty && trimmedMac != '00:00:00:00:00:00'
+            ? trimmedMac.toUpperCase()
+            : 'Not set';
+    final String endpointText = '${widget.ip}:${widget.wsPort}';
+    final String securityText = widget.useTls ? 'TLS+AEAD' : 'AEAD';
+    final String controlText = widget.viewOnlyMode ? 'View-Only' : 'Interactive';
+
+    return Container(
+      padding: EdgeInsets.all(isCompact ? 8.5 : 10.0),
+      decoration: BoxDecoration(
+        color: palette.isDaylight
+            ? Colors.white.withValues(alpha: 0.62)
+            : Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: palette.dividerColor),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final double maxWidth = constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : 240.0;
+          return Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _TelemetryMetricChip(
+                icon: Icons.desktop_windows_rounded,
+                label: 'OS',
+                value: osText,
+                accent: palette.primary,
+                maxWidth: maxWidth,
+              ),
+              _TelemetryMetricChip(
+                icon: Icons.memory_rounded,
+                label: 'CPU',
+                value: cpuText,
+                accent: widget.cpuUsage > 80 ? palette.accent : palette.primary,
+                maxWidth: maxWidth,
+              ),
+              _TelemetryMetricChip(
+                icon: Icons.developer_board_rounded,
+                label: 'RAM',
+                value: ramText,
+                accent:
+                    widget.ramUsage > 85 ? palette.warning : palette.secondary,
+                maxWidth: maxWidth,
+              ),
+              _TelemetryMetricChip(
+                icon: Icons.storage_rounded,
+                label: 'Disk',
+                value: diskText,
+                accent: widget.diskUsage > 90 ? palette.warning : palette.sky,
+                maxWidth: maxWidth,
+              ),
+              _TelemetryMetricChip(
+                icon: Icons.schedule_rounded,
+                label: 'Uptime',
+                value: uptimeText,
+                accent: palette.success,
+                maxWidth: maxWidth,
+              ),
+              _TelemetryMetricChip(
+                icon: Icons.router_rounded,
+                label: 'MAC',
+                value: macText,
+                accent: palette.textSecondary,
+                monospace: true,
+                maxWidth: maxWidth,
+              ),
+              _TelemetryMetricChip(
+                icon: Icons.lan_rounded,
+                label: 'Endpoint',
+                value: endpointText,
+                accent: palette.sky,
+                monospace: true,
+                maxWidth: maxWidth,
+              ),
+              _TelemetryMetricChip(
+                icon: widget.useTls
+                    ? Icons.verified_user_rounded
+                    : Icons.enhanced_encryption_rounded,
+                label: 'Security',
+                value: securityText,
+                accent: widget.useTls ? palette.success : palette.primary,
+                maxWidth: maxWidth,
+              ),
+              _TelemetryMetricChip(
+                icon: widget.viewOnlyMode
+                    ? Icons.visibility_rounded
+                    : Icons.touch_app_rounded,
+                label: 'Control',
+                value: controlText,
+                accent:
+                    widget.viewOnlyMode ? palette.warning : palette.success,
+                maxWidth: maxWidth,
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  List<Widget> _buildQuickActionPills({
+    required CyberPalette palette,
+    required VoidCallback? openControlCallback,
+  }) {
+    final bool isOnline = widget.isOnline;
+    final List<Widget> pills = <Widget>[];
+
+    if (isOnline && openControlCallback != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-touch-${widget.id}'),
+          icon: Icons.touch_app_rounded,
+          label: 'Fullscreen Touch',
+          color: palette.primary,
+          onTap: openControlCallback,
+        ),
+      );
+    }
+    if (isOnline && widget.onOpenTerminal != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-terminal-${widget.id}'),
+          icon: Icons.terminal_rounded,
+          label: 'Terminal',
+          color: palette.secondary,
+          onTap: widget.onOpenTerminal!,
+        ),
+      );
+    }
+    if (isOnline && widget.onSyncClipboard != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-clipboard-${widget.id}'),
+          icon: Icons.content_paste_go_rounded,
+          label: 'Clipboard Sync',
+          color: palette.sky,
+          onTap: widget.onSyncClipboard!,
+        ),
+      );
+    }
+    if (isOnline && widget.onToggleMute != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-mute-${widget.id}'),
+          icon: Icons.volume_off_rounded,
+          label: 'Mute',
+          color: palette.warning,
+          onTap: widget.onToggleMute!,
+        ),
+      );
+    }
+    if (isOnline && widget.onLockPc != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-lock-${widget.id}'),
+          icon: Icons.lock_outline_rounded,
+          label: 'Lock PC',
+          color: palette.accent,
+          onTap: widget.onLockPc!,
+        ),
+      );
+    }
+    if (!isOnline && widget.onWakeOnLan != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-wol-${widget.id}'),
+          icon: Icons.bolt_rounded,
+          label: 'Wake WoL',
+          color: palette.warning,
+          onTap: widget.onWakeOnLan!,
+        ),
+      );
+    }
+    if (widget.onOpenDiagnostics != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-diagnostics-${widget.id}'),
+          icon: Icons.monitor_heart_rounded,
+          label: 'Diagnostics',
+          color: palette.success,
+          onTap: widget.onOpenDiagnostics!,
+        ),
+      );
+    }
+    if (widget.onMoreActions != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-options-${widget.id}'),
+          icon: Icons.tune_rounded,
+          label: 'Options',
+          color: palette.textSecondary,
+          onTap: widget.onMoreActions!,
+        ),
+      );
+    }
+
+    return pills;
   }
 
   Widget _buildStatusPillsRow({
@@ -730,15 +1095,20 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: context.fluidFont(9),
-                fontWeight: FontWeight.w600,
-                color: palette.textSecondary,
-                letterSpacing: 0.8,
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: context.fluidFont(9),
+                  fontWeight: FontWeight.w600,
+                  color: palette.textSecondary,
+                  letterSpacing: 0.8,
+                ),
               ),
             ),
+            const SizedBox(width: 4),
             Text(
               '$value%',
               style: TextStyle(
@@ -796,6 +1166,213 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ExpandChevronButton extends StatelessWidget {
+  final String hostName;
+  final bool isExpanded;
+  final Duration duration;
+  final CyberPalette palette;
+  final VoidCallback? onPressed;
+
+  const _ExpandChevronButton({
+    super.key,
+    required this.hostName,
+    required this.isExpanded,
+    required this.duration,
+    required this.palette,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color fgColor = isExpanded ? palette.primary : palette.textSecondary;
+    final Color bgColor = isExpanded
+        ? palette.primary.withValues(alpha: palette.isDaylight ? 0.12 : 0.18)
+        : (palette.isDaylight
+            ? Colors.black.withValues(alpha: 0.04)
+            : Colors.white.withValues(alpha: 0.06));
+    final Color borderColor = isExpanded
+        ? palette.primary.withValues(alpha: 0.42)
+        : palette.dividerColor;
+
+    return Semantics(
+      button: true,
+      expanded: isExpanded,
+      label: isExpanded
+          ? 'Collapse details for $hostName'
+          : 'Expand details for $hostName',
+      child: Tooltip(
+        message: isExpanded ? 'Collapse details' : 'Expand preview & telemetry',
+        child: Material(
+          color: bgColor,
+          shape: CircleBorder(
+            side: BorderSide(color: borderColor),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: Center(
+                child: AnimatedRotation(
+                  turns: isExpanded ? 0.5 : 0.0,
+                  duration: duration,
+                  curve: Curves.easeOutCubic,
+                  child: Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 18,
+                    color: fgColor,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TelemetryMetricChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color accent;
+  final bool monospace;
+  final double maxWidth;
+
+  const _TelemetryMetricChip({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.accent,
+    this.monospace = false,
+    required this.maxWidth,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final CyberPalette palette = context.palette;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: palette.isDaylight
+              ? palette.primary.withValues(alpha: 0.05)
+              : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(11),
+          border: Border.all(
+            color: accent.withValues(alpha: 0.24),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12.5, color: accent),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: context.fluidFont(8.5),
+                      fontWeight: FontWeight.w700,
+                      color: palette.textSecondary,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: context.fluidFont(10.0),
+                      fontWeight: FontWeight.w700,
+                      fontFamily: monospace ? 'monospace' : null,
+                      color: palette.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickActionPill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _QuickActionPill({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final CyberPalette palette = context.palette;
+    return Semantics(
+      button: true,
+      label: label,
+      child: FluidPressScale(
+        pressedScale: 0.95,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(999),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: color.withValues(
+                  alpha: palette.isDaylight ? 0.11 : 0.16,
+                ),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: color.withValues(alpha: 0.38),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 13.5, color: color),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: context.fluidFont(10.0),
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

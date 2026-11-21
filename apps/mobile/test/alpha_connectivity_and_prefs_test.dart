@@ -629,7 +629,16 @@ void main() {
         final vpFrame =
             received.lastWhere((f) => f.opcode == BinaryOpcode.viewportResize);
         final vpJson = jsonDecode(utf8.decode(vpFrame.payload)) as Map<String, dynamic>;
-        expect(vpJson, equals({'width': 1920, 'height': 1080, 'quality': 82, 'fps': 60}));
+        expect(
+          vpJson,
+          equals({
+            'width': 1920,
+            'height': 1080,
+            'quality': 82,
+            'fps': 60,
+            'frame_ack': true,
+          }),
+        );
 
         // Drop server socket -> client emits reconnecting with reconnectAttempt >= 1 and auto-recovers
         await server.dropAllClients();

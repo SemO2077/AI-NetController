@@ -67,6 +67,8 @@ class ZeroGcVideoRenderer extends StatefulWidget {
   final Uint8List? initialFrame;
   final void Function(int opcode)? onRequestKeyframe;
   final void Function(Size frameSize)? onFrameSizeChanged;
+  final VoidCallback? onFramePresented;
+  final VoidCallback? onFrameDropped;
   final BoxFit fit;
   final Alignment alignment;
 
@@ -76,6 +78,8 @@ class ZeroGcVideoRenderer extends StatefulWidget {
     this.initialFrame,
     this.onRequestKeyframe,
     this.onFrameSizeChanged,
+    this.onFramePresented,
+    this.onFrameDropped,
     this.fit = BoxFit.contain,
     this.alignment = Alignment.center,
   });
@@ -150,6 +154,13 @@ class ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
   void _onFrameArrival(Uint8List rawBytes) {
     if (_isDecoding) {
       // GPU codec busy: Latch newest frame to guarantee zero jitter and zero drops
+      if (_latchedPendingFrame != null) {
+        try {
+          widget.onFrameDropped?.call();
+        } catch (e) {
+          debugPrint('[ZeroGC-Pipeline] onFrameDropped error: $e');
+        }
+      }
       _latchedPendingFrame = rawBytes;
       return;
     }
@@ -172,49 +183,60 @@ class ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
             debugPrint(
                 '[ZeroGC-Pipeline] Malformed frame size (${currentBytes.length}B). Dropping.');
             _requestKeyframeResync();
+            widget.onFrameDropped?.call();
+          } else if (currentBytes[0] != 0xFF ||
+              currentBytes[1] != 0xD8 ||
+              currentBytes[currentBytes.length - 2] != 0xFF ||
+              currentBytes[currentBytes.length - 1] != 0xD9) {
+            debugPrint(
+                '[ZeroGC-Pipeline] Corrupted JPEG frame markers! Discarding chunk.');
+            _requestKeyframeResync();
+            widget.onFrameDropped?.call();
           } else {
-            // 1. Copy into alternating slot (Zero-Heap Allocation)
-            final Uint8List frameSlice = _ringBuffer.copy(currentBytes);
+            // Avoid redundant ring-buffer memcpy when currentBytes is already an
+            // unshared owned frame slice (e.g. from FrameDecryptIsolate).
+            final bool isUnsharedSlice = currentBytes.offsetInBytes == 0 &&
+                currentBytes.lengthInBytes == currentBytes.buffer.lengthInBytes;
+            final Uint8List frameSlice =
+                isUnsharedSlice ? currentBytes : _ringBuffer.copy(currentBytes);
 
-            // Verify JPEG SOI / EOI markers (0xFFD8 ... 0xFFD9)
-            if (frameSlice[0] != 0xFF ||
-                frameSlice[1] != 0xD8 ||
-                frameSlice[frameSlice.length - 2] != 0xFF ||
-                frameSlice[frameSlice.length - 1] != 0xD9) {
-              debugPrint(
-                  '[ZeroGC-Pipeline] Corrupted JPEG frame markers! Discarding chunk.');
-              _requestKeyframeResync();
-            } else {
-              codec = await ui.instantiateImageCodec(
-                frameSlice,
-                targetWidth:
-                    widget.fit == BoxFit.contain ? null : _cachedTargetWidth,
+            codec = await ui.instantiateImageCodec(
+              frameSlice,
+              targetWidth:
+                  widget.fit == BoxFit.contain ? null : _cachedTargetWidth,
+            );
+            pendingImage = (await codec.getNextFrame()).image;
+
+            if (!_isDisposed && mounted) {
+              final Size decodedSize = Size(
+                pendingImage.width.toDouble(),
+                pendingImage.height.toDouble(),
               );
-              pendingImage = (await codec.getNextFrame()).image;
-
-              if (!_isDisposed && mounted) {
-                final Size decodedSize = Size(
-                  pendingImage.width.toDouble(),
-                  pendingImage.height.toDouble(),
-                );
-                final ui.Image? oldImage = _activeImageNotifier.value;
-                _activeImageNotifier.value = pendingImage;
-                pendingImage = null; // Ownership transferred to notifier
-                if (oldImage != null) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    oldImage.dispose();
-                  });
-                }
-                _reportFrameSizeIfChanged(decodedSize);
-              } else {
-                pendingImage.dispose();
-                pendingImage = null;
+              final ui.Image? oldImage = _activeImageNotifier.value;
+              _activeImageNotifier.value = pendingImage;
+              pendingImage = null; // Ownership transferred to notifier
+              try {
+                widget.onFramePresented?.call();
+              } catch (e) {
+                debugPrint('[ZeroGC-Pipeline] onFramePresented error: $e');
               }
+              if (oldImage != null) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  oldImage.dispose();
+                });
+              }
+              _reportFrameSizeIfChanged(decodedSize);
+            } else {
+              pendingImage.dispose();
+              pendingImage = null;
             }
           }
         } catch (e) {
           debugPrint('[ZeroGC-Pipeline] Hardware decode exception: $e');
           _requestKeyframeResync();
+          try {
+            widget.onFrameDropped?.call();
+          } catch (_) {}
         } finally {
           pendingImage?.dispose();
           codec?.dispose();

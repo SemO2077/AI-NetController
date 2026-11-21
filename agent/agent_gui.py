@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI NetController - Cyber Glassmorphic Desktop Control Center (v0.80.0 Beta)
+AI NetController - Cyber Glassmorphic Desktop Control Center (v0.90.0 Beta)
 ================================================================================
 Ground-up rebuild mirroring the Mobile Companion design language:
   - Deep Abyssal Void (#040812) backdrop with top-right Cyan (#00F0FF) &
@@ -154,7 +154,7 @@ except (ImportError, ModuleNotFoundError):
             show_uninstall_dialog,
         )
     except (ImportError, ModuleNotFoundError):
-        APP_VERSION = "0.80.0"
+        APP_VERSION = "0.90.0"
         create_desktop_shortcut = None
         create_native_shortcut = None
         is_autostart_enabled = None
