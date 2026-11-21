@@ -446,7 +446,8 @@ class TestFastCaptureAndBackoff(unittest.IsolatedAsyncioTestCase):
     def test_03_dxgi_detection_fallback_and_turbojpeg_probe(self):
         # _discover_turbojpeg probes standard path when file exists
         fake_tj_cls = MagicMock(return_value="TJ_INST")
-        with patch.object(agent_mod, "TurboJPEG", fake_tj_cls), \
+        with patch.object(agent_mod.platform, "system", return_value="Windows"), \
+             patch.object(agent_mod, "TurboJPEG", fake_tj_cls), \
              patch.object(agent_mod.os.path, "isfile", side_effect=lambda p: p == r"C:\libjpeg-turbo64\bin\turbojpeg.dll"):
             res = agent_mod._discover_turbojpeg()
         self.assertEqual(res, "TJ_INST")
@@ -486,9 +487,12 @@ class TestFastCaptureAndBackoff(unittest.IsolatedAsyncioTestCase):
 
         # MultiMonitorStreamer TurboJPEG probe + DXGI detection & clean close
         import multi_monitor_streamer as mms_mod
-        with patch.object(mms_mod, "TurboJPEG", fake_tj_cls), \
+        fake_tj_cls.reset_mock()
+        with patch.object(mms_mod.platform, "system", return_value="Windows"), \
+             patch.object(mms_mod, "TurboJPEG", fake_tj_cls), \
              patch.object(mms_mod.os.path, "isfile", side_effect=lambda p: p == r"C:\libjpeg-turbo64\bin\turbojpeg.dll"):
             self.assertEqual(mms_mod._discover_turbojpeg(), "TJ_INST")
+        fake_tj_cls.assert_called_once_with(r"C:\libjpeg-turbo64\bin\turbojpeg.dll")
 
         fake_cam2 = MagicMock()
         fake_cam2.grab.return_value = frame_arr
