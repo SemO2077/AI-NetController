@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 /// Maximum retained JPEG frame size (4MB per slot).
 const int _maxFrameBytes = 4 * 1024 * 1024;
@@ -65,6 +66,7 @@ class ZeroGcVideoRenderer extends StatefulWidget {
   final Stream<Uint8List> frameStream;
   final Uint8List? initialFrame;
   final void Function(int opcode)? onRequestKeyframe;
+  final void Function(Size frameSize)? onFrameSizeChanged;
   final BoxFit fit;
   final Alignment alignment;
 
@@ -73,15 +75,16 @@ class ZeroGcVideoRenderer extends StatefulWidget {
     required this.frameStream,
     this.initialFrame,
     this.onRequestKeyframe,
+    this.onFrameSizeChanged,
     this.fit = BoxFit.contain,
     this.alignment = Alignment.center,
   });
 
   @override
-  State<ZeroGcVideoRenderer> createState() => _ZeroGcVideoRendererState();
+  State<ZeroGcVideoRenderer> createState() => ZeroGcVideoRendererState();
 }
 
-class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
+class ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
   final _DoubleFrameRingBuffer _ringBuffer = _DoubleFrameRingBuffer();
   final ValueNotifier<ui.Image?> _activeImageNotifier = ValueNotifier<ui.Image?>(null);
 
@@ -90,8 +93,12 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
   bool _isDisposed = false;
   Uint8List? _latchedPendingFrame;
   int? _cachedTargetWidth;
+  Size? _lastFrameSize;
   DateTime? _lastKeyframeResyncAt;
   static const Duration _resyncCooldown = Duration(milliseconds: 1500);
+
+  /// The last decoded video frame dimensions reported by this renderer.
+  Size? get lastFrameSize => _lastFrameSize;
 
   @override
   void initState() {
@@ -186,6 +193,10 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
               pendingImage = (await codec.getNextFrame()).image;
 
               if (!_isDisposed && mounted) {
+                final Size decodedSize = Size(
+                  pendingImage.width.toDouble(),
+                  pendingImage.height.toDouble(),
+                );
                 final ui.Image? oldImage = _activeImageNotifier.value;
                 _activeImageNotifier.value = pendingImage;
                 pendingImage = null; // Ownership transferred to notifier
@@ -194,6 +205,7 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
                     oldImage.dispose();
                   });
                 }
+                _reportFrameSizeIfChanged(decodedSize);
               } else {
                 pendingImage.dispose();
                 pendingImage = null;
@@ -215,6 +227,34 @@ class _ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
     } finally {
       _latchedPendingFrame = null;
       _isDecoding = false;
+    }
+  }
+
+  /// Safely notifies [ZeroGcVideoRenderer.onFrameSizeChanged] whenever decoded
+  /// image dimensions change.
+  void _reportFrameSizeIfChanged(Size decodedSize) {
+    if (decodedSize.width <= 0 || decodedSize.height <= 0) return;
+    if (_lastFrameSize == decodedSize) return;
+    _lastFrameSize = decodedSize;
+    final callback = widget.onFrameSizeChanged;
+    if (callback == null) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_isDisposed && mounted) {
+          try {
+            widget.onFrameSizeChanged?.call(decodedSize);
+          } catch (e) {
+            debugPrint('[ZeroGC-Pipeline] onFrameSizeChanged error: $e');
+          }
+        }
+      });
+    } else {
+      try {
+        callback(decodedSize);
+      } catch (e) {
+        debugPrint('[ZeroGC-Pipeline] onFrameSizeChanged error: $e');
+      }
     }
   }
 
