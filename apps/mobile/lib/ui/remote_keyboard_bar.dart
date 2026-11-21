@@ -64,23 +64,27 @@ class _RemoteKeyboardBarState extends State<RemoteKeyboardBar> {
       return;
     }
 
-    // Compute longest common prefix between previous and new buffer so IME
-    // composition, backspace, autocorrect, and paste all translate accurately.
-    final int minLen = math.min(_prevLiveText.length, next.length);
+    // Diff by Unicode scalar values (runes) rather than UTF-16 code units so
+    // surrogate-pair characters (e.g. emojis) never emit 2 backspaces or split
+    // into invalid lone surrogates.
+    final List<int> prevRunes = _prevLiveText.runes.toList(growable: false);
+    final List<int> nextRunes = next.runes.toList(growable: false);
+    final int minLen = math.min(prevRunes.length, nextRunes.length);
     int common = 0;
-    while (common < minLen &&
-        _prevLiveText.codeUnitAt(common) == next.codeUnitAt(common)) {
+    while (common < minLen && prevRunes[common] == nextRunes[common]) {
       common++;
     }
 
-    final int deletions = _prevLiveText.length - common;
+    final int deletions = prevRunes.length - common;
     for (int i = 0; i < deletions; i++) {
       widget.onKey('backspace');
     }
 
-    final String inserted = next.substring(common);
-    if (inserted.isNotEmpty) {
-      widget.onTypeText(inserted, pressEnter: false);
+    if (common < nextRunes.length) {
+      final String inserted = String.fromCharCodes(nextRunes.sublist(common));
+      if (inserted.isNotEmpty) {
+        widget.onTypeText(inserted, pressEnter: false);
+      }
     }
 
     _prevLiveText = next;
@@ -430,7 +434,8 @@ class _RemoteKeyboardBarState extends State<RemoteKeyboardBar> {
           _haptic();
           setState(() {
             _liveMode = !_liveMode;
-            _prevLiveText = _textController.text;
+            _textController.clear();
+            _prevLiveText = '';
           });
         },
         borderRadius: BorderRadius.circular(10),

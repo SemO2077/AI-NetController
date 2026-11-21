@@ -251,6 +251,41 @@ void main() {
       expect(controller.hasActiveVisuals, isFalse);
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('short-circuits painting cleanly under reduced motion without stuck visuals', (tester) async {
+      final controller = TouchFeedbackController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: CyberTheme.themeData,
+          home: MediaQuery(
+            data: const MediaQueryData(disableAnimations: true),
+            child: Scaffold(
+              body: SizedBox(
+                width: 300,
+                height: 200,
+                child: TouchFeedbackOverlay(controller: controller),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      controller.triggerRipple(const Offset(50, 50));
+      controller.updateCursor(const Offset(60, 60), isDragging: true);
+      await tester.pumpAndSettle();
+
+      // No CustomPaint overlay is mounted when reducedMotion is active
+      expect(
+        find.descendant(
+          of: find.byType(TouchFeedbackOverlay),
+          matching: find.byType(CustomPaint),
+        ),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('RemoteKeyboardBar', () {
@@ -336,6 +371,61 @@ void main() {
       await tester.tap(find.byTooltip('Hide Keyboard Bar'));
       await tester.pump();
       expect(closed, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('diffs UTF-16 surrogate pairs by rune and clears buffer when switching LIVE to TEXT', (tester) async {
+      final typedEvents = <(String, bool)>[];
+      final keyEvents = <String>[];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: CyberTheme.themeData,
+          home: Scaffold(
+            body: RemoteKeyboardBar(
+              autofocus: false,
+              hapticsEnabled: false,
+              onTypeText: (text, {bool pressEnter = false}) =>
+                  typedEvents.add((text, pressEnter)),
+              onKey: keyEvents.add,
+              onHotkey: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final inputFinder = find.byKey(const ValueKey('remote-keyboard-input'));
+      // Enter emoji 😀 (U+1F600, 2 UTF-16 code units)
+      await tester.enterText(inputFinder, '😀');
+      expect(typedEvents, equals([('😀', false)]));
+
+      // Replace 😀 with 😁 (same high surrogate 0xD83D!) -> 1 backspace + valid '😁'
+      typedEvents.clear();
+      keyEvents.clear();
+      await tester.enterText(inputFinder, '😁');
+      expect(keyEvents, equals(['backspace']));
+      expect(typedEvents, equals([('😁', false)]));
+
+      // Delete 😁 -> exactly 1 backspace (not 2)
+      keyEvents.clear();
+      await tester.enterText(inputFinder, '');
+      expect(keyEvents, equals(['backspace']));
+
+      // Type in LIVE mode then toggle LIVE -> TEXT: buffer must clear so text isn't resent
+      typedEvents.clear();
+      await tester.enterText(inputFinder, 'already-sent');
+      expect(typedEvents, equals([('already-sent', false)]));
+      typedEvents.clear();
+
+      await tester.tap(find.byKey(const ValueKey('remote-keyboard-mode-toggle')));
+      await tester.pump();
+      expect(find.text('TEXT'), findsOneWidget);
+      expect(tester.widget<TextField>(inputFinder).controller?.text, isEmpty);
+
+      await tester.tap(find.byTooltip('Send Text'));
+      await tester.pump();
+      expect(typedEvents, isEmpty);
       expect(tester.takeException(), isNull);
     });
   });

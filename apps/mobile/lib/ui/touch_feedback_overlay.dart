@@ -275,6 +275,10 @@ class _TouchFeedbackOverlayState extends State<TouchFeedbackOverlay>
   }
 
   void _onControllerChanged() {
+    if (!widget.enabled || _reducedMotion) {
+      if (_ticker.isActive) _ticker.stop();
+      return;
+    }
     _frameNow = DateTime.now();
     _paintEpoch.value++;
     _syncTicker();
@@ -294,7 +298,7 @@ class _TouchFeedbackOverlayState extends State<TouchFeedbackOverlay>
   }
 
   void _onTick(Duration _) {
-    if (!mounted || !widget.enabled) {
+    if (!mounted || !widget.enabled || _reducedMotion) {
       _ticker.stop();
       return;
     }
@@ -317,7 +321,7 @@ class _TouchFeedbackOverlayState extends State<TouchFeedbackOverlay>
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.enabled) {
+    if (!widget.enabled || _reducedMotion) {
       return const SizedBox.shrink();
     }
     final CyberPalette palette = context.palette;
