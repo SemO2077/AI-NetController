@@ -99,6 +99,11 @@ export const WolModal: React.FC<WolModalProps> = ({
 
   const IPV4_REGEX = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 
+  // Schedules State
+  const [schedules, setSchedules] = useState<WolSchedule[]>(() => externalSchedules || loadWolSchedules());
+  const [isAddingSchedule, setIsAddingSchedule] = useState(false);
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -117,10 +122,6 @@ export const WolModal: React.FC<WolModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, isAddingSchedule, onClose]);
 
-  // Schedules State
-  const [schedules, setSchedules] = useState<WolSchedule[]>(() => externalSchedules || loadWolSchedules());
-  const [isAddingSchedule, setIsAddingSchedule] = useState(false);
-  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [recentlyFiredId, setRecentlyFiredId] = useState<string | null>(null);
   const [confirmDeleteScheduleId, setConfirmDeleteScheduleId] = useState<string | null>(null);
   const [confirmRestoreDefaults, setConfirmRestoreDefaults] = useState(false);
