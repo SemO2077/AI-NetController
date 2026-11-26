@@ -28,9 +28,13 @@ import {
   Monitor,
   Play,
   Pause,
+  Network,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { HostDevice } from '../../types';
 import { triggerHapticFeedback } from '../../services/hapticService';
+import { copyToClipboard } from '../../utils/clipboard';
 import { useTranslation } from '../../i18n/useTranslation';
 import { computeViewportMetrics } from '../../utils/viewportScale';
 import { useUIStore } from '../../store/uiStore';
@@ -96,9 +100,17 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
   const [isPaused, setIsPaused] = useState(false);
   const [filterMode, setFilterMode] = useState<'all' | 'online' | 'servers'>('all');
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [copiedIp, setCopiedIp] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zoomBehaviorRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const onSelectHostRef = useRef(onSelectHost);
   const isPausedRef = useRef(isPaused);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     onSelectHostRef.current = onSelectHost;
@@ -206,12 +218,20 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
 
   // Aggregate Topology Metrics
   const metrics = useMemo(() => {
-    const total = graphData.nodes.filter((n) => !n.isController).length;
-    const online = graphData.nodes.filter((n) => !n.isController && n.isOnline).length;
-    const pings = graphData.nodes.filter((n) => n.isOnline && typeof n.ping === 'number').map((n) => n.ping!);
-    const avgPing = pings.length > 0 ? (pings.reduce((a, b) => a + b, 0) / pings.length).toFixed(1) : 'N/A';
+    const visibleHosts = hosts.filter((h) => {
+      if (filterMode === 'online') return h.isOnline;
+      if (filterMode === 'servers') return h.deviceType === 'server' || h.id.includes('SRV');
+      return true;
+    });
+    const total = visibleHosts.length;
+    const online = visibleHosts.filter((h) => h.isOnline).length;
+    const pings = visibleHosts
+      .filter((h) => h.isOnline && typeof h.ping === 'number' && Number.isFinite(h.ping))
+      .map((h) => h.ping!);
+    const avgPing =
+      pings.length > 0 ? (pings.reduce((a, b) => a + b, 0) / pings.length).toFixed(1) : null;
     return { total, online, sleeping: total - online, avgPing };
-  }, [graphData]);
+  }, [hosts, filterMode]);
 
   // Reset / Re-center View
   const handleResetZoom = useCallback(() => {
@@ -348,23 +368,30 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
 
     const pulseNodes = pulses.nodes();
     const pulseData = pulses.data();
-    const pulseTimer = timer((elapsed) => {
-      if (isPausedRef.current || (typeof document !== 'undefined' && document.hidden)) {
-        return;
-      }
-      // 144Hz Framerate-Independent animation with zero per-frame D3 selection allocation
-      const pulseProgress = (elapsed * 0.00048) % 1;
-      for (let i = 0; i < pulseNodes.length; i++) {
-        const d = pulseData[i] as any;
-        const src = d?.source;
-        const tgt = d?.target;
-        if (src && tgt && src.x !== undefined && tgt.x !== undefined) {
-          const el = pulseNodes[i];
-          el.setAttribute('cx', String(src.x + (tgt.x - src.x) * pulseProgress));
-          el.setAttribute('cy', String(src.y + (tgt.y - src.y) * pulseProgress));
-        }
-      }
-    });
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const pulseTimer =
+      prefersReducedMotion || pulseNodes.length === 0
+        ? null
+        : timer((elapsed) => {
+            if (isPausedRef.current || (typeof document !== 'undefined' && document.hidden)) {
+              return;
+            }
+            // 144Hz Framerate-Independent animation with zero per-frame D3 selection allocation
+            const pulseProgress = (elapsed * 0.00048) % 1;
+            for (let i = 0; i < pulseNodes.length; i++) {
+              const d = pulseData[i] as any;
+              const src = d?.source;
+              const tgt = d?.target;
+              if (src && tgt && src.x !== undefined && tgt.x !== undefined) {
+                const el = pulseNodes[i];
+                el.setAttribute('cx', String(src.x + (tgt.x - src.x) * pulseProgress));
+                el.setAttribute('cy', String(src.y + (tgt.y - src.y) * pulseProgress));
+              }
+            }
+          });
 
     // Draw Nodes (Groups)
     const nodeGroup = g.append('g').attr('class', 'nodes');
@@ -529,7 +556,7 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
 
     return () => {
       simulation.stop();
-      pulseTimer.stop();
+      pulseTimer?.stop();
       svg.on('.zoom', null);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       resizeObserver.disconnect();
@@ -569,10 +596,34 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isFullScreen]);
 
-  const liveActiveNode = useMemo(
-    () => (activeNode ? graphData.nodes.find((n) => n.id === activeNode.id) || activeNode : null),
-    [activeNode, graphData.nodes]
-  );
+  const liveActiveNode = useMemo(() => {
+    if (!activeNode) return null;
+    const liveHost = hosts.find((h) => h.id === activeNode.id);
+    if (!liveHost) {
+      return graphData.nodes.find((n) => n.id === activeNode.id) || activeNode;
+    }
+    return {
+      ...activeNode,
+      name: liveHost.name,
+      ip: liveHost.ip,
+      mac: liveHost.mac,
+      isOnline: liveHost.isOnline,
+      ping: liveHost.ping,
+      cpu: liveHost.cpuUsage ?? liveHost.cpu,
+      ram: liveHost.ramUsage ?? liveHost.ram,
+    };
+  }, [activeNode, hosts, graphData.nodes]);
+
+  const handleCopyNodeIp = useCallback(async (ip: string) => {
+    if (!ip) return;
+    triggerHapticFeedback('light');
+    const ok = await copyToClipboard(ip);
+    if (ok) {
+      setCopiedIp(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopiedIp(false), 1600);
+    }
+  }, []);
 
   return (
     <div
@@ -584,36 +635,38 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
       } ${className}`}
     >
       {/* Top Floating Liquid Glass HUD Bar */}
-      <div className="absolute top-3 inset-x-3 z-20 px-3.5 py-2.5 rounded-full glass-liquid-elevated flex items-center justify-between gap-2 flex-wrap pointer-events-auto">
+      <div className="absolute top-3 inset-x-3 z-20 px-3.5 py-2.5 rounded-[22px] glass-liquid-elevated flex items-center justify-between gap-2 flex-wrap pointer-events-auto">
         {/* Title & Live Status */}
-        <div className="flex items-center space-x-2.5">
+        <div className="flex items-center space-x-2.5 min-w-0">
           <div className="w-8 h-8 squircle-badge squircle-hero flex items-center justify-center shrink-0">
             <Activity className="w-4 h-4 animate-pulse" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center space-x-2">
-              <span className="text-xs sm:text-sm font-display font-extrabold ink-primary tracking-tight">
+              <span className="text-xs sm:text-sm font-display font-extrabold ink-primary tracking-tight truncate">
                 {language === 'bg' ? 'Мрежова топология' : 'Network Topology'}
               </span>
-              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/14 text-emerald-400 border border-emerald-500/35">
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/14 text-emerald-400 border border-emerald-500/35 shrink-0">
                 AI-NET/3.0
               </span>
             </div>
-            <p className="text-[10.5px] ink-muted flex items-center gap-2 font-mono">
+            <p className="text-[10.5px] ink-muted flex items-center gap-2 font-mono tabular-nums">
               <span>
                 {language === 'bg'
                   ? `${metrics.online}/${metrics.total} Онлайн`
                   : `${metrics.online}/${metrics.total} Online`}
               </span>
               <span>•</span>
-              <span className="text-cyan-400 font-semibold">RTT: ~{metrics.avgPing}ms</span>
+              <span className="text-cyan-400 font-semibold">
+                {metrics.avgPing !== null ? `RTT: ~${metrics.avgPing}ms` : 'RTT: —'}
+              </span>
             </p>
           </div>
         </div>
 
-        {/* Action Controls */}
-        <div className="flex items-center space-x-1.5">
-          <div className="hidden sm:flex items-center glass-liquid-subtle rounded-full p-0.5 text-[11px]">
+        {/* Action Controls (Visible across Desktop & Mobile) */}
+        <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto justify-between sm:justify-end">
+          <div className="flex items-center glass-liquid-subtle rounded-full p-0.5 text-[11px]">
             {(
               [
                 { id: 'all' as const, label: language === 'bg' ? 'Всички' : 'All' },
@@ -639,44 +692,66 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
             ))}
           </div>
 
-          <button
-            type="button"
-            onClick={togglePauseSimulation}
-            className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
-            title={isPaused ? 'Resume Physics' : 'Freeze Nodes'}
-          >
-            {isPaused ? <Play className="w-3.5 h-3.5 text-emerald-400" /> : <Pause className="w-3.5 h-3.5" />}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={togglePauseSimulation}
+              className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
+              title={
+                isPaused
+                  ? language === 'bg'
+                    ? 'Продължи физиката'
+                    : 'Resume Physics'
+                  : language === 'bg'
+                  ? 'Замрази възлите'
+                  : 'Freeze Nodes'
+              }
+              aria-label={isPaused ? 'Resume Physics' : 'Freeze Nodes'}
+            >
+              {isPaused ? <Play className="w-3.5 h-3.5 text-emerald-400" /> : <Pause className="w-3.5 h-3.5" />}
+            </button>
 
-          <button
-            type="button"
-            onClick={handleResetZoom}
-            className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
-            title="Reset Zoom / Pan"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
+            <button
+              type="button"
+              onClick={handleResetZoom}
+              className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
+              title={language === 'bg' ? 'Нулирай мащаба' : 'Reset Zoom / Pan'}
+              aria-label="Reset Zoom"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
 
-          <button
-            type="button"
-            onClick={handleReheat}
-            className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
-            title="Re-balance Graph"
-          >
-            <Zap className="w-3.5 h-3.5 text-cyan-400" />
-          </button>
+            <button
+              type="button"
+              onClick={handleReheat}
+              className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
+              title={language === 'bg' ? 'Пренареди графа' : 'Re-balance Graph'}
+              aria-label="Re-balance Graph"
+            >
+              <Zap className="w-3.5 h-3.5 text-cyan-400" />
+            </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              triggerHapticFeedback('medium');
-              setIsFullScreen(!isFullScreen);
-            }}
-            className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
-            title={isFullScreen ? 'Exit Full Screen' : 'Full Screen'}
-          >
-            {isFullScreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-          </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHapticFeedback('medium');
+                setIsFullScreen(!isFullScreen);
+              }}
+              className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
+              title={
+                isFullScreen
+                  ? language === 'bg'
+                    ? 'Изход от цял екран'
+                    : 'Exit Full Screen'
+                  : language === 'bg'
+                  ? 'Цял екран'
+                  : 'Full Screen'
+              }
+              aria-label={isFullScreen ? 'Exit Full Screen' : 'Full Screen'}
+            >
+              {isFullScreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -691,22 +766,64 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
         className="w-full h-full cursor-grab active:cursor-grabbing select-none"
       />
 
+      {/* Empty State Overlay when no nodes match or fleet is empty */}
+      {graphData.nodes.length === 0 && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center p-6 pointer-events-none">
+          <div className="glass-liquid-modal rounded-[26px] px-6 py-5 max-w-xs text-center space-y-2.5 pointer-events-auto">
+            <div className="w-11 h-11 squircle-badge squircle-hero mx-auto flex items-center justify-center">
+              <Network className="w-5 h-5" />
+            </div>
+            <h4 className="font-display text-sm font-extrabold ink-primary">
+              {hosts.length === 0
+                ? language === 'bg'
+                  ? 'Няма възли в топологията'
+                  : 'No Nodes in Topology'
+                : language === 'bg'
+                ? 'Няма съвпадащи устройства'
+                : 'No Matching Nodes'}
+            </h4>
+            <p className="text-xs ink-muted leading-relaxed">
+              {hosts.length === 0
+                ? language === 'bg'
+                  ? 'Добавете компютър или сканирайте локалната мрежа, за да визуализирате живата LAN топология.'
+                  : 'Add a computer or scan your LAN to map live hosts and subnet links here.'
+                : language === 'bg'
+                ? 'Текущият филтър скрива всички устройства в мрежовия граф.'
+                : 'The active topology filter has no matching hosts.'}
+            </p>
+            {hosts.length > 0 && filterMode !== 'all' && (
+              <button
+                type="button"
+                onClick={() => setFilterMode('all')}
+                className="h-8.5 px-4 rounded-full liquid-hero-btn text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>{language === 'bg' ? 'Покажи всички' : 'Show All Nodes'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Bottom Floating Legend & Frosted Selected Node Inspector */}
       <div className="absolute bottom-3 inset-x-3 z-20 flex flex-col sm:flex-row items-stretch sm:items-end justify-between gap-2 pointer-events-none">
-        <div className="px-3.5 py-2 rounded-full glass-liquid-elevated flex items-center space-x-3 text-[10.5px] ink-secondary font-medium pointer-events-auto">
+        <div className="px-3.5 py-2 rounded-[20px] glass-liquid-elevated flex items-center flex-wrap gap-x-3 gap-y-1 text-[10.5px] ink-secondary font-medium pointer-events-auto">
           <div className="flex items-center space-x-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-violet-500" />
-            <span>&lt;25ms (Fast)</span>
+            <span>{language === 'bg' ? '<25ms (Бърз)' : '<25ms (Fast)'}</span>
           </div>
           <div className="flex items-center space-x-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-            <span>&gt;25ms (Jitter)</span>
+            <span>{language === 'bg' ? '>25ms (Джитър)' : '>25ms (Jitter)'}</span>
           </div>
           <div className="flex items-center space-x-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-slate-400 border border-dashed border-current" />
             <span>{language === 'bg' ? 'Спящ (WoL)' : 'Sleeping (WoL)'}</span>
           </div>
-          <span className="ink-muted hidden md:inline">• Drag to reposition • Scroll to zoom</span>
+          <span className="ink-muted hidden md:inline">
+            {language === 'bg'
+              ? '• Влачете възлите • Колелце за мащаб'
+              : '• Drag to reposition • Scroll to zoom'}
+          </span>
         </div>
 
         {liveActiveNode && (
@@ -731,18 +848,40 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
                   {liveActiveNode.name}
                 </span>
                 <span
-                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full shrink-0 ${
                     liveActiveNode.isOnline
                       ? 'bg-emerald-500/16 text-emerald-400 border border-emerald-500/35'
                       : 'liquid-control-pill ink-muted'
                   }`}
                 >
-                  {liveActiveNode.isOnline ? `${liveActiveNode.ping ?? 0}ms` : 'SLEEPING'}
+                  {liveActiveNode.isOnline
+                    ? `${liveActiveNode.ping ?? 0}ms`
+                    : language === 'bg'
+                    ? 'СПЯЩ'
+                    : 'SLEEPING'}
                 </span>
               </div>
 
-              <div className="text-[11px] font-mono ink-secondary mt-0.5 truncate">
-                {liveActiveNode.ip} • {liveActiveNode.mac}
+              <div className="flex items-center gap-1.5 text-[11px] font-mono ink-secondary mt-1">
+                <button
+                  type="button"
+                  onClick={() => handleCopyNodeIp(liveActiveNode.ip)}
+                  className="inline-flex items-center gap-1 text-cyan-400 hover:underline cursor-pointer truncate"
+                  title={language === 'bg' ? 'Копирай IP' : 'Copy IP'}
+                >
+                  <span>{liveActiveNode.ip}</span>
+                  {copiedIp ? (
+                    <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Copy className="w-2.5 h-2.5 opacity-65 shrink-0" />
+                  )}
+                </button>
+                {liveActiveNode.mac && (
+                  <>
+                    <span className="opacity-35">·</span>
+                    <span className="truncate ink-muted">{liveActiveNode.mac}</span>
+                  </>
+                )}
               </div>
 
               {!liveActiveNode.isController && (
@@ -780,7 +919,8 @@ export const NetworkTopologyGraph: React.FC<NetworkTopologyGraphProps> = ({
                   <button
                     type="button"
                     onClick={() => setActiveNode(null)}
-                    className="ml-auto w-6 h-6 rounded-full liquid-control-pill text-[10px] flex items-center justify-center cursor-pointer"
+                    className="ml-auto w-7 h-7 rounded-full liquid-control-pill text-[11px] flex items-center justify-center cursor-pointer"
+                    aria-label={language === 'bg' ? 'Затвори' : 'Close'}
                   >
                     ✕
                   </button>

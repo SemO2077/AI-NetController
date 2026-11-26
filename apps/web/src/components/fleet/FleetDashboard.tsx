@@ -11,11 +11,14 @@ import {
   ArrowUpAZ,
   Activity,
   Gauge,
+  Cpu,
+  Star,
   LayoutGrid,
   Network,
   Zap,
   Monitor,
   QrCode,
+  RotateCcw,
 } from 'lucide-react';
 import { HostDevice, WolPacketPayload } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
@@ -27,6 +30,7 @@ import { generateMagicPacket } from '../../services/wolService';
 import { useTranslation, Language } from '../../i18n/useTranslation';
 import { POPOVER_BUBBLE_VARIANTS, SPRING_JELLY, SPRING_POP } from '../../utils/springPhysics';
 import { ThemeQuickControls } from '../ui/ThemeQuickControls';
+import { getPersistentItem, setPersistentItem } from '../../utils/nativeStorage';
 
 const LazyNetworkTopologyGraph = React.lazy(() =>
   import('../telemetry/NetworkTopologyGraph').then((module) => ({
@@ -34,8 +38,12 @@ const LazyNetworkTopologyGraph = React.lazy(() =>
   }))
 );
 
-export type FleetSortMode = 'alphabetical' | 'status' | 'latency';
+export type FleetSortMode = 'alphabetical' | 'status' | 'latency' | 'load';
 export type FleetSortDirection = 'asc' | 'desc';
+export type FleetFilterMode = 'all' | 'pinned' | 'online' | 'sleeping' | 'servers' | 'quarantined';
+
+const VALID_FILTERS: FleetFilterMode[] = ['all', 'pinned', 'online', 'sleeping', 'servers', 'quarantined'];
+const NOOP = () => {};
 
 interface FleetDashboardProps {
   hosts: HostDevice[];
@@ -58,6 +66,7 @@ interface FleetDashboardProps {
   isScanning?: boolean;
   isNetworkDisconnected?: boolean;
   onReconnectNetwork?: () => void;
+  onToast?: (msg: string) => void;
 }
 
 const latencyConfigCache = new Map<string, any>();
@@ -68,10 +77,12 @@ const latencyConfigCache = new Map<string, any>();
 export function getLatencyConfig(
   ping?: number,
   isOnline?: boolean,
-  seedId: string = 'host',
+  _seedId: string = 'host',
   lang: Language = 'bg'
 ) {
-  const cacheKey = `${ping ?? -1}_${isOnline ? 1 : 0}_${seedId}_${lang}`;
+  const normalizedPing =
+    typeof ping === 'number' && Number.isFinite(ping) && ping >= 0 ? Math.round(ping) : -1;
+  const cacheKey = `${normalizedPing}_${isOnline ? 1 : 0}_${lang}`;
   const cached = latencyConfigCache.get(cacheKey);
   if (cached) return cached;
 
@@ -85,18 +96,18 @@ export function getLatencyConfig(
         lang === 'bg'
           ? 'Устройството е в спящ режим — няма активна телеметрия'
           : 'Host is sleeping — no active RTT telemetry',
-      colorDot: 'bg-white/20',
-      colorText: 'text-white/40',
-      colorBg: 'bg-white/[0.04]',
-      colorBorder: 'border-white/10',
+      colorDot: 'bg-slate-400/70',
+      colorText: 'ink-muted',
+      colorBg: 'bg-slate-500/10',
+      colorBorder: 'border-slate-400/30',
       bars: [
-        { active: false, height: '4px', color: 'bg-white/20' },
-        { active: false, height: '7px', color: 'bg-white/20' },
-        { active: false, height: '10px', color: 'bg-white/20' },
+        { active: false, height: '4px', color: 'bg-slate-400/35' },
+        { active: false, height: '7px', color: 'bg-slate-400/35' },
+        { active: false, height: '10px', color: 'bg-slate-400/35' },
       ],
     };
   } else {
-    const latency = typeof ping === 'number' && ping >= 0 ? ping : 0;
+    const latency = normalizedPing >= 0 ? normalizedPing : 0;
 
     if (latency <= 20) {
       result = {
@@ -109,8 +120,8 @@ export function getLatencyConfig(
             : `Network latency (RTT): ${latency} ms • Excellent connection response (GbE LAN)`,
         colorDot: 'bg-emerald-400',
         colorText: 'text-emerald-400',
-        colorBg: 'bg-emerald-500/10',
-        colorBorder: 'border-emerald-500/30',
+        colorBg: 'bg-emerald-500/12',
+        colorBorder: 'border-emerald-500/35',
         bars: [
           { active: true, height: '4px', color: 'bg-emerald-400' },
           { active: true, height: '7px', color: 'bg-emerald-400' },
@@ -127,9 +138,9 @@ export function getLatencyConfig(
             ? `Мрежова латентност (RTT): ${latency} ms • Стабилна и бърза мрежова връзка`
             : `Network latency (RTT): ${latency} ms • Stable and responsive connection`,
         colorDot: 'bg-cyan-400',
-        colorText: 'text-cyan-300',
-        colorBg: 'bg-cyan-500/10',
-        colorBorder: 'border-cyan-500/30',
+        colorText: 'text-cyan-400',
+        colorBg: 'bg-cyan-500/12',
+        colorBorder: 'border-cyan-500/35',
         bars: [
           { active: true, height: '4px', color: 'bg-cyan-400' },
           { active: true, height: '7px', color: 'bg-cyan-400' },
@@ -146,13 +157,13 @@ export function getLatencyConfig(
             ? `Мрежова латентност (RTT): ${latency} ms • Възможно е слабо забавяне при стрийминг`
             : `Network latency (RTT): ${latency} ms • Possible slight stream delay`,
         colorDot: 'bg-amber-400',
-        colorText: 'text-amber-300',
-        colorBg: 'bg-amber-500/10',
-        colorBorder: 'border-amber-500/30',
+        colorText: 'text-amber-400',
+        colorBg: 'bg-amber-500/12',
+        colorBorder: 'border-amber-500/35',
         bars: [
           { active: true, height: '4px', color: 'bg-amber-400' },
           { active: true, height: '7px', color: 'bg-amber-400' },
-          { active: false, height: '10px', color: 'bg-white/20' },
+          { active: false, height: '10px', color: 'bg-slate-400/35' },
         ],
       };
     } else {
@@ -166,18 +177,18 @@ export function getLatencyConfig(
             : `Network latency (RTT): ${latency} ms • High latency / congested route`,
         colorDot: 'bg-rose-400',
         colorText: 'text-rose-400',
-        colorBg: 'bg-rose-500/10',
-        colorBorder: 'border-rose-500/30',
+        colorBg: 'bg-rose-500/12',
+        colorBorder: 'border-rose-500/35',
         bars: [
           { active: true, height: '4px', color: 'bg-rose-400' },
-          { active: false, height: '7px', color: 'bg-white/20' },
-          { active: false, height: '10px', color: 'bg-white/20' },
+          { active: false, height: '7px', color: 'bg-slate-400/35' },
+          { active: false, height: '10px', color: 'bg-slate-400/35' },
         ],
       };
     }
   }
 
-  if (latencyConfigCache.size > 100) {
+  if (latencyConfigCache.size > 160) {
     latencyConfigCache.clear();
   }
   latencyConfigCache.set(cacheKey, result);
@@ -205,15 +216,23 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   isScanning = false,
   isNetworkDisconnected = false,
   onReconnectNetwork,
+  onToast,
 }) => {
   const activeSelectedId = selectedHostId || selectedTarget;
-  const onSelectHostSafe = onSelectHost || (() => {});
-  const rescanHandler = onRescan || (() => {});
+  const onSelectHostSafe = onSelectHost || NOOP;
+  const rescanHandler = onRescan || NOOP;
   const openModal = useUIStore((s) => s.openModal);
   const toggleOmnibar = useUIStore((s) => s.toggleOmnibar);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const setPendingChatPrompt = useUIStore((s) => s.setPendingChatPrompt);
-  const addHostHandler = onOpenAddHostModal || onAddNewHost || (() => openModal('addHost'));
+  const addHostHandler = useMemo(
+    () => onOpenAddHostModal || onAddNewHost || (() => openModal('addHost')),
+    [onOpenAddHostModal, onAddNewHost, openModal]
+  );
+  const handleOpenDetailsModal = useCallback(
+    (dev: HostDevice) => openModal('hostDetails', dev),
+    [openModal]
+  );
   const { t, language } = useTranslation();
 
   const [expandedHostIds, setExpandedHostIds] = useState<Record<string, boolean>>(() => {
@@ -223,39 +242,48 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   const [pinnedHostIds, setPinnedHostIds] = useState<string[]>(() => {
     try {
       const saved =
-        localStorage.getItem('ai_pinned_hosts_v1') || localStorage.getItem('cst_pinned_hosts_v1');
+        getPersistentItem('ai_pinned_hosts_v1') || getPersistentItem('cst_pinned_hosts_v1');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) return parsed.filter((id) => typeof id === 'string');
       }
     } catch {}
     return [];
   });
 
-  const togglePinHost = useCallback((hostId: string) => {
-    setPinnedHostIds((prev) => {
-      const next = prev.includes(hostId) ? prev.filter((id) => id !== hostId) : [...prev, hostId];
-      try {
-        localStorage.setItem('ai_pinned_hosts_v1', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-  }, []);
+  const hostsRef = useRef(hosts);
+  hostsRef.current = hosts;
+
+  const togglePinHost = useCallback(
+    (hostId: string) => {
+      setPinnedHostIds((prev) => {
+        const wasPinned = prev.includes(hostId);
+        const next = wasPinned ? prev.filter((id) => id !== hostId) : [...prev, hostId];
+        setPersistentItem('ai_pinned_hosts_v1', JSON.stringify(next));
+        const hostName = hostsRef.current.find((h) => h.id === hostId)?.name || hostId;
+        onToast?.(
+          wasPinned
+            ? t('host_unpinned_toast', { name: hostName })
+            : t('host_pinned_toast', { name: hostName })
+        );
+        return next;
+      });
+    },
+    [onToast, t]
+  );
 
   const [viewMode, setViewMode] = useState<'grid' | 'topology'>(() => {
     try {
       const saved =
-        localStorage.getItem('ai_net_fleet_view_mode') ||
-        localStorage.getItem('cst_fleet_view_mode');
+        getPersistentItem('ai_net_fleet_view_mode') ||
+        getPersistentItem('cst_fleet_view_mode');
       if (saved === 'grid' || saved === 'topology') return saved;
     } catch {}
     return 'grid';
   });
 
   useEffect(() => {
-    try {
-      localStorage.setItem('ai_net_fleet_view_mode', viewMode);
-    } catch {}
+    setPersistentItem('ai_net_fleet_view_mode', viewMode);
   }, [viewMode]);
 
   const toggleHostExpansion = useCallback((hostId: string) => {
@@ -270,14 +298,23 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   const deferredQuery = useDeferredValue(searchQuery);
   const [confirmWakeAll, setConfirmWakeAll] = useState(false);
 
-  const [activeFilter, setActiveFilter] = useState<
-    'all' | 'online' | 'sleeping' | 'servers' | 'quarantined'
-  >('all');
+  const [activeFilter, setActiveFilter] = useState<FleetFilterMode>(() => {
+    try {
+      const saved = getPersistentItem('ai_net_fleet_filter') as FleetFilterMode | null;
+      if (saved && VALID_FILTERS.includes(saved)) return saved;
+    } catch {}
+    return 'all';
+  });
+
+  useEffect(() => {
+    setPersistentItem('ai_net_fleet_filter', activeFilter);
+  }, [activeFilter]);
+
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [sortMode, setSortMode] = useState<FleetSortMode>(() => {
     try {
-      const saved = localStorage.getItem('wakeflow_fleet_sort_mode');
-      if (saved === 'alphabetical' || saved === 'status' || saved === 'latency') {
+      const saved = getPersistentItem('wakeflow_fleet_sort_mode');
+      if (saved === 'alphabetical' || saved === 'status' || saved === 'latency' || saved === 'load') {
         return saved;
       }
     } catch {}
@@ -285,7 +322,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   });
   const [sortDirection, setSortDirection] = useState<FleetSortDirection>(() => {
     try {
-      const saved = localStorage.getItem('wakeflow_fleet_sort_direction');
+      const saved = getPersistentItem('wakeflow_fleet_sort_direction');
       if (saved === 'asc' || saved === 'desc') {
         return saved;
       }
@@ -294,11 +331,18 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   });
 
   useEffect(() => {
-    try {
-      localStorage.setItem('wakeflow_fleet_sort_mode', sortMode);
-      localStorage.setItem('wakeflow_fleet_sort_direction', sortDirection);
-    } catch {}
+    setPersistentItem('wakeflow_fleet_sort_mode', sortMode);
+    setPersistentItem('wakeflow_fleet_sort_direction', sortDirection);
   }, [sortMode, sortDirection]);
+
+  useEffect(() => {
+    if (!isSortMenuOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsSortMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isSortMenuOpen]);
 
   const handleSortToggle = useCallback((mode: FleetSortMode) => {
     triggerHapticFeedback('selection');
@@ -307,7 +351,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
         setSortDirection((prevDir) => (prevDir === 'asc' ? 'desc' : 'asc'));
         return prevMode;
       } else {
-        setSortDirection('asc');
+        setSortDirection(mode === 'load' ? 'desc' : 'asc');
         return mode;
       }
     });
@@ -316,13 +360,18 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
   const [wakingCountdown, setWakingCountdown] = useState<Record<string, number>>({});
   const wolHistory = useWolHistory();
   const seenWolIdsRef = useRef<Set<string> | null>(null);
-  if (seenWolIdsRef.current === null) {
-    seenWolIdsRef.current = new Set(wolHistory.map((e) => e.id));
-  }
 
   useEffect(() => {
+    if (seenWolIdsRef.current === null) {
+      seenWolIdsRef.current = new Set(wolHistory.map((e) => e.id));
+      return;
+    }
     const seen = seenWolIdsRef.current;
-    if (!seen) return;
+    if (seen.size > 400) {
+      seen.clear();
+      wolHistory.forEach((e) => seen.add(e.id));
+      return;
+    }
     const now = Date.now();
     const newlyWokenIds: string[] = [];
     for (const entry of wolHistory) {
@@ -347,9 +396,33 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
     }
   }, [wolHistory, hosts]);
 
+  const pinnedSet = useMemo(() => new Set(pinnedHostIds), [pinnedHostIds]);
+  const quarantinedSet = useMemo(() => new Set(quarantinedHosts), [quarantinedHosts]);
+  const circuitTrippedSet = useMemo(() => new Set(circuitTrippedHosts), [circuitTrippedHosts]);
+
   const onlineCount = useMemo(() => hosts.filter((h) => h.isOnline).length, [hosts]);
   const offlineHosts = useMemo(() => hosts.filter((h) => !h.isOnline), [hosts]);
   const offlineCount = offlineHosts.length;
+  const pinnedCount = useMemo(
+    () => hosts.filter((h) => pinnedSet.has(h.id)).length,
+    [hosts, pinnedSet]
+  );
+  const serverCount = useMemo(
+    () =>
+      hosts.filter(
+        (h) => h.deviceType === 'server' || h.id.includes('SERVER') || h.id.includes('SRV')
+      ).length,
+    [hosts]
+  );
+
+  // Auto-reset filter if user unpins last pinned host or clears last quarantined host while viewing that tab
+  useEffect(() => {
+    if (activeFilter === 'pinned' && pinnedCount === 0) {
+      setActiveFilter('all');
+    } else if (activeFilter === 'quarantined' && quarantinedHosts.length === 0) {
+      setActiveFilter('all');
+    }
+  }, [activeFilter, pinnedCount, quarantinedHosts.length]);
 
   const handleDiagnoseHost = useCallback(
     (host: HostDevice) => {
@@ -460,17 +533,18 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
 
       if (!matchesQuery) return false;
 
+      if (activeFilter === 'pinned') return pinnedSet.has(h.id);
       if (activeFilter === 'online') return h.isOnline;
       if (activeFilter === 'sleeping') return !h.isOnline;
       if (activeFilter === 'servers')
         return h.deviceType === 'server' || h.id.includes('SERVER') || h.id.includes('SRV');
-      if (activeFilter === 'quarantined') return quarantinedHosts.includes(h.id);
+      if (activeFilter === 'quarantined') return quarantinedSet.has(h.id);
       return true;
     });
 
     return [...filtered].sort((a, b) => {
-      const aPinned = pinnedHostIds.includes(a.id);
-      const bPinned = pinnedHostIds.includes(b.id);
+      const aPinned = pinnedSet.has(a.id);
+      const bPinned = pinnedSet.has(b.id);
       if (aPinned !== bPinned) {
         return aPinned ? -1 : 1;
       }
@@ -502,32 +576,62 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
         return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
       }
 
+      if (sortMode === 'load') {
+        if (a.isOnline !== b.isOnline) {
+          return a.isOnline ? -1 : 1;
+        }
+        const loadA = Math.max(a.cpuUsage ?? a.cpu ?? 0, a.ramUsage ?? a.ram ?? 0);
+        const loadB = Math.max(b.cpuUsage ?? b.cpu ?? 0, b.ramUsage ?? b.ram ?? 0);
+        const diff = loadA - loadB;
+        if (diff !== 0) {
+          return sortDirection === 'desc' ? -diff : diff;
+        }
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      }
+
       return 0;
     });
-  }, [activeFilter, hosts, deferredQuery, sortMode, sortDirection, pinnedHostIds, quarantinedHosts, language]);
+  }, [activeFilter, hosts, deferredQuery, sortMode, sortDirection, pinnedSet, quarantinedSet, language]);
 
-  const sortOptions = [
-    {
-      id: 'alphabetical' as const,
-      label: t('sort_name'),
-      badge: sortDirection === 'asc' ? 'A→Z' : 'Z→A',
-      icon: sortDirection === 'asc' ? ArrowDownAZ : ArrowUpAZ,
-    },
-    {
-      id: 'status' as const,
-      label: t('sort_status'),
-      badge: sortDirection === 'asc' ? 'Online' : 'Sleep',
-      icon: Activity,
-    },
-    {
-      id: 'latency' as const,
-      label: t('sort_latency'),
-      badge: sortDirection === 'asc' ? 'Fast' : 'Slow',
-      icon: Gauge,
-    },
-  ];
+  const sortOptions = useMemo(
+    () => [
+      {
+        id: 'alphabetical' as const,
+        label: t('sort_name'),
+        badge: sortDirection === 'asc' ? t('sort_name_asc') : t('sort_name_desc'),
+        icon: sortDirection === 'asc' ? ArrowDownAZ : ArrowUpAZ,
+      },
+      {
+        id: 'status' as const,
+        label: t('sort_status'),
+        badge:
+          sortDirection === 'asc' ? t('sort_status_online_first') : t('sort_status_offline_first'),
+        icon: Activity,
+      },
+      {
+        id: 'latency' as const,
+        label: t('sort_latency'),
+        badge:
+          sortDirection === 'asc' ? t('sort_latency_fast_first') : t('sort_latency_slow_first'),
+        icon: Gauge,
+      },
+      {
+        id: 'load' as const,
+        label: t('sort_load'),
+        badge: sortDirection === 'desc' ? t('sort_load_high_first') : t('sort_load_low_first'),
+        icon: Cpu,
+      },
+    ],
+    [sortDirection, t]
+  );
   const currentSortOption = sortOptions.find((o) => o.id === sortMode) || sortOptions[0];
   const CurrentSortIcon = currentSortOption.icon;
+  const hasActiveNarrowing = Boolean(searchQuery.trim() || activeFilter !== 'all');
+  const resetFilters = useCallback(() => {
+    triggerHapticFeedback('light');
+    setSearchQuery('');
+    setActiveFilter('all');
+  }, []);
 
   return (
     <div id="fleet-dashboard-container" className="w-full flex flex-col select-none pb-2 relative">
@@ -585,7 +689,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-between sm:justify-end gap-1.5 w-full sm:w-auto shrink-0 sm:ml-auto flex-wrap">
+          <div className="flex items-center justify-start sm:justify-end gap-1.5 w-full sm:w-auto shrink-0 sm:ml-auto flex-wrap">
             <ThemeQuickControls showAccentDots />
 
             {offlineCount > 0 &&
@@ -707,9 +811,19 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  if (searchQuery) {
+                    setSearchQuery('');
+                  } else {
+                    (e.currentTarget as HTMLInputElement).blur();
+                  }
+                }
+              }}
               placeholder={
                 language === 'bg' ? 'Търси PC, IP или MAC...' : 'Search PCs, IP or MAC...'
               }
+              aria-label={language === 'bg' ? 'Търси PC, IP или MAC' : 'Search PCs, IP or MAC'}
               className="flex-1 min-w-0 bg-transparent border-none outline-none text-xs sm:text-sm ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80"
             />
             {searchQuery ? (
@@ -728,7 +842,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                   triggerHapticFeedback('light');
                   toggleOmnibar();
                 }}
-                className="hidden lg:inline-flex px-2.5 py-0.5 rounded-full liquid-control-pill text-[11px] font-mono ink-secondary"
+                className="hidden lg:inline-flex items-center justify-center h-8 min-w-[44px] px-3 rounded-full liquid-control-pill text-[11px] font-mono font-bold ink-secondary hover:ink-primary"
                 title={t('fleet_spotlight_tooltip')}
               >
                 ⌘K
@@ -768,6 +882,8 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               className="h-11 px-3 sm:px-3.5 rounded-full liquid-control-pill flex items-center gap-1.5 text-xs font-semibold shrink-0 cursor-pointer"
               title={`${t('sort_label')} ${currentSortOption.label}`}
               aria-label={`${t('sort_label')} ${currentSortOption.label}`}
+              aria-haspopup="menu"
+              aria-expanded={isSortMenuOpen}
             >
               <CurrentSortIcon className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               <span className="hidden xs:inline">{currentSortOption.label}</span>
@@ -830,16 +946,27 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none min-w-0 flex-1 py-0.5 px-0.5">
             {[
-              { id: 'all', label: t('filter_all'), count: hosts.length },
-              { id: 'online', label: t('filter_online'), count: onlineCount },
-              { id: 'sleeping', label: t('filter_sleeping'), count: offlineCount },
-              { id: 'servers', label: t('filter_servers'), count: null },
+              { id: 'all' as FleetFilterMode, label: t('filter_all'), count: hosts.length, isPinnedChip: false },
+              ...(pinnedCount > 0
+                ? [
+                    {
+                      id: 'pinned' as FleetFilterMode,
+                      label: t('filter_pinned'),
+                      count: pinnedCount,
+                      isPinnedChip: true,
+                    },
+                  ]
+                : []),
+              { id: 'online' as FleetFilterMode, label: t('filter_online'), count: onlineCount, isPinnedChip: false },
+              { id: 'sleeping' as FleetFilterMode, label: t('filter_sleeping'), count: offlineCount, isPinnedChip: false },
+              { id: 'servers' as FleetFilterMode, label: t('filter_servers'), count: serverCount, isPinnedChip: false },
               ...(quarantinedHosts.length > 0
                 ? [
                     {
-                      id: 'quarantined',
-                      label: language === 'bg' ? 'Карантина' : 'Quarantine',
+                      id: 'quarantined' as FleetFilterMode,
+                      label: t('filter_quarantined'),
                       count: quarantinedHosts.length,
+                      isPinnedChip: false,
                     },
                   ]
                 : []),
@@ -854,7 +981,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                   transition={SPRING_POP}
                   onClick={() => {
                     triggerHapticFeedback('selection');
-                    setActiveFilter(chip.id as any);
+                    setActiveFilter(chip.id);
                   }}
                   className={`relative h-8.5 px-3.5 rounded-full text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 shrink-0 cursor-pointer ${
                     isActive ? 'preserve-white' : 'liquid-control-pill'
@@ -865,6 +992,13 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
                       layoutId="fleetActiveFilterPill"
                       transition={SPRING_JELLY}
                       className="absolute inset-0 rounded-full liquid-hero-btn pointer-events-none"
+                    />
+                  )}
+                  {chip.isPinnedChip && (
+                    <Star
+                      className={`relative z-10 w-3 h-3 shrink-0 ${
+                        isActive ? 'text-white fill-white' : 'text-amber-400 fill-amber-400'
+                      }`}
                     />
                   )}
                   <span className="relative z-10">{chip.label}</span>
@@ -905,6 +1039,23 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
             </motion.button>
           )}
         </div>
+
+        {/* Active Search / Filter Status Bar */}
+        {viewMode === 'grid' && hosts.length > 0 && hasActiveNarrowing && (
+          <div className="flex items-center justify-between gap-2 px-1 text-[11px] font-mono ink-muted">
+            <span>
+              {t('filter_showing_count', { shown: filteredHosts.length, total: hosts.length })}
+            </span>
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="inline-flex items-center gap-1 text-cyan-400 hover:underline font-semibold cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>{t('filter_reset')}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Fleet Content */}
@@ -934,7 +1085,7 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
       ) : filteredHosts.length === 0 ? (
         <div className="glass-liquid rounded-[30px] p-7 sm:p-10 flex flex-col items-center justify-center text-center mx-auto max-w-md my-6">
           <div className="w-14 h-14 squircle-badge squircle-hero flex items-center justify-center mb-4">
-            <Monitor className="w-7 h-7" />
+            {hosts.length === 0 ? <Monitor className="w-7 h-7" /> : <Search className="w-6 h-6" />}
           </div>
           <h3 className="text-base sm:text-lg font-extrabold ink-primary tracking-tight font-display">
             {hosts.length === 0
@@ -951,34 +1102,39 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               : t('empty_hosts_desc')}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-2.5 w-full">
-            {searchQuery && (
+            {hasActiveNarrowing && (
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
-                className="h-10 px-4 rounded-full liquid-control-pill font-semibold text-xs"
+                onClick={resetFilters}
+                className="h-10 px-4 rounded-full liquid-hero-btn font-bold text-xs flex items-center gap-1.5"
               >
-                {language === 'bg' ? 'Изчисти търсенето' : 'Clear Search'}
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>{t('filter_reset')}</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => {
-                triggerHapticFeedback('light');
-                openModal('quickSetup');
-              }}
-              className="h-10 px-4 rounded-full squircle-emerald preserve-white font-bold text-xs flex items-center gap-1.5"
-            >
-              <QrCode className="w-4 h-4" />
-              <span>{language === 'bg' ? 'Бързо сдвояване (QR/PIN)' : 'Quick Pair (QR/PIN)'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={addHostHandler}
-              className="h-10 px-4 rounded-full liquid-hero-btn font-bold text-xs flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>{language === 'bg' ? 'Добави компютър' : 'Add First PC'}</span>
-            </button>
+            {hosts.length === 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback('light');
+                    openModal('quickSetup');
+                  }}
+                  className="h-10 px-4 rounded-full squircle-emerald preserve-white font-bold text-xs flex items-center gap-1.5"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>{language === 'bg' ? 'Бързо сдвояване (QR/PIN)' : 'Quick Pair (QR/PIN)'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={addHostHandler}
+                  className="h-10 px-4 rounded-full liquid-hero-btn font-bold text-xs flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4 stroke-[2.5]" />
+                  <span>{language === 'bg' ? 'Добави компютър' : 'Add First PC'}</span>
+                </button>
+              </>
+            )}
             {onRescan && (
               <button
                 type="button"
@@ -1009,9 +1165,9 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               language={language}
               isSelected={host.id === activeSelectedId}
               isExpanded={!!expandedHostIds[host.id]}
-              isPinned={pinnedHostIds.includes(host.id)}
-              isQuarantined={quarantinedHosts.includes(host.id)}
-              isCircuitTripped={circuitTrippedHosts.includes(host.id)}
+              isPinned={pinnedSet.has(host.id)}
+              isQuarantined={quarantinedSet.has(host.id)}
+              isCircuitTripped={circuitTrippedSet.has(host.id)}
               sortMode={sortMode}
               remainingWakeSeconds={wakingCountdown[host.id]}
               onSelect={onSelectHostSafe}
@@ -1022,8 +1178,9 @@ const FleetDashboardComponent: React.FC<FleetDashboardProps> = ({
               onQuickCommand={onSendCommand}
               onSendInputOpcode={onSendInputOpcode}
               onDiagnoseHost={handleDiagnoseHost}
-              onOpenDetailsModal={(dev) => openModal('hostDetails', dev)}
+              onOpenDetailsModal={handleOpenDetailsModal}
               onWakeClick={handleWakeClick}
+              onNotify={onToast}
             />
           ))}
         </div>

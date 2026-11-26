@@ -53,10 +53,16 @@ function triggerFileDownload(filename: string, content: string, mime: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  setTimeout(() => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  }, 1000);
 }
 
-export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
+const WolHistoryLogViewerComponent: React.FC<WolHistoryLogViewerProps> = ({
   hosts = [],
   onSendWolPacket,
 }) => {
@@ -670,3 +676,5 @@ export const WolHistoryLogViewer: React.FC<WolHistoryLogViewerProps> = ({
     </div>
   );
 };
+
+export const WolHistoryLogViewer = React.memo(WolHistoryLogViewerComponent);

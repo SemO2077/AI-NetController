@@ -108,10 +108,25 @@ function readPersistedUiSettings(): PersistedUiSettings {
   }
 }
 
+function writeJsonFileAtomic(filePath: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const serialized = JSON.stringify(data, null, 2);
+  const tmpPath = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, serialized, { encoding: 'utf-8', mode: 0o600 });
+    fs.renameSync(tmpPath, filePath);
+  } catch {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore temp cleanup failure
+    }
+    fs.writeFileSync(filePath, serialized, { encoding: 'utf-8', mode: 0o600 });
+  }
+}
+
 function writePersistedUiSettings(settings: PersistedUiSettings): void {
-  const p = getUiSettingsPath();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(settings, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  writeJsonFileAtomic(getUiSettingsPath(), settings);
 }
 
 interface HostMemoryRecord {
@@ -131,9 +146,7 @@ function readAllHostMemory(): Record<string, HostMemoryRecord> {
 }
 
 function writeAllHostMemory(store: Record<string, HostMemoryRecord>): void {
-  const p = getHostMemoryPath();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(store, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  writeJsonFileAtomic(getHostMemoryPath(), store);
 }
 
 function detectPrimaryLanIp(): string {
@@ -272,14 +285,15 @@ const apiRateBuckets = new Map<string, { count: number; resetAt: number }>();
 const API_WINDOW_MS = 60_000;
 const API_MAX_REQUESTS = 180;
 
-setInterval(() => {
+const rateLimitCleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [ip, b] of apiRateBuckets.entries()) {
     if (now >= b.resetAt) {
       apiRateBuckets.delete(ip);
     }
   }
-}, 60_000).unref();
+}, 60_000);
+rateLimitCleanupInterval.unref();
 
 app.use('/api', (req: Request, res: Response, next: NextFunction) => {
   const clientIp = String(req.socket.remoteAddress || '127.0.0.1').trim();
@@ -371,6 +385,14 @@ function readPlaintextConfigSync(): DaemonConfigData | null {
 }
 
 function getPythonBin(): string {
+  const winVenv = path.join(ROOT_DIR, '.venv', 'Scripts', 'python.exe');
+  if (process.platform === 'win32' && fs.existsSync(winVenv)) {
+    return winVenv;
+  }
+  const posixVenv = path.join(ROOT_DIR, '.venv', 'bin', 'python');
+  if (process.platform !== 'win32' && fs.existsSync(posixVenv)) {
+    return posixVenv;
+  }
   return process.platform === 'win32' ? 'python' : 'python3';
 }
 
@@ -489,7 +511,7 @@ const activeSessions = new Map<string, { expiresAt: number; ip: string }>();
 const MAX_ACTIVE_SESSIONS = 500;
 const authFailBuckets = new Map<string, { count: number; lockedUntil: number; windowStart: number }>();
 
-setInterval(() => {
+const sessionCleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [sid, meta] of activeSessions.entries()) {
     if (now >= meta.expiresAt) {
@@ -501,7 +523,8 @@ setInterval(() => {
       authFailBuckets.delete(ipKey);
     }
   }
-}, 5 * 60_000).unref();
+}, 5 * 60_000);
+sessionCleanupInterval.unref();
 
 function safeTimingEqual(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf-8');
@@ -1095,6 +1118,20 @@ async function dispatchLiveAgentCommand(
       resolve(result);
     };
 
+    const safeWsSend = (data: string | Uint8Array<ArrayBuffer>): boolean => {
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+          return true;
+        }
+        finish({ ok: false, error: 'Host Agent socket closed before message dispatch' });
+        return false;
+      } catch (err: any) {
+        finish({ ok: false, error: err?.message || 'Failed to transmit message to Host Agent' });
+        return false;
+      }
+    };
+
     const sendEncryptedCommand = () => {
       if (commandSent || !vault || !vaultReady) return;
       commandSent = true;
@@ -1119,7 +1156,7 @@ async function dispatchLiveAgentCommand(
         opcode = 0x08;
         payloadBytes = Buffer.from(JSON.stringify(messagePayload), 'utf-8');
       }
-      ws.send(vault.encryptWirePacket(opcode, payloadBytes));
+      if (!safeWsSend(vault.encryptWirePacket(opcode, payloadBytes))) return;
       if (!awaitEvent) {
         dispatchTimer = setTimeout(() => finish({ ok: true, response: { event: 'DISPATCHED_AEAD' } }), 50);
       }
@@ -1162,7 +1199,7 @@ async function dispatchLiveAgentCommand(
             if (!vault) {
               vault = new WebCryptoVault(secret);
             }
-            ws.send(packPlainFrame(0x06, 0, vault.createMutualInitPayload()));
+            safeWsSend(packPlainFrame(0x06, 0, vault.createMutualInitPayload()));
             return;
           }
           if (statusStr === 'OK_ECDH_VAULT') {
@@ -1181,7 +1218,7 @@ async function dispatchLiveAgentCommand(
               .createHmac('sha256', Buffer.from(secret, 'utf-8'))
               .update(payload)
               .digest();
-            ws.send(packPlainFrame(0x06, seq, sig));
+            safeWsSend(packPlainFrame(0x06, seq, sig));
             return;
           }
           if (authenticated && vault && !vault.isKeysReady && (len === 91 || len === 59)) {
@@ -1190,7 +1227,7 @@ async function dispatchLiveAgentCommand(
               finish({ ok: false, error: 'Host ECDH mutual authentication failed' });
               return;
             }
-            ws.send(packPlainFrame(0x06, 0, resp80));
+            safeWsSend(packPlainFrame(0x06, 0, resp80));
             return;
           }
           if (statusStr) {
@@ -1264,7 +1301,7 @@ async function dispatchLiveAgentCommand(
         if (parsed.event === 'AUTHENTICATED') {
           authenticated = true;
           outboundSeq += 1;
-          ws.send(JSON.stringify({ ...messagePayload, _seq: outboundSeq }));
+          if (!safeWsSend(JSON.stringify({ ...messagePayload, _seq: outboundSeq }))) return;
           if (!awaitEvent) {
             dispatchTimer = setTimeout(() => finish({ ok: true, response: parsed }), 40);
           }
@@ -1403,25 +1440,29 @@ async function getRealDaemonSnapshot() {
 
 // Public non-secret health check
 app.get('/api/health', async (_req: Request, res: Response) => {
-  const cfg = await loadDaemonConfig();
-  const port = Number(cfg.port || 8765);
-  const probe = await probeTcpPortWithRtt('127.0.0.1', port, 250);
-  res.json({
-    status: 'online',
-    daemonOnline: probe.open,
-    protocol: PROTOCOL_VERSION,
-    version: APP_VERSION,
-    timestamp: new Date().toISOString(),
-    hasApiKey: Boolean(process.env.GEMINI_API_KEY),
-    models: DYNAMIC_MODELS.map(({ id, name, provider, description, contextWindow, isCustom }) => ({
-      id,
-      name,
-      provider,
-      description,
-      contextWindow,
-      isCustom,
-    })),
-  });
+  try {
+    const cfg = await loadDaemonConfig();
+    const port = Number(cfg.port || 8765);
+    const probe = await probeTcpPortWithRtt('127.0.0.1', port, 250);
+    return res.json({
+      status: 'online',
+      daemonOnline: probe.open,
+      protocol: PROTOCOL_VERSION,
+      version: APP_VERSION,
+      timestamp: new Date().toISOString(),
+      hasApiKey: Boolean(process.env.GEMINI_API_KEY),
+      models: DYNAMIC_MODELS.map(({ id, name, provider, description, contextWindow, isCustom }) => ({
+        id,
+        name,
+        provider,
+        description,
+        contextWindow,
+        isCustom,
+      })),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ status: 'degraded', error: err?.message || 'Health check failed' });
+  }
 });
 
 // =====================================================================
@@ -2377,37 +2418,42 @@ app.get('/api/setup/info', requireControlAuth, async (_req: Request, res: Respon
 });
 
 app.get('/api/setup/windows-launcher', requireControlAuth, async (_req: Request, res: Response) => {
-  const snap = await getRealDaemonSnapshot();
-  const safePort = Number.isInteger(snap.port) ? snap.port : 8765;
+  try {
+    const snap = await getRealDaemonSnapshot();
+    const safePort = Number.isInteger(snap.port) ? snap.port : 8765;
 
-  const batLines = [
-    '@echo off',
-    'title AI NetController - PC Host Agent Launcher',
-    'color 0B',
-    `echo AI NetController v${APP_VERSION} (${APP_VERSION_LABEL}) Host Agent Launcher`,
-    'echo Note: Credentials are loaded securely from your user DPAPI config.json.',
-    `set "CST_AGENT_PORT=${safePort}"`,
-    'cd /d "%~dp0"',
-    'where python >nul 2>nul',
-    'if %ERRORLEVEL% EQU 0 (',
-    '    if exist "agent\\requirements.txt" python -m pip install -r agent\\requirements.txt --quiet',
-    ')',
-    `netsh advfirewall firewall add rule name="AI NetController Daemon" dir=in action=allow protocol=TCP localport=${safePort} profile=private >nul 2>nul`,
-    `if exist "AI_NetController_HostAgent_v${APP_VERSION}_win64.exe" (`,
-    `    start "AI NetController Host Agent" "AI_NetController_HostAgent_v${APP_VERSION}_win64.exe"`,
-    ') else if exist "agent\\agent.py" (',
-    '    start "AI NetController Host Agent" python "agent\\agent.py"',
-    ') else if exist "agent\\agent_daemon.py" (',
-    '    start "AI NetController Host Agent" python "agent\\agent_daemon.py"',
-    ') else (',
-    '    echo [!] Place this script in the AI NetController folder or alongside the Host Agent .exe.',
-    ')',
-    'pause',
-  ];
+    const batLines = [
+      '@echo off',
+      'title AI NetController - PC Host Agent Launcher',
+      'color 0B',
+      `echo AI NetController v${APP_VERSION} (${APP_VERSION_LABEL}) Host Agent Launcher`,
+      'echo Note: Credentials are loaded securely from your user DPAPI config.json.',
+      `set "CST_AGENT_PORT=${safePort}"`,
+      'cd /d "%~dp0"',
+      'where python >nul 2>nul',
+      'if %ERRORLEVEL% EQU 0 (',
+      '    if exist "agent\\requirements.txt" python -m pip install -r agent\\requirements.txt --quiet',
+      ')',
+      `netsh advfirewall firewall add rule name="AI NetController Daemon" dir=in action=allow protocol=TCP localport=${safePort} profile=private >nul 2>nul`,
+      `if exist "AI_NetController_HostAgent_v${APP_VERSION}_win64.exe" (`,
+      `    start "AI NetController Host Agent" "AI_NetController_HostAgent_v${APP_VERSION}_win64.exe"`,
+      ') else if exist "agent\\agent.py" (',
+      '    start "AI NetController Host Agent" python "agent\\agent.py"',
+      ') else if exist "agent\\agent_daemon.py" (',
+      '    start "AI NetController Host Agent" python "agent\\agent_daemon.py"',
+      ') else (',
+      '    echo [!] Place this script in the AI NetController folder or alongside the Host Agent .exe.',
+      ')',
+      'pause',
+    ];
 
-  res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename="AI_NetController_OneClick_Setup.bat"');
-  return res.send(batLines.join('\r\n'));
+    res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="AI_NetController_OneClick_Setup.bat"');
+    return res.send(batLines.join('\r\n'));
+  } catch (err: any) {
+    console.error('[API /api/setup/windows-launcher error]:', err);
+    return res.status(500).json({ error: 'Failed to generate launcher script' });
+  }
 });
 
 // =====================================================================
@@ -2839,16 +2885,14 @@ function readPersistedWolSchedules(): PersistedWolSchedule[] {
 }
 
 function writePersistedWolSchedules(list: PersistedWolSchedule[]): void {
-  const p = getWolSchedulesPath();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(list, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  writeJsonFileAtomic(getWolSchedulesPath(), list);
 }
 
 const firedScheduleMinuteKey = new Map<string, string>();
 const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 let wolSchedulerRunning = false;
 
-setInterval(async () => {
+const wolSchedulerInterval = setInterval(async () => {
   if (wolSchedulerRunning) return;
   wolSchedulerRunning = true;
   try {
@@ -2907,7 +2951,8 @@ setInterval(async () => {
   } finally {
     wolSchedulerRunning = false;
   }
-}, 20_000).unref();
+}, 20_000);
+wolSchedulerInterval.unref();
 
 app.get('/api/wol/schedules', requireControlAuth, (_req: Request, res: Response) => {
   return res.json({ success: true, schedules: readPersistedWolSchedules() });
@@ -2966,121 +3011,136 @@ app.delete('/api/wol/schedules/:id', requireControlAuth, (req: Request, res: Res
 });
 
 // =====================================================================
-// REAL LAN & ARP SUBNET SCANNER (No Fake Hosts)
+// REAL LAN & ARP SUBNET SCANNER (No Fake Hosts, Coalesced Concurrency)
 // =====================================================================
-app.post('/api/hosts/scan', requireControlAuth, async (_req: Request, res: Response) => {
-  try {
-    const snap = await getRealDaemonSnapshot();
-    const port = snap.port || 8765;
-    const discovered: Array<{
-      id: string;
-      name: string;
-      ip: string;
-      mac: string;
-      os: string;
-      isOnline: boolean;
-      ping: number;
-    }> = [];
+type DiscoveredLanHost = {
+  id: string;
+  name: string;
+  ip: string;
+  mac: string;
+  os: string;
+  isOnline: boolean;
+  ping: number;
+};
 
-    const primaryAdapter = snap.activeAdapters[0] || {
-      name: 'Loopback',
-      ipv4: snap.localIp,
-      mac: '00:00:00:00:00:00',
-    };
+let activeLanScanPromise: Promise<DiscoveredLanHost[]> | null = null;
 
-    const loopbackProbe = await probeTcpPortWithRtt('127.0.0.1', port, 400);
-    const lanSelfProbe =
-      snap.localIp !== '127.0.0.1' ? await probeTcpPortWithRtt(snap.localIp, port, 400) : { open: false, rttMs: 0 };
+async function performLanHostScan(): Promise<DiscoveredLanHost[]> {
+  const snap = await getRealDaemonSnapshot();
+  const port = snap.port || 8765;
+  const discovered: DiscoveredLanHost[] = [];
 
-    if (loopbackProbe.open || lanSelfProbe.open) {
-      const realHostname = snap.hostname || os.hostname() || 'Host-PC';
-      const safeId = realHostname.toUpperCase().replace(/[^A-Z0-9_-]/g, '-');
-      discovered.push({
-        id: safeId,
-        name: realHostname,
-        ip: snap.localIp !== '127.0.0.1' ? snap.localIp : '127.0.0.1',
-        mac: primaryAdapter.mac || '00:00:00:00:00:00',
-        os: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux',
-        isOnline: true,
-        ping: lanSelfProbe.open ? lanSelfProbe.rttMs : loopbackProbe.rttMs,
-      });
+  const primaryAdapter = snap.activeAdapters[0] || {
+    name: 'Loopback',
+    ipv4: snap.localIp,
+    mac: '00:00:00:00:00:00',
+  };
+
+  const loopbackProbe = await probeTcpPortWithRtt('127.0.0.1', port, 400);
+  const lanSelfProbe =
+    snap.localIp !== '127.0.0.1' ? await probeTcpPortWithRtt(snap.localIp, port, 400) : { open: false, rttMs: 0 };
+
+  if (loopbackProbe.open || lanSelfProbe.open) {
+    const realHostname = snap.hostname || os.hostname() || 'Host-PC';
+    const safeId = realHostname.toUpperCase().replace(/[^A-Z0-9_-]/g, '-');
+    discovered.push({
+      id: safeId,
+      name: realHostname,
+      ip: snap.localIp !== '127.0.0.1' ? snap.localIp : '127.0.0.1',
+      mac: primaryAdapter.mac || '00:00:00:00:00:00',
+      os: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux',
+      isOnline: true,
+      ping: lanSelfProbe.open ? lanSelfProbe.rttMs : loopbackProbe.rttMs,
+    });
+  }
+
+  const arpStdout = await new Promise<string>((resolve) => {
+    execFile('arp', ['-a'], { timeout: 4000 }, (err, stdout) => resolve(err ? '' : stdout || ''));
+  });
+
+  if (arpStdout) {
+    const ipMacRegex =
+      /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})/i;
+    const seenIps = new Set<string>(['127.0.0.1', snap.localIp]);
+    const candidates: Array<{ ip: string; mac: string }> = [];
+
+    for (const line of arpStdout.split('\n')) {
+      const match = line.match(ipMacRegex);
+      if (!match) continue;
+      const ip = match[1];
+      const mac = match[2].replace(/-/g, ':').toUpperCase();
+      if (seenIps.has(ip) || ip.endsWith('.255') || !isAllowedAgentTargetIp(ip)) continue;
+      if (mac === 'FF:FF:FF:FF:FF:FF') continue;
+      seenIps.add(ip);
+      candidates.push({ ip, mac });
     }
 
-    const arpStdout = await new Promise<string>((resolve) => {
-      execFile('arp', ['-a'], { timeout: 4000 }, (err, stdout) => resolve(err ? '' : stdout || ''));
-    });
-
-    if (arpStdout) {
-      const ipMacRegex =
-        /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})/i;
-      const seenIps = new Set<string>(['127.0.0.1', snap.localIp]);
-      const candidates: Array<{ ip: string; mac: string }> = [];
-
-      for (const line of arpStdout.split('\n')) {
-        const match = line.match(ipMacRegex);
-        if (!match) continue;
-        const ip = match[1];
-        const mac = match[2].replace(/-/g, ':').toUpperCase();
-        if (seenIps.has(ip) || ip.endsWith('.255') || !isAllowedAgentTargetIp(ip)) continue;
-        if (mac === 'FF:FF:FF:FF:FF:FF') continue;
-        seenIps.add(ip);
-        candidates.push({ ip, mac });
-      }
-
-      const reverseDnsWithTimeout = (ip: string, ms: number): Promise<string[]> =>
-        new Promise((resolve) => {
-          let settled = false;
-          const timer = setTimeout(() => {
+    const reverseDnsWithTimeout = (ip: string, ms: number): Promise<string[]> =>
+      new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            resolve([]);
+          }
+        }, ms);
+        dns
+          .reverse(ip)
+          .then((names) => {
             if (!settled) {
               settled = true;
+              clearTimeout(timer);
+              resolve(names);
+            }
+          })
+          .catch(() => {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
               resolve([]);
             }
-          }, ms);
-          dns
-            .reverse(ip)
-            .then((names) => {
-              if (!settled) {
-                settled = true;
-                clearTimeout(timer);
-                resolve(names);
-              }
-            })
-            .catch(() => {
-              if (!settled) {
-                settled = true;
-                clearTimeout(timer);
-                resolve([]);
-              }
-            });
-        });
-
-      const MAX_PROBE_CONCURRENCY = 16;
-      let cursor = 0;
-      const runProbeWorker = async () => {
-        while (cursor < candidates.length) {
-          const item = candidates[cursor++];
-          if (!item) break;
-          const { ip, mac } = item;
-          const probe = await probeTcpPortWithRtt(ip, port, 350);
-          if (!probe.open) continue;
-          let resolvedName = `Peer (${ip})`;
-          const names = await reverseDnsWithTimeout(ip, 500);
-          if (names && names[0]) resolvedName = names[0];
-          discovered.push({
-            id: `PC-${ip.replace(/\./g, '-')}`,
-            name: resolvedName,
-            ip,
-            mac,
-            os: 'unknown',
-            isOnline: true,
-            ping: probe.rttMs,
           });
-        }
-      };
+      });
 
-      const workerCount = Math.min(MAX_PROBE_CONCURRENCY, candidates.length);
-      await Promise.allSettled(Array.from({ length: workerCount }, () => runProbeWorker()));
+    const MAX_PROBE_CONCURRENCY = 16;
+    let cursor = 0;
+    const runProbeWorker = async () => {
+      while (cursor < candidates.length) {
+        const item = candidates[cursor++];
+        if (!item) break;
+        const { ip, mac } = item;
+        const probe = await probeTcpPortWithRtt(ip, port, 350);
+        if (!probe.open) continue;
+        let resolvedName = `Peer (${ip})`;
+        const names = await reverseDnsWithTimeout(ip, 500);
+        if (names && names[0]) resolvedName = names[0];
+        discovered.push({
+          id: `PC-${ip.replace(/\./g, '-')}`,
+          name: resolvedName,
+          ip,
+          mac,
+          os: 'unknown',
+          isOnline: true,
+          ping: probe.rttMs,
+        });
+      }
+    };
+
+    const workerCount = Math.min(MAX_PROBE_CONCURRENCY, candidates.length);
+    await Promise.allSettled(Array.from({ length: workerCount }, () => runProbeWorker()));
+  }
+
+  return discovered;
+}
+
+app.post('/api/hosts/scan', requireControlAuth, async (_req: Request, res: Response) => {
+  try {
+    if (!activeLanScanPromise) {
+      activeLanScanPromise = performLanHostScan().finally(() => {
+        activeLanScanPromise = null;
+      });
     }
+    const discovered = await activeLanScanPromise;
 
     return res.json({
       success: true,
@@ -4023,6 +4083,8 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 });
 
 async function startServer() {
+  let viteServer: { close: () => Promise<void> } | null = null;
+
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('/{*splat}', (_req: Request, res: Response) => {
@@ -4039,14 +4101,50 @@ async function startServer() {
       },
       appType: 'spa',
     });
+    viteServer = vite;
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, BIND_HOST, () => {
+  const httpServer = app.listen(PORT, BIND_HOST, () => {
     console.log(
       `[AI NetController Server v${APP_VERSION}] Listening on http://${BIND_HOST}:${PORT} (LAN=${ALLOW_LAN_WEB}, Node=${process.version})`
     );
   });
+
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(
+        `[AI NetController Server] Port ${PORT} on ${BIND_HOST} is already in use. Set PORT=<port> or stop the existing process.`
+      );
+    } else {
+      console.error('[AI NetController Server Error]:', err);
+    }
+    process.exit(1);
+  });
+
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearInterval(rateLimitCleanupInterval);
+    clearInterval(sessionCleanupInterval);
+    clearInterval(wolSchedulerInterval);
+    const forceExitTimer = setTimeout(() => process.exit(0), 3000);
+    forceExitTimer.unref();
+    httpServer.close(async () => {
+      try {
+        await viteServer?.close();
+      } catch {
+        // ignore vite close errors during shutdown
+      }
+      clearTimeout(forceExitTimer);
+      console.log(`[AI NetController Server] Clean shutdown complete (${signal}).`);
+      process.exit(0);
+    });
+  };
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 startServer().catch((err) => {
