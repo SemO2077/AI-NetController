@@ -441,6 +441,7 @@ class HistoryNotifier extends StateNotifier<List<ActivityHistoryEntry>> {
   }
 
   Future<void> clearAll() async {
+    if (state.isEmpty) return;
     state = const <ActivityHistoryEntry>[];
     await _persist();
   }
@@ -449,6 +450,7 @@ class HistoryNotifier extends StateNotifier<List<ActivityHistoryEntry>> {
     final filtered = state
         .where((entry) => entry.category != category)
         .toList(growable: false);
+    if (filtered.length == state.length) return;
     state = List<ActivityHistoryEntry>.unmodifiable(filtered);
     await _persist();
   }
@@ -470,8 +472,13 @@ class HistoryNotifier extends StateNotifier<List<ActivityHistoryEntry>> {
   }
 
   /// Exports matching activity entries as a pretty-printed JSON payload.
-  String exportAsJson({ActivityCategory? category}) {
-    final items = _filteredEntries(category);
+  String exportAsJson({
+    ActivityCategory? category,
+    Iterable<ActivityHistoryEntry>? entriesOverride,
+  }) {
+    final items = entriesOverride != null
+        ? entriesOverride.toList(growable: false)
+        : _filteredEntries(category);
     final payload = <String, Object?>{
       'version': 1,
       'exportedAt': DateTime.now().toUtc().toIso8601String(),
@@ -483,8 +490,13 @@ class HistoryNotifier extends StateNotifier<List<ActivityHistoryEntry>> {
   }
 
   /// Exports matching activity entries as RFC 4180 CSV text.
-  String exportAsCsv({ActivityCategory? category}) {
-    final items = _filteredEntries(category);
+  String exportAsCsv({
+    ActivityCategory? category,
+    Iterable<ActivityHistoryEntry>? entriesOverride,
+  }) {
+    final items = entriesOverride != null
+        ? entriesOverride.toList(growable: false)
+        : _filteredEntries(category);
     final buffer = StringBuffer(
       'id,timestamp_iso,timestamp_ms,category,status,host_name,host_ip,mac,title,detail,latency_ms,meta_json',
     );
@@ -493,7 +505,12 @@ class HistoryNotifier extends StateNotifier<List<ActivityHistoryEntry>> {
         entry.timestampMs,
         isUtc: true,
       ).toIso8601String();
-      final metaJson = jsonEncode(entry.meta);
+      String metaJson;
+      try {
+        metaJson = jsonEncode(entry.meta);
+      } catch (_) {
+        metaJson = '{}';
+      }
       buffer.writeln();
       buffer.write(
         <String>[

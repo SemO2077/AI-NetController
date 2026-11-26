@@ -248,6 +248,7 @@ class HostState {
   final bool useTls;
   final String certFingerprint;
   final int? latencyMs;
+  final bool isPinned;
 
   HostState({
     required this.id,
@@ -269,6 +270,7 @@ class HostState {
     this.useTls = false,
     this.certFingerprint = '',
     this.latencyMs,
+    this.isPinned = false,
   });
 
   HostState copyWith({
@@ -292,6 +294,7 @@ class HostState {
     String? certFingerprint,
     int? latencyMs,
     bool clearLatency = false,
+    bool? isPinned,
   }) {
     return HostState(
       id: id ?? this.id,
@@ -313,6 +316,7 @@ class HostState {
       useTls: useTls ?? this.useTls,
       certFingerprint: certFingerprint ?? this.certFingerprint,
       latencyMs: clearLatency ? null : (latencyMs ?? this.latencyMs),
+      isPinned: isPinned ?? this.isPinned,
     );
   }
 
@@ -324,6 +328,7 @@ class HostState {
         'mac': mac,
         'osName': osName,
         'useTls': useTls,
+        if (isPinned) 'isPinned': true,
       };
 
   static HostState? fromSavedMap(Map<dynamic, dynamic> raw) {
@@ -344,6 +349,7 @@ class HostState {
       (raw['osName'] ?? '').toString(),
     );
     final useTls = raw['useTls'] == true;
+    final isPinned = raw['isPinned'] == true;
 
     // Cold-start hosts begin offline until an active heartbeat confirms reachability.
     return HostState(
@@ -357,6 +363,7 @@ class HostState {
       sharedSecret: loadHostPairingSecret(ip),
       useTls: useTls,
       certFingerprint: loadHostCertFingerprint(ip),
+      isPinned: isPinned,
     );
   }
 }
@@ -552,6 +559,100 @@ class FleetNotifier extends StateNotifier<List<HostState>> {
     }
     state = state.where((h) => h.id != id).toList(growable: false);
     _persistHosts();
+  }
+
+  void togglePinHost(String id) {
+    bool changed = false;
+    final nextList = <HostState>[
+      for (final h in state)
+        if (h.id == id)
+          (() {
+            changed = true;
+            return h.copyWith(isPinned: !h.isPinned);
+          })()
+        else
+          h,
+    ];
+    if (changed) {
+      state = nextList;
+      _persistHosts();
+    }
+  }
+
+  void setHostPinned(String id, bool pinned) {
+    bool changed = false;
+    final nextList = <HostState>[
+      for (final h in state)
+        if (h.id == id && h.isPinned != pinned)
+          (() {
+            changed = true;
+            return h.copyWith(isPinned: pinned);
+          })()
+        else
+          h,
+    ];
+    if (changed) {
+      state = nextList;
+      _persistHosts();
+    }
+  }
+
+  void mergeDiscoveredMetadata(
+    String ip, {
+    String? mac,
+    String? osName,
+    int? latencyMs,
+    bool? isOnline,
+  }) {
+    final String cleanMac =
+        mac != null ? (NetworkValidators.normalizeMac(mac) ?? '') : '';
+    final String cleanOs = osName != null
+        ? NetworkValidators.sanitizeLabel(osName)
+        : '';
+    bool stateChanged = false;
+    bool persistNeeded = false;
+    final nextList = <HostState>[
+      for (final h in state)
+        if (h.ip == ip)
+          (() {
+            final nextOnline = isOnline ?? h.isOnline;
+            final nextLat = latencyMs ?? h.latencyMs;
+            final nextMac =
+                (cleanMac.isNotEmpty && h.mac == '00:00:00:00:00:00')
+                    ? cleanMac
+                    : h.mac;
+            final nextOs =
+                (cleanOs.isNotEmpty &&
+                        cleanOs != 'Unknown' &&
+                        h.osName.trim().isEmpty)
+                    ? cleanOs
+                    : h.osName;
+            if (nextMac != h.mac || nextOs != h.osName) {
+              persistNeeded = true;
+            }
+            if (nextOnline == h.isOnline &&
+                nextLat == h.latencyMs &&
+                nextMac == h.mac &&
+                nextOs == h.osName) {
+              return h;
+            }
+            stateChanged = true;
+            return h.copyWith(
+              isOnline: nextOnline,
+              latencyMs: nextLat,
+              mac: nextMac,
+              osName: nextOs,
+            );
+          })()
+        else
+          h,
+    ];
+    if (stateChanged) {
+      state = nextList;
+    }
+    if (persistNeeded) {
+      _persistHosts();
+    }
   }
 
   void clearAllHostSecrets() {
@@ -892,6 +993,8 @@ class MainAdaptiveScreen extends ConsumerStatefulWidget {
   ConsumerState<MainAdaptiveScreen> createState() => _MainAdaptiveScreenState();
 }
 
+enum _FleetStatusFilter { all, online, sleeping, pinned }
+
 class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   static const MethodChannel _deeplinkChannel =
       MethodChannel('com.cst.autonomouslan/deeplink');
@@ -902,6 +1005,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   final TextEditingController _fleetSearchController = TextEditingController();
   final List<CommandLogItem> _commandLogs = [];
   String _fleetSearchQuery = '';
+  _FleetStatusFilter _fleetFilter = _FleetStatusFilter.all;
+  bool _showFleetSearch = false;
   bool _isScanning = false;
   bool _isPinging = false;
 
@@ -1039,8 +1144,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             ? 'Paired with $cleanName ($ip:$port)!'
             : 'Added $cleanName ($ip:$port) — enter 6-digit PIN to pair.',
         accentColor: resolvedSecret.isNotEmpty
-            ? CyberColors.success
-            : CyberColors.warning,
+            ? context.palette.success
+            : context.palette.warning,
       );
       return true;
     } catch (_) {
@@ -1115,9 +1220,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     Duration duration = const Duration(seconds: 2),
   }) {
     if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
     final palette = context.palette;
     final Color effectiveAccent = accentColor ?? palette.primary;
-    ScaffoldMessenger.of(context)
+    messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
@@ -1201,7 +1308,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       if (!silent) {
         _showToast(
           'Cannot send Wake-on-LAN: set a valid non-zero MAC address on this workstation.',
-          accentColor: CyberColors.warning,
+          accentColor: context.palette.warning,
           duration: const Duration(seconds: 3),
         );
       }
@@ -1248,7 +1355,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               : '255.255.255.255';
           _showToast(
             'WoL Magic Packet dispatched to $normalizedMac ($targetsText · UDP ${result.port})',
-            accentColor: CyberColors.warning,
+            accentColor: context.palette.warning,
           );
         } else {
           _showToast(
@@ -1294,7 +1401,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     if (targets.isEmpty) {
       _showToast(
         'No offline workstations have a valid MAC address for Wake-on-LAN.',
-        accentColor: CyberColors.warning,
+        accentColor: context.palette.warning,
       );
       return;
     }
@@ -1307,9 +1414,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         silent: true,
       );
     }
+    if (!mounted) return;
     _showToast(
       'Sent Wake-on-LAN packets to ${targets.length} sleeping workstation(s).',
-      accentColor: CyberColors.warning,
+      accentColor: context.palette.warning,
     );
   }
 
@@ -1360,7 +1468,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       ms != null
           ? '${host.name} (${host.ip}:${host.wsPort}) reachable in ${ms}ms'
           : '${host.name} (${host.ip}:${host.wsPort}) did not respond',
-      accentColor: ms != null ? CyberColors.success : CyberColors.warning,
+      accentColor: ms != null
+          ? context.palette.success
+          : context.palette.warning,
     );
   }
 
@@ -1401,8 +1511,9 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       );
       _showToast(
         'Health check complete: $onlineCount / ${hosts.length} online',
-        accentColor:
-            onlineCount > 0 ? CyberColors.success : CyberColors.warning,
+        accentColor: onlineCount > 0
+            ? context.palette.success
+            : context.palette.warning,
       );
     } finally {
       if (mounted) {
@@ -1446,7 +1557,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               name: safeName,
               ip: host.ip,
               wsPort: host.wsPort,
-              mac: '00:00:00:00:00:00',
+              mac: host.mac.isNotEmpty ? host.mac : '00:00:00:00:00:00',
               isOnline: true,
               osName: host.os,
               useTls: host.useTls,
@@ -1573,9 +1684,11 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         for (final pc in foundPcs) {
           final existing = existingByIp[pc.ip];
           if (existing != null) {
-            ref.read(fleetProvider.notifier).updateLatencyByIp(
+            ref.read(fleetProvider.notifier).mergeDiscoveredMetadata(
                   pc.ip,
-                  pc.latencyMs,
+                  mac: pc.mac,
+                  osName: pc.osName,
+                  latencyMs: pc.latencyMs,
                   isOnline: true,
                 );
           } else {
@@ -1588,13 +1701,13 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         }
         _showToast(
           'Discovered ${foundPcs.length} active host(s) on port $scanPort.',
-          accentColor: CyberColors.success,
+          accentColor: context.palette.success,
           duration: const Duration(seconds: 3),
         );
       } else {
         _showToast(
           'No active PCs found on port $scanPort. Verify the PC agent is running.',
-          accentColor: CyberColors.warning,
+          accentColor: context.palette.warning,
           duration: const Duration(seconds: 4),
         );
       }
@@ -1613,7 +1726,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     if (effectiveSecret.isEmpty) {
       _showToast(
         'Enter the 6-digit PIN from ${host.name} to pair & view its screen.',
-        accentColor: CyberColors.warning,
+        accentColor: context.palette.warning,
       );
       unawaited(_showHostEditorDialog(existing: host));
       return;
@@ -1688,351 +1801,92 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   Future<void> _showHostEditorDialog({HostState? existing}) async {
     final defaultPort =
         existing?.wsPort ?? ref.read(appPreferencesProvider).customScanPort;
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final ipCtrl = TextEditingController(text: existing?.ip ?? '');
-    final portCtrl = TextEditingController(text: defaultPort.toString());
-    final macCtrl = TextEditingController(
-      text: (existing != null && existing.mac != '00:00:00:00:00:00')
-          ? existing.mac
-          : '',
-    );
-    final secretCtrl = TextEditingController(
-      text: existing != null
-          ? existing.sharedSecret
-          : ref.read(globalPairingSecretProvider),
-    );
-    String? validationError;
-    bool isSaving = false;
-    bool useTls = existing?.useTls ?? ref.read(appPreferencesProvider).preferTls;
+    final defaultSecret = existing != null
+        ? existing.sharedSecret
+        : ref.read(globalPairingSecretProvider);
+    final defaultTls =
+        existing?.useTls ?? ref.read(appPreferencesProvider).preferTls;
 
     await showDialog<void>(
       context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setDialogState) {
-            final dlgPalette = ctx.palette;
-            final primary = dlgPalette.primary;
-            return AlertDialog(
-              insetPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-              backgroundColor: dlgPalette.surfaceElevated,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: dlgPalette.dividerColor),
-              ),
-              title: Text(
-                existing == null ? 'Add Workstation' : 'Edit Workstation',
-                style: TextStyle(
-                  color: dlgPalette.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    TextField(
-                      controller: nameCtrl,
-                      style: TextStyle(color: dlgPalette.textPrimary, fontSize: 13),
-                      decoration: const InputDecoration(
-                        labelText: 'Hostname',
-                        hintText: 'e.g. WORKSTATION-01',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 3,
-                          child: TextField(
-                            controller: ipCtrl,
-                            style: TextStyle(
-                              color: dlgPalette.textPrimary,
-                              fontSize: 13,
-                              fontFamily: 'monospace',
-                            ),
-                            decoration: const InputDecoration(
-                              labelText: 'IPv4 or Host',
-                              hintText: '192.168.1.50',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          flex: 2,
-                          child: TextField(
-                            controller: portCtrl,
-                            keyboardType: TextInputType.number,
-                            style: TextStyle(
-                              color: dlgPalette.textPrimary,
-                              fontSize: 13,
-                              fontFamily: 'monospace',
-                            ),
-                            decoration: const InputDecoration(
-                              labelText: 'Port',
-                              hintText: '8765',
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: macCtrl,
-                      style: TextStyle(
-                        color: dlgPalette.textPrimary,
-                        fontSize: 13,
-                        fontFamily: 'monospace',
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'MAC Address (Optional for WoL)',
-                        hintText: 'AA:BB:CC:DD:EE:FF',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: secretCtrl,
-                      obscureText: secretCtrl.text.trim().length > 6 &&
-                          !RegExp(r'^\d+$').hasMatch(secretCtrl.text.trim()),
-                      onChanged: (_) => setDialogState(() {}),
-                      style: TextStyle(
-                        color: dlgPalette.textPrimary,
-                        fontSize: 13,
-                        fontFamily: 'monospace',
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: '6-Digit PIN or Pairing Token',
-                        hintText: 'e.g. 482910 or ainet_...',
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        style: TextButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                        ),
-                        icon: Icon(Icons.qr_code_2_rounded,
-                            size: 16, color: primary),
-                        label: Text(
-                          'Paste Pairing Link from Clipboard',
-                          style: TextStyle(color: primary, fontSize: 11.5),
-                        ),
-                        onPressed: isSaving
-                            ? null
-                            : () async {
-                                final nav = Navigator.of(ctx);
-                                final clip =
-                                    await Clipboard.getData('text/plain');
-                                final txt = clip?.text?.trim() ?? '';
-                                if (txt.isEmpty || !mounted) return;
-                                final ok =
-                                    await _handleIncomingPairingLink(txt);
-                                if (ok && nav.mounted) {
-                                  nav.pop();
-                                } else if (ctx.mounted) {
-                                  setDialogState(() {
-                                    validationError =
-                                        'Clipboard does not contain a valid ainet://pair or #pair_ip= link.';
-                                  });
-                                }
-                              },
-                      ),
-                    ),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      activeThumbColor: primary,
-                      activeTrackColor: primary.withValues(alpha: 0.45),
-                      title: Text(
-                        'Require WSS TLS',
-                        style: TextStyle(
-                          color: dlgPalette.textSecondary,
-                          fontSize: 12,
-                        ),
-                      ),
-                      value: useTls,
-                      onChanged: isSaving
-                          ? null
-                          : (v) => setDialogState(() => useTls = v),
-                    ),
-                    if (validationError != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        validationError!,
-                        style: const TextStyle(
-                          color: _kDangerColor,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isSaving ? null : () => Navigator.of(ctx).pop(),
-                  child: Text(
-                    'Cancel',
-                    style: TextStyle(color: dlgPalette.textSecondary),
-                  ),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primary,
-                    foregroundColor: dlgPalette.isDaylight
-                        ? Colors.white
-                        : const Color(0xFF090B1D),
-                  ),
-                  onPressed: isSaving
-                      ? null
-                      : () async {
-                          final ip = ipCtrl.text.trim();
-                          final parsedPort = int.tryParse(portCtrl.text.trim());
-                          final rawMac = macCtrl.text.trim();
-
-                          if (!NetworkValidators.isValidIpOrHost(ip)) {
-                            setDialogState(() {
-                              validationError =
-                                  'Enter a valid IPv4 address or LAN hostname.';
-                            });
-                            return;
-                          }
-                          if (!NetworkValidators.isValidPort(parsedPort)) {
-                            setDialogState(() {
-                              validationError =
-                                  'Port must be between 1 and 65535.';
-                            });
-                            return;
-                          }
-
-                          String normalizedMac = '00:00:00:00:00:00';
-                          if (rawMac.isNotEmpty) {
-                            final maybeMac =
-                                NetworkValidators.normalizeMac(rawMac);
-                            if (maybeMac == null) {
-                              setDialogState(() {
-                                validationError =
-                                    'MAC must be 12 hex characters (AA:BB:CC:DD:EE:FF).';
-                              });
-                              return;
-                            }
-                            normalizedMac = maybeMac;
-                          }
-
-                          setDialogState(() {
-                            validationError = null;
-                            isSaving = true;
-                          });
-
-                          final name = nameCtrl.text.trim().isNotEmpty
-                              ? NetworkValidators.sanitizeLabel(nameCtrl.text)
-                              : 'PC-$ip';
-
-                          String secret = secretCtrl.text.trim();
-                          String certFp =
-                              existing?.certFingerprint.trim().isNotEmpty == true
-                                  ? existing!.certFingerprint.trim()
-                                  : loadHostCertFingerprint(ip);
-                          if (RegExp(r'^\d{6}$').hasMatch(secret)) {
-                            final exchanged = await _pairWithHostPin(
-                              ip,
-                              secret,
-                              port: parsedPort!,
-                              useTls: useTls,
-                              certFingerprint: certFp.isNotEmpty ? certFp : null,
-                            );
-                            if (exchanged != null &&
-                                exchanged.pairingToken.isNotEmpty) {
-                              secret = exchanged.pairingToken;
-                              if (exchanged.certFingerprint != null &&
-                                  exchanged.certFingerprint!.isNotEmpty) {
-                                certFp = exchanged.certFingerprint!;
-                              }
-                            } else {
-                              if (ctx.mounted) {
-                                setDialogState(() {
-                                  isSaving = false;
-                                  validationError =
-                                      'PIN pairing failed — verify the 6-digit PIN shown on the PC Agent ($ip:$parsedPort).';
-                                });
-                              }
-                              return;
-                            }
-                          }
-
-                          if (secret.isNotEmpty || certFp.isNotEmpty) {
-                            saveHostPairingSecret(
-                              ip,
-                              secret,
-                              certFingerprint: certFp,
-                            );
-                          }
-                          if (!mounted) return;
-                          if (secret.isNotEmpty &&
-                              ref.read(globalPairingSecretProvider).trim().isEmpty) {
-                            ref
-                                .read(globalPairingSecretProvider.notifier)
-                                .state = secret;
-                          }
-
-                          if (existing != null) {
-                            ref.read(fleetProvider.notifier).editHost(
-                                  existing.id,
-                                  name: name,
-                                  ip: ip,
-                                  wsPort: parsedPort!,
-                                  mac: normalizedMac,
-                                  sharedSecret: secret,
-                                  useTls: useTls,
-                                  certFingerprint: certFp,
-                                );
-                          } else {
-                            final id = 'PC-${ip.replaceAll('.', '-')}-$parsedPort';
-                            final host = HostState(
-                              id: id,
-                              name: name,
-                              ip: ip,
-                              wsPort: parsedPort!,
-                              mac: normalizedMac,
-                              isOnline: secret.isNotEmpty,
-                              sharedSecret: secret,
-                              useTls: useTls,
-                              certFingerprint: certFp,
-                            );
-                            ref.read(fleetProvider.notifier).addHost(host);
-                            ref.read(selectedHostIdProvider.notifier).state =
-                                host.id;
-                          }
-
-                          if (ctx.mounted) {
-                            Navigator.of(ctx).pop();
-                          }
-                        },
-                  child: Text(
-                    isSaving
-                        ? 'Pairing...'
-                        : (existing == null ? 'Save PC' : 'Update PC'),
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
+      builder: (_) => _HostEditorDialog(
+        existing: existing,
+        defaultPort: defaultPort,
+        defaultSecret: defaultSecret,
+        defaultTls: defaultTls,
+        onPastePairingLink: _handleIncomingPairingLink,
+        onSave: ({
+          required String name,
+          required String ip,
+          required int port,
+          required String normalizedMac,
+          required String rawSecret,
+          required bool useTls,
+        }) async {
+          String secret = rawSecret;
+          String certFp =
+              existing?.certFingerprint.trim().isNotEmpty == true
+                  ? existing!.certFingerprint.trim()
+                  : loadHostCertFingerprint(ip);
+          if (RegExp(r'^\d{6}$').hasMatch(secret)) {
+            final exchanged = await _pairWithHostPin(
+              ip,
+              secret,
+              port: port,
+              useTls: useTls,
+              certFingerprint: certFp.isNotEmpty ? certFp : null,
             );
-          },
-        );
-      },
-    ).whenComplete(() {
-      Future<void>.delayed(const Duration(milliseconds: 300), () {
-        nameCtrl.dispose();
-        ipCtrl.dispose();
-        portCtrl.dispose();
-        macCtrl.dispose();
-        secretCtrl.dispose();
-      });
-    });
+            if (exchanged != null && exchanged.pairingToken.isNotEmpty) {
+              secret = exchanged.pairingToken;
+              if (exchanged.certFingerprint != null &&
+                  exchanged.certFingerprint!.isNotEmpty) {
+                certFp = exchanged.certFingerprint!;
+              }
+            } else {
+              return 'PIN pairing failed — verify the 6-digit PIN shown on the PC Agent ($ip:$port).';
+            }
+          }
+
+          if (secret.isNotEmpty || certFp.isNotEmpty) {
+            saveHostPairingSecret(ip, secret, certFingerprint: certFp);
+          }
+          if (!mounted) return null;
+          if (secret.isNotEmpty &&
+              ref.read(globalPairingSecretProvider).trim().isEmpty) {
+            ref.read(globalPairingSecretProvider.notifier).state = secret;
+          }
+
+          if (existing != null) {
+            ref.read(fleetProvider.notifier).editHost(
+                  existing.id,
+                  name: name,
+                  ip: ip,
+                  wsPort: port,
+                  mac: normalizedMac,
+                  sharedSecret: secret,
+                  useTls: useTls,
+                  certFingerprint: certFp,
+                );
+          } else {
+            final id = 'PC-${ip.replaceAll('.', '-')}-$port';
+            final host = HostState(
+              id: id,
+              name: name,
+              ip: ip,
+              wsPort: port,
+              mac: normalizedMac,
+              isOnline: secret.isNotEmpty,
+              sharedSecret: secret,
+              useTls: useTls,
+              certFingerprint: certFp,
+            );
+            ref.read(fleetProvider.notifier).addHost(host);
+            ref.read(selectedHostIdProvider.notifier).state = host.id;
+          }
+          return null;
+        },
+      ),
+    );
   }
 
   Future<HostConnectionClient?> _acquireConnectedClient(HostState host) async {
@@ -2041,7 +1895,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     if (secret.isEmpty) {
       _showToast(
         'Pairing secret required before connecting to ${host.name}.',
-        accentColor: CyberColors.warning,
+        accentColor: context.palette.warning,
       );
       return null;
     }
@@ -2113,8 +1967,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                     final data = await Clipboard.getData('text/plain');
                     final txt = data?.text ?? '';
                     if (txt.isEmpty) {
-                      _showToast('Phone clipboard is empty.',
-                          accentColor: CyberColors.warning);
+                      if (mounted) {
+                        _showToast('Phone clipboard is empty.',
+                            accentColor: context.palette.warning);
+                      }
                       return;
                     }
                     if (!mounted) return;
@@ -2242,8 +2098,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                   onPressed: () {
                     Navigator.of(ctx).pop();
                     activeClient.sendAudioCommand('lock_pc');
-                    _showToast('Sent lock_pc command to ${host.name}.',
-                        accentColor: CyberColors.warning);
+                    if (mounted) {
+                      _showToast('Sent lock_pc command to ${host.name}.',
+                          accentColor: context.palette.warning);
+                    }
                   },
                 ),
               ],
@@ -2257,85 +2115,18 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   }
 
   Future<void> _showSendFileToHostDialog(HostState host) async {
-    final pathCtrl = TextEditingController();
-    final noteNameCtrl = TextEditingController(text: 'mobile_note.txt');
-    final noteBodyCtrl = TextEditingController();
-
-    final submitted = await showDialog<bool>(
-          context: context,
-          builder: (ctx) {
-            final dlgPalette = ctx.palette;
-            return AlertDialog(
-              backgroundColor: dlgPalette.surfaceElevated,
-              title: Text('Send Encrypted File -> ${host.name}'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextField(
-                      controller: pathCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Local File Path (optional)',
-                        hintText: '/storage/emulated/0/Download/file.bin',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Or send a text note payload directly:',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: dlgPalette.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: noteNameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Target Filename',
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: noteBodyCtrl,
-                      maxLines: 3,
-                      decoration: const InputDecoration(
-                        labelText: 'Quick Text Content',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(false),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () => Navigator.of(ctx).pop(true),
-                  child: const Text('Send AEAD'),
-                ),
-              ],
-            );
-          },
-        ) ??
-        false;
-
-    final filePath = pathCtrl.text.trim();
-    final noteName = noteNameCtrl.text.trim().isNotEmpty
-        ? noteNameCtrl.text.trim()
-        : 'mobile_note.txt';
-    final noteBody = noteBodyCtrl.text;
-    Future<void>.delayed(const Duration(milliseconds: 300), () {
-      pathCtrl.dispose();
-      noteNameCtrl.dispose();
-      noteBodyCtrl.dispose();
-    });
-
-    if (!submitted || !mounted) return;
+    final payload = await showDialog<
+        ({String filePath, String noteName, String noteBody})>(
+      context: context,
+      builder: (_) => _SendFileDialog(hostName: host.name),
+    );
+    if (payload == null || !mounted) return;
+    final filePath = payload.filePath;
+    final noteName = payload.noteName;
+    final noteBody = payload.noteBody;
     if (filePath.isEmpty && noteBody.isEmpty) {
       _showToast('Enter a file path or text content to transfer.',
-          accentColor: CyberColors.warning);
+          accentColor: context.palette.warning);
       return;
     }
 
@@ -2615,15 +2406,96 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                           },
                         ),
                         ListTile(
+                          leading: Icon(
+                            host.isPinned
+                                ? Icons.star_rounded
+                                : Icons.star_outline_rounded,
+                            color: host.isPinned
+                                ? sheetPalette.warning
+                                : sheetPalette.textSecondary,
+                          ),
+                          title: Text(
+                            host.isPinned
+                                ? 'Unpin Workstation'
+                                : 'Pin Workstation to Top',
+                          ),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            _togglePinHost(host);
+                          },
+                        ),
+                        ListTile(
                           leading: Icon(Icons.copy_rounded,
                               color: sheetPalette.textSecondary),
                           title: const Text('Copy IP Address'),
+                          subtitle: Text(
+                            host.ip,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                            ),
+                          ),
                           onTap: () {
                             Navigator.of(ctx).pop();
-                            Clipboard.setData(ClipboardData(text: host.ip));
-                            _showToast('Copied ${host.ip} to clipboard');
+                            unawaited(
+                              Clipboard.setData(ClipboardData(text: host.ip))
+                                  .catchError((_) {}),
+                            );
+                            _showToast(
+                              'Copied IP ${host.ip} to clipboard',
+                              accentColor: context.palette.success,
+                            );
                           },
                         ),
+                        ListTile(
+                          leading: Icon(Icons.lan_rounded,
+                              color: sheetPalette.textSecondary),
+                          title: const Text('Copy Endpoint (IP:Port)'),
+                          subtitle: Text(
+                            '${host.ip}:${host.wsPort}',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                            ),
+                          ),
+                          onTap: () {
+                            Navigator.of(ctx).pop();
+                            final endpoint = '${host.ip}:${host.wsPort}';
+                            unawaited(
+                              Clipboard.setData(ClipboardData(text: endpoint))
+                                  .catchError((_) {}),
+                            );
+                            _showToast(
+                              'Copied Endpoint $endpoint to clipboard',
+                              accentColor: context.palette.success,
+                            );
+                          },
+                        ),
+                        if (hasValidMac)
+                          ListTile(
+                            leading: Icon(Icons.router_rounded,
+                                color: sheetPalette.textSecondary),
+                            title: const Text('Copy MAC Address'),
+                            subtitle: Text(
+                              host.mac.toUpperCase(),
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 11,
+                              ),
+                            ),
+                            onTap: () {
+                              Navigator.of(ctx).pop();
+                              final mac = host.mac.toUpperCase();
+                              unawaited(
+                                Clipboard.setData(ClipboardData(text: mac))
+                                    .catchError((_) {}),
+                              );
+                              _showToast(
+                                'Copied MAC $mac to clipboard',
+                                accentColor: context.palette.success,
+                              );
+                            },
+                          ),
                         ListTile(
                           leading: Icon(Icons.edit_rounded,
                               color: sheetPalette.textSecondary),
@@ -2833,7 +2705,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           );
           _showToast(
             'Command blocked by operator HITL guard.',
-            accentColor: CyberColors.warning,
+            accentColor: context.palette.warning,
           );
         }
         return;
@@ -3261,14 +3133,70 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     }
   }
 
-  List<HostState> _filteredHosts(List<HostState> hosts) {
+  void _togglePinHost(HostState host) {
+    _hapticTap();
+    final nextPinned = !host.isPinned;
+    ref.read(fleetProvider.notifier).togglePinHost(host.id);
+    _showToast(
+      nextPinned
+          ? 'Pinned ${host.name} to top of Fleet.'
+          : 'Unpinned ${host.name}.',
+      accentColor: nextPinned ? context.palette.warning : null,
+    );
+  }
+
+  List<HostState> _filteredHosts(
+    List<HostState> hosts, {
+    required FleetSortMode sortMode,
+  }) {
     final query = _fleetSearchQuery.trim().toLowerCase();
-    if (query.isEmpty) return hosts;
-    return hosts.where((h) {
+    final filtered = hosts.where((h) {
+      switch (_fleetFilter) {
+        case _FleetStatusFilter.all:
+          break;
+        case _FleetStatusFilter.online:
+          if (!h.isOnline) return false;
+        case _FleetStatusFilter.sleeping:
+          if (h.isOnline) return false;
+        case _FleetStatusFilter.pinned:
+          if (!h.isPinned) return false;
+      }
+      if (query.isEmpty) return true;
       return h.name.toLowerCase().contains(query) ||
           h.ip.toLowerCase().contains(query) ||
-          h.mac.toLowerCase().contains(query);
-    }).toList(growable: false);
+          h.mac.toLowerCase().contains(query) ||
+          h.osName.toLowerCase().contains(query);
+    }).toList();
+
+    final indexById = <String, int>{
+      for (int i = 0; i < hosts.length; i++) hosts[i].id: i,
+    };
+
+    filtered.sort((a, b) {
+      if (a.isPinned != b.isPinned) {
+        return a.isPinned ? -1 : 1;
+      }
+      switch (sortMode) {
+        case FleetSortMode.defaultOrder:
+          return (indexById[a.id] ?? 0).compareTo(indexById[b.id] ?? 0);
+        case FleetSortMode.onlineFirst:
+          if (a.isOnline != b.isOnline) return a.isOnline ? -1 : 1;
+          return (indexById[a.id] ?? 0).compareTo(indexById[b.id] ?? 0);
+        case FleetSortMode.nameAsc:
+          final cmp = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          return cmp != 0
+              ? cmp
+              : (indexById[a.id] ?? 0).compareTo(indexById[b.id] ?? 0);
+        case FleetSortMode.latencyAsc:
+          if (a.isOnline != b.isOnline) return a.isOnline ? -1 : 1;
+          final int latA = a.latencyMs ?? 1 << 30;
+          final int latB = b.latencyMs ?? 1 << 30;
+          if (latA != latB) return latA.compareTo(latB);
+          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      }
+    });
+
+    return List<HostState>.unmodifiable(filtered);
   }
 
   Widget _buildOnboardingBanner() {
@@ -3365,12 +3293,20 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     );
   }
 
-  Widget _buildFleetToolbar(List<HostState> hosts) {
+  Widget _buildFleetToolbar(
+    List<HostState> hosts, {
+    required FleetSortMode sortMode,
+  }) {
     final palette = context.palette;
     final primary = palette.primary;
+    final onlineCount = hosts.where((h) => h.isOnline).length;
+    final sleepingCount = hosts.length - onlineCount;
+    final pinnedCount = hosts.where((h) => h.isPinned).length;
     final hasSleepingWithMac = hosts.any(
       (h) => !h.isOnline && NetworkValidators.normalizeMac(h.mac) != null,
     );
+    final bool showSearchField =
+        hosts.length > 2 || _showFleetSearch || _fleetSearchQuery.isNotEmpty;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3382,12 +3318,42 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           runSpacing: 4,
           children: [
             _buildSectionHeader(
-              'WORKSTATIONS (${hosts.where((h) => h.isOnline).length}/${hosts.length} ONLINE)',
+              'WORKSTATIONS ($onlineCount/${hosts.length} ONLINE)',
             ),
             if (hosts.isNotEmpty)
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (hosts.length <= 2)
+                    IconButton(
+                      key: const ValueKey('fleet-search-toggle-btn'),
+                      tooltip: showSearchField
+                          ? 'Hide workstation search'
+                          : 'Search workstations',
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      padding: EdgeInsets.zero,
+                      icon: Icon(
+                        showSearchField
+                            ? Icons.search_off_rounded
+                            : Icons.search_rounded,
+                        size: 17,
+                        color: showSearchField ? primary : palette.textSecondary,
+                      ),
+                      onPressed: () {
+                        _hapticTap();
+                        setState(() {
+                          _showFleetSearch = !showSearchField;
+                          if (!_showFleetSearch) {
+                            _fleetSearchController.clear();
+                            _fleetSearchQuery = '';
+                          }
+                        });
+                      },
+                    ),
                   TextButton.icon(
                     style: TextButton.styleFrom(
                       visualDensity: VisualDensity.compact,
@@ -3404,7 +3370,8 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                               color: primary,
                             ),
                           )
-                        : Icon(Icons.network_ping_rounded, size: 15, color: primary),
+                        : Icon(Icons.network_ping_rounded,
+                            size: 15, color: primary),
                     label: Text(
                       _isPinging ? 'Pinging...' : 'Ping',
                       style: TextStyle(color: primary, fontSize: 11.5),
@@ -3435,9 +3402,160 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               ),
           ],
         ),
-        if (hosts.length > 2) ...[
+        if (hosts.length >= 2) ...[
+          const SizedBox(height: 6),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: [
+                _buildFleetFilterPill(
+                  key: const ValueKey('fleet-filter-all'),
+                  label: 'All (${hosts.length})',
+                  selected: _fleetFilter == _FleetStatusFilter.all,
+                  color: primary,
+                  onTap: () => setState(() => _fleetFilter = _FleetStatusFilter.all),
+                ),
+                const SizedBox(width: 6),
+                _buildFleetFilterPill(
+                  key: const ValueKey('fleet-filter-online'),
+                  label: 'Online ($onlineCount)',
+                  selected: _fleetFilter == _FleetStatusFilter.online,
+                  color: palette.success,
+                  onTap: () => setState(
+                    () => _fleetFilter = _fleetFilter == _FleetStatusFilter.online
+                        ? _FleetStatusFilter.all
+                        : _FleetStatusFilter.online,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _buildFleetFilterPill(
+                  key: const ValueKey('fleet-filter-sleeping'),
+                  label: 'Sleeping ($sleepingCount)',
+                  selected: _fleetFilter == _FleetStatusFilter.sleeping,
+                  color: palette.warning,
+                  onTap: () => setState(
+                    () => _fleetFilter =
+                        _fleetFilter == _FleetStatusFilter.sleeping
+                            ? _FleetStatusFilter.all
+                            : _FleetStatusFilter.sleeping,
+                  ),
+                ),
+                if (pinnedCount > 0 ||
+                    _fleetFilter == _FleetStatusFilter.pinned) ...[
+                  const SizedBox(width: 6),
+                  _buildFleetFilterPill(
+                    key: const ValueKey('fleet-filter-pinned'),
+                    label: 'Pinned ($pinnedCount)',
+                    icon: Icons.star_rounded,
+                    selected: _fleetFilter == _FleetStatusFilter.pinned,
+                    color: palette.warning,
+                    onTap: () => setState(
+                      () => _fleetFilter =
+                          _fleetFilter == _FleetStatusFilter.pinned
+                              ? _FleetStatusFilter.all
+                              : _FleetStatusFilter.pinned,
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 8),
+                PopupMenuButton<FleetSortMode>(
+                  key: const ValueKey('fleet-sort-btn'),
+                  tooltip: 'Sort workstations',
+                  color: palette.surfaceElevated,
+                  initialValue: sortMode,
+                  onSelected: (nextMode) {
+                    _hapticTap();
+                    unawaited(
+                      ref
+                          .read(appPreferencesProvider.notifier)
+                          .setFleetSortMode(nextMode),
+                    );
+                  },
+                  itemBuilder: (_) => [
+                    for (final mode in FleetSortMode.values)
+                      PopupMenuItem<FleetSortMode>(
+                        key: ValueKey('fleet-sort-${mode.name}'),
+                        value: mode,
+                        child: Row(
+                          children: [
+                            Icon(
+                              mode == sortMode
+                                  ? Icons.check_rounded
+                                  : Icons.sort_rounded,
+                              size: 16,
+                              color: mode == sortMode
+                                  ? primary
+                                  : palette.textSecondary,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Sort: ${mode.label}',
+                              style: TextStyle(
+                                color: mode == sortMode
+                                    ? primary
+                                    : palette.textPrimary,
+                                fontWeight: mode == sortMode
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                fontSize: 12.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: sortMode != FleetSortMode.defaultOrder
+                          ? palette.secondary.withValues(
+                              alpha: palette.isDaylight ? 0.12 : 0.20,
+                            )
+                          : palette.terminalBackground,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: sortMode != FleetSortMode.defaultOrder
+                            ? palette.secondary.withValues(alpha: 0.45)
+                            : palette.dividerColor,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.swap_vert_rounded,
+                          size: 13.5,
+                          color: sortMode != FleetSortMode.defaultOrder
+                              ? palette.secondary
+                              : palette.textSecondary,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          sortMode.label,
+                          style: TextStyle(
+                            color: sortMode != FleetSortMode.defaultOrder
+                                ? palette.secondary
+                                : palette.textSecondary,
+                            fontSize: context.fluidFont(10.5),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (showSearchField) ...[
           const SizedBox(height: 6),
           TextField(
+            key: const ValueKey('fleet-search-input'),
             controller: _fleetSearchController,
             onChanged: (val) => setState(() => _fleetSearchQuery = val),
             style: TextStyle(color: palette.terminalText, fontSize: 12.5),
@@ -3446,6 +3564,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               prefixIcon: Icon(Icons.search_rounded, size: 18, color: primary),
               suffixIcon: _fleetSearchQuery.isNotEmpty
                   ? IconButton(
+                      tooltip: 'Clear fleet search',
                       icon: const Icon(Icons.clear_rounded, size: 16),
                       onPressed: () {
                         _fleetSearchController.clear();
@@ -3453,7 +3572,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       },
                     )
                   : null,
-              hintText: 'Filter by hostname, IP, or MAC...',
+              hintText: 'Filter by hostname, IP, MAC, or OS...',
               hintStyle: TextStyle(
                 color: palette.textTertiary,
                 fontSize: 12,
@@ -3473,6 +3592,111 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         ],
         const SizedBox(height: 8),
       ],
+    );
+  }
+
+  Widget _buildFleetFilterPill({
+    required Key key,
+    required String label,
+    IconData? icon,
+    required bool selected,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    final palette = context.palette;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: key,
+        onTap: () {
+          _hapticTap();
+          onTap();
+        },
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: selected
+                ? color.withValues(alpha: palette.isDaylight ? 0.15 : 0.22)
+                : palette.terminalBackground,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected
+                  ? color.withValues(alpha: 0.55)
+                  : palette.dividerColor,
+              width: selected ? 1.25 : 1.0,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(
+                  icon,
+                  size: 12.5,
+                  color: selected ? color : palette.textSecondary,
+                ),
+                const SizedBox(width: 4),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected ? color : palette.textSecondary,
+                  fontSize: context.fluidFont(10.5),
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNoMatchingHostsState() {
+    final palette = context.palette;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      decoration: BoxDecoration(
+        gradient: palette.cardBevelGradient(isSelected: false),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: palette.glassBorderIdle),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.filter_list_off_rounded,
+            size: 28,
+            color: palette.textTertiary,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'No workstations match the current filter.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: palette.textPrimary,
+              fontWeight: FontWeight.w700,
+              fontSize: context.fluidFont(13),
+            ),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            key: const ValueKey('fleet-reset-filters-btn'),
+            onPressed: () {
+              _hapticTap();
+              _fleetSearchController.clear();
+              setState(() {
+                _fleetSearchQuery = '';
+                _fleetFilter = _FleetStatusFilter.all;
+              });
+            },
+            icon: const Icon(Icons.clear_all_rounded, size: 16),
+            label: const Text('Reset Filters'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3616,12 +3840,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         if (sent) {
           _showToast(
             successMessage,
-            accentColor: action == 'lock_pc' ? CyberColors.warning : null,
+            accentColor: action == 'lock_pc' ? context.palette.warning : null,
           );
         } else {
           _showToast(
             'Unable to send $action to ${host.name}: vault not ready.',
-            accentColor: CyberColors.warning,
+            accentColor: context.palette.warning,
           );
         }
       } finally {
@@ -3734,7 +3958,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     if (cmd.isEmpty) {
       _showToast(
         'No command payload to re-run.',
-        accentColor: CyberColors.warning,
+        accentColor: context.palette.warning,
       );
       return;
     }
@@ -3772,21 +3996,22 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           mac: parsed.mac,
           useTls: parsed.useTls,
         );
+        if (parsed.isPinned) {
+          fleetNotifier.setHostPinned(existing.id, true);
+        }
       } else {
         fleetNotifier.addHost(parsed);
       }
     }
   }
 
-  Widget _buildDeviceCardFor(HostState host, {bool isSelected = false}) {
-    final prefs = ref.watch(
-      appPreferencesProvider.select(
-        (p) => (
-          preferTls: p.preferTls,
-          cardSnapshotIntervalSec: p.cardSnapshotIntervalSec,
-        ),
-      ),
-    );
+  Widget _buildDeviceCardFor(
+    HostState host, {
+    required bool preferTls,
+    required int cardSnapshotIntervalSec,
+    bool isSelected = false,
+  }) {
+    final bool isExpanded = _expandedHostId == host.id;
     final effectiveFp = host.certFingerprint.trim().isNotEmpty
         ? host.certFingerprint.trim()
         : loadHostCertFingerprint(host.ip);
@@ -3802,8 +4027,17 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       ramUsage: host.ramUsage,
       latencyMs: host.latencyMs,
       isSelected: isSelected,
-      useTls: host.useTls || prefs.preferTls,
-      isExpanded: _expandedHostId == host.id,
+      isPinned: host.isPinned,
+      onTogglePin: () => _togglePinHost(host),
+      onCopyText: (label, value) {
+        _hapticTap();
+        _showToast(
+          'Copied $label: $value',
+          accentColor: context.palette.success,
+        );
+      },
+      useTls: host.useTls || preferTls,
+      isExpanded: isExpanded,
       onToggleExpand: () {
         _hapticTap();
         ref.read(selectedHostIdProvider.notifier).state = host.id;
@@ -3811,24 +4045,33 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           _expandedHostId = _expandedHostId == host.id ? null : host.id;
         });
       },
-      expandedPreview: HostSnapshotPreview(
-        hostId: host.id,
-        hostName: host.name,
-        hostIp: host.ip,
-        wsPort: host.wsPort,
-        sharedSecret: effectiveSecret,
-        useTls: host.useTls || prefs.preferTls,
-        certFingerprint: effectiveFp.isNotEmpty ? effectiveFp : null,
-        isOnline: host.isOnline,
-        mac: host.mac,
-        refreshIntervalSec: prefs.cardSnapshotIntervalSec,
-        onTapFullscreen: () => _openStreamScreen(host),
-        onWakeOnLan: () => _sendWakeOnLan(
-          host.mac,
-          targetIp: host.ip,
-          hostName: host.name,
-        ),
-      ),
+      expandedPreview: isExpanded
+          ? HostSnapshotPreview(
+              hostId: host.id,
+              hostName: host.name,
+              hostIp: host.ip,
+              wsPort: host.wsPort,
+              sharedSecret: effectiveSecret,
+              useTls: host.useTls || preferTls,
+              certFingerprint: effectiveFp.isNotEmpty ? effectiveFp : null,
+              isOnline: host.isOnline,
+              mac: host.mac,
+              refreshIntervalSec: cardSnapshotIntervalSec,
+              onTapFullscreen: () => _openStreamScreen(host),
+              onWakeOnLan: () => _sendWakeOnLan(
+                host.mac,
+                targetIp: host.ip,
+                hostName: host.name,
+              ),
+              onCopyMac: () {
+                _hapticTap();
+                _showToast(
+                  'Copied MAC: ${host.mac.toUpperCase()}',
+                  accentColor: context.palette.success,
+                );
+              },
+            )
+          : null,
       osName: host.osName,
       cpuCores: host.cpuCores,
       ramUsedGb: host.ramUsedGb,
@@ -3874,7 +4117,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // 1. COMPACT FLEET VIEW (SINGLE COLUMN SCROLL + PULL TO REFRESH)
   // -------------------------------------------------------------------
   Widget _buildCompactListFleet(List<HostState> hosts) {
-    final filtered = _filteredHosts(hosts);
+    final fleetPrefs = ref.watch(
+      appPreferencesProvider.select(
+        (p) => (
+          preferTls: p.preferTls,
+          cardSnapshotIntervalSec: p.cardSnapshotIntervalSec,
+          fleetSortMode: p.fleetSortMode,
+        ),
+      ),
+    );
+    final filtered = _filteredHosts(hosts, sortMode: fleetPrefs.fleetSortMode);
     return RefreshIndicator(
       onRefresh: hosts.isEmpty ? _scanForPcs : _pingAllHosts,
       child: ListView(
@@ -3884,21 +4136,19 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         padding: FluidSize.pagePadding(context),
         children: [
           _buildOnboardingBanner(),
-          _buildFleetToolbar(hosts),
+          _buildFleetToolbar(hosts, sortMode: fleetPrefs.fleetSortMode),
           if (hosts.isEmpty)
             _buildEmptyFleetState()
           else if (filtered.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 28),
-              child: Center(
-                child: Text(
-                  'No workstations match the current filter.',
-                  style: TextStyle(color: CyberColors.textSecondary),
-                ),
-              ),
-            )
+            _buildNoMatchingHostsState()
           else
-            ...filtered.map((host) => _buildDeviceCardFor(host)),
+            ...filtered.map(
+              (host) => _buildDeviceCardFor(
+                host,
+                preferTls: fleetPrefs.preferTls,
+                cardSnapshotIntervalSec: fleetPrefs.cardSnapshotIntervalSec,
+              ),
+            ),
         ],
       ),
     );
@@ -3908,7 +4158,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // 2. MEDIUM FLEET VIEW (RESPONSIVE NON-CLIPPING 2-COLUMN LAYOUT)
   // -------------------------------------------------------------------
   Widget _buildMediumGridFleet(List<HostState> hosts) {
-    final filtered = _filteredHosts(hosts);
+    final fleetPrefs = ref.watch(
+      appPreferencesProvider.select(
+        (p) => (
+          preferTls: p.preferTls,
+          cardSnapshotIntervalSec: p.cardSnapshotIntervalSec,
+          fleetSortMode: p.fleetSortMode,
+        ),
+      ),
+    );
+    final filtered = _filteredHosts(hosts, sortMode: fleetPrefs.fleetSortMode);
     final pad = FluidSize.pagePadding(context);
 
     return RefreshIndicator(
@@ -3920,20 +4179,15 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           if (hosts.isEmpty) {
             fleetItems = [_buildEmptyFleetState()];
           } else if (filtered.isEmpty) {
-            fleetItems = const [
-              Padding(
-                padding: EdgeInsets.symmetric(vertical: 28),
-                child: Center(
-                  child: Text(
-                    'No workstations match the current filter.',
-                    style: TextStyle(color: CyberColors.textSecondary),
-                  ),
-                ),
-              ),
-            ];
+            fleetItems = [_buildNoMatchingHostsState()];
           } else if (!isTwoCol) {
             fleetItems = [
-              for (final host in filtered) _buildDeviceCardFor(host),
+              for (final host in filtered)
+                _buildDeviceCardFor(
+                  host,
+                  preferTls: fleetPrefs.preferTls,
+                  cardSnapshotIntervalSec: fleetPrefs.cardSnapshotIntervalSec,
+                ),
             ];
           } else {
             fleetItems = <Widget>[];
@@ -3941,7 +4195,13 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             while (i < filtered.length) {
               final current = filtered[i];
               if (current.id == _expandedHostId) {
-                fleetItems.add(_buildDeviceCardFor(current));
+                fleetItems.add(
+                  _buildDeviceCardFor(
+                    current,
+                    preferTls: fleetPrefs.preferTls,
+                    cardSnapshotIntervalSec: fleetPrefs.cardSnapshotIntervalSec,
+                  ),
+                );
                 i += 1;
                 continue;
               }
@@ -3951,11 +4211,23 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: _buildDeviceCardFor(current)),
+                    Expanded(
+                      child: _buildDeviceCardFor(
+                        current,
+                        preferTls: fleetPrefs.preferTls,
+                        cardSnapshotIntervalSec:
+                            fleetPrefs.cardSnapshotIntervalSec,
+                      ),
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: hasPair
-                          ? _buildDeviceCardFor(filtered[i + 1])
+                          ? _buildDeviceCardFor(
+                              filtered[i + 1],
+                              preferTls: fleetPrefs.preferTls,
+                              cardSnapshotIntervalSec:
+                                  fleetPrefs.cardSnapshotIntervalSec,
+                            )
                           : const SizedBox.shrink(),
                     ),
                   ],
@@ -3972,7 +4244,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
             padding: pad,
             children: [
               _buildOnboardingBanner(),
-              _buildFleetToolbar(hosts),
+              _buildFleetToolbar(hosts, sortMode: fleetPrefs.fleetSortMode),
               ...fleetItems,
             ],
           );
@@ -3985,29 +4257,32 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // 3. EXPANDED MASTER PANE (35% WIDTH)
   // -------------------------------------------------------------------
   Widget _buildMasterFleetPane(List<HostState> hosts, String selectedId) {
-    final filtered = _filteredHosts(hosts);
+    final fleetPrefs = ref.watch(
+      appPreferencesProvider.select(
+        (p) => (
+          preferTls: p.preferTls,
+          cardSnapshotIntervalSec: p.cardSnapshotIntervalSec,
+          fleetSortMode: p.fleetSortMode,
+        ),
+      ),
+    );
+    final filtered = _filteredHosts(hosts, sortMode: fleetPrefs.fleetSortMode);
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       children: [
         _buildOnboardingBanner(),
-        _buildFleetToolbar(hosts),
+        _buildFleetToolbar(hosts, sortMode: fleetPrefs.fleetSortMode),
         if (hosts.isEmpty)
           _buildEmptyFleetState()
         else if (filtered.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 28),
-            child: Center(
-              child: Text(
-                'No workstations match the current filter.',
-                style: TextStyle(color: CyberColors.textSecondary),
-              ),
-            ),
-          )
+          _buildNoMatchingHostsState()
         else
           ...filtered.map(
             (host) => _buildDeviceCardFor(
               host,
+              preferTls: fleetPrefs.preferTls,
+              cardSnapshotIntervalSec: fleetPrefs.cardSnapshotIntervalSec,
               isSelected: host.id == selectedId,
             ),
           ),
@@ -4269,40 +4544,52 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
         Row(
           children: [
             Expanded(
-              child: TextField(
-                controller: _commandController,
-                onSubmitted: (val) => _dispatchCommand(val, host),
-                style: TextStyle(
-                  color: palette.terminalText,
-                  fontFamily: 'monospace',
-                  fontSize: 12.5,
-                ),
-                decoration: InputDecoration(
-                  hintText: 'Enter PowerShell or Bash command...',
-                  hintStyle: TextStyle(
-                    color: palette.textSecondary,
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                  ),
-                  filled: true,
-                  fillColor: palette.terminalBackground,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 13,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide(color: palette.glassBorderIdle),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide(color: palette.glassBorderIdle),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide(color: primary, width: 1.5),
-                  ),
-                ),
+              child: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _commandController,
+                builder: (context, cmdVal, _) {
+                  return TextField(
+                    controller: _commandController,
+                    onSubmitted: (val) => _dispatchCommand(val, host),
+                    style: TextStyle(
+                      color: palette.terminalText,
+                      fontFamily: 'monospace',
+                      fontSize: 12.5,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Enter PowerShell or Bash command...',
+                      hintStyle: TextStyle(
+                        color: palette.textSecondary,
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                      suffixIcon: cmdVal.text.isNotEmpty
+                          ? IconButton(
+                              tooltip: 'Clear command',
+                              icon: const Icon(Icons.close_rounded, size: 17),
+                              onPressed: () => _commandController.clear(),
+                            )
+                          : null,
+                      filled: true,
+                      fillColor: palette.terminalBackground,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 13,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide(color: palette.glassBorderIdle),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide(color: palette.glassBorderIdle),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide(color: primary, width: 1.5),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
             const SizedBox(width: 8),
@@ -4311,7 +4598,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: primary,
-                  foregroundColor: Colors.white,
+                  foregroundColor: palette.onPrimary,
                   elevation: 6,
                   shadowColor: primary.withValues(alpha: 0.45),
                   shape: RoundedRectangleBorder(
@@ -4401,7 +4688,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                       ),
                     ),
                     onPressed: () {
-                      _commandController.text = item;
+                      _commandController.value = TextEditingValue(
+                        text: item,
+                        selection: TextSelection.collapsed(offset: item.length),
+                      );
                     },
                   ),
                 );
@@ -4535,8 +4825,6 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
   // SETTINGS TAB (APPEARANCE STUDIO + SECURITY + PERSISTENT PREFS)
   // -------------------------------------------------------------------
   Future<void> _showPairingSecretDialog() async {
-    final secretCtrl = TextEditingController();
-    final pinCtrl = TextEditingController();
     final hosts = ref.read(fleetProvider);
     final selectedId = ref.read(selectedHostIdProvider);
     HostState? targetHost;
@@ -4547,216 +4835,86 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       );
     }
 
-    bool isSaving = false;
-    await showDialog<void>(
+    final result = await showDialog<
+        ({bool? pinPaired, String nextSecret})>(
       context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setDialogState) {
-            final dlgPalette = ctx.palette;
-            final primary = dlgPalette.primary;
-            return AlertDialog(
-              insetPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-              scrollable: true,
-              backgroundColor: dlgPalette.surfaceElevated,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: dlgPalette.dividerColor),
-              ),
-              title: Text(
-                'Pair Workstation Credentials',
-                style: TextStyle(color: dlgPalette.textPrimary, fontSize: 16),
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: secretCtrl,
-                    obscureText: true,
-                    style: TextStyle(
-                      color: dlgPalette.textPrimary,
-                      fontSize: 13,
-                      fontFamily: 'monospace',
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'New Global Pairing Token (ainet_...)',
-                      hintText: 'Leave blank to keep current token',
-                    ),
-                  ),
-                  if (targetHost != null) ...[
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: pinCtrl,
-                      keyboardType: TextInputType.number,
-                      style: TextStyle(
-                        color: dlgPalette.textPrimary,
-                        fontSize: 13,
-                        fontFamily: 'monospace',
-                      ),
-                      decoration: InputDecoration(
-                        labelText: 'Or Pair ${targetHost.ip} with 6-Digit PIN',
-                        hintText: 'e.g. 482910',
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isSaving ? null : () => Navigator.of(ctx).pop(),
-                  child: Text(
-                    'Cancel',
-                    style: TextStyle(color: dlgPalette.textSecondary),
-                  ),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primary,
-                    foregroundColor: dlgPalette.isDaylight
-                        ? Colors.white
-                        : const Color(0xFF090B1D),
-                  ),
-                  onPressed: isSaving
-                      ? null
-                      : () async {
-                          setDialogState(() => isSaving = true);
-                          String nextSecret = secretCtrl.text.trim();
-                          String? nextCertFp = targetHost?.certFingerprint;
-                          final pin = pinCtrl.text.trim();
-                          bool? pinPaired;
-                          if (targetHost != null &&
-                              RegExp(r'^\d{6}$').hasMatch(pin)) {
-                            final exchanged = await _pairWithHostPin(
-                              targetHost.ip,
-                              pin,
-                              port: targetHost.wsPort,
-                              useTls: targetHost.useTls ||
-                                  ref.read(appPreferencesProvider).preferTls,
-                              certFingerprint:
-                                  targetHost.certFingerprint.isNotEmpty
-                                      ? targetHost.certFingerprint
-                                      : null,
-                            );
-                            if (exchanged != null &&
-                                exchanged.pairingToken.isNotEmpty) {
-                              nextSecret = exchanged.pairingToken;
-                              if (exchanged.certFingerprint != null &&
-                                  exchanged.certFingerprint!.isNotEmpty) {
-                                nextCertFp = exchanged.certFingerprint;
-                              }
-                              pinPaired = true;
-                            } else {
-                              pinPaired = false;
-                            }
-                          }
-                          if (nextSecret.isNotEmpty) {
-                            saveHostPairingSecret(
-                              targetHost?.ip ?? '',
-                              nextSecret,
-                              certFingerprint: nextCertFp,
-                            );
-                            if (mounted) {
-                              ref
-                                  .read(globalPairingSecretProvider.notifier)
-                                  .state = nextSecret;
-                              if (targetHost != null) {
-                                ref.read(fleetProvider.notifier).setHostSecret(
-                                      targetHost.ip,
-                                      nextSecret,
-                                      certFingerprint: nextCertFp,
-                                    );
-                              }
-                            }
-                          }
-                          if (ctx.mounted) {
-                            Navigator.of(ctx).pop();
-                          }
-                          if (pinPaired != null) {
-                            _showToast(
-                              pinPaired
-                                  ? 'Paired with ${targetHost?.ip} — session token saved.'
-                                  : 'PIN pairing failed — verify the 6-digit PIN on the PC daemon.',
-                              accentColor: pinPaired
-                                  ? CyberColors.success
-                                  : CyberColors.warning,
-                            );
-                          } else if (nextSecret.isNotEmpty) {
-                            _showToast(
-                              'Pairing token stored in secure local vault.',
-                              accentColor: CyberColors.success,
-                            );
-                          }
-                        },
-                  child: Text(
-                    isSaving ? 'Pairing...' : 'Save & Pair',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
+      builder: (_) => _PairingSecretDialog(
+        targetHost: targetHost,
+        onSubmit: ({required String secretInput, required String pin}) async {
+          String nextSecret = secretInput;
+          String? nextCertFp = targetHost?.certFingerprint;
+          bool? pinPaired;
+          if (targetHost != null && RegExp(r'^\d{6}$').hasMatch(pin)) {
+            final exchanged = await _pairWithHostPin(
+              targetHost.ip,
+              pin,
+              port: targetHost.wsPort,
+              useTls: targetHost.useTls ||
+                  ref.read(appPreferencesProvider).preferTls,
+              certFingerprint: targetHost.certFingerprint.isNotEmpty
+                  ? targetHost.certFingerprint
+                  : null,
             );
-          },
-        );
-      },
-    ).whenComplete(() {
-      Future<void>.delayed(const Duration(milliseconds: 300), () {
-        secretCtrl.dispose();
-        pinCtrl.dispose();
-      });
-    });
+            if (exchanged != null && exchanged.pairingToken.isNotEmpty) {
+              nextSecret = exchanged.pairingToken;
+              if (exchanged.certFingerprint != null &&
+                  exchanged.certFingerprint!.isNotEmpty) {
+                nextCertFp = exchanged.certFingerprint;
+              }
+              pinPaired = true;
+            } else {
+              pinPaired = false;
+            }
+          }
+          if (nextSecret.isNotEmpty) {
+            saveHostPairingSecret(
+              targetHost?.ip ?? '',
+              nextSecret,
+              certFingerprint: nextCertFp,
+            );
+            if (mounted) {
+              ref.read(globalPairingSecretProvider.notifier).state = nextSecret;
+              if (targetHost != null) {
+                ref.read(fleetProvider.notifier).setHostSecret(
+                      targetHost.ip,
+                      nextSecret,
+                      certFingerprint: nextCertFp,
+                    );
+              }
+            }
+          }
+          return (pinPaired: pinPaired, nextSecret: nextSecret);
+        },
+      ),
+    );
+    if (result == null || !mounted) return;
+    if (result.pinPaired != null) {
+      _showToast(
+        result.pinPaired!
+            ? 'Paired with ${targetHost?.ip} — session token saved.'
+            : 'PIN pairing failed — verify the 6-digit PIN on the PC daemon.',
+        accentColor: result.pinPaired!
+            ? context.palette.success
+            : context.palette.warning,
+      );
+    } else if (result.nextSecret.isNotEmpty) {
+      _showToast(
+        'Pairing token stored in secure local vault.',
+        accentColor: context.palette.success,
+      );
+    }
   }
 
   Future<void> _showDiscoveryPortDialog(int currentPort) async {
-    final portCtrl = TextEditingController(text: currentPort.toString());
-    String? errorMsg;
-    await showDialog<void>(
+    final int? parsed = await showDialog<int>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: ctx.palette.surfaceElevated,
-          title: const Text('LAN Discovery Port'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: portCtrl,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: 'TCP WebSocket Port',
-                  hintText: '8765',
-                  errorText: errorMsg,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final parsed = int.tryParse(portCtrl.text.trim());
-                if (!NetworkValidators.isValidPort(parsed)) {
-                  setDialogState(() {
-                    errorMsg = 'Enter a valid port (1 - 65535)';
-                  });
-                  return;
-                }
-                ref
-                    .read(appPreferencesProvider.notifier)
-                    .setCustomScanPort(parsed!);
-                Navigator.of(ctx).pop();
-                _showToast('Default scan port updated to $parsed');
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
-    ).whenComplete(() {
-      Future<void>.delayed(const Duration(milliseconds: 300), portCtrl.dispose);
-    });
+      builder: (_) => _ScanPortDialog(initialPort: currentPort),
+    );
+    if (parsed == null || !mounted) return;
+    unawaited(
+      ref.read(appPreferencesProvider.notifier).setCustomScanPort(parsed),
+    );
+    _showToast('Default scan port updated to $parsed');
   }
 
   Future<void> _confirmPurgeAllSecrets() async {
@@ -4792,7 +4950,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
     ref.read(fleetProvider.notifier).clearAllHostSecrets();
     _showToast(
       'All pairing credentials purged from device vault.',
-      accentColor: CyberColors.warning,
+      accentColor: context.palette.warning,
     );
   }
 
@@ -4874,6 +5032,7 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               isOnline: h.isOnline,
               osName: h.osName,
               useTls: h.useTls,
+              isPinned: h.isPinned,
             ),
           )
           .toList(growable: false),
@@ -4926,6 +5085,595 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               letterSpacing: 1.5,
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HostEditorDialog extends StatefulWidget {
+  final HostState? existing;
+  final int defaultPort;
+  final String defaultSecret;
+  final bool defaultTls;
+  final Future<bool> Function(String rawLink) onPastePairingLink;
+  final Future<String?> Function({
+    required String name,
+    required String ip,
+    required int port,
+    required String normalizedMac,
+    required String rawSecret,
+    required bool useTls,
+  }) onSave;
+
+  const _HostEditorDialog({
+    required this.existing,
+    required this.defaultPort,
+    required this.defaultSecret,
+    required this.defaultTls,
+    required this.onPastePairingLink,
+    required this.onSave,
+  });
+
+  @override
+  State<_HostEditorDialog> createState() => _HostEditorDialogState();
+}
+
+class _HostEditorDialogState extends State<_HostEditorDialog> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _ipCtrl;
+  late final TextEditingController _portCtrl;
+  late final TextEditingController _macCtrl;
+  late final TextEditingController _secretCtrl;
+  late bool _useTls;
+  String? _validationError;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    _nameCtrl = TextEditingController(text: existing?.name ?? '');
+    _ipCtrl = TextEditingController(text: existing?.ip ?? '');
+    _portCtrl = TextEditingController(text: widget.defaultPort.toString());
+    _macCtrl = TextEditingController(
+      text: (existing != null && existing.mac != '00:00:00:00:00:00')
+          ? existing.mac
+          : '',
+    );
+    _secretCtrl = TextEditingController(text: widget.defaultSecret);
+    _useTls = widget.defaultTls;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _ipCtrl.dispose();
+    _portCtrl.dispose();
+    _macCtrl.dispose();
+    _secretCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dlgPalette = context.palette;
+    final primary = dlgPalette.primary;
+    final existing = widget.existing;
+    final secretTrimmed = _secretCtrl.text.trim();
+
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      backgroundColor: dlgPalette.surfaceElevated,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: dlgPalette.dividerColor),
+      ),
+      title: Text(
+        existing == null ? 'Add Workstation' : 'Edit Workstation',
+        style: TextStyle(
+          color: dlgPalette.textPrimary,
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              style: TextStyle(color: dlgPalette.textPrimary, fontSize: 13),
+              decoration: const InputDecoration(
+                labelText: 'Hostname',
+                hintText: 'e.g. WORKSTATION-01',
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    controller: _ipCtrl,
+                    style: TextStyle(
+                      color: dlgPalette.textPrimary,
+                      fontSize: 13,
+                      fontFamily: 'monospace',
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'IPv4 or Host',
+                      hintText: '192.168.1.50',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: _portCtrl,
+                    keyboardType: TextInputType.number,
+                    style: TextStyle(
+                      color: dlgPalette.textPrimary,
+                      fontSize: 13,
+                      fontFamily: 'monospace',
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Port',
+                      hintText: '8765',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _macCtrl,
+              style: TextStyle(
+                color: dlgPalette.textPrimary,
+                fontSize: 13,
+                fontFamily: 'monospace',
+              ),
+              decoration: const InputDecoration(
+                labelText: 'MAC Address (Optional for WoL)',
+                hintText: 'AA:BB:CC:DD:EE:FF',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _secretCtrl,
+              obscureText: secretTrimmed.length > 6 &&
+                  !RegExp(r'^\d+$').hasMatch(secretTrimmed),
+              onChanged: (_) => setState(() {}),
+              style: TextStyle(
+                color: dlgPalette.textPrimary,
+                fontSize: 13,
+                fontFamily: 'monospace',
+              ),
+              decoration: const InputDecoration(
+                labelText: '6-Digit PIN or Pairing Token',
+                hintText: 'e.g. 482910 or ainet_...',
+              ),
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                ),
+                icon: Icon(Icons.qr_code_2_rounded, size: 16, color: primary),
+                label: Text(
+                  'Paste Pairing Link from Clipboard',
+                  style: TextStyle(color: primary, fontSize: 11.5),
+                ),
+                onPressed: _isSaving
+                    ? null
+                    : () async {
+                        final nav = Navigator.of(context);
+                        final clip = await Clipboard.getData('text/plain');
+                        final txt = clip?.text?.trim() ?? '';
+                        if (txt.isEmpty || !mounted) return;
+                        final ok = await widget.onPastePairingLink(txt);
+                        if (ok && nav.mounted) {
+                          nav.pop();
+                        } else if (mounted) {
+                          setState(() {
+                            _validationError =
+                                'Clipboard does not contain a valid ainet://pair or #pair_ip= link.';
+                          });
+                        }
+                      },
+              ),
+            ),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              activeThumbColor: primary,
+              activeTrackColor: primary.withValues(alpha: 0.45),
+              title: Text(
+                'Require WSS TLS',
+                style: TextStyle(
+                  color: dlgPalette.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+              value: _useTls,
+              onChanged:
+                  _isSaving ? null : (v) => setState(() => _useTls = v),
+            ),
+            if (_validationError != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _validationError!,
+                style: const TextStyle(color: _kDangerColor, fontSize: 11.5),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+          child: Text(
+            'Cancel',
+            style: TextStyle(color: dlgPalette.textSecondary),
+          ),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: primary,
+            foregroundColor: dlgPalette.onPrimary,
+          ),
+          onPressed: _isSaving
+              ? null
+              : () async {
+                  final ip = _ipCtrl.text.trim();
+                  final parsedPort = int.tryParse(_portCtrl.text.trim());
+                  final rawMac = _macCtrl.text.trim();
+
+                  if (!NetworkValidators.isValidIpOrHost(ip)) {
+                    setState(() {
+                      _validationError =
+                          'Enter a valid IPv4 address or LAN hostname.';
+                    });
+                    return;
+                  }
+                  if (!NetworkValidators.isValidPort(parsedPort)) {
+                    setState(() {
+                      _validationError = 'Port must be between 1 and 65535.';
+                    });
+                    return;
+                  }
+
+                  String normalizedMac = '00:00:00:00:00:00';
+                  if (rawMac.isNotEmpty) {
+                    final maybeMac = NetworkValidators.normalizeMac(rawMac);
+                    if (maybeMac == null) {
+                      setState(() {
+                        _validationError =
+                            'MAC must be 12 hex characters (AA:BB:CC:DD:EE:FF).';
+                      });
+                      return;
+                    }
+                    normalizedMac = maybeMac;
+                  }
+
+                  setState(() {
+                    _validationError = null;
+                    _isSaving = true;
+                  });
+
+                  final name = _nameCtrl.text.trim().isNotEmpty
+                      ? NetworkValidators.sanitizeLabel(_nameCtrl.text)
+                      : 'PC-$ip';
+
+                  final err = await widget.onSave(
+                    name: name,
+                    ip: ip,
+                    port: parsedPort!,
+                    normalizedMac: normalizedMac,
+                    rawSecret: _secretCtrl.text.trim(),
+                    useTls: _useTls,
+                  );
+                  if (!mounted) return;
+                  if (err != null) {
+                    setState(() {
+                      _isSaving = false;
+                      _validationError = err;
+                    });
+                    return;
+                  }
+                  Navigator.of(context).pop();
+                },
+          child: Text(
+            _isSaving
+                ? 'Pairing...'
+                : (existing == null ? 'Save PC' : 'Update PC'),
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SendFileDialog extends StatefulWidget {
+  final String hostName;
+
+  const _SendFileDialog({required this.hostName});
+
+  @override
+  State<_SendFileDialog> createState() => _SendFileDialogState();
+}
+
+class _SendFileDialogState extends State<_SendFileDialog> {
+  late final TextEditingController _pathCtrl;
+  late final TextEditingController _noteNameCtrl;
+  late final TextEditingController _noteBodyCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _pathCtrl = TextEditingController();
+    _noteNameCtrl = TextEditingController(text: 'mobile_note.txt');
+    _noteBodyCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _pathCtrl.dispose();
+    _noteNameCtrl.dispose();
+    _noteBodyCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dlgPalette = context.palette;
+    return AlertDialog(
+      backgroundColor: dlgPalette.surfaceElevated,
+      title: Text('Send Encrypted File -> ${widget.hostName}'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _pathCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Local File Path (optional)',
+                hintText: '/storage/emulated/0/Download/file.bin',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Or send a text note payload directly:',
+              style: TextStyle(fontSize: 11, color: dlgPalette.textSecondary),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _noteNameCtrl,
+              decoration: const InputDecoration(labelText: 'Target Filename'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _noteBodyCtrl,
+              maxLines: 3,
+              decoration:
+                  const InputDecoration(labelText: 'Quick Text Content'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: dlgPalette.primary,
+            foregroundColor: dlgPalette.onPrimary,
+          ),
+          onPressed: () {
+            final noteName = _noteNameCtrl.text.trim().isNotEmpty
+                ? _noteNameCtrl.text.trim()
+                : 'mobile_note.txt';
+            Navigator.of(context).pop((
+              filePath: _pathCtrl.text.trim(),
+              noteName: noteName,
+              noteBody: _noteBodyCtrl.text,
+            ));
+          },
+          child: const Text('Send AEAD'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PairingSecretDialog extends StatefulWidget {
+  final HostState? targetHost;
+  final Future<({bool? pinPaired, String nextSecret})> Function({
+    required String secretInput,
+    required String pin,
+  }) onSubmit;
+
+  const _PairingSecretDialog({
+    required this.targetHost,
+    required this.onSubmit,
+  });
+
+  @override
+  State<_PairingSecretDialog> createState() => _PairingSecretDialogState();
+}
+
+class _PairingSecretDialogState extends State<_PairingSecretDialog> {
+  late final TextEditingController _secretCtrl;
+  late final TextEditingController _pinCtrl;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _secretCtrl = TextEditingController();
+    _pinCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _secretCtrl.dispose();
+    _pinCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dlgPalette = context.palette;
+    final primary = dlgPalette.primary;
+    final targetHost = widget.targetHost;
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      scrollable: true,
+      backgroundColor: dlgPalette.surfaceElevated,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: dlgPalette.dividerColor),
+      ),
+      title: Text(
+        'Pair Workstation Credentials',
+        style: TextStyle(color: dlgPalette.textPrimary, fontSize: 16),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _secretCtrl,
+            obscureText: true,
+            style: TextStyle(
+              color: dlgPalette.textPrimary,
+              fontSize: 13,
+              fontFamily: 'monospace',
+            ),
+            decoration: const InputDecoration(
+              labelText: 'New Global Pairing Token (ainet_...)',
+              hintText: 'Leave blank to keep current token',
+            ),
+          ),
+          if (targetHost != null) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _pinCtrl,
+              keyboardType: TextInputType.number,
+              style: TextStyle(
+                color: dlgPalette.textPrimary,
+                fontSize: 13,
+                fontFamily: 'monospace',
+              ),
+              decoration: InputDecoration(
+                labelText: 'Or Pair ${targetHost.ip} with 6-Digit PIN',
+                hintText: 'e.g. 482910',
+              ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+          child: Text(
+            'Cancel',
+            style: TextStyle(color: dlgPalette.textSecondary),
+          ),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: primary,
+            foregroundColor: dlgPalette.onPrimary,
+          ),
+          onPressed: _isSaving
+              ? null
+              : () async {
+                  setState(() => _isSaving = true);
+                  final res = await widget.onSubmit(
+                    secretInput: _secretCtrl.text.trim(),
+                    pin: _pinCtrl.text.trim(),
+                  );
+                  if (!mounted) return;
+                  Navigator.of(context).pop(res);
+                },
+          child: Text(
+            _isSaving ? 'Pairing...' : 'Save & Pair',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ScanPortDialog extends StatefulWidget {
+  final int initialPort;
+
+  const _ScanPortDialog({required this.initialPort});
+
+  @override
+  State<_ScanPortDialog> createState() => _ScanPortDialogState();
+}
+
+class _ScanPortDialogState extends State<_ScanPortDialog> {
+  late final TextEditingController _portCtrl;
+  String? _errorMsg;
+
+  @override
+  void initState() {
+    super.initState();
+    _portCtrl = TextEditingController(text: widget.initialPort.toString());
+  }
+
+  @override
+  void dispose() {
+    _portCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return AlertDialog(
+      backgroundColor: palette.surfaceElevated,
+      title: const Text('LAN Discovery Port'),
+      content: TextField(
+        controller: _portCtrl,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(
+          labelText: 'TCP WebSocket Port',
+          hintText: '8765',
+          errorText: _errorMsg,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: palette.primary,
+            foregroundColor: palette.onPrimary,
+          ),
+          onPressed: () {
+            final parsed = int.tryParse(_portCtrl.text.trim());
+            if (!NetworkValidators.isValidPort(parsed)) {
+              setState(() => _errorMsg = 'Enter a valid port (1 - 65535)');
+              return;
+            }
+            Navigator.of(context).pop(parsed);
+          },
+          child: const Text('Save'),
         ),
       ],
     );

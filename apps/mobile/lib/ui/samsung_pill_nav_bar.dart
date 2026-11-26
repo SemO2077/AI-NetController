@@ -94,13 +94,15 @@ class _SamsungPillNavBarState extends State<SamsungPillNavBar>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.items.isEmpty) return const SizedBox.shrink();
     final palette = context.palette;
-    final sigma = palette.glass.blurSigma;
+    final sigma = palette.glass.blurSigma.clamp(0.0, 14.0);
     final disableAnim = MediaQuery.disableAnimationsOf(context);
     final size = MediaQuery.sizeOf(context);
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final horizontalPad = size.width < 340 ? 10.0 : 20.0;
     final barHeight = size.height < 440 ? 54.0 : 66.0;
+    final Color activeFg = palette.onHeroGradient;
 
     final Widget dockBody = CustomPaint(
       painter: PillDockPainter(
@@ -117,81 +119,86 @@ class _SamsungPillNavBarState extends State<SamsungPillNavBar>
             final item = widget.items[index];
 
             return Expanded(
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => _handleTabTap(index),
-                  borderRadius: BorderRadius.circular(28),
-                  splashColor: widget.accentColor.withValues(alpha: 0.18),
-                  highlightColor: Colors.transparent,
-                  child: AnimatedContainer(
-                    duration: disableAnim
-                        ? Duration.zero
-                        : const Duration(milliseconds: 240),
-                    curve: Curves.easeOutCubic,
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 4,
-                      horizontal: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      gradient: isSelected ? palette.heroGradient : null,
-                      color: isSelected ? null : Colors.transparent,
-                      borderRadius: BorderRadius.circular(28),
-                      border: isSelected
-                          ? Border.all(
-                              color: Colors.white.withValues(alpha: 0.50),
-                              width: 1.0,
-                            )
-                          : null,
-                      boxShadow: isSelected
-                          ? [
-                              BoxShadow(
-                                color: widget.accentColor
-                                    .withValues(alpha: 0.34),
-                                blurRadius: 14,
-                                offset: const Offset(0, 4),
+              child: Semantics(
+                button: true,
+                selected: isSelected,
+                label: item.label,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => _handleTabTap(index),
+                    borderRadius: BorderRadius.circular(28),
+                    splashColor: widget.accentColor.withValues(alpha: 0.18),
+                    highlightColor: Colors.transparent,
+                    child: AnimatedContainer(
+                      duration: disableAnim
+                          ? Duration.zero
+                          : const Duration(milliseconds: 240),
+                      curve: Curves.easeOutCubic,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 4,
+                        horizontal: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        gradient: isSelected ? palette.heroGradient : null,
+                        color: isSelected ? null : Colors.transparent,
+                        borderRadius: BorderRadius.circular(28),
+                        border: isSelected
+                            ? Border.all(
+                                color: Colors.white.withValues(alpha: 0.50),
+                                width: 1.0,
+                              )
+                            : null,
+                        boxShadow: isSelected
+                            ? [
+                                BoxShadow(
+                                  color: widget.accentColor
+                                      .withValues(alpha: 0.34),
+                                  blurRadius: 14,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            AnimatedSwitcher(
+                              duration: disableAnim
+                                  ? Duration.zero
+                                  : const Duration(milliseconds: 200),
+                              transitionBuilder: (child, anim) =>
+                                  ScaleTransition(scale: anim, child: child),
+                              child: Icon(
+                                isSelected ? item.activeIcon : item.icon,
+                                key: ValueKey('${item.label}_$isSelected'),
+                                size: 22,
+                                color: isSelected
+                                    ? activeFg
+                                    : palette.textSecondary,
                               ),
-                            ]
-                          : null,
-                    ),
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          AnimatedSwitcher(
-                            duration: disableAnim
-                                ? Duration.zero
-                                : const Duration(milliseconds: 200),
-                            transitionBuilder: (child, anim) =>
-                                ScaleTransition(scale: anim, child: child),
-                            child: Icon(
-                              isSelected ? item.activeIcon : item.icon,
-                              key: ValueKey('${item.label}_$isSelected'),
-                              size: 22,
-                              color: isSelected
-                                  ? Colors.white
-                                  : palette.textSecondary,
                             ),
-                          ),
-                          const SizedBox(height: 2.5),
-                          Text(
-                            item.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: isSelected
-                                  ? FontWeight.w800
-                                  : FontWeight.w600,
-                              letterSpacing: -0.1,
-                              color: isSelected
-                                  ? Colors.white
-                                  : palette.textSecondary,
+                            const SizedBox(height: 2.5),
+                            Text(
+                              item.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: isSelected
+                                    ? FontWeight.w800
+                                    : FontWeight.w600,
+                                letterSpacing: -0.1,
+                                color: isSelected
+                                    ? activeFg
+                                    : palette.textSecondary,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -262,6 +269,7 @@ class PillDockPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
     final Rect rect = Offset.zero & size;
     final RRect rrect =
         RRect.fromRectAndRadius(rect, const Radius.circular(34));
