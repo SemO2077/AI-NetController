@@ -282,11 +282,13 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
     },
   ];
 
-  if (!isOpen) return null;
-
   return (
     <AnimatePresence>
+      {isOpen && (
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={isBg ? 'Бърза настройка и сдвояване' : 'Quick Setup & Device Pairing'}
         onClick={(e) => {
           if (e.target === e.currentTarget) {
             triggerHapticFeedback('light');
@@ -304,10 +306,10 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
           className="relative w-full max-w-4xl rounded-[28px] glass-liquid-modal overflow-hidden my-auto max-h-[92dvh] flex flex-col transform-gpu"
         >
           {/* Specular Accent Top Bar */}
-          <div className="h-1 w-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)] shrink-0" />
+          <div className="h-1 w-full bg-gradient-to-r from-[var(--theme-accent)] via-[var(--theme-secondary)] to-[var(--theme-tertiary)] shrink-0" />
 
           {/* Top Header */}
-          <div className="px-5 py-4 border-b border-[var(--glass-border)] flex items-center justify-between gap-3 shrink-0">
+          <div className="px-5 py-4 border-b border-[var(--surface-border-subtle)] flex items-center justify-between gap-3 shrink-0">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 squircle-badge squircle-hero shrink-0">
                 <Sparkles className="w-5 h-5 icon-sparkle-live" />
@@ -340,7 +342,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
           </div>
 
           {/* Interactive 3-Step Readiness Stepper + View Filter Bar */}
-          <div className="px-5 py-3 flex flex-col gap-2.5 border-b border-[var(--glass-border)] glass-liquid-subtle shrink-0">
+          <div className="px-5 py-3 flex flex-col gap-2.5 border-b border-[var(--surface-border-subtle)] glass-liquid-subtle shrink-0">
             {/* Step Progress Indicator */}
             <div className="flex items-center justify-between gap-2">
               {progressSteps.map((step, idx) => (
@@ -358,7 +360,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                         step.done
                           ? 'bg-emerald-500 text-white shadow-sm'
                           : activeStep === step.id
-                          ? 'bg-[var(--accent-primary)] text-white shadow-sm'
+                          ? 'bg-[var(--theme-accent)] text-white shadow-sm'
                           : 'liquid-control-pill ink-secondary'
                       }`}
                     >
@@ -367,7 +369,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     <span
                       className={`text-xs font-display font-semibold truncate transition ${
                         activeStep === step.id
-                          ? 'text-[var(--accent-primary)]'
+                          ? 'text-[var(--theme-accent)]'
                           : step.done
                           ? 'text-emerald-600 dark:text-emerald-300'
                           : 'ink-secondary group-hover:ink-primary'
@@ -381,7 +383,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       className={`flex-1 h-0.5 rounded-full transition-colors ${
                         step.done
                           ? 'bg-emerald-500/60'
-                          : 'bg-[var(--glass-border)]'
+                          : 'bg-[var(--surface-border-subtle)]'
                       }`}
                     />
                   )}
@@ -391,7 +393,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
 
             {/* Filter Pills + Refresh IP */}
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="flex items-center gap-1 p-1 rounded-full glass-liquid-subtle border border-[var(--glass-border)] overflow-x-auto scrollbar-none">
+              <div className="flex items-center gap-1 p-1 rounded-full glass-liquid-subtle border border-[var(--surface-border-subtle)] overflow-x-auto scrollbar-none">
                 {[
                   { id: 'all', label: isBg ? 'Всичко в 1 изглед' : 'All-in-One', icon: Sparkles },
                   { id: 'pc', label: isBg ? '1. PC Агент' : '1. PC Agent', icon: Monitor },
@@ -434,7 +436,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 onClick={() => void fetchSetupDetails()}
                 className="min-h-[36px] px-3.5 rounded-full liquid-control-pill text-xs font-display font-semibold ink-primary flex items-center gap-1.5 cursor-pointer shrink-0"
               >
-                <RefreshCw className={`w-3.5 h-3.5 text-[var(--accent-primary)] ${isLoading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3.5 h-3.5 text-[var(--theme-accent)] ${isLoading ? 'animate-spin' : ''}`} />
                 <span>{isBg ? 'Обнови IP' : 'Refresh IP'}</span>
               </motion.button>
             </div>
@@ -443,9 +445,9 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
           {/* Scrollable Body */}
           <div className="p-5 overflow-y-auto bouncy-scroll space-y-5 flex-1">
             {/* Quick Auto-Pair PC Hero Strip */}
-            <div className="rounded-3xl glass-liquid-subtle border border-[var(--accent-primary)]/30 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="rounded-3xl glass-liquid-subtle border border-[var(--theme-accent)]/30 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="space-y-1 min-w-0">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[var(--accent-primary)]/14 border border-[var(--accent-primary)]/30 text-[11px] font-display font-bold text-[var(--accent-primary)]">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[var(--theme-accent)]/14 border border-[var(--theme-accent)]/30 text-[11px] font-display font-bold text-[var(--theme-accent)]">
                   <Zap className="w-3.5 h-3.5 shrink-0" />
                   <span>
                     {isBg ? 'Мигновено авто-сдвояване' : 'Instant Zero-Config Auto-Pairing'}
@@ -496,7 +498,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 <div
                   className={`${
                     activeStep === 'pc' ? 'lg:col-span-12' : 'lg:col-span-6'
-                  } rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 sm:p-5 flex flex-col justify-between space-y-4`}
+                  } rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 sm:p-5 flex flex-col justify-between space-y-4`}
                 >
                   <div className="space-y-3">
                     <div className="flex items-center justify-between gap-2">
@@ -521,7 +523,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </div>
 
                     {/* Option A: Auto-Setup Launcher (.BAT) */}
-                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--accent-primary)]/30 space-y-2.5">
+                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--theme-accent)]/30 space-y-2.5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-display font-bold ink-primary">
                           {isBg
@@ -551,7 +553,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </div>
 
                     {/* Option B: Standalone Windows .EXE */}
-                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] space-y-2.5">
+                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] space-y-2.5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-display font-bold ink-primary">
                           {isBg
@@ -580,12 +582,12 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </div>
 
                     {/* Option C: Copy 1-Line Command */}
-                    <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center justify-between gap-2">
+                    <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex items-center justify-between gap-2">
                       <div className="min-w-0">
                         <div className="text-[10px] ink-muted">
                           {isBg ? 'Или стартирайте от папката на проекта:' : 'Or run inside the project folder:'}
                         </div>
-                        <code className="text-xs font-mono font-semibold text-[var(--accent-primary)] truncate block mt-0.5">
+                        <code className="text-xs font-mono font-semibold text-[var(--theme-accent)] truncate block mt-0.5">
                           START_HERE_WINDOWS.bat
                         </code>
                       </div>
@@ -601,7 +603,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                           </>
                         ) : (
                           <>
-                            <Copy className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                            <Copy className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                             <span>{isBg ? 'Копирай' : 'Copy'}</span>
                           </>
                         )}
@@ -616,7 +618,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 <div
                   className={`${
                     activeStep === 'phone' ? 'lg:col-span-12' : 'lg:col-span-6'
-                  } rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 sm:p-5 flex flex-col justify-between space-y-4`}
+                  } rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 sm:p-5 flex flex-col justify-between space-y-4`}
                 >
                   <div className="space-y-3">
                     <div className="flex items-center justify-between gap-2">
@@ -635,7 +637,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                           </p>
                         </div>
                       </div>
-                      <QrCode className="w-5 h-5 text-[var(--accent-primary)] shrink-0" />
+                      <QrCode className="w-5 h-5 text-[var(--theme-accent)] shrink-0" />
                     </div>
 
                     {/* Prominent 6-Digit Pairing PIN Row */}
@@ -674,7 +676,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </div>
 
                     {/* QR Target Mode Toggle */}
-                    <div className="grid grid-cols-2 gap-1.5 p-1 rounded-full liquid-terminal-entry border border-[var(--glass-border)]">
+                    <div className="grid grid-cols-2 gap-1.5 p-1 rounded-full liquid-terminal-entry border border-[var(--surface-border-subtle)]">
                       <button
                         type="button"
                         onClick={() => {
@@ -683,7 +685,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                         }}
                         className={`min-h-[34px] px-2.5 py-1 rounded-full text-[11px] font-display font-bold transition cursor-pointer ${
                           qrMode === 'android'
-                            ? 'bg-[var(--accent-primary)]/18 text-[var(--accent-primary)] border border-[var(--accent-primary)]/40'
+                            ? 'bg-[var(--theme-accent)]/18 text-[var(--theme-accent)] border border-[var(--theme-accent)]/40'
                             : 'ink-secondary hover:ink-primary border border-transparent'
                         }`}
                       >
@@ -706,7 +708,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </div>
 
                     {/* Crisp White-Framed QR Code + Editable LAN IP Row */}
-                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex flex-col sm:flex-row items-center gap-4">
+                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex flex-col sm:flex-row items-center gap-4">
                       <div className="w-36 h-36 rounded-2xl bg-white p-2.5 flex items-center justify-center shrink-0 shadow-md border border-black/10">
                         {qrDataUrl ? (
                           <img
@@ -730,7 +732,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                             value={customIp}
                             onChange={(e) => setCustomIp(e.target.value)}
                             placeholder="192.168.1.104"
-                            className="w-full px-3 py-2 rounded-xl glass-liquid-subtle border border-[var(--glass-border)] text-xs font-mono ink-primary outline-none focus:border-[var(--accent-primary)]"
+                            className="w-full px-3 py-2 rounded-xl glass-liquid-subtle border border-[var(--surface-border-subtle)] text-xs font-mono ink-primary outline-none focus:border-[var(--theme-accent)]"
                           />
                         </div>
 
@@ -760,7 +762,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                             </>
                           ) : (
                             <>
-                              <Copy className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                              <Copy className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                               <span>
                                 {qrMode === 'android'
                                   ? isBg
@@ -798,7 +800,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                         onClick={() => triggerHapticFeedback('medium')}
                         className="min-h-[42px] px-3.5 py-2 rounded-full liquid-control-pill ink-primary font-display font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                       >
-                        <Download className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                        <Download className="w-4 h-4 text-[var(--theme-accent)] shrink-0" />
                         <span>{isBg ? 'Изтегли Android .APK' : 'Download Android .APK'}</span>
                       </a>
                     </div>
@@ -838,7 +840,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
 
             {/* STEP 3: LIVE READINESS & CONNECTION VERIFICATION */}
             {(activeStep === 'all' || activeStep === 'verify') && (
-              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 sm:p-5 space-y-3">
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 sm:p-5 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 squircle-badge squircle-emerald">
@@ -856,7 +858,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
-                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center gap-2.5">
+                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex items-center gap-2.5">
                     {isDaemonReady ? (
                       <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                     ) : (
@@ -886,7 +888,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center gap-2.5">
+                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex items-center gap-2.5">
                     {hasValidMac ? (
                       <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                     ) : (
@@ -899,7 +901,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       <div
                         className={`text-[11px] font-mono truncate ${
                           hasValidMac
-                            ? 'text-[var(--accent-primary)]'
+                            ? 'text-[var(--theme-accent)]'
                             : 'text-amber-600 dark:text-amber-300'
                         }`}
                       >
@@ -908,7 +910,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center gap-2.5">
+                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex items-center gap-2.5">
                     {isDaemonReady ? (
                       <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                     ) : (
@@ -934,17 +936,17 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center gap-2.5">
+                  <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex items-center gap-2.5">
                     <Wifi
                       className={`w-4 h-4 shrink-0 ${
-                        isConnected ? 'text-emerald-500' : 'text-[var(--accent-primary)]'
+                        isConnected ? 'text-emerald-500' : 'text-[var(--theme-accent)]'
                       }`}
                     />
                     <div className="min-w-0">
                       <div className="font-display font-semibold ink-primary truncate">
                         {isBg ? 'Контролер Връзка' : 'Controller Channel'}
                       </div>
-                      <div className="text-[11px] text-[var(--accent-primary)] font-mono truncate">
+                      <div className="text-[11px] text-[var(--theme-accent)] font-mono truncate">
                         {isConnected
                           ? isBg
                             ? 'Свързан (Live WS)'
@@ -961,7 +963,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
           </div>
 
           {/* Footer */}
-          <div className="px-5 py-3.5 border-t border-[var(--glass-border)] glass-liquid-subtle flex items-center justify-between gap-3 shrink-0">
+          <div className="px-5 py-3.5 border-t border-[var(--surface-border-subtle)] glass-liquid-subtle flex items-center justify-between gap-3 shrink-0">
             <div className="text-[11px] ink-secondary hidden sm:block">
               {isBg
                 ? 'Съвет: Телефонът и компютърът трябва да са в една и съща Wi-Fi / LAN мрежа.'
@@ -973,7 +975,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                 onClick={handleOneTapAutoPair}
                 className="min-h-[40px] px-4 py-2 rounded-full liquid-control-pill ink-primary font-display font-bold text-xs flex items-center gap-1.5 cursor-pointer"
               >
-                <Zap className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                <Zap className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                 <span>{isBg ? 'Авто-сдвои PC' : 'Auto-Pair Local PC'}</span>
               </button>
               <button
@@ -988,6 +990,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
           </div>
         </motion.div>
       </div>
+      )}
     </AnimatePresence>
   );
 };
