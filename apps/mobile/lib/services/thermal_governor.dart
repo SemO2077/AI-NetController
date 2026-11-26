@@ -61,6 +61,37 @@ class ThermalConfig {
     forceFlatAcrylic: true,
     isSnapshotOnlyMode: true,
   );
+
+  static const lowBattery = ThermalConfig(
+    targetFps: 5,
+    blurSigma: 0.0,
+    enableMeshGradient: false,
+    enablePulsingAnimations: false,
+    forceFlatAcrylic: true,
+    isSnapshotOnlyMode: true,
+  );
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is ThermalConfig &&
+        other.targetFps == targetFps &&
+        other.blurSigma == blurSigma &&
+        other.enableMeshGradient == enableMeshGradient &&
+        other.enablePulsingAnimations == enablePulsingAnimations &&
+        other.forceFlatAcrylic == forceFlatAcrylic &&
+        other.isSnapshotOnlyMode == isSnapshotOnlyMode;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+        targetFps,
+        blurSigma,
+        enableMeshGradient,
+        enablePulsingAnimations,
+        forceFlatAcrylic,
+        isSnapshotOnlyMode,
+      );
 }
 
 class ThermalGovernor extends ChangeNotifier {
@@ -75,19 +106,13 @@ class ThermalGovernor extends ChangeNotifier {
   ThermalProfile get profile => _currentProfile;
   int get batteryPercentage => _batteryPercentage;
   bool get isCharging => _isCharging;
+  bool get isLowBatteryOverride => _batteryPercentage <= 15 && !_isCharging;
   String get statusMessage => _governorStatusMessage;
 
   ThermalConfig get currentConfig {
-    if (_batteryPercentage <= 15 && !_isCharging) {
+    if (isLowBatteryOverride) {
       // Force low battery power-saving override
-      return const ThermalConfig(
-        targetFps: 5,
-        blurSigma: 0.0,
-        enableMeshGradient: false,
-        enablePulsingAnimations: false,
-        forceFlatAcrylic: true,
-        isSnapshotOnlyMode: true,
-      );
+      return ThermalConfig.lowBattery;
     }
 
     switch (_currentProfile) {
@@ -100,22 +125,29 @@ class ThermalGovernor extends ChangeNotifier {
     }
   }
 
+  void _refreshStatusMessage() {
+    if (isLowBatteryOverride) {
+      _governorStatusMessage =
+          "Low Battery (<15%): Stream collapsed to On-Demand Snapshot Mode";
+    } else {
+      _governorStatusMessage = _statusForProfile(_currentProfile);
+    }
+  }
+
   /// Ingests system thermal state updates from native platform channels
   void updateThermalState(int thermalIndex) {
-    ThermalProfile newProfile;
+    final ThermalProfile newProfile;
     if (thermalIndex <= 1) {
       newProfile = ThermalProfile.nominal;
-      _governorStatusMessage = "Nominal: Full Glassmorphism Active (60 FPS)";
     } else if (thermalIndex == 2) {
       newProfile = ThermalProfile.fair;
-      _governorStatusMessage = "Fair: Thermal Throttling Activated (20 FPS, Sigma 8)";
     } else {
       newProfile = ThermalProfile.critical;
-      _governorStatusMessage = "Critical: GPU Throttling Active (10 FPS, Flat Acrylic)";
     }
 
     if (newProfile != _currentProfile) {
       _currentProfile = newProfile;
+      _refreshStatusMessage();
       notifyListeners();
     }
   }
@@ -123,15 +155,11 @@ class ThermalGovernor extends ChangeNotifier {
   /// Updates battery state
   void updateBatteryState({required int percentage, required bool isCharging}) {
     final int clamped = percentage.clamp(0, 100);
-    final bool changed = (_batteryPercentage != clamped) || (_isCharging != isCharging);
+    final bool changed =
+        (_batteryPercentage != clamped) || (_isCharging != isCharging);
     _batteryPercentage = clamped;
     _isCharging = isCharging;
-
-    if (_batteryPercentage <= 15 && !_isCharging) {
-      _governorStatusMessage = "Low Battery (<15%): Stream collapsed to On-Demand Snapshot Mode";
-    } else if (_governorStatusMessage.startsWith("Low Battery")) {
-      _governorStatusMessage = _statusForProfile(_currentProfile);
-    }
+    _refreshStatusMessage();
 
     if (changed) {
       notifyListeners();
@@ -152,7 +180,7 @@ class ThermalGovernor extends ChangeNotifier {
   /// Manually force a profile for testing / benchmarking
   void forceProfile(ThermalProfile profile) {
     _currentProfile = profile;
-    _governorStatusMessage = _statusForProfile(profile);
+    _refreshStatusMessage();
     notifyListeners();
   }
 }

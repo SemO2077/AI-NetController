@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import '../services/thermal_governor.dart';
 import '../theme/fluid_theme.dart';
 
 /// Monitor display specification from Opcode 0x0D (DISPLAY_ENUMERATION)
@@ -56,24 +57,93 @@ class PipStreamViewer extends StatefulWidget {
 class _PipStreamViewerState extends State<PipStreamViewer>
     with WidgetsBindingObserver {
   bool _isInPipMode = false;
+  bool _reducedMotion = false;
+  bool _appPaused = false;
   final ValueNotifier<Offset> _gyroOffsetNotifier =
       ValueNotifier<Offset>(Offset.zero);
+  final TransformationController _transformController =
+      TransformationController();
+  final ValueNotifier<double> _zoomScaleNotifier = ValueNotifier<double>(1.0);
   StreamSubscription<AccelerometerEvent>? _sensorSub;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initGyroscopeListener();
+    ThermalGovernor.instance.addListener(_syncSensorSubscription);
+    _transformController.addListener(_onTransformChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final bool nextReduced = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (_reducedMotion != nextReduced || _sensorSub == null) {
+      _reducedMotion = nextReduced;
+      _syncSensorSubscription();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant PipStreamViewer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedMonitorIndex != widget.selectedMonitorIndex &&
+        _zoomScaleNotifier.value > 1.02) {
+      _resetZoom();
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ThermalGovernor.instance.removeListener(_syncSensorSubscription);
+    _transformController.removeListener(_onTransformChanged);
+    _transformController.dispose();
+    _zoomScaleNotifier.dispose();
     unawaited(_sensorSub?.cancel());
     _sensorSub = null;
     _gyroOffsetNotifier.dispose();
     super.dispose();
+  }
+
+  void _onTransformChanged() {
+    final double scale = _transformController.value.getMaxScaleOnAxis();
+    final double safeScale = scale.isFinite && scale > 0 ? scale : 1.0;
+    if ((_zoomScaleNotifier.value - safeScale).abs() > 0.01) {
+      _zoomScaleNotifier.value = safeScale;
+    }
+  }
+
+  void _resetZoom() {
+    _transformController.value = Matrix4.identity();
+    _zoomScaleNotifier.value = 1.0;
+  }
+
+  bool get _shouldRunGyro =>
+      !_isInPipMode &&
+      !_appPaused &&
+      !_reducedMotion &&
+      ThermalGovernor.instance.currentConfig.enableMeshGradient;
+
+  void _syncSensorSubscription() {
+    if (!mounted) return;
+    if (!_shouldRunGyro) {
+      if (_sensorSub != null && !_sensorSub!.isPaused) {
+        _sensorSub!.pause();
+      }
+      if (_gyroOffsetNotifier.value != Offset.zero) {
+        _gyroOffsetNotifier.value = Offset.zero;
+      }
+      return;
+    }
+
+    if (_sensorSub != null) {
+      if (_sensorSub!.isPaused) {
+        _sensorSub!.resume();
+      }
+      return;
+    }
+    _initGyroscopeListener();
   }
 
   @override
@@ -82,18 +152,22 @@ class _PipStreamViewerState extends State<PipStreamViewer>
     // Automatically transition to PiP when user swipes to home / leaves app
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
+      _appPaused = true;
       if (widget.isStreaming && !_isInPipMode) {
         setState(() {
           _isInPipMode = true;
         });
         widget.onTogglePip?.call();
       }
+      _syncSensorSubscription();
     } else if (state == AppLifecycleState.resumed) {
+      _appPaused = false;
       if (_isInPipMode) {
         setState(() {
           _isInPipMode = false;
         });
       }
+      _syncSensorSubscription();
     }
   }
 
@@ -101,7 +175,7 @@ class _PipStreamViewerState extends State<PipStreamViewer>
     try {
       _sensorSub = accelerometerEventStream().listen(
         (AccelerometerEvent event) {
-          if (!mounted || _isInPipMode) return;
+          if (!mounted || !_shouldRunGyro) return;
           // Damped low-pass filter with micro-jitter deadzone to avoid needless GPU repaints
           final double targetX = (event.x / 9.8).clamp(-1.0, 1.0);
           final double targetY = (event.y / 9.8).clamp(-1.0, 1.0);
@@ -136,6 +210,7 @@ class _PipStreamViewerState extends State<PipStreamViewer>
       onDoubleTap: () {
         if (mounted && _isInPipMode) {
           setState(() => _isInPipMode = false);
+          _syncSensorSubscription();
         }
       },
       child: Container(
@@ -151,11 +226,12 @@ class _PipStreamViewerState extends State<PipStreamViewer>
                         fit: BoxFit.contain,
                         filterQuality: FilterQuality.medium,
                       )
-                    : const Center(
+                    : Center(
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor:
-                              AlwaysStoppedAnimation<Color>(Color(0xFF00F0FF)),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            widget.dominantAccentColor,
+                          ),
                         ),
                       ),
               ),
@@ -201,6 +277,17 @@ class _PipStreamViewerState extends State<PipStreamViewer>
         ),
       ),
     );
+  }
+
+  String _activeDisplayBadgeText() {
+    for (final mon in widget.monitors) {
+      if (mon.index == widget.selectedMonitorIndex) {
+        final String res =
+            (mon.width > 0 && mon.height > 0) ? ' · ${mon.width}×${mon.height}' : '';
+        return 'Display ${mon.index}$res';
+      }
+    }
+    return 'Display ${widget.selectedMonitorIndex}';
   }
 
   /// Full-Screen Interactive Desktop Viewer with Gyro Mesh Gradient & Multi-Monitor Controls
@@ -265,6 +352,8 @@ class _PipStreamViewerState extends State<PipStreamViewer>
                             child: RepaintBoundary(
                               child: widget.frameData != null
                                   ? InteractiveViewer(
+                                      transformationController:
+                                          _transformController,
                                       maxScale: 4.0,
                                       minScale: 1.0,
                                       child: Image.memory(
@@ -275,6 +364,62 @@ class _PipStreamViewerState extends State<PipStreamViewer>
                                       ),
                                     )
                                   : _buildLoadingState(activeAccent),
+                            ),
+                          ),
+
+                          // Crisp 1-tap Zoom Reset pill when zoomed > 1.02x
+                          Positioned(
+                            top: 12,
+                            right: 12,
+                            child: ValueListenableBuilder<double>(
+                              valueListenable: _zoomScaleNotifier,
+                              builder: (_, scale, _) {
+                                if (scale <= 1.02) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    key: const ValueKey('pip-zoom-reset-pill'),
+                                    onTap: _resetZoom,
+                                    borderRadius: BorderRadius.circular(999),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 10, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: palette.surfaceElevated
+                                            .withValues(alpha: 0.92),
+                                        borderRadius:
+                                            BorderRadius.circular(999),
+                                        border: Border.all(
+                                          color: palette.primary
+                                              .withValues(alpha: 0.65),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.zoom_out_map_rounded,
+                                            size: 14,
+                                            color: palette.primary,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            '${scale.toStringAsFixed(1)}x · 1x',
+                                            style: TextStyle(
+                                              fontFamily: 'monospace',
+                                              fontSize: 10.5,
+                                              fontWeight: FontWeight.w800,
+                                              color: palette.primary,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                           ),
 
@@ -309,7 +454,7 @@ class _PipStreamViewerState extends State<PipStreamViewer>
                                   ),
                                   const SizedBox(width: 6),
                                   Text(
-                                    'Display ${widget.selectedMonitorIndex} • TurboJPEG 60 FPS',
+                                    '${_activeDisplayBadgeText()} • TurboJPEG',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 10.5,
@@ -335,11 +480,11 @@ class _PipStreamViewerState extends State<PipStreamViewer>
 
   Widget _buildHeaderBar(CyberPalette palette) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: palette.surfaceElevated
-            .withValues(alpha: palette.isDaylight ? 0.90 : 0.88),
+            .withValues(alpha: palette.isDaylight ? 0.92 : 0.88),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: palette.glassBorderIdle),
         boxShadow: [
@@ -354,6 +499,7 @@ class _PipStreamViewerState extends State<PipStreamViewer>
       child: Row(
         children: [
           IconButton(
+            tooltip: 'Close viewer',
             icon: Icon(Icons.arrow_back_rounded,
                 color: palette.textPrimary, size: 20),
             onPressed: widget.onClose ?? () => Navigator.of(context).pop(),
@@ -372,9 +518,11 @@ class _PipStreamViewerState extends State<PipStreamViewer>
                       onTap: () => widget.onSelectMonitor?.call(mon.index),
                       borderRadius: BorderRadius.circular(999),
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
+                        duration: _reducedMotion
+                            ? Duration.zero
+                            : const Duration(milliseconds: 200),
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
+                            horizontal: 12, vertical: 7),
                         decoration: BoxDecoration(
                           color: isSelected
                               ? palette.primary.withValues(
@@ -428,6 +576,7 @@ class _PipStreamViewerState extends State<PipStreamViewer>
               setState(() {
                 _isInPipMode = true;
               });
+              _syncSensorSubscription();
               widget.onTogglePip?.call();
             },
           ),

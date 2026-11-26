@@ -71,6 +71,7 @@ class ZeroGcVideoRenderer extends StatefulWidget {
   final VoidCallback? onFrameDropped;
   final BoxFit fit;
   final Alignment alignment;
+  final bool showLoadingSpinner;
 
   const ZeroGcVideoRenderer({
     super.key,
@@ -82,6 +83,7 @@ class ZeroGcVideoRenderer extends StatefulWidget {
     this.onFrameDropped,
     this.fit = BoxFit.contain,
     this.alignment = Alignment.center,
+    this.showLoadingSpinner = true,
   });
 
   @override
@@ -96,7 +98,6 @@ class ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
   bool _isDecoding = false;
   bool _isDisposed = false;
   Uint8List? _latchedPendingFrame;
-  int? _cachedTargetWidth;
   Size? _lastFrameSize;
   DateTime? _lastKeyframeResyncAt;
   static const Duration _resyncCooldown = Duration(milliseconds: 1500);
@@ -119,22 +120,21 @@ class ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final double logicalWidth = MediaQuery.sizeOf(context).width;
-    final double dpr = MediaQuery.devicePixelRatioOf(context);
-    final int physicalWidth = (logicalWidth * dpr).round();
-    _cachedTargetWidth = physicalWidth > 0 ? physicalWidth : null;
-  }
-
-  @override
   void didUpdateWidget(ZeroGcVideoRenderer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.frameStream != widget.frameStream) {
+      _latchedPendingFrame = null;
+      _lastFrameSize = null;
       unawaited(_streamSub?.cancel());
       _subscribeToFrames();
       final seed = widget.initialFrame;
       if (seed != null && seed.isNotEmpty && _activeImageNotifier.value == null) {
+        _onFrameArrival(seed);
+      }
+    } else if (oldWidget.initialFrame != widget.initialFrame &&
+        _activeImageNotifier.value == null) {
+      final seed = widget.initialFrame;
+      if (seed != null && seed.isNotEmpty) {
         _onFrameArrival(seed);
       }
     }
@@ -152,6 +152,7 @@ class ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
 
   /// 120Hz Frame Pacing Handler: Decodes immediately or latches newest frame.
   void _onFrameArrival(Uint8List rawBytes) {
+    if (_isDisposed || !mounted) return;
     if (_isDecoding) {
       // GPU codec busy: Latch newest frame to guarantee zero jitter and zero drops
       if (_latchedPendingFrame != null) {
@@ -200,11 +201,9 @@ class ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
             final Uint8List frameSlice =
                 isUnsharedSlice ? currentBytes : _ringBuffer.copy(currentBytes);
 
-            codec = await ui.instantiateImageCodec(
-              frameSlice,
-              targetWidth:
-                  widget.fit == BoxFit.contain ? null : _cachedTargetWidth,
-            );
+            // Decode at native stream resolution (already viewport-negotiated by host)
+            // so FILL (BoxFit.cover) and pinch-to-zoom remain razor-sharp.
+            codec = await ui.instantiateImageCodec(frameSlice);
             pendingImage = (await codec.getNextFrame()).image;
 
             if (!_isDisposed && mounted) {
@@ -312,6 +311,9 @@ class ZeroGcVideoRendererState extends State<ZeroGcVideoRenderer> {
         valueListenable: _activeImageNotifier,
         builder: (context, imageToRender, _) {
           if (imageToRender == null) {
+            if (!widget.showLoadingSpinner) {
+              return const SizedBox.expand();
+            }
             return Center(
               child: SizedBox(
                 width: 32,

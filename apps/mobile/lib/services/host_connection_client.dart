@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -106,15 +107,16 @@ class HostConnectionClient {
   int _aeadDecryptErrors = 0;
   int _retainCount = 0;
   final ValueNotifier<int> frameKbPerSecNotifier = ValueNotifier<int>(0);
-  final List<({int tsMs, int bytes})> _throughputSamples =
-      <({int tsMs, int bytes})>[];
+  final ListQueue<({int tsMs, int bytes})> _throughputSamples =
+      ListQueue<({int tsMs, int bytes})>();
   int _throughputWindowBytes = 0;
   final Map<int, Stopwatch> _pendingPings = <int, Stopwatch>{};
   final Set<String> _inFlightHitlIds = <String>{};
   final Random _rnd = Random.secure();
-  late final PacketReassembler _reassembler;
+  late PacketReassembler _reassembler;
   StreamSubscription<int>? _frameSyncSub;
   int _activeMonitorIndex = 1;
+  List<Map<String, dynamic>> _lastMonitors = const <Map<String, dynamic>>[];
 
   final StreamController<Uint8List> _frameCtrl =
       StreamController<Uint8List>.broadcast(sync: true);
@@ -142,12 +144,25 @@ class HostConnectionClient {
     this.useTls = false,
     this.certFingerprint,
   }) {
+    _initReassembler();
+  }
+
+  void _initReassembler() {
     _reassembler = PacketReassembler();
     _frameSyncSub = _reassembler.onFrameSyncRequested.listen((syncOpcode) {
       if (_isVaultEstablished) {
         sendEncrypted(syncOpcode, Uint8List(0));
       }
     });
+  }
+
+  void _resetReassembler({bool recreate = true}) {
+    unawaited(_frameSyncSub?.cancel());
+    _frameSyncSub = null;
+    _reassembler.dispose();
+    if (recreate && !_disposed) {
+      _initReassembler();
+    }
   }
 
   bool get isConnecting => _isConnecting;
@@ -161,6 +176,8 @@ class HostConnectionClient {
   DateTime? get connectedSince => _connectedSince;
   String? get errorHint => _errorHint;
   int get activeMonitorIndex => _activeMonitorIndex;
+  List<Map<String, dynamic>> get lastMonitors =>
+      List<Map<String, dynamic>>.unmodifiable(_lastMonitors);
   Uint8List? get lastFrame => _lastFrame;
   int get lastFrameSeq => _lastFrameSeq;
 
@@ -1018,7 +1035,8 @@ class HostConnectionClient {
               final mons = (decoded['monitors'] as List)
                   .whereType<Map>()
                   .map((m) => Map<String, dynamic>.from(m))
-                  .toList();
+                  .toList(growable: false);
+              _lastMonitors = mons;
               if (!_displayEnumCtrl.isClosed) _displayEnumCtrl.add(mons);
             }
           }
@@ -1121,8 +1139,7 @@ class HostConnectionClient {
     final int cutoffMs = nowMs - 1000;
     while (_throughputSamples.isNotEmpty &&
         _throughputSamples.first.tsMs < cutoffMs) {
-      _throughputWindowBytes -= _throughputSamples.first.bytes;
-      _throughputSamples.removeAt(0);
+      _throughputWindowBytes -= _throughputSamples.removeFirst().bytes;
     }
     if (_throughputWindowBytes < 0) {
       _throughputWindowBytes = 0;
@@ -1544,7 +1561,10 @@ class HostConnectionClient {
     _watchdogTimer?.cancel();
 
     _pingTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      _sendPingNow();
+      if (_disposed || !_isVaultEstablished) return;
+      if (!_sendPingNow()) {
+        _handleDisconnect('Heartbeat ping transmit failed.', null);
+      }
     });
 
     _watchdogTimer = Timer.periodic(const Duration(seconds: 3), (_) {
@@ -1640,7 +1660,9 @@ class HostConnectionClient {
     _latencyMs = null;
     _lastFrame = null;
     _lastFrameSeq = 0;
+    _lastMonitors = const <Map<String, dynamic>>[];
     _resetFrameThroughput();
+    _resetReassembler(recreate: !_disposed);
     _frameDecryptIsolate?.dispose();
     _frameDecryptIsolate = null;
     unawaited(_subscription?.cancel());
@@ -1684,11 +1706,11 @@ class HostConnectionClient {
     if (_disposed) return;
     _disposed = true;
     disconnect();
+    _inFlightHitlIds.clear();
     _frameDecryptIsolate?.dispose();
     _frameDecryptIsolate = null;
     frameKbPerSecNotifier.dispose();
-    unawaited(_frameSyncSub?.cancel());
-    _reassembler.dispose();
+    _resetReassembler(recreate: false);
     unawaited(_frameCtrl.close());
     unawaited(_telemetryCtrl.close());
     unawaited(_shellCtrl.close());

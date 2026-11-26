@@ -127,6 +127,7 @@ class ViewportStreamWidget extends StatefulWidget {
   final String? orientationLabel;
   final IconData? orientationIcon;
   final ValueChanged<String>? onQualityPresetChanged;
+  final ValueChanged<int>? onTargetFpsChanged;
 
   const ViewportStreamWidget({
     super.key,
@@ -157,6 +158,7 @@ class ViewportStreamWidget extends StatefulWidget {
     this.orientationLabel,
     this.orientationIcon,
     this.onQualityPresetChanged,
+    this.onTargetFpsChanged,
   });
 
   @override
@@ -215,15 +217,21 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
   bool _resizeScheduled = false;
   bool _zoomClampScheduled = false;
 
-  // Input Mode, Fit Mode, Quality Preset, Zoom/Pan, Keyboard & Collapsible HUD
+  // Input Mode, Fit Mode, Quality Preset, Target FPS, Zoom/Pan, Keyboard & Collapsible HUD
   late _StreamInputMode _inputMode;
   late String _qualityPreset;
+  late int _targetFps;
   BoxFit _videoFit = BoxFit.contain;
-  Matrix4 _zoomTransform = Matrix4.identity();
+  final ValueNotifier<Matrix4> _zoomTransformNotifier =
+      ValueNotifier<Matrix4>(Matrix4.identity());
+  final ValueNotifier<Offset?> _restorePillOffsetNotifier =
+      ValueNotifier<Offset?>(null);
   bool _showKeyboardBar = false;
   bool _hudVisible = true;
-  Offset? _restorePillOffset;
   bool _hostViewOnly = false;
+
+  Matrix4 get _zoomTransform => _zoomTransformNotifier.value;
+  set _zoomTransform(Matrix4 next) => _zoomTransformNotifier.value = next;
 
   // Multi-touch Pointer State Machine (0ms latency direct touchscreen + trackpad)
   final Map<int, Offset> _activePointers = <int, Offset>{};
@@ -236,6 +244,11 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
   bool _mouseButtonHeld = false;
   Offset _lastNormalizedPos = const Offset(0.5, 0.5);
   bool _suppressOneFingerUntilAllUp = false;
+
+  // 3-finger quick tap to reveal/hide fullscreen HUD
+  DateTime? _threeFingerStartAt;
+  final Map<int, Offset> _threeFingerStartPos = <int, Offset>{};
+  bool _threeFingerMoved = false;
 
   // Single/Double tap disambiguation
   DateTime? _lastTapUpAt;
@@ -303,6 +316,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     WidgetsBinding.instance.addObserver(this);
     _inputMode = _modeFromPref(widget.initialInputMode);
     _qualityPreset = _normalizePreset(widget.qualityPreset);
+    _targetFps = widget.targetFps > 0 ? widget.targetFps : 30;
     _syncWakelock(widget.keepScreenAwake);
     ThermalGovernor.instance.addListener(_onThermalConfigChanged);
     _connect(notify: false);
@@ -359,6 +373,11 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
         oldWidget.certFingerprint != widget.certFingerprint) {
       _hasReceivedFrame = false;
       _decodedFrameSize = null;
+      _monitors = const [];
+      _activeMonitorIdx = 1;
+      _hostViewOnly = false;
+      _fpsCount = 0;
+      _fpsNotifier.value = 0;
       _lastSentPhysicalWidth = 0;
       _lastSentPhysicalHeight = 0;
       _lastSentCapMaxWidth = 0;
@@ -366,6 +385,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       _zoomTransform = Matrix4.identity();
       _connect(notify: false);
     } else if (oldWidget.targetFps != widget.targetFps) {
+      _targetFps = widget.targetFps > 0 ? widget.targetFps : 30;
       _negotiateViewportIfReady();
     }
   }
@@ -396,7 +416,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
   }
 
   int _effectiveTargetFps(ThermalConfig cfg) {
-    final int prefFps = widget.targetFps > 0 ? widget.targetFps : 30;
+    final int prefFps = _targetFps > 0 ? _targetFps : 30;
     final int govFps = cfg.targetFps > 0 ? cfg.targetFps : 30;
     return min(prefFps, govFps);
   }
@@ -592,6 +612,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     final HostConnectionSnapshot initialSnap = client.snapshot;
     final Uint8List? cachedFrame = client.lastFrame;
     final bool hasCachedFrame = cachedFrame != null && cachedFrame.isNotEmpty;
+    final List<Map<String, dynamic>> cachedMonitors = client.lastMonitors;
     _latencyNotifier.value = initialSnap.latencyMs;
     applyState(() {
       _connectionSnapshot = initialSnap;
@@ -601,6 +622,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       _isConnected = initialSnap.isConnected;
       _isAuthenticated = initialSnap.isVaultEstablished;
       _hasReceivedFrame = hasCachedFrame;
+      _monitors = cachedMonitors;
+      _activeMonitorIdx = client.activeMonitorIndex;
       _errorMessage =
           (initialSnap.errorMessage != null && !initialSnap.isVaultEstablished)
               ? initialSnap.errorMessage
@@ -810,12 +833,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _zoomClampScheduled = false;
         if (!mounted || _zoomTransform.isIdentity()) return;
-        setState(() {
-          _zoomTransform = TouchCoordinateMapper.clampZoomTransform(
-            transform: _zoomTransform,
-            containerSize: _lastContainerSize,
-          );
-        });
+        _zoomTransform = TouchCoordinateMapper.clampZoomTransform(
+          transform: _zoomTransform,
+          containerSize: _lastContainerSize,
+        );
       });
     }
 
@@ -1072,6 +1093,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       _primaryMovedBeyondSlop = false;
       _longPressFired = false;
 
+      if (_hostViewOnly) {
+        return;
+      }
+
       final DateTime now = DateTime.now();
       final bool withinDoubleTap = _lastTapUpAt != null &&
           _lastTapUpPos != null &&
@@ -1167,16 +1192,34 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       _twoFingerMaxMidMove = 0.0;
       _twoFingerMode = _TwoFingerMode.undecided;
     } else {
-      // 3+ fingers: abort single-finger timers cleanly
+      // 3+ fingers: abort single-finger timers cleanly & arm 3-finger HUD toggle tap
       _cancelPendingTouchTimers();
       _releaseHeldMouseButton();
       _suppressOneFingerUntilAllUp = true;
+      if (_activePointers.length == 3 && widget.collapsibleHud) {
+        _threeFingerStartAt = DateTime.now();
+        _threeFingerStartPos
+          ..clear()
+          ..addAll(_activePointers);
+        _threeFingerMoved = false;
+      } else {
+        _threeFingerStartAt = null;
+        _threeFingerStartPos.clear();
+      }
     }
   }
 
   void _handlePointerMove(PointerMoveEvent event) {
     if (!_activePointers.containsKey(event.pointer)) return;
     _activePointers[event.pointer] = event.localPosition;
+
+    if (_activePointers.length == 3 && _threeFingerStartAt != null) {
+      final Offset? start = _threeFingerStartPos[event.pointer];
+      if (start != null && (event.localPosition - start).distance > 18.0) {
+        _threeFingerMoved = true;
+      }
+      return;
+    }
 
     if (_activePointers.length == 2) {
       final List<Offset> pts = _activePointers.values.toList(growable: false);
@@ -1188,8 +1231,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
         _twoFingerMaxMidMove = midMoveFromStart;
       }
 
+      // If 2 fingers landed very close together (< 12px), latch the first valid
+      // separation once they spread >= 12px so pinch-to-zoom never deadlocks at 1x.
+      if (_twoFingerStartDist < 12.0 && dist >= 12.0) {
+        _twoFingerStartDist = dist;
+      }
+
       final double scaleRatio =
-          _twoFingerStartDist > 12.0 ? (dist / _twoFingerStartDist) : 1.0;
+          _twoFingerStartDist >= 12.0 ? (dist / _twoFingerStartDist) : 1.0;
 
       if (_twoFingerMode == _TwoFingerMode.undecided) {
         final bool alreadyZoomed =
@@ -1201,7 +1250,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
         } else if (widget.pinchZoomEnabled &&
             (scaleRatio - 1.0).abs() > 0.10) {
           _twoFingerMode = _TwoFingerMode.zoomPan;
-        } else if (midMoveFromStart > 10.0) {
+        } else if (!_hostViewOnly && midMoveFromStart > 10.0) {
           _twoFingerMode = _TwoFingerMode.scroll;
         }
       }
@@ -1216,8 +1265,9 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
           currentFocalPoint: mid,
           containerSize: _lastContainerSize,
         );
-        setState(() => _zoomTransform = nextTransform);
-      } else if (_twoFingerMode == _TwoFingerMode.scroll) {
+        // Update ValueNotifier directly so 120Hz pinch-zoom never rebuilds parent HUD
+        _zoomTransform = nextTransform;
+      } else if (_twoFingerMode == _TwoFingerMode.scroll && !_hostViewOnly) {
         final double dir = widget.naturalScroll ? 1.0 : -1.0;
         final double sens = widget.scrollSensitivity.clamp(0.5, 3.0);
         _accumScrollDx += (midDelta.dx * dir) * sens;
@@ -1229,7 +1279,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       return;
     }
 
-    if (_activePointers.length != 1 ||
+    if (_hostViewOnly ||
+        _activePointers.length != 1 ||
         _suppressOneFingerUntilAllUp ||
         event.pointer != _primaryPointerId) {
       return;
@@ -1296,8 +1347,24 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     final int countBefore = _activePointers.length;
     _activePointers.remove(pointer);
 
+    // 3-finger quick tap toggles collapsible fullscreen HUD effortlessly
+    if (countBefore == 3 && !isCancel && widget.collapsibleHud) {
+      final DateTime? threeStart = _threeFingerStartAt;
+      if (!_threeFingerMoved &&
+          threeStart != null &&
+          DateTime.now().difference(threeStart) <=
+              const Duration(milliseconds: 300)) {
+        _threeFingerStartAt = null;
+        _threeFingerStartPos.clear();
+        _setHudVisible(!_hudVisible);
+      } else {
+        _threeFingerStartAt = null;
+        _threeFingerStartPos.clear();
+      }
+    }
+
     // Detect crisp 2-finger tap -> right-click when leaving 2-finger state
-    if (countBefore == 2 && !isCancel) {
+    if (countBefore == 2 && !isCancel && !_hostViewOnly) {
       final DateTime? startAt = _twoFingerStartAt;
       final bool isQuickTwoFingerTap =
           _twoFingerMode == _TwoFingerMode.undecided &&
@@ -1355,7 +1422,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
           style: TouchRippleStyle.dragEnd,
         );
         _feedbackController.clearCursor();
-      } else if (!_suppressOneFingerUntilAllUp &&
+      } else if (!_hostViewOnly &&
+          !_suppressOneFingerUntilAllUp &&
           !_primaryMovedBeyondSlop &&
           !_longPressFired &&
           !isCancel) {
@@ -1465,6 +1533,9 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     if (_activePointers.isEmpty) {
       _suppressOneFingerUntilAllUp = false;
       _twoFingerMode = _TwoFingerMode.undecided;
+      _threeFingerStartAt = null;
+      _threeFingerStartPos.clear();
+      _threeFingerMoved = false;
     }
   }
 
@@ -1479,6 +1550,63 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     _armHudAutoHide();
   }
 
+  void _cycleTargetFps() {
+    _hapticLight();
+    final int idx = kValidTargetFps.indexOf(_targetFps);
+    final int nextFps =
+        kValidTargetFps[(idx + 1) % kValidTargetFps.length];
+    setState(() => _targetFps = nextFps);
+    widget.onTargetFpsChanged?.call(nextFps);
+    _negotiateViewportIfReady();
+    _armHudAutoHide();
+  }
+
+  Future<void> _pushPhoneClipboard() async {
+    final client = _client;
+    if (client == null || !client.isVaultEstablished || !mounted) return;
+    _hapticLight();
+    _armHudAutoHide();
+    final data = await Clipboard.getData('text/plain');
+    final txt = data?.text ?? '';
+    if (!mounted) return;
+    if (txt.isEmpty) {
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Phone clipboard is empty',
+              style: TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      return;
+    }
+    client.sendClipboard(txt);
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Pushed phone clipboard to PC (${txt.length} chars)',
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  void _pullPcClipboard() {
+    final client = _client;
+    if (client == null || !client.isVaultEstablished) return;
+    _hapticLight();
+    _armHudAutoHide();
+    client.requestClipboard();
+  }
+
   void _toggleFitMode() {
     _hapticLight();
     setState(() {
@@ -1489,7 +1617,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
 
   void _resetZoom() {
     _hapticLight();
-    setState(() => _zoomTransform = Matrix4.identity());
+    _zoomTransform = Matrix4.identity();
     _armHudAutoHide();
   }
 
@@ -1575,6 +1703,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     _feedbackController.dispose();
     _fpsNotifier.dispose();
     _latencyNotifier.dispose();
+    _zoomTransformNotifier.dispose();
+    _restorePillOffsetNotifier.dispose();
     unawaited(_frameController.close());
     _syncWakelock(false);
     super.dispose();
@@ -1582,9 +1712,6 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
 
   @override
   Widget build(BuildContext context) {
-    final double currentScale =
-        TouchCoordinateMapper.extractScale(_zoomTransform);
-    final bool isZoomed = currentScale > 1.02;
     final EdgeInsets safePad =
         widget.isInline ? EdgeInsets.zero : MediaQuery.paddingOf(context);
     final double keyboardInset =
@@ -1605,7 +1732,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
               color: Colors.black,
               child: Stack(
                 children: [
-                  // 1. Hardware-accelerated video canvas with Matrix4 zoom/pan & 0ms pointer engine
+                  // 1. Hardware-accelerated video canvas with ValueNotifier Matrix4 zoom/pan & 0ms pointer engine
                   Positioned.fill(
                     child: Listener(
                       key: const ValueKey('viewport-touch-surface'),
@@ -1626,12 +1753,17 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                         child: Stack(
                           children: [
                             Positioned.fill(
-                              child: Transform(
-                                transform: _zoomTransform,
+                              child: ValueListenableBuilder<Matrix4>(
+                                valueListenable: _zoomTransformNotifier,
+                                builder: (_, matrix, child) => Transform(
+                                  transform: matrix,
+                                  child: child,
+                                ),
                                 child: ZeroGcVideoRenderer(
                                   frameStream: _frameController.stream,
                                   initialFrame: _client?.lastFrame,
                                   fit: _videoFit,
+                                  showLoadingSpinner: false,
                                   onFramePresented: () {
                                     final client = _client;
                                     if (client != null &&
@@ -1682,9 +1814,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                       child: IgnorePointer(
                         ignoring: !_isStatusOverlayInteractive,
                         child: Center(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 360),
-                            child: _buildStatusOverlay(context),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 360),
+                              child: _buildStatusOverlay(context),
+                            ),
                           ),
                         ),
                       ),
@@ -1696,19 +1834,30 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                       top: safePad.top + 10.0,
                       left: safePad.left + 10.0,
                       right: safePad.right + 10.0,
-                      child: _buildHudHeader(context),
+                      child: RepaintBoundary(
+                        child: _buildHudHeader(context),
+                      ),
                     ),
 
-                  // 4. Floating 1-Tap Zoom Reset Pill (shown whenever zoomed 1.02x–4.0x)
-                  if (isZoomed)
-                    Positioned(
-                      top: safePad.top +
-                          ((!widget.collapsibleHud || _hudVisible)
-                              ? 52.0
-                              : 12.0),
-                      right: safePad.right + 12.0,
-                      child: _buildZoomResetPill(context, currentScale),
+                  // 4. Floating 1-Tap Zoom Reset Pill (ValueListenable-isolated, shown when zoomed > 1.02x)
+                  Positioned(
+                    top: safePad.top +
+                        ((!widget.collapsibleHud || _hudVisible)
+                            ? 58.0
+                            : 12.0),
+                    right: safePad.right + 12.0,
+                    child: ValueListenableBuilder<Matrix4>(
+                      valueListenable: _zoomTransformNotifier,
+                      builder: (ctx, matrix, _) {
+                        final double scale =
+                            TouchCoordinateMapper.extractScale(matrix);
+                        if (scale <= 1.02) {
+                          return const SizedBox.shrink();
+                        }
+                        return _buildZoomResetPill(ctx, scale);
+                      },
                     ),
+                  ),
 
                   // 5. Inline Live Remote Keyboard Bar
                   if (_showKeyboardBar)
@@ -1723,6 +1872,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                             _sendKeyboardText(text, pressEnter: pressEnter),
                         onKey: _sendKey,
                         onHotkey: _sendHotkey,
+                        onPushClipboard: _pushPhoneClipboard,
+                        onPullClipboard: _pullPcClipboard,
                         onClose: _toggleKeyboardBar,
                       ),
                     ),
@@ -1736,12 +1887,14 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                       left: safePad.left + 10.0,
                       right: safePad.right +
                           (widget.onToggleFullscreen != null ? 58.0 : 10.0),
-                      child: Align(
-                        alignment: Alignment.bottomLeft,
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          physics: const BouncingScrollPhysics(),
-                          child: _buildInteractiveControllerDock(context),
+                      child: RepaintBoundary(
+                        child: Align(
+                          alignment: Alignment.bottomLeft,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            physics: const BouncingScrollPhysics(),
+                            child: _buildInteractiveControllerDock(context),
+                          ),
                         ),
                       ),
                     ),
@@ -1775,40 +1928,54 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
 
   Widget _buildZoomResetPill(BuildContext context, double scale) {
     final CyberPalette palette = context.palette;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        key: const ValueKey('viewport-zoom-reset-pill'),
-        onTap: _resetZoom,
-        borderRadius: BorderRadius.circular(999),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            color: palette.surfaceElevated.withValues(alpha: 0.90),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: palette.primary.withValues(alpha: 0.65)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.28),
-                blurRadius: 10,
+    return Tooltip(
+      message: 'Reset zoom to 1.0x',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          key: const ValueKey('viewport-zoom-reset-pill'),
+          onTap: _resetZoom,
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 34),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+            decoration: BoxDecoration(
+              color: palette.surfaceElevated.withValues(
+                alpha: palette.isDaylight ? 0.94 : 0.90,
               ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.zoom_out_map_rounded, size: 14, color: palette.primary),
-              const SizedBox(width: 4),
-              Text(
-                '${scale.toStringAsFixed(1)}x · 1x',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w800,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: palette.primary.withValues(alpha: 0.72),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.28),
+                  blurRadius: 12,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.zoom_out_map_rounded,
+                  size: 14,
                   color: palette.primary,
                 ),
-              ),
-            ],
+                const SizedBox(width: 5),
+                Text(
+                  '${scale.toStringAsFixed(1)}x · 1x',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: palette.primary,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1822,80 +1989,97 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     required EdgeInsets safePad,
   }) {
     final CyberPalette palette = context.palette;
-    const double pillW = 92.0;
-    const double pillH = 34.0;
-    final double minX = safePad.left + 8.0;
-    final double maxX = max(minX, maxW - safePad.right - pillW - 8.0);
-    final double minY = safePad.top + 8.0;
-    final double maxY = max(minY, maxH - safePad.bottom - pillH - 8.0);
+    const double pillW = 112.0;
+    const double pillH = 38.0;
+    final double minX = safePad.left + 10.0;
+    final double maxX = max(minX, maxW - safePad.right - pillW - 10.0);
+    final double minY = safePad.top + 10.0;
+    final double maxY = max(minY, maxH - safePad.bottom - pillH - 10.0);
 
-    final Offset current = _restorePillOffset ?? Offset(minX, minY);
-    final double clampedX = current.dx.clamp(minX, maxX);
-    final double clampedY = current.dy.clamp(minY, maxY);
+    return Positioned.fill(
+      child: ValueListenableBuilder<Offset?>(
+        valueListenable: _restorePillOffsetNotifier,
+        builder: (_, storedOffset, _) {
+          final Offset current = storedOffset ?? Offset(minX, minY);
+          final double clampedX = current.dx.clamp(minX, maxX);
+          final double clampedY = current.dy.clamp(minY, maxY);
 
-    return Positioned(
-      left: clampedX,
-      top: clampedY,
-      child: GestureDetector(
-        key: const ValueKey('viewport-hud-restore-pill'),
-        onPanUpdate: (details) {
-          setState(() {
-            _restorePillOffset = Offset(
-              (clampedX + details.delta.dx).clamp(minX, maxX),
-              (clampedY + details.delta.dy).clamp(minY, maxY),
-            );
-          });
-        },
-        onTap: () => _setHudVisible(true),
-        child: Container(
-          height: pillH,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: palette.surfaceElevated.withValues(alpha: 0.84),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: palette.primary.withValues(alpha: 0.55),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.30),
-                blurRadius: 12,
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+          return Stack(
             children: [
-              Container(
-                width: 7,
-                height: 7,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _isConnected ? palette.success : palette.accent,
-                ),
-              ),
-              const SizedBox(width: 6),
-              ValueListenableBuilder<int?>(
-                valueListenable: _latencyNotifier,
-                builder: (_, latency, _) => Text(
-                  '${latency ?? '--'}ms',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: palette.textPrimary,
+              Positioned(
+                left: clampedX,
+                top: clampedY,
+                child: Tooltip(
+                  message: 'Tap to show HUD · Drag to move · 3-finger tap anywhere',
+                  child: GestureDetector(
+                    key: const ValueKey('viewport-hud-restore-pill'),
+                    onPanUpdate: (details) {
+                      _restorePillOffsetNotifier.value = Offset(
+                        (clampedX + details.delta.dx).clamp(minX, maxX),
+                        (clampedY + details.delta.dy).clamp(minY, maxY),
+                      );
+                    },
+                    onTap: () => _setHudVisible(true),
+                    child: Container(
+                      height: pillH,
+                      padding: const EdgeInsets.symmetric(horizontal: 11),
+                      decoration: BoxDecoration(
+                        color: palette.surfaceElevated.withValues(
+                          alpha: palette.isDaylight ? 0.92 : 0.86,
+                        ),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: palette.primary.withValues(alpha: 0.60),
+                          width: 1.2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.30),
+                            blurRadius: 14,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color:
+                                  _isConnected ? palette.success : palette.accent,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          ValueListenableBuilder<int?>(
+                            valueListenable: _latencyNotifier,
+                            builder: (_, latency, _) => Text(
+                              '${latency ?? '--'}ms',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: _latencyColor(palette, latency),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Icon(
+                            Icons.tune_rounded,
+                            size: 15,
+                            color: palette.primary,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(width: 5),
-              Icon(
-                Icons.tune_rounded,
-                size: 14,
-                color: palette.primary,
-              ),
             ],
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -1934,51 +2118,81 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     );
   }
 
+  Color _latencyColor(CyberPalette palette, int? latencyMs) {
+    if (latencyMs == null) return palette.textSecondary;
+    if (latencyMs <= 30) return palette.success;
+    if (latencyMs <= 80) return palette.primary;
+    return palette.warning;
+  }
+
   Widget _buildHudHeader(BuildContext context) {
     final palette = context.palette;
     final sigma = palette.glass.blurSigma;
     final String resolutionText = _decodedFrameSize != null
         ? '${_decodedFrameSize!.width.round()}x${_decodedFrameSize!.height.round()}'
         : '${_lastPhysicalWidth}x$_lastPhysicalHeight';
+    final ValueNotifier<int>? throughputNotifier =
+        _client?.frameKbPerSecNotifier;
 
     final hudBody = LayoutBuilder(
       builder: (context, constraints) {
         final maxW = constraints.maxWidth;
         final showResolution =
             (_decodedFrameSize != null || _lastPhysicalWidth > 0) &&
-                maxW >= 360;
+                maxW >= 370;
+        final showThroughput = throughputNotifier != null && maxW >= 460;
         final showLatency = maxW >= 200;
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
             color: palette.surfaceElevated.withValues(
-              alpha: sigma > 0 ? (palette.isDaylight ? 0.86 : 0.78) : 0.95,
+              alpha: sigma > 0 ? (palette.isDaylight ? 0.90 : 0.82) : 0.96,
             ),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(15),
             border: Border.all(
               color: palette.isDaylight
-                  ? Colors.white.withValues(alpha: 0.85)
-                  : palette.primary.withValues(alpha: 0.35),
+                  ? Colors.white.withValues(alpha: 0.90)
+                  : palette.primary.withValues(alpha: 0.38),
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(
+                  alpha: palette.isDaylight ? 0.14 : 0.28,
+                ),
+                blurRadius: 14,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               if (widget.onExitFullscreen != null) ...[
-                InkWell(
-                  key: const ValueKey('viewport-exit-fullscreen-btn'),
-                  onTap: widget.onExitFullscreen,
-                  borderRadius: BorderRadius.circular(999),
-                  child: Padding(
-                    padding: const EdgeInsets.all(3),
-                    child: Icon(
-                      Icons.arrow_back_rounded,
-                      size: 18,
-                      color: palette.textPrimary,
+                Tooltip(
+                  message: 'Exit fullscreen',
+                  child: InkWell(
+                    key: const ValueKey('viewport-exit-fullscreen-btn'),
+                    onTap: widget.onExitFullscreen,
+                    borderRadius: BorderRadius.circular(999),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: palette.isDaylight
+                            ? palette.primary.withValues(alpha: 0.08)
+                            : Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Icon(
+                        Icons.arrow_back_rounded,
+                        size: 18,
+                        color: palette.textPrimary,
+                      ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 7),
               ],
               Container(
                 width: 7,
@@ -2001,60 +2215,106 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                   key: const ValueKey('viewport-open-diagnostics-btn'),
                   onTap: _openDiagnosticsSheet,
                   borderRadius: BorderRadius.circular(8),
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          widget.hostName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontWeight: FontWeight.bold,
-                            fontSize: context.fluidFont(11),
-                            color: palette.textPrimary,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      ValueListenableBuilder<int>(
-                        valueListenable: _fpsNotifier,
-                        builder: (_, fps, _) => Text(
-                          '$fps FPS',
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: context.fluidFont(10),
-                            color: palette.primary,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      if (showLatency) ...[
-                        const SizedBox(width: 7),
-                        ValueListenableBuilder<int?>(
-                          valueListenable: _latencyNotifier,
-                          builder: (_, latency, _) => Text(
-                            '${latency ?? '--'}ms',
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            widget.hostName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontFamily: 'monospace',
-                              fontSize: context.fluidFont(10),
-                              color: palette.textSecondary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: context.fluidFont(11),
+                              color: palette.textPrimary,
                             ),
                           ),
                         ),
-                      ],
-                      if (showResolution) ...[
                         const SizedBox(width: 7),
-                        Text(
-                          resolutionText,
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: context.fluidFont(9),
-                            color: palette.textTertiary,
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: palette.primary.withValues(
+                              alpha: palette.isDaylight ? 0.12 : 0.18,
+                            ),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: ValueListenableBuilder<int>(
+                            valueListenable: _fpsNotifier,
+                            builder: (_, fps, _) => Text(
+                              '$fps FPS',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: context.fluidFont(9.5),
+                                color: palette.primary,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
                           ),
                         ),
+                        if (showLatency) ...[
+                          const SizedBox(width: 5),
+                          ValueListenableBuilder<int?>(
+                            valueListenable: _latencyNotifier,
+                            builder: (_, latency, _) {
+                              final Color rttColor =
+                                  _latencyColor(palette, latency);
+                              return Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: rttColor.withValues(
+                                    alpha: palette.isDaylight ? 0.10 : 0.16,
+                                  ),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  '${latency ?? '--'}ms',
+                                  style: TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: context.fluidFont(9.5),
+                                    fontWeight: FontWeight.w700,
+                                    color: rttColor,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                        if (showResolution) ...[
+                          const SizedBox(width: 6),
+                          Text(
+                            resolutionText,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: context.fluidFont(9),
+                              color: palette.textSecondary,
+                            ),
+                          ),
+                        ],
+                        if (showThroughput) ...[
+                          const SizedBox(width: 6),
+                          ValueListenableBuilder<int>(
+                            valueListenable: throughputNotifier,
+                            builder: (_, kbPerSec, _) => Text(
+                              '${kbPerSec}KB/s',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: context.fluidFont(9),
+                                color: palette.textTertiary,
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -2062,10 +2322,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                 const SizedBox(width: 5),
                 Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: palette.accent.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(4),
+                    color: palette.accent.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(6),
                     border:
                         Border.all(color: palette.accent.withValues(alpha: 0.6)),
                   ),
@@ -2081,9 +2341,10 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                 ),
               ],
               if (widget.onCycleOrientation != null) ...[
-                const SizedBox(width: 5),
+                const SizedBox(width: 6),
                 Tooltip(
-                  message: 'Switch Orientation (${widget.orientationLabel ?? 'Auto'})',
+                  message:
+                      'Switch Orientation (${widget.orientationLabel ?? 'Auto'})',
                   child: InkWell(
                     key: const ValueKey('viewport-rotate-btn'),
                     onTap: () {
@@ -2091,17 +2352,18 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                       widget.onCycleOrientation!();
                       _armHudAutoHide();
                     },
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(9),
                     child: Container(
+                      constraints: const BoxConstraints(minHeight: 30),
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 3,
+                        horizontal: 8,
+                        vertical: 4,
                       ),
                       decoration: BoxDecoration(
                         color: palette.primary.withValues(alpha: 0.14),
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(9),
                         border: Border.all(
-                          color: palette.primary.withValues(alpha: 0.35),
+                          color: palette.primary.withValues(alpha: 0.38),
                         ),
                       ),
                       child: Row(
@@ -2110,17 +2372,17 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                           Icon(
                             widget.orientationIcon ??
                                 Icons.screen_rotation_rounded,
-                            size: 13,
+                            size: 14,
                             color: palette.primary,
                           ),
                           if (widget.orientationLabel != null &&
                               maxW >= 290) ...[
-                            const SizedBox(width: 3),
+                            const SizedBox(width: 4),
                             Text(
                               widget.orientationLabel!,
                               style: TextStyle(
                                 fontFamily: 'monospace',
-                                fontSize: 9,
+                                fontSize: 9.5,
                                 fontWeight: FontWeight.w800,
                                 color: palette.primary,
                               ),
@@ -2139,9 +2401,17 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                   child: InkWell(
                     key: const ValueKey('viewport-collapse-hud-btn'),
                     onTap: () => _setHudVisible(false),
-                    borderRadius: BorderRadius.circular(8),
-                    child: Padding(
-                      padding: const EdgeInsets.all(3),
+                    borderRadius: BorderRadius.circular(9),
+                    child: Container(
+                      width: 32,
+                      height: 30,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: palette.isDaylight
+                            ? palette.primary.withValues(alpha: 0.06)
+                            : Colors.white.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
                       child: Icon(
                         Icons.visibility_off_rounded,
                         size: 16,
@@ -2158,7 +2428,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     );
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(15),
       child: sigma > 0
           ? BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
@@ -2184,6 +2454,40 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     return _errorMessage != null;
   }
 
+  Widget _wrapStatusCard(
+    CyberPalette palette, {
+    required Widget child,
+    Color? borderColor,
+  }) {
+    // High-contrast Liquid Glass card ensures legibility over the black video
+    // backdrop in BOTH Daylight (light) and Vibrant Dark themes.
+    return Container(
+      key: const ValueKey('viewport-status-card'),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: palette.surfaceElevated.withValues(
+          alpha: palette.isDaylight ? 0.94 : 0.88,
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: borderColor ??
+              (palette.isDaylight
+                  ? Colors.white.withValues(alpha: 0.92)
+                  : palette.primary.withValues(alpha: 0.35)),
+          width: 1.15,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.36),
+            blurRadius: 20,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
   Widget _buildStatusOverlay(BuildContext context) {
     final palette = context.palette;
     final HostConnectionPhase phase = _connectionSnapshot.phase;
@@ -2193,163 +2497,189 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
         phase,
         reconnectAttempt: _connectionSnapshot.reconnectAttempt,
       );
+      final Color accent = phase == HostConnectionPhase.reconnecting
+          ? palette.warning
+          : palette.primary;
       return SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 26,
-              height: 26,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                color: phase == HostConnectionPhase.reconnecting
-                    ? palette.warning
-                    : palette.primary,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              phaseText,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: context.fluidFont(12),
-                fontWeight: FontWeight.w700,
-                color: palette.textPrimary,
-                fontFamily: 'monospace',
-              ),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              '${widget.hostIp}:${widget.wsPort}',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: context.fluidFont(10.5),
-                color: palette.textSecondary,
-                fontFamily: 'monospace',
-              ),
-            ),
-            if (phase == HostConnectionPhase.reconnecting) ...[
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: _handleReconnect,
-                icon: Icon(
-                  Icons.refresh_rounded,
-                  size: 15,
-                  color: palette.primary,
-                ),
-                label: Text(
-                  'RETRY NOW',
-                  style: TextStyle(
-                    color: palette.primary,
-                    fontWeight: FontWeight.bold,
-                  ),
+        child: _wrapStatusCard(
+          palette,
+          borderColor: accent.withValues(alpha: 0.45),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 26,
+                height: 26,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: accent,
                 ),
               ),
-            ],
-          ],
-        ),
-      );
-    }
-
-    if (_errorMessage != null) {
-      return SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              phase == HostConnectionPhase.authFailed
-                  ? Icons.gpp_bad_rounded
-                  : Icons.signal_wifi_off_rounded,
-              color: palette.accent,
-              size: 32,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              _errorMessage!,
-              style: TextStyle(
-                color: palette.textPrimary,
-                fontSize: context.fluidFont(11.5),
-                fontWeight: FontWeight.w600,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            if (_errorHint != null && _errorHint!.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Container(
-                constraints: const BoxConstraints(maxWidth: 360),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                decoration: BoxDecoration(
-                  color: palette.warning.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: palette.warning.withValues(alpha: 0.40),
-                  ),
-                ),
-                child: Text(
-                  _errorHint!,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: palette.textSecondary,
-                    fontSize: context.fluidFont(10.5),
-                  ),
+              const SizedBox(height: 10),
+              Text(
+                phaseText,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: context.fluidFont(12),
+                  fontWeight: FontWeight.w700,
+                  color: palette.textPrimary,
+                  fontFamily: 'monospace',
                 ),
               ),
-            ],
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              alignment: WrapAlignment.center,
-              children: [
+              const SizedBox(height: 3),
+              Text(
+                '${widget.hostIp}:${widget.wsPort}',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: context.fluidFont(10.5),
+                  color: palette.textSecondary,
+                  fontFamily: 'monospace',
+                ),
+              ),
+              if (phase == HostConnectionPhase.reconnecting) ...[
+                const SizedBox(height: 8),
                 TextButton.icon(
-                  key: const ValueKey('viewport-reconnect-btn'),
                   onPressed: _handleReconnect,
                   icon: Icon(
                     Icons.refresh_rounded,
-                    size: 16,
+                    size: 15,
                     color: palette.primary,
                   ),
                   label: Text(
-                    'RECONNECT',
+                    'RETRY NOW',
                     style: TextStyle(
                       color: palette.primary,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
-                TextButton.icon(
-                  onPressed: _openDiagnosticsSheet,
-                  icon: Icon(
-                    Icons.analytics_outlined,
-                    size: 16,
-                    color: palette.textSecondary,
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_errorMessage != null) {
+      return SingleChildScrollView(
+        child: _wrapStatusCard(
+          palette,
+          borderColor: palette.accent.withValues(alpha: 0.45),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                phase == HostConnectionPhase.authFailed
+                    ? Icons.gpp_bad_rounded
+                    : Icons.signal_wifi_off_rounded,
+                color: palette.accent,
+                size: 30,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _errorMessage!,
+                style: TextStyle(
+                  color: palette.textPrimary,
+                  fontSize: context.fluidFont(11.5),
+                  fontWeight: FontWeight.w700,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              if (_errorHint != null && _errorHint!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Container(
+                  constraints: const BoxConstraints(maxWidth: 340),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: palette.warning.withValues(
+                      alpha: palette.isDaylight ? 0.12 : 0.16,
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: palette.warning.withValues(alpha: 0.42),
+                    ),
                   ),
-                  label: Text(
-                    'DIAGNOSTICS',
-                    style: TextStyle(color: palette.textSecondary),
+                  child: Text(
+                    _errorHint!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: palette.textSecondary,
+                      fontSize: context.fluidFont(10.5),
+                    ),
                   ),
                 ),
               ],
-            ),
-          ],
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                alignment: WrapAlignment.center,
+                children: [
+                  TextButton.icon(
+                    key: const ValueKey('viewport-reconnect-btn'),
+                    onPressed: _handleReconnect,
+                    icon: Icon(
+                      Icons.refresh_rounded,
+                      size: 16,
+                      color: palette.primary,
+                    ),
+                    label: Text(
+                      'RECONNECT',
+                      style: TextStyle(
+                        color: palette.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: _openDiagnosticsSheet,
+                    icon: Icon(
+                      Icons.analytics_outlined,
+                      size: 16,
+                      color: palette.textSecondary,
+                    ),
+                    label: Text(
+                      'DIAGNOSTICS',
+                      style: TextStyle(color: palette.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       );
     }
 
     return IgnorePointer(
       ignoring: true,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Text(
-          'Awaiting incoming video frames...',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: palette.textSecondary,
-            fontSize: context.fluidFont(12),
-          ),
+      child: _wrapStatusCard(
+        palette,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: palette.primary,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                'Awaiting incoming video frames...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: palette.textPrimary,
+                  fontSize: context.fluidFont(11.5),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2359,193 +2689,239 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     final client = _client;
     if (client == null || !client.isVaultEstablished) return;
     if (_monitors.length <= 1) {
+      _hapticLight();
       client.requestDisplayEnum();
+      _armHudAutoHide();
       return;
     }
     _hapticLight();
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: context.palette.surfaceElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        final palette = ctx.palette;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Select Host Display',
-                  style: TextStyle(
-                    color: palette.textPrimary,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
+    _hudAutoHideTimer?.cancel();
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: context.palette.surfaceElevated,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (ctx) {
+          final palette = ctx.palette;
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Select Host Display',
+                    style: TextStyle(
+                      color: palette.textPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                ..._monitors.map((mon) {
-                  final int idx = (mon['index'] as num?)?.toInt() ?? 1;
-                  final int w = (mon['width'] as num?)?.toInt() ?? 0;
-                  final int h = (mon['height'] as num?)?.toInt() ?? 0;
-                  final String res = (w > 0 && h > 0) ? '$w×$h' : 'Active Display';
-                  final bool selected = idx == _activeMonitorIdx;
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      Icons.desktop_windows_rounded,
-                      color: selected ? palette.primary : palette.textSecondary,
-                    ),
-                    title: Text(
-                      'Display $idx',
-                      style: TextStyle(
-                        color: palette.textPrimary,
-                        fontWeight:
-                            selected ? FontWeight.w800 : FontWeight.w600,
+                  const SizedBox(height: 8),
+                  ..._monitors.map((mon) {
+                    final int idx = (mon['index'] as num?)?.toInt() ?? 1;
+                    final int w = (mon['width'] as num?)?.toInt() ?? 0;
+                    final int h = (mon['height'] as num?)?.toInt() ?? 0;
+                    final String res =
+                        (w > 0 && h > 0) ? '$w×$h' : 'Active Display';
+                    final bool selected = idx == _activeMonitorIdx;
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        Icons.desktop_windows_rounded,
+                        color:
+                            selected ? palette.primary : palette.textSecondary,
                       ),
-                    ),
-                    subtitle: Text(
-                      res,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 11.5,
-                        color: palette.textSecondary,
+                      title: Text(
+                        'Display $idx',
+                        style: TextStyle(
+                          color: palette.textPrimary,
+                          fontWeight:
+                              selected ? FontWeight.w800 : FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    trailing: selected
-                        ? Icon(Icons.check_circle_rounded, color: palette.primary)
-                        : null,
-                    onTap: () {
-                      Navigator.of(ctx).pop();
-                      setState(() => _activeMonitorIdx = idx);
-                      client.requestDisplayEnum(switchMonitorIndex: idx);
-                    },
-                  );
-                }),
-              ],
+                      subtitle: Text(
+                        res,
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11.5,
+                          color: palette.textSecondary,
+                        ),
+                      ),
+                      trailing: selected
+                          ? Icon(
+                              Icons.check_circle_rounded,
+                              color: palette.primary,
+                            )
+                          : null,
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        setState(() => _activeMonitorIdx = idx);
+                        client.requestDisplayEnum(switchMonitorIndex: idx);
+                      },
+                    );
+                  }),
+                ],
+              ),
             ),
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
+    } finally {
+      if (mounted) _armHudAutoHide();
+    }
   }
 
   Future<void> _showClipboardSheet() async {
     final client = _client;
     if (client == null || !client.isVaultEstablished || !mounted) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: context.palette.surfaceElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        final sheetPalette = ctx.palette;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: Icon(Icons.upload_rounded, color: sheetPalette.primary),
-                  title: const Text('Push Phone Clipboard -> PC'),
-                  onTap: () async {
-                    Navigator.of(ctx).pop();
-                    final data = await Clipboard.getData('text/plain');
-                    final txt = data?.text ?? '';
-                    if (txt.isEmpty) return;
-                    client.sendClipboard(txt);
-                  },
-                ),
-                ListTile(
-                  leading:
-                      Icon(Icons.download_rounded, color: sheetPalette.primary),
-                  title: const Text('Pull PC Clipboard -> Phone'),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    client.requestClipboard();
-                  },
-                ),
-              ],
+    _hapticLight();
+    _hudAutoHideTimer?.cancel();
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: context.palette.surfaceElevated,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (ctx) {
+          final sheetPalette = ctx.palette;
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    leading:
+                        Icon(Icons.upload_rounded, color: sheetPalette.primary),
+                    title: const Text('Push Phone Clipboard -> PC'),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      unawaited(_pushPhoneClipboard());
+                    },
+                  ),
+                  ListTile(
+                    leading: Icon(
+                      Icons.download_rounded,
+                      color: sheetPalette.primary,
+                    ),
+                    title: const Text('Pull PC Clipboard -> Phone'),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _pullPcClipboard();
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
+    } finally {
+      if (mounted) _armHudAutoHide();
+    }
   }
 
   Future<void> _showAudioControlSheet() async {
     final client = _client;
     if (client == null || !client.isVaultEstablished || !mounted) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: context.palette.surfaceElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        final palette = ctx.palette;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              alignment: WrapAlignment.center,
-              children: [
-                ActionChip(
-                  avatar: const Icon(Icons.skip_previous_rounded, size: 18),
-                  label: const Text('Prev'),
-                  onPressed: () => client.sendAudioCommand('prev'),
-                ),
-                ActionChip(
-                  avatar: Icon(
-                    Icons.play_arrow_rounded,
-                    size: 18,
-                    color: palette.primary,
+    _hapticLight();
+    _hudAutoHideTimer?.cancel();
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: context.palette.surfaceElevated,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (ctx) {
+          final palette = ctx.palette;
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                alignment: WrapAlignment.center,
+                children: [
+                  ActionChip(
+                    avatar: const Icon(Icons.skip_previous_rounded, size: 18),
+                    label: const Text('Prev'),
+                    onPressed: () {
+                      _hapticLight();
+                      client.sendAudioCommand('prev');
+                    },
                   ),
-                  label: const Text('Play/Pause'),
-                  onPressed: () => client.sendAudioCommand('play_pause'),
-                ),
-                ActionChip(
-                  avatar: const Icon(Icons.skip_next_rounded, size: 18),
-                  label: const Text('Next'),
-                  onPressed: () => client.sendAudioCommand('next'),
-                ),
-                ActionChip(
-                  avatar: const Icon(Icons.volume_down_rounded, size: 18),
-                  label: const Text('Vol -'),
-                  onPressed: () => client.sendAudioCommand('volume_down'),
-                ),
-                ActionChip(
-                  avatar: const Icon(Icons.volume_off_rounded, size: 18),
-                  label: const Text('Mute'),
-                  onPressed: () => client.sendAudioCommand('mute'),
-                ),
-                ActionChip(
-                  avatar: const Icon(Icons.volume_up_rounded, size: 18),
-                  label: const Text('Vol +'),
-                  onPressed: () => client.sendAudioCommand('volume_up'),
-                ),
-                ActionChip(
-                  avatar:
-                      Icon(Icons.lock_rounded, size: 18, color: palette.accent),
-                  label: const Text('Lock PC'),
-                  onPressed: () {
-                    Navigator.of(ctx).pop();
-                    client.sendAudioCommand('lock_pc');
-                  },
-                ),
-              ],
+                  ActionChip(
+                    avatar: Icon(
+                      Icons.play_arrow_rounded,
+                      size: 18,
+                      color: palette.primary,
+                    ),
+                    label: const Text('Play/Pause'),
+                    onPressed: () {
+                      _hapticLight();
+                      client.sendAudioCommand('play_pause');
+                    },
+                  ),
+                  ActionChip(
+                    avatar: const Icon(Icons.skip_next_rounded, size: 18),
+                    label: const Text('Next'),
+                    onPressed: () {
+                      _hapticLight();
+                      client.sendAudioCommand('next');
+                    },
+                  ),
+                  ActionChip(
+                    avatar: const Icon(Icons.volume_down_rounded, size: 18),
+                    label: const Text('Vol -'),
+                    onPressed: () {
+                      _hapticLight();
+                      client.sendAudioCommand('volume_down');
+                    },
+                  ),
+                  ActionChip(
+                    avatar: const Icon(Icons.volume_off_rounded, size: 18),
+                    label: const Text('Mute'),
+                    onPressed: () {
+                      _hapticLight();
+                      client.sendAudioCommand('mute');
+                    },
+                  ),
+                  ActionChip(
+                    avatar: const Icon(Icons.volume_up_rounded, size: 18),
+                    label: const Text('Vol +'),
+                    onPressed: () {
+                      _hapticLight();
+                      client.sendAudioCommand('volume_up');
+                    },
+                  ),
+                  ActionChip(
+                    avatar: Icon(
+                      Icons.lock_rounded,
+                      size: 18,
+                      color: palette.accent,
+                    ),
+                    label: const Text('Lock PC'),
+                    onPressed: () {
+                      _hapticMedium();
+                      Navigator.of(ctx).pop();
+                      client.sendAudioCommand('lock_pc');
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
+    } finally {
+      if (mounted) _armHudAutoHide();
+    }
   }
 
   String _qualityShortLabel() {
@@ -2557,6 +2933,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     };
   }
 
+  Widget _buildDockDivider(CyberPalette palette) {
+    return Container(
+      width: 1,
+      height: 18,
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+      color: palette.dividerColor,
+    );
+  }
+
   Widget _buildInteractiveControllerDock(BuildContext context) {
     final palette = context.palette;
     final sigma = palette.glass.blurSigma;
@@ -2565,14 +2950,23 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
         color: palette.surfaceElevated.withValues(
-          alpha: sigma > 0 ? (palette.isDaylight ? 0.90 : 0.85) : 0.96,
+          alpha: sigma > 0 ? (palette.isDaylight ? 0.92 : 0.86) : 0.96,
         ),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
           color: palette.isDaylight
-              ? Colors.white.withValues(alpha: 0.85)
-              : palette.primary.withValues(alpha: 0.32),
+              ? Colors.white.withValues(alpha: 0.90)
+              : palette.primary.withValues(alpha: 0.36),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(
+              alpha: palette.isDaylight ? 0.14 : 0.28,
+            ),
+            blurRadius: 14,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2581,6 +2975,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
             context,
             'TOUCH',
             () => _selectInputMode(_StreamInputMode.touch),
+            icon: Icons.touch_app_rounded,
             isAccent: _inputMode == _StreamInputMode.touch,
           ),
           const SizedBox(width: 4),
@@ -2592,6 +2987,7 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
                   ? _StreamInputMode.touch
                   : _StreamInputMode.drag,
             ),
+            icon: Icons.pan_tool_alt_rounded,
             isWarning: _inputMode == _StreamInputMode.drag,
           ),
           const SizedBox(width: 4),
@@ -2599,13 +2995,15 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
             context,
             'PAD',
             () => _selectInputMode(_StreamInputMode.trackpad),
+            icon: Icons.mouse_rounded,
             isAccent: _inputMode == _StreamInputMode.trackpad,
           ),
-          const SizedBox(width: 6),
+          _buildDockDivider(palette),
           _buildDockButton(
             context,
             'KEY',
             _toggleKeyboardBar,
+            icon: Icons.keyboard_rounded,
             isAccent: _showKeyboardBar,
           ),
           const SizedBox(width: 4),
@@ -2613,6 +3011,9 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
             context,
             _videoFit == BoxFit.contain ? 'FIT' : 'FILL',
             _toggleFitMode,
+            icon: _videoFit == BoxFit.contain
+                ? Icons.fit_screen_rounded
+                : Icons.crop_free_rounded,
             isAccent: _videoFit == BoxFit.cover,
           ),
           const SizedBox(width: 4),
@@ -2620,38 +3021,98 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
             context,
             'Q:${_qualityShortLabel()}',
             _cycleQualityPreset,
+            key: const ValueKey('viewport-quality-btn'),
+            icon: Icons.hd_rounded,
           ),
           const SizedBox(width: 4),
           _buildDockButton(
             context,
+            'FPS:$_targetFps',
+            _cycleTargetFps,
+            key: const ValueKey('viewport-fps-btn'),
+            icon: Icons.speed_rounded,
+          ),
+          const SizedBox(width: 4),
+          _buildDockButton(
+            context,
+            monLabel,
+            _showMonitorSwitcherSheet,
+            key: const ValueKey('viewport-monitor-btn'),
+            icon: Icons.desktop_windows_rounded,
+            isAccent: _monitors.length > 1,
+          ),
+          _buildDockDivider(palette),
+          _buildDockButton(
+            context,
             'L-CLICK',
-            () => _sendRelativeMouseClick('left'),
+            () {
+              _hapticLight();
+              _sendRelativeMouseClick('left');
+              _armHudAutoHide();
+            },
             isAccent: _inputMode == _StreamInputMode.trackpad,
           ),
           const SizedBox(width: 4),
           _buildDockButton(
             context,
             'R-CLICK',
-            () => _sendRelativeMouseClick('right'),
+            () {
+              _hapticLight();
+              _sendRelativeMouseClick('right');
+              _armHudAutoHide();
+            },
           ),
           const SizedBox(width: 4),
-          _buildDockButton(context, 'WIN', () => _sendHotkey(const ['win'])),
+          _buildDockButton(
+            context,
+            'WIN',
+            () {
+              _hapticLight();
+              _sendHotkey(const ['win']);
+              _armHudAutoHide();
+            },
+          ),
           const SizedBox(width: 4),
           _buildDockButton(
             context,
             'ALT+TAB',
-            () => _sendHotkey(const ['alt', 'tab']),
+            () {
+              _hapticLight();
+              _sendHotkey(const ['alt', 'tab']);
+              _armHudAutoHide();
+            },
           ),
           const SizedBox(width: 4),
-          _buildDockButton(context, 'ESC', () => _sendKey('esc')),
+          _buildDockButton(
+            context,
+            'ESC',
+            () {
+              _hapticLight();
+              _sendKey('esc');
+              _armHudAutoHide();
+            },
+          ),
+          _buildDockDivider(palette),
+          _buildDockButton(
+            context,
+            'CLIP',
+            _showClipboardSheet,
+            icon: Icons.content_paste_rounded,
+          ),
           const SizedBox(width: 4),
-          _buildDockButton(context, 'CLIP', _showClipboardSheet),
+          _buildDockButton(
+            context,
+            'AUDIO',
+            _showAudioControlSheet,
+            icon: Icons.volume_up_rounded,
+          ),
           const SizedBox(width: 4),
-          _buildDockButton(context, 'AUDIO', _showAudioControlSheet),
-          const SizedBox(width: 4),
-          _buildDockButton(context, monLabel, _showMonitorSwitcherSheet),
-          const SizedBox(width: 4),
-          _buildDockButton(context, 'INFO', _openDiagnosticsSheet),
+          _buildDockButton(
+            context,
+            'INFO',
+            _openDiagnosticsSheet,
+            icon: Icons.analytics_outlined,
+          ),
         ],
       ),
     );
@@ -2670,6 +3131,8 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     BuildContext context,
     String label,
     VoidCallback onTap, {
+    Key? key,
+    IconData? icon,
     bool isAccent = false,
     bool isWarning = false,
   }) {
@@ -2678,10 +3141,13 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
     final bool highlighted = isAccent || isWarning;
 
     return InkWell(
+      key: key,
       onTap: onTap,
       borderRadius: BorderRadius.circular(999),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        constraints: const BoxConstraints(minHeight: 32),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: highlighted
               ? activeColor.withValues(
@@ -2695,13 +3161,26 @@ class _ViewportStreamWidgetState extends State<ViewportStreamWidget>
             color: highlighted ? activeColor : palette.dividerColor,
           ),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: highlighted ? activeColor : palette.textPrimary,
-            fontSize: 10.5,
-            fontWeight: FontWeight.w700,
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(
+                icon,
+                size: 13,
+                color: highlighted ? activeColor : palette.textSecondary,
+              ),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                color: highlighted ? activeColor : palette.textPrimary,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
       ),
     );

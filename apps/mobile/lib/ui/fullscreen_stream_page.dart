@@ -58,6 +58,7 @@ class FullscreenStreamPage extends StatefulWidget {
   final bool pinchZoomEnabled;
   final void Function(Map<String, dynamic> telemetry)? onTelemetry;
   final ValueChanged<String>? onQualityPresetChanged;
+  final ValueChanged<int>? onTargetFpsChanged;
 
   const FullscreenStreamPage({
     super.key,
@@ -82,23 +83,35 @@ class FullscreenStreamPage extends StatefulWidget {
     this.pinchZoomEnabled = true,
     this.onTelemetry,
     this.onQualityPresetChanged,
+    this.onTargetFpsChanged,
   });
 
   @override
   State<FullscreenStreamPage> createState() => _FullscreenStreamPageState();
 }
 
-class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
+class _FullscreenStreamPageState extends State<FullscreenStreamPage>
+    with WidgetsBindingObserver {
   late StreamOrientationMode _orientationMode;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _orientationMode = widget.autoLandscape
         ? StreamOrientationMode.landscape
         : StreamOrientationMode.auto;
     _enterImmersiveMode();
     _applyOrientation(_orientationMode);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Re-assert immersive sticky chrome & orientation after Android resume/unlock.
+      _enterImmersiveMode();
+      _applyOrientation(_orientationMode);
+    }
   }
 
   void _enterImmersiveMode() {
@@ -144,6 +157,7 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _restoreSystemChrome();
     super.dispose();
   }
@@ -180,6 +194,7 @@ class _FullscreenStreamPageState extends State<FullscreenStreamPage> {
         orientationIcon: _orientationMode.icon,
         onTelemetry: widget.onTelemetry,
         onQualityPresetChanged: widget.onQualityPresetChanged,
+        onTargetFpsChanged: widget.onTargetFpsChanged,
       ),
     );
   }
