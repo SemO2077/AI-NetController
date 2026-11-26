@@ -30,9 +30,11 @@ logger = logging.getLogger("AI-NetController-Config")
 
 DEFAULT_PORT = 8765
 DEFAULT_HOST = "0.0.0.0"
+DEFAULT_DISCOVERY_PORT = 8766
 DEFAULT_PIN_TTL_SECONDS = 900
 _CONFIG_LOCK = threading.RLock()
 _CONFIG_REVISION = 0
+_HARDENED_DIRS: set = set()
 _DPAPI_PREFIX = "dpapi_v1:"
 _DPAPI_ENTROPY = b"AI_NetController_Config_DPAPI_v1"
 _IS_WINDOWS = platform.system() == "Windows"
@@ -151,6 +153,8 @@ def _dpapi_unprotect(stored: str) -> Optional[str]:
                 return dec.decode("utf-8")
             finally:
                 if out_blob.pbData:
+                    if out_blob.cbData:
+                        ctypes.memset(out_blob.pbData, 0, out_blob.cbData)
                     kernel32.LocalFree(ctypes.cast(out_blob.pbData, wintypes.HLOCAL))
     except Exception as exc:
         logger.warning("Failed to decrypt stored DPAPI secret: %s", exc)
@@ -190,8 +194,15 @@ def get_config_dir() -> str:
         config_dir = os.path.join(os.path.expanduser("~"), ".ai_netcontroller")
 
     try:
+        existed = os.path.isdir(config_dir)
         os.makedirs(config_dir, exist_ok=True)
-        _restrict_file_permissions(config_dir, is_dir=True)
+        norm_dir = os.path.normcase(os.path.abspath(config_dir))
+        if not existed or norm_dir not in _HARDENED_DIRS:
+            _restrict_file_permissions(config_dir, is_dir=True)
+            _HARDENED_DIRS.add(norm_dir)
+            if len(_HARDENED_DIRS) > 64:
+                _HARDENED_DIRS.clear()
+                _HARDENED_DIRS.add(norm_dir)
     except Exception as e:
         logger.debug("Could not create config dir %s: %s", config_dir, e)
     return config_dir
@@ -254,6 +265,8 @@ def _generate_default_config() -> Dict[str, Any]:
         "close_to_tray": True,
         "enable_tray_icon": True,
         "mdns_enabled": True,
+        "udp_discovery_enabled": True,
+        "discovery_port": DEFAULT_DISCOVERY_PORT,
         "file_transfer_enabled": True,
         "audio_control_enabled": True,
         "ollama_bridge_enabled": True,
@@ -289,6 +302,7 @@ def _validate_and_sanitize_config(
         "close_to_tray",
         "enable_tray_icon",
         "mdns_enabled",
+        "udp_discovery_enabled",
         "file_transfer_enabled",
         "audio_control_enabled",
         "ollama_bridge_enabled",
@@ -322,13 +336,17 @@ def _validate_and_sanitize_config(
     ):
         merged["ui_accent"] = raw["ui_accent"]
 
-    # Valid TCP port range & capture FPS
+    # Valid TCP port range, UDP discovery port & capture FPS
     raw_port = raw.get("port")
     if isinstance(raw_port, int) and not isinstance(raw_port, bool) and 1 <= raw_port <= 65535:
         merged["port"] = raw_port
 
+    raw_disc_port = raw.get("discovery_port")
+    if isinstance(raw_disc_port, int) and not isinstance(raw_disc_port, bool) and 0 <= raw_disc_port <= 65535:
+        merged["discovery_port"] = raw_disc_port
+
     raw_fps = raw.get("target_fps")
-    if isinstance(raw_fps, int) and not isinstance(raw_fps, bool) and raw_fps in (15, 30, 60):
+    if isinstance(raw_fps, int) and not isinstance(raw_fps, bool) and 5 <= raw_fps <= 60:
         merged["target_fps"] = raw_fps
 
     # PIN issued timestamp & TTL
@@ -434,13 +452,22 @@ def load_config() -> Dict[str, Any]:
                     loaded = json.load(f)
                 if isinstance(loaded, dict):
                     sanitized = _validate_and_sanitize_config(loaded, defaults)
-                    # Migrate legacy plaintext secrets on Windows to DPAPI storage automatically
+                    # Migrate legacy plaintext secrets (token and/or PIN) on Windows to DPAPI storage
                     raw_tok = loaded.get("pairing_token")
-                    if _IS_WINDOWS and isinstance(raw_tok, str) and not raw_tok.startswith(_DPAPI_PREFIX):
+                    raw_pin = loaded.get("pairing_pin")
+                    tok_plain = isinstance(raw_tok, str) and bool(raw_tok) and not raw_tok.startswith(_DPAPI_PREFIX)
+                    pin_plain = isinstance(raw_pin, str) and bool(raw_pin) and not raw_pin.startswith(_DPAPI_PREFIX)
+                    if _IS_WINDOWS and (tok_plain or pin_plain):
                         save_config(sanitized)
                     return sanitized
             except Exception as e:
-                logger.warning("Failed to read config from %s, re-initializing: %s", cfg_path, e)
+                logger.warning("Failed to read config from %s, backing up and re-initializing: %s", cfg_path, e)
+                try:
+                    backup_path = f"{cfg_path}.corrupt.{int(time.time())}"
+                    os.replace(cfg_path, backup_path)
+                    _restrict_file_permissions(backup_path, is_dir=False)
+                except OSError:
+                    pass
 
         save_config(defaults)
         return defaults

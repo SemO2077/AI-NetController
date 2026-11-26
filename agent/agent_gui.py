@@ -191,19 +191,25 @@ class HostDaemonState:
     and Desktop Control Center GUI.
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765):
+    def __init__(self, host: Optional[str] = None, port: Optional[int] = None):
         self.lock = threading.RLock()
         self.version = APP_VERSION
         self.protocol = "AI-NET/3.0-SECURE"
         self.hostname = socket.gethostname()
         self.os_name = f"{platform.system()} {platform.release()}"
-        self.local_ip = self._detect_local_ip()
-        self.bind_host = host
-        self.port = int(port)
-        self.start_time = time.time()
 
         cfg = load_config() if callable(load_config) else {}
         self.config: Dict[str, Any] = dict(cfg) if isinstance(cfg, dict) else {}
+
+        self.local_ip = self._detect_local_ip()
+        self._last_ip_refresh = time.monotonic()
+        self.bind_host = str(host or self.config.get("bind_host") or "0.0.0.0")
+        raw_port = port if port is not None else self.config.get("port", 8765)
+        try:
+            self.port = int(raw_port) if raw_port is not None else 8765
+        except (TypeError, ValueError):
+            self.port = 8765
+        self.start_time = time.time()
 
         self.is_running = True
         self.is_paused = False
@@ -605,6 +611,13 @@ class HostDaemonState:
                 pass
 
         with self.lock:
+            now_mono = time.monotonic()
+            ip_interval = 5.0 if self.local_ip == "127.0.0.1" else 15.0
+            if (now_mono - self._last_ip_refresh) >= ip_interval:
+                self._last_ip_refresh = now_mono
+                detected_ip = self._detect_local_ip()
+                if detected_ip and detected_ip != self.local_ip:
+                    self.local_ip = detected_ip
             self.cpu_percent = round(cpu, 1)
             self.ram_percent = round(ram_pct, 1)
             self.ram_used_gb = ram_used
@@ -792,6 +805,13 @@ class HostDaemonDesktopGUI:
         self._resize_after_id: Optional[str] = None
         self._gauge_anim_after_id: Optional[str] = None
         self._refresh_after_id: Optional[str] = None
+        self._scroll_sync_after_id: Optional[str] = None
+        self._startup_after_id: Optional[str] = None
+        self._clip_clear_after_id: Optional[str] = None
+        self._btn_flash_after_ids: Dict[int, str] = {}
+        self._tooltip_win: Optional[tk.Toplevel] = None
+        self._tooltip_after_id: Optional[str] = None
+        self._peers_wrap_px: int = 360
         self._gauge_display_pct: Dict[str, float] = {}
         self._gauge_target_pct: Dict[str, float] = {}
         self._gauge_paint_sig: Dict[str, Tuple[Any, ...]] = {}
@@ -832,6 +852,7 @@ class HostDaemonDesktopGUI:
         self.root.bind("<Configure>", self._on_root_configure)
         self.root.bind("<Map>", lambda _e: self._set_hidden(False))
         self.root.bind("<Unmap>", self._on_unmap)
+        self.root.bind("<Destroy>", self._on_root_destroy)
         self.root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
         self.root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
         self.root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
@@ -839,9 +860,9 @@ class HostDaemonDesktopGUI:
 
         # Launch guided setup automatically on clean first-time start, or start minimized if configured
         if not self.state.setup_completed and "--headless" not in sys.argv:
-            self.root.after(450, self._open_setup_wizard)
+            self._startup_after_id = self.root.after(450, self._open_setup_wizard)
         elif (self.state.start_minimized or "--minimized" in sys.argv) and "--headless" not in sys.argv:
-            self.root.after(150, self._hide_to_tray)
+            self._startup_after_id = self.root.after(150, self._hide_to_tray)
 
         self._refresh_ui(force_telemetry=True)
         self._refresh_after_id = self.root.after(250, self._schedule_refresh)
@@ -1072,8 +1093,143 @@ class HostDaemonDesktopGUI:
         self._stage_canvas.itemconfigure(self._stage_win_id, width=cw, height=req_h)
         self._sync_stage_scrollregion()
 
-    def _sync_stage_scrollregion(self) -> None:
+    def _cancel_after_attr(self, attr: str) -> None:
+        after_id = getattr(self, attr, None)
+        if after_id is not None:
+            setattr(self, attr, None)
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+
+    def _cancel_button_flash_timers(self) -> None:
+        for aid in list(self._btn_flash_after_ids.values()):
+            try:
+                self.root.after_cancel(aid)
+            except Exception:
+                pass
+        self._btn_flash_after_ids.clear()
+
+    def _hide_tooltip(self) -> None:
+        self._cancel_after_attr("_tooltip_after_id")
+        tip = self._tooltip_win
+        self._tooltip_win = None
+        if tip is not None:
+            try:
+                tip.destroy()
+            except Exception:
+                pass
+
+    def _attach_tooltip(self, widget: tk.Widget, text_or_fn: Any) -> None:
+        """Attaches a lightweight Liquid Glass hover tooltip that cleans up deterministically."""
+        def _show() -> None:
+            self._tooltip_after_id = None
+            try:
+                if not self.root.winfo_exists() or not widget.winfo_exists():
+                    return
+                msg = text_or_fn() if callable(text_or_fn) else str(text_or_fn)
+                if not msg:
+                    return
+                self._hide_tooltip()
+                p = self._palette
+                tip = tk.Toplevel(self.root)
+                tip.overrideredirect(True)
+                tip.configure(bg=p.GLASS_BORDER_BRIGHT)
+                lbl = tk.Label(
+                    tip,
+                    text=msg,
+                    font=(self.ui_font, 8),
+                    fg=p.TEXT_PRIMARY,
+                    bg=p.SURFACE_ELEVATED,
+                    padx=8,
+                    pady=4,
+                    justify="left",
+                )
+                lbl.pack(padx=1, pady=1)
+                x = widget.winfo_rootx() + 4
+                y = widget.winfo_rooty() + widget.winfo_height() + 6
+                tip.geometry(f"+{x}+{y}")
+                self._tooltip_win = tip
+            except Exception:
+                pass
+
+        def _on_enter(_e: Any) -> None:
+            self._cancel_after_attr("_tooltip_after_id")
+            try:
+                self._tooltip_after_id = self.root.after(420, _show)
+            except Exception:
+                pass
+
+        def _on_leave(_e: Any) -> None:
+            self._hide_tooltip()
+
+        widget.bind("<Enter>", _on_enter, add="+")
+        widget.bind("<Leave>", _on_leave, add="+")
+        widget.bind("<ButtonPress-1>", _on_leave, add="+")
+
+    def _flash_button_copied(self, btn: Optional[tk.Button], copied_text: str = "COPIED ✓", duration_ms: int = 1600) -> None:
+        """Provides crisp inline visual feedback on quick-copy buttons without altering layout."""
+        if btn is None:
+            return
         try:
+            if not btn.winfo_exists():
+                return
+        except Exception:
+            return
+        btn_id = id(btn)
+        prev_aid = self._btn_flash_after_ids.pop(btn_id, None)
+        if prev_aid is not None:
+            try:
+                self.root.after_cancel(prev_aid)
+            except Exception:
+                pass
+        orig_text = getattr(btn, "_copy_orig_text", None)
+        if orig_text is None:
+            orig_text = str(btn.cget("text"))
+            btn._copy_orig_text = orig_text  # type: ignore[attr-defined]
+        btn.configure(text=copied_text)
+
+        def _restore() -> None:
+            self._btn_flash_after_ids.pop(btn_id, None)
+            try:
+                if btn.winfo_exists():
+                    btn.configure(text=orig_text)
+            except Exception:
+                pass
+
+        try:
+            self._btn_flash_after_ids[btn_id] = self.root.after(duration_ms, _restore)
+        except Exception:
+            pass
+
+    def _schedule_scroll_sync(self) -> None:
+        self._cancel_after_attr("_scroll_sync_after_id")
+        try:
+            if self.root.winfo_exists():
+                self._scroll_sync_after_id = self.root.after_idle(self._sync_stage_scrollregion)
+        except Exception:
+            self._scroll_sync_after_id = None
+
+    def _on_root_destroy(self, event: Any) -> None:
+        if getattr(event, "widget", None) is not self.root:
+            return
+        self._hide_tooltip()
+        self._cancel_button_flash_timers()
+        for attr in (
+            "_refresh_after_id",
+            "_resize_after_id",
+            "_gauge_anim_after_id",
+            "_scroll_sync_after_id",
+            "_startup_after_id",
+            "_clip_clear_after_id",
+        ):
+            self._cancel_after_attr(attr)
+
+    def _sync_stage_scrollregion(self) -> None:
+        self._scroll_sync_after_id = None
+        try:
+            if not self.root.winfo_exists() or not self._stage_canvas.winfo_exists():
+                return
             cw = max(200, self._stage_canvas.winfo_width())
             ch = max(120, self._stage_canvas.winfo_height())
             req_h = self._stage.winfo_reqheight()
@@ -1260,6 +1416,7 @@ class HostDaemonDesktopGUI:
 
             # QR Box & Credentials side-by-side vs stacked when column is narrow
             col_w = width if scale.columns == 1 else int(width * 0.52)
+            self._peers_wrap_px = max(200, (width if scale.columns == 1 else int(width * 0.44)) - 56)
             if col_w < 460:
                 self._qr_box.pack_configure(side="top", padx=0, pady=(0, 8), anchor="center")
                 self._creds_box.pack_configure(side="top", fill="both", expand=True)
@@ -1323,10 +1480,12 @@ class HostDaemonDesktopGUI:
             self._diag_output.configure(wraplength=col_wrap)
             for lbl in self._av_check_labels:
                 lbl.configure(wraplength=max(160, col_wrap - 64))
+            for chk in getattr(self, "_sys_checkbuttons", ()):
+                chk.configure(wraplength=max(180, col_wrap - 28), justify="left")
         except Exception:
             pass
 
-        self.root.after_idle(self._sync_stage_scrollregion)
+        self._schedule_scroll_sync()
 
     def _set_hidden(self, hidden: bool) -> None:
         self._is_hidden = hidden
@@ -1458,17 +1617,33 @@ class HostDaemonDesktopGUI:
         )
         self._btn_viewonly.pack(side="left", padx=(0, 6))
 
-        self._make_cyber_button(
+        self._btn_panic = self._make_cyber_button(
             btns, "Panic Kill", self._panic_kill,
             fg=CyberColors.ACCENT, bg=CyberColors.ACCENT_SOFT, border=CyberColors.ACCENT,
             pad_x=9, pad_y=5, font_size=8,
-        ).pack(side="left", padx=(0, 6))
+        )
+        self._btn_panic.pack(side="left", padx=(0, 6))
 
-        self._make_cyber_button(
+        self._btn_tray = self._make_cyber_button(
             btns, "Tray", self._hide_to_tray,
             fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.SURFACE_ELEVATED, border=CyberColors.GLASS_BORDER_IDLE,
             pad_x=9, pad_y=5, font_size=8,
-        ).pack(side="left")
+        )
+        self._btn_tray.pack(side="left")
+
+        self._attach_tooltip(
+            self._pill_status,
+            lambda: f"Host listener on {self.state.local_ip}:{self.state.port} ({'Paused' if self.state.is_paused else 'Active'})",
+        )
+        self._attach_tooltip(
+            self._pill_peers,
+            lambda: f"{len(self.state.connected_clients)} authenticated companion(s) connected",
+        )
+        self._attach_tooltip(self._btn_theme, "Switch between Bright Daylight and Vibrant Dark glass polarity")
+        self._attach_tooltip(self._btn_pause, "Pause or resume incoming connections and screen streaming")
+        self._attach_tooltip(self._btn_viewonly, "Toggle global View-Only lock (blocks remote mouse/keyboard/shell)")
+        self._attach_tooltip(self._btn_panic, "Emergency Panic: disconnect all peers & terminate active tasks")
+        self._attach_tooltip(self._btn_tray, "Minimize Control Center to the Windows System Tray")
 
     def _prebuild_orb_frames(self) -> None:
         if not HAS_IMAGETK:
@@ -1573,7 +1748,7 @@ class HostDaemonDesktopGUI:
 
         if tab_key == "console":
             self._flush_logs_to_console()
-        self.root.after_idle(self._sync_stage_scrollregion)
+        self._schedule_scroll_sync()
 
     # ------------------------------------------------------------------
     # TAB 1: OVERVIEW, TELEMETRY GAUGES, QR PAIRING & ACTIVE PEERS
@@ -1716,10 +1891,16 @@ class HostDaemonDesktopGUI:
         ).pack(anchor="w")
         uri_row = tk.Frame(creds, bg=CyberColors.TERMINAL_BG, padx=10, pady=7, highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE)
         uri_row.pack(fill="x", pady=(3, 10))
-        self._make_cyber_button(
-            uri_row, "COPY", self._copy_ws_uri,
-            fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, pad_x=8, pad_y=2, font_size=8,
-        ).pack(side="right", padx=(6, 0))
+        self._btn_copy_uri = self._make_cyber_button(
+            uri_row, "COPY URI", self._copy_ws_uri,
+            fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, pad_x=7, pad_y=2, font_size=8,
+        )
+        self._btn_copy_uri.pack(side="right", padx=(4, 0))
+        self._btn_copy_ip = self._make_cyber_button(
+            uri_row, "COPY IP", self._copy_lan_endpoint,
+            fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE_ELEVATED, border=CyberColors.GLASS_BORDER_IDLE, pad_x=7, pad_y=2, font_size=8,
+        )
+        self._btn_copy_ip.pack(side="right", padx=(6, 0))
         self._lbl_ws_uri = tk.Label(
             uri_row, text=f"ws://{self.state.local_ip}:{self.state.port}",
             font=(self.mono_font, 10, "bold"), fg=CyberColors.PRIMARY, bg=CyberColors.TERMINAL_BG, anchor="w",
@@ -1732,10 +1913,11 @@ class HostDaemonDesktopGUI:
         ).pack(anchor="w")
         pin_row = tk.Frame(creds, bg=CyberColors.TERMINAL_BG, padx=10, pady=7, highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE)
         pin_row.pack(fill="x", pady=(3, 10))
-        self._make_cyber_button(
+        self._btn_copy_pin = self._make_cyber_button(
             pin_row, "COPY PIN", self._copy_pin,
             fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT, border=CyberColors.SUCCESS, pad_x=8, pad_y=3, font_size=8,
-        ).pack(side="right", padx=(6, 0))
+        )
+        self._btn_copy_pin.pack(side="right", padx=(6, 0))
         self._lbl_pin_ttl = tk.Label(
             pin_row, text="TTL --:--", font=(self.mono_font, 8),
             fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.TERMINAL_BG,
@@ -1758,10 +1940,11 @@ class HostDaemonDesktopGUI:
             fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.SURFACE_ELEVATED, border=CyberColors.GLASS_BORDER_IDLE, pad_x=7, pad_y=2, font_size=8,
         )
         self._btn_tok_vis.pack(side="right", padx=(4, 0))
-        self._make_cyber_button(
+        self._btn_copy_token = self._make_cyber_button(
             tok_row, "COPY", self._copy_token,
             fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, pad_x=7, pad_y=2, font_size=8,
-        ).pack(side="right", padx=(6, 0))
+        )
+        self._btn_copy_token.pack(side="right", padx=(6, 0))
         self._lbl_token = tk.Label(
             tok_row, text="ainet_••••••••••••••••••••••••",
             font=(self.mono_font, 9), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG, anchor="w",
@@ -1770,10 +1953,11 @@ class HostDaemonDesktopGUI:
 
         act_row = tk.Frame(creds, bg=CyberColors.SURFACE)
         act_row.pack(fill="x")
-        self._make_cyber_button(
+        self._btn_copy_pair = self._make_cyber_button(
             act_row, "COPY PAIR LINK", self._copy_pairing_uri,
             fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT, border=CyberColors.SUCCESS,
-        ).pack(side="left", padx=(0, 6), pady=2)
+        )
+        self._btn_copy_pair.pack(side="left", padx=(0, 6), pady=2)
         self._make_cyber_button(
             act_row, "REFRESH PIN", self._refresh_pin_only,
             fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT,
@@ -1910,6 +2094,11 @@ class HostDaemonDesktopGUI:
             hdr, "Clear Console", self._clear_console,
             fg=CyberColors.TEXT_SECONDARY, bg=CyberColors.SURFACE_ELEVATED, border=CyberColors.GLASS_BORDER_IDLE, pad_x=10, pad_y=3, font_size=8,
         ).pack(side="right")
+        self._btn_copy_logs = self._make_cyber_button(
+            hdr, "Copy Logs", self._copy_console_logs,
+            fg=CyberColors.PRIMARY, bg=CyberColors.PRIMARY_SOFT, pad_x=10, pad_y=3, font_size=8,
+        )
+        self._btn_copy_logs.pack(side="right", padx=(0, 6))
 
         term_wrap = tk.Frame(cb, bg=CyberColors.TERMINAL_BG, highlightthickness=1, highlightbackground=CyberColors.GLASS_BORDER_IDLE)
         term_wrap.pack(fill="both", expand=True)
@@ -2088,41 +2277,29 @@ class HostDaemonDesktopGUI:
         )
         self._diag_output.pack(fill="x", pady=(0, 12))
 
-        tk.Checkbutton(
-            sb,
-            text="Run Host Daemon automatically on Windows Sign-In (Startup)",
-            variable=self.var_autostart,
-            command=self._toggle_autostart,
-            font=(self.ui_font, 9),
-            fg=CyberColors.TEXT_PRIMARY,
-            bg=CyberColors.SURFACE,
-            selectcolor=CyberColors.TERMINAL_BG,
-            activebackground=CyberColors.SURFACE,
-        ).pack(anchor="w", pady=(0, 3))
-
-        tk.Checkbutton(
-            sb,
-            text="Start Minimized to System Tray on Launch",
-            variable=self.var_start_minimized,
-            command=self._sync_toggles,
-            font=(self.ui_font, 9),
-            fg=CyberColors.TEXT_PRIMARY,
-            bg=CyberColors.SURFACE,
-            selectcolor=CyberColors.TERMINAL_BG,
-            activebackground=CyberColors.SURFACE,
-        ).pack(anchor="w", pady=(0, 3))
-
-        tk.Checkbutton(
-            sb,
-            text="Minimize to System Tray When Closing Window (Uncheck to exit on close)",
-            variable=self.var_close_to_tray,
-            command=self._sync_toggles,
-            font=(self.ui_font, 9),
-            fg=CyberColors.TEXT_PRIMARY,
-            bg=CyberColors.SURFACE,
-            selectcolor=CyberColors.TERMINAL_BG,
-            activebackground=CyberColors.SURFACE,
-        ).pack(anchor="w", pady=(0, 10))
+        self._sys_checkbuttons: List[tk.Checkbutton] = []
+        for chk_txt, chk_var, chk_cmd, chk_pady in (
+            ("Run Host Daemon automatically on Windows Sign-In (Startup)", self.var_autostart, self._toggle_autostart, (0, 3)),
+            ("Start Minimized to System Tray on Launch", self.var_start_minimized, self._sync_toggles, (0, 3)),
+            ("Minimize to System Tray When Closing Window (Uncheck to exit on close)", self.var_close_to_tray, self._sync_toggles, (0, 10)),
+        ):
+            chk = tk.Checkbutton(
+                sb,
+                text=chk_txt,
+                variable=chk_var,
+                command=chk_cmd,
+                font=(self.ui_font, 9),
+                fg=CyberColors.TEXT_PRIMARY,
+                bg=CyberColors.SURFACE,
+                selectcolor=CyberColors.TERMINAL_BG,
+                activebackground=CyberColors.SURFACE,
+                activeforeground=CyberColors.PRIMARY,
+                anchor="w",
+                justify="left",
+                wraplength=380,
+            )
+            chk.pack(fill="x", anchor="w", pady=chk_pady)
+            self._sys_checkbuttons.append(chk)
 
         btn_grid = tk.Frame(sb, bg=CyberColors.SURFACE)
         btn_grid.pack(fill="x")
@@ -2248,41 +2425,74 @@ class HostDaemonDesktopGUI:
 
         snap = self.state.get_snapshot()
 
-        # Rotate orbital CyberNodeBadge sprite smoothly
-        if self._orb_frames and getattr(self, "_orb_item", None) is not None:
+        # Rotate orbital CyberNodeBadge sprite smoothly (pause rotation while daemon is paused)
+        if not snap["isPaused"] and self._orb_frames and getattr(self, "_orb_item", None) is not None:
             self._orb_phase = (self._orb_phase + 1) % len(self._orb_frames)
             self._orb_canvas.itemconfigure(self._orb_item, image=self._orb_frames[self._orb_phase])
 
         # Header pills
         if snap["isPaused"]:
-            self._pill_status.configure(
-                text=" ● PAUSED ", fg=CyberColors.WARNING, bg=CyberColors.WARNING_SOFT,
-                highlightbackground=CyberColors.WARNING,
-            )
-            self._btn_pause.configure(text="Resume")
+            if self._pill_status.cget("text") != " ● PAUSED ":
+                self._pill_status.configure(
+                    text=" ● PAUSED ", fg=CyberColors.WARNING, bg=CyberColors.WARNING_SOFT,
+                    highlightbackground=CyberColors.WARNING,
+                )
+            if self._btn_pause.cget("text") != "Resume":
+                self._btn_pause.configure(text="Resume")
         else:
             tls_tag = " · TLS" if snap["tlsEnabled"] else ""
-            self._pill_status.configure(
-                text=f" ● ONLINE{tls_tag} ", fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT,
-                highlightbackground=CyberColors.SUCCESS,
-            )
-            self._btn_pause.configure(text="Pause")
+            online_txt = f" ● ONLINE{tls_tag} "
+            if self._pill_status.cget("text") != online_txt:
+                self._pill_status.configure(
+                    text=online_txt, fg=CyberColors.SUCCESS, bg=CyberColors.SUCCESS_SOFT,
+                    highlightbackground=CyberColors.SUCCESS,
+                )
+            if self._btn_pause.cget("text") != "Pause":
+                self._btn_pause.configure(text="Pause")
 
         peer_count = len(snap["connectedClients"])
-        self._pill_peers.configure(text=f" {peer_count} PEER{'S' if peer_count != 1 else ''} ")
-        self._lbl_uptime.configure(text=f"UP {snap['uptime']}")
+        peers_txt = f" {peer_count} PEER{'S' if peer_count != 1 else ''} "
+        if self._pill_peers.cget("text") != peers_txt:
+            self._pill_peers.configure(text=peers_txt)
+        uptime_txt = f"UP {snap['uptime']}"
+        if self._lbl_uptime.cget("text") != uptime_txt:
+            self._lbl_uptime.configure(text=uptime_txt)
         vo_fg = CyberColors.WARNING if snap["viewOnlyMode"] else CyberColors.PRIMARY
         vo_bg = CyberColors.WARNING_SOFT if snap["viewOnlyMode"] else CyberColors.PRIMARY_SOFT
         vo_br = CyberColors.WARNING if snap["viewOnlyMode"] else CyberColors.GLASS_BORDER
-        self._btn_viewonly._base_fg = vo_fg  # type: ignore[attr-defined]
-        self._btn_viewonly._base_bg = vo_bg  # type: ignore[attr-defined]
-        self._btn_viewonly._base_border = vo_br  # type: ignore[attr-defined]
-        self._btn_viewonly.configure(
-            text="Input Locked" if snap["viewOnlyMode"] else "Lock Input",
-            fg=vo_fg,
-            bg=vo_bg,
-            highlightbackground=vo_br,
-        )
+        vo_txt = "Input Locked" if snap["viewOnlyMode"] else "Lock Input"
+        if self._btn_viewonly.cget("text") != vo_txt or getattr(self._btn_viewonly, "_base_fg", None) != vo_fg:
+            self._btn_viewonly._base_fg = vo_fg  # type: ignore[attr-defined]
+            self._btn_viewonly._base_bg = vo_bg  # type: ignore[attr-defined]
+            self._btn_viewonly._base_border = vo_br  # type: ignore[attr-defined]
+            self._btn_viewonly.configure(
+                text=vo_txt,
+                fg=vo_fg,
+                bg=vo_bg,
+                highlightbackground=vo_br,
+            )
+
+        # Keep Security tab checkboxes in sync with external changes (Tray / Web Console)
+        if self._active_tab == "security":
+            for tk_var, snap_key in (
+                (self.var_view_only, "viewOnlyMode"),
+                (self.var_hitl, "requireHitlApproval"),
+                (self.var_clipboard, "clipboardSyncAllowed"),
+                (self.var_autolock, "autoLockOnDisconnect"),
+                (self.var_autoban, "autoBanIntrusion"),
+                (self.var_geofence, "subnetGeofenceOnly"),
+                (self.var_file_transfer, "fileTransferEnabled"),
+                (self.var_audio_control, "audioControlEnabled"),
+                (self.var_ollama_bridge, "ollamaBridgeEnabled"),
+                (self.var_hmac_auth, "requireHmacAuth"),
+                (self.var_aead, "requireAead"),
+                (self.var_tls, "requireTls"),
+            ):
+                desired = bool(snap[snap_key])
+                if bool(tk_var.get()) != desired:
+                    tk_var.set(desired)
+            if self.var_profile.get() != snap["securityProfile"]:
+                self.var_profile.set(snap["securityProfile"])
 
         # Overview gauges & credentials (only refresh QR bitmap when URI changes)
         if self._active_tab == "overview":
@@ -2296,28 +2506,42 @@ class HostDaemonDesktopGUI:
             fps_pct = min(100.0, (snap["captureFps"] / 60.0) * 100.0)
             self._draw_gauge("fps", fps_pct, f"{snap['captureFps']:.1f} FPS")
 
-            self._lbl_cmds.configure(text=f"COMMANDS: {snap['commandsExecuted']}")
-            self._lbl_frames.configure(text=f"FRAMES: {snap['framesBroadcast']}")
-            self._lbl_ws_uri.configure(text=snap["wsUri"])
-            self._lbl_pin.configure(text=snap["pairingPin"])
+            cmds_txt = f"COMMANDS: {snap['commandsExecuted']}"
+            if self._lbl_cmds.cget("text") != cmds_txt:
+                self._lbl_cmds.configure(text=cmds_txt)
+            frames_txt = f"FRAMES: {snap['framesBroadcast']}"
+            if self._lbl_frames.cget("text") != frames_txt:
+                self._lbl_frames.configure(text=frames_txt)
+            if self._lbl_ws_uri.cget("text") != snap["wsUri"]:
+                self._lbl_ws_uri.configure(text=snap["wsUri"])
+            if self._lbl_pin.cget("text") != snap["pairingPin"]:
+                self._lbl_pin.configure(text=snap["pairingPin"])
 
             rem_ttl = max(0, int(snap["pinTtlSeconds"] - (now - snap["pinIssuedAt"])))
             mm, ss = divmod(rem_ttl, 60)
-            self._lbl_pin_ttl.configure(text=f"TTL {mm:02d}:{ss:02d}")
-            self._lbl_tls_badge.configure(
-                text=" WSS TLS 1.3 " if snap["tlsEnabled"] else " WS LAN ",
-                fg=CyberColors.SUCCESS if snap["tlsEnabled"] else CyberColors.PRIMARY,
-                bg=CyberColors.SUCCESS_SOFT if snap["tlsEnabled"] else CyberColors.PRIMARY_SOFT,
-            )
+            ttl_txt = f"TTL {mm:02d}:{ss:02d}"
+            ttl_fg = CyberColors.WARNING if rem_ttl <= 60 else CyberColors.TEXT_SECONDARY
+            if self._lbl_pin_ttl.cget("text") != ttl_txt or self._lbl_pin_ttl.cget("fg") != ttl_fg:
+                self._lbl_pin_ttl.configure(text=ttl_txt, fg=ttl_fg)
+            tls_badge_txt = " WSS TLS 1.3 " if snap["tlsEnabled"] else " WS LAN "
+            if self._lbl_tls_badge.cget("text") != tls_badge_txt:
+                self._lbl_tls_badge.configure(
+                    text=tls_badge_txt,
+                    fg=CyberColors.SUCCESS if snap["tlsEnabled"] else CyberColors.PRIMARY,
+                    bg=CyberColors.SUCCESS_SOFT if snap["tlsEnabled"] else CyberColors.PRIMARY_SOFT,
+                )
 
             tok = snap["pairingToken"]
             if self._token_visible:
-                self._lbl_token.configure(text=tok)
-                self._btn_tok_vis.configure(text="HIDE")
+                tok_display = tok
+                vis_txt = "HIDE"
             else:
-                masked = f"{tok[:6]}{'•' * 14}{tok[-4:]}" if len(tok) > 12 else "•" * 16
-                self._lbl_token.configure(text=masked)
-                self._btn_tok_vis.configure(text="SHOW")
+                tok_display = f"{tok[:6]}{'•' * 14}{tok[-4:]}" if len(tok) > 12 else "•" * 16
+                vis_txt = "SHOW"
+            if self._lbl_token.cget("text") != tok_display:
+                self._lbl_token.configure(text=tok_display)
+            if self._btn_tok_vis.cget("text") != vis_txt:
+                self._btn_tok_vis.configure(text=vis_txt)
 
             self._refresh_qr_card(snap["pairingUri"])
             self._refresh_peers_panel(snap["connectedClients"])
@@ -2437,7 +2661,7 @@ class HostDaemonDesktopGUI:
                 fg=CyberColors.TEXT_SECONDARY,
                 bg=CyberColors.SURFACE,
                 justify="left",
-                wraplength=360,
+                wraplength=self._peers_wrap_px,
             ).pack(anchor="w", pady=10)
             return
 
@@ -2477,6 +2701,16 @@ class HostDaemonDesktopGUI:
                 row, text=f"{dev} ({ip})",
                 font=(self.ui_font, 9, "bold"), fg=CyberColors.TEXT_PRIMARY, bg=CyberColors.TERMINAL_BG, anchor="w",
             ).pack(side="left", fill="x", expand=True)
+
+        if len(clients) > 4:
+            tk.Label(
+                self._peers_list_frame,
+                text=f"+{len(clients) - 4} more peer(s) connected — open Manage & Ban List",
+                font=(self.mono_font, 8),
+                fg=CyberColors.TEXT_SECONDARY,
+                bg=CyberColors.SURFACE,
+                anchor="w",
+            ).pack(anchor="w", pady=(4, 0))
 
     def _flush_logs_to_console(self) -> None:
         with self.state.lock:
@@ -2689,12 +2923,12 @@ class HostDaemonDesktopGUI:
                 ip = str(item.get("ip", "?"))
                 dev = str(item.get("device", "Unknown"))
                 if is_ban:
-                    tk.Label(row, text=f"{dev} [{ip}] — {item.get('reason', '')}", font=(self.mono_font, 8), fg=p.ACCENT, bg=p.TERMINAL_BG).pack(side="left")
-                    self._make_cyber_button(row, "Unban", lambda ip_addr=ip: self.state.unban_device(ip_addr), fg=p.SUCCESS, bg=p.SUCCESS_SOFT, border=p.SUCCESS, pad_x=10, pad_y=3, font_size=8).pack(side="right")
+                    self._make_cyber_button(row, "Unban", lambda ip_addr=ip: self.state.unban_device(ip_addr), fg=p.SUCCESS, bg=p.SUCCESS_SOFT, border=p.SUCCESS, pad_x=10, pad_y=3, font_size=8).pack(side="right", padx=(8, 0))
+                    tk.Label(row, text=f"{dev} [{ip}] — {item.get('reason', '')}", font=(self.mono_font, 8), fg=p.ACCENT, bg=p.TERMINAL_BG, anchor="w", justify="left", wraplength=440).pack(side="left", fill="x", expand=True)
                 else:
                     cid = str(item.get("id", ""))
-                    tk.Label(row, text=f"{dev} [{ip}]", font=(self.mono_font, 9), fg=p.TEXT_PRIMARY, bg=p.TERMINAL_BG).pack(side="left")
-                    self._make_cyber_button(row, "Disconnect", lambda i=cid: self.state.disconnect_client(i), fg=p.WARNING, bg=p.WARNING_SOFT, border=p.WARNING, pad_x=10, pad_y=3, font_size=8).pack(side="right")
+                    self._make_cyber_button(row, "Disconnect", lambda i=cid: self.state.disconnect_client(i), fg=p.WARNING, bg=p.WARNING_SOFT, border=p.WARNING, pad_x=10, pad_y=3, font_size=8).pack(side="right", padx=(8, 0))
+                    tk.Label(row, text=f"{dev} [{ip}]", font=(self.mono_font, 9), fg=p.TEXT_PRIMARY, bg=p.TERMINAL_BG, anchor="w").pack(side="left", fill="x", expand=True)
 
     def _open_setup_wizard(self) -> None:
         if self._setup_win is not None and self._setup_win.winfo_exists():
@@ -2939,18 +3173,10 @@ class HostDaemonDesktopGUI:
 
     def _apply_theme_live(self) -> None:
         active_tab = self._active_tab
-        if self._gauge_anim_after_id is not None:
-            try:
-                self.root.after_cancel(self._gauge_anim_after_id)
-            except Exception:
-                pass
-            self._gauge_anim_after_id = None
-        if self._resize_after_id is not None:
-            try:
-                self.root.after_cancel(self._resize_after_id)
-            except Exception:
-                pass
-            self._resize_after_id = None
+        self._hide_tooltip()
+        self._cancel_button_flash_timers()
+        for attr in ("_gauge_anim_after_id", "_resize_after_id", "_scroll_sync_after_id"):
+            self._cancel_after_attr(attr)
 
         self._palette = get_liquid_palette(self.state.ui_theme_mode, self.state.ui_accent)
         CyberColors.set_palette(self._palette)
@@ -3031,6 +3257,15 @@ class HostDaemonDesktopGUI:
         self.root.clipboard_clear()
         self.root.clipboard_append(uri)
         self.state.add_log("INFO", f"Copied endpoint URI: {uri}")
+        self._flash_button_copied(getattr(self, "_btn_copy_uri", None))
+
+    def _copy_lan_endpoint(self) -> None:
+        snap = self.state.get_snapshot()
+        endpoint = f"{snap['localIp']}:{snap['port']}"
+        self.root.clipboard_clear()
+        self.root.clipboard_append(endpoint)
+        self.state.add_log("INFO", f"Copied LAN endpoint: {endpoint}")
+        self._flash_button_copied(getattr(self, "_btn_copy_ip", None))
 
     def _copy_pin(self) -> None:
         pin = str(self.state.pairing_pin or "").strip()
@@ -3039,12 +3274,14 @@ class HostDaemonDesktopGUI:
         self.root.clipboard_clear()
         self.root.clipboard_append(pin)
         self.state.add_log("SECURITY", "6-digit pairing PIN copied to local clipboard.")
+        self._flash_button_copied(getattr(self, "_btn_copy_pin", None))
 
     def _copy_pairing_uri(self) -> None:
         uri = self.state.get_pairing_uri()
         self.root.clipboard_clear()
         self.root.clipboard_append(uri)
         self.state.add_log("SECURITY", "One-tap pairing link (ainet://pair) copied to local clipboard.")
+        self._flash_button_copied(getattr(self, "_btn_copy_pair", None))
 
     def _toggle_token_visibility(self) -> None:
         self._token_visible = not self._token_visible
@@ -3055,18 +3292,34 @@ class HostDaemonDesktopGUI:
         self.root.clipboard_clear()
         self.root.clipboard_append(copied)
         self.state.add_log("SECURITY", "Master pairing token copied to local clipboard (auto-clears in 30s).")
+        self._flash_button_copied(getattr(self, "_btn_copy_token", None))
 
         def _auto_clear() -> None:
+            self._clip_clear_after_id = None
             try:
-                if self.root.clipboard_get() == copied:
+                if self.root.winfo_exists() and self.root.clipboard_get() == copied:
                     self.root.clipboard_clear()
             except Exception:
                 pass
 
+        self._cancel_after_attr("_clip_clear_after_id")
         try:
-            self.root.after(30000, _auto_clear)
+            self._clip_clear_after_id = self.root.after(30000, _auto_clear)
         except Exception:
-            pass
+            self._clip_clear_after_id = None
+
+    def _copy_console_logs(self) -> None:
+        with self.state.lock:
+            lines = [
+                f"[{e.get('ts', '--:--:--')}] [{e.get('level', 'SYSTEM')}] {e.get('msg', '')}"
+                for e in self.state.logs[-120:]
+            ]
+        text = "\n".join(lines)
+        if not text:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self._flash_button_copied(getattr(self, "_btn_copy_logs", None))
 
     def _rotate_token(self) -> None:
         if messagebox is not None:
@@ -3215,14 +3468,17 @@ class HostDaemonDesktopGUI:
     def _full_shutdown(self) -> None:
         with self.state.lock:
             self.state.is_running = False
-        for attr in ("_refresh_after_id", "_resize_after_id", "_gauge_anim_after_id"):
-            after_id = getattr(self, attr, None)
-            if after_id is not None:
-                setattr(self, attr, None)
-                try:
-                    self.root.after_cancel(after_id)
-                except Exception:
-                    pass
+        self._hide_tooltip()
+        self._cancel_button_flash_timers()
+        for attr in (
+            "_refresh_after_id",
+            "_resize_after_id",
+            "_gauge_anim_after_id",
+            "_scroll_sync_after_id",
+            "_startup_after_id",
+            "_clip_clear_after_id",
+        ):
+            self._cancel_after_attr(attr)
         if callable(self.on_stop_daemon):
             try:
                 self.on_stop_daemon()
