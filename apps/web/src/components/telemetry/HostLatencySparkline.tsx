@@ -430,7 +430,8 @@ const HostLatencySparklineComponent: React.FC<HostLatencySparklineProps> = ({
                 cy={lastPoint.y}
                 r="3.5"
                 fill={colors.stroke}
-                className="animate-ping origin-center"
+                style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+                className="animate-ping"
                 opacity="0.7"
               />
               <circle

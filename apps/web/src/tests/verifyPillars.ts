@@ -19,6 +19,7 @@ import {
   parseValidatedFrame,
 } from '../utils/binaryFramer';
 import { inspectCommandSecurity } from '../services/securityService';
+import { translations } from '../i18n/translations';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -318,6 +319,28 @@ console.log('================================================================\n'
   assert(wolHistoryStore.getEntries().length === 0, 'Pillar 21 (WoL History Clear)', 'Cleared WoL packet history cleanly');
   wolHistoryStore.seedTestEntries();
   assert(wolHistoryStore.getEntries().length >= 5, 'Pillar 21 (WoL History Restore)', 'Restored default WoL history entries');
+}
+
+// Pillar 22: Full i18n Locale Parity & Non-Empty Coverage (BG <-> EN)
+{
+  const bgMap = translations.bg as unknown as Record<string, string>;
+  const enMap = translations.en as unknown as Record<string, string>;
+  const bgKeys = Object.keys(bgMap).sort();
+  const enKeys = Object.keys(enMap).sort();
+  const missingInBg = enKeys.filter((k) => !Object.prototype.hasOwnProperty.call(bgMap, k));
+  const missingInEn = bgKeys.filter((k) => !Object.prototype.hasOwnProperty.call(enMap, k));
+  const emptyBg = bgKeys.filter((k) => !bgMap[k]?.trim());
+  const emptyEn = enKeys.filter((k) => !enMap[k]?.trim());
+
+  assert(
+    missingInBg.length === 0 &&
+      missingInEn.length === 0 &&
+      emptyBg.length === 0 &&
+      emptyEn.length === 0 &&
+      bgKeys.length === enKeys.length,
+    'Pillar 22 (i18n Locale Parity)',
+    `All ${enKeys.length} translation keys have complete, non-empty BG and EN coverage`
+  );
 }
 
 console.log('\n================================================================');

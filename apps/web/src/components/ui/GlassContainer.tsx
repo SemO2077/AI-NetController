@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 
 interface GlassContainerProps extends React.HTMLAttributes<HTMLDivElement> {
   children: React.ReactNode;
@@ -17,11 +17,30 @@ const GlassContainerComponent: React.FC<GlassContainerProps> = ({
   onMouseMove,
   ...props
 }) => {
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, []);
+
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      e.currentTarget.style.setProperty('--glint-x', `${e.clientX - rect.left}px`);
-      e.currentTarget.style.setProperty('--glint-y', `${e.clientY - rect.top}px`);
+      const el = e.currentTarget;
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+      if (rafRef.current === null) {
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          const rect = el.getBoundingClientRect();
+          el.style.setProperty('--glint-x', `${clientX - rect.left}px`);
+          el.style.setProperty('--glint-y', `${clientY - rect.top}px`);
+        });
+      }
       onMouseMove?.(e);
     },
     [onMouseMove]

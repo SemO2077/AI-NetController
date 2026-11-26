@@ -29,21 +29,28 @@ export interface Translations {
 
   // Filters
   filter_all: string;
+  filter_pinned: string;
   filter_online: string;
   filter_sleeping: string;
   filter_servers: string;
+  filter_quarantined: string;
+  filter_reset: string;
+  filter_showing_count: string;
 
   // Sorting
   sort_label: string;
   sort_name: string;
   sort_status: string;
   sort_latency: string;
+  sort_load: string;
   sort_name_asc: string;
   sort_name_desc: string;
   sort_status_online_first: string;
   sort_status_offline_first: string;
   sort_latency_fast_first: string;
   sort_latency_slow_first: string;
+  sort_load_high_first: string;
+  sort_load_low_first: string;
   sort_title_template: string;
 
   // Pull to refresh
@@ -72,6 +79,18 @@ export interface Translations {
   host_details_btn: string;
   host_hide_details_btn: string;
   host_copy_ip: string;
+  host_copy_mac: string;
+  host_copy_endpoint: string;
+  host_copied_ip: string;
+  host_copied_mac: string;
+  host_copied_endpoint: string;
+  host_copied_short: string;
+  host_pin: string;
+  host_unpin: string;
+  host_pinned_toast: string;
+  host_unpinned_toast: string;
+  host_wol_ready: string;
+  host_wol_no_mac: string;
   host_ip_label: string;
   host_mac_label: string;
   host_port_label: string;
@@ -268,21 +287,28 @@ export const translations: Record<Language, Translations> = {
 
     // Filters
     filter_all: 'Всички',
+    filter_pinned: 'Закачени',
     filter_online: 'Онлайн',
     filter_sleeping: 'Спящи',
     filter_servers: 'Сървъри',
+    filter_quarantined: 'Карантина',
+    filter_reset: 'Нулирай филтрите',
+    filter_showing_count: 'Показани {shown} от {total}',
 
     // Sorting
     sort_label: 'Сортиране:',
     sort_name: 'Име',
     sort_status: 'Статус',
     sort_latency: 'Латентност',
+    sort_load: 'Натоварване',
     sort_name_asc: 'А→Я',
     sort_name_desc: 'Я→А',
     sort_status_online_first: 'Онлайн',
     sort_status_offline_first: 'Спящи',
     sort_latency_fast_first: 'Бързи',
     sort_latency_slow_first: 'Бавни',
+    sort_load_high_first: 'Високо',
+    sort_load_low_first: 'Ниско',
     sort_title_template: 'Сортиране по {mode}: {badge}. Натиснете за обръщане на реда.',
 
     // Pull to refresh
@@ -311,6 +337,18 @@ export const translations: Record<Language, Translations> = {
     host_details_btn: 'Детайли',
     host_hide_details_btn: 'Скрий',
     host_copy_ip: 'Копирай IP адрес',
+    host_copy_mac: 'Копирай MAC адрес',
+    host_copy_endpoint: 'Копирай WebSocket адрес',
+    host_copied_ip: 'Копиран IP: {value}',
+    host_copied_mac: 'Копиран MAC: {value}',
+    host_copied_endpoint: 'Копиран адрес: {value}',
+    host_copied_short: 'Копирано',
+    host_pin: 'Закачи най-отгоре',
+    host_unpin: 'Откачи от любими',
+    host_pinned_toast: 'Закачен: {name}',
+    host_unpinned_toast: 'Откачен: {name}',
+    host_wol_ready: 'WoL готов',
+    host_wol_no_mac: 'Няма MAC',
     host_ip_label: 'IP АДРЕС',
     host_mac_label: 'MAC АДРЕС',
     host_port_label: 'AI NETCONTROLLER АГЕНТ ПОРТ',
@@ -505,21 +543,28 @@ export const translations: Record<Language, Translations> = {
 
     // Filters
     filter_all: 'All',
+    filter_pinned: 'Pinned',
     filter_online: 'Online',
     filter_sleeping: 'Sleeping',
     filter_servers: 'Servers',
+    filter_quarantined: 'Quarantine',
+    filter_reset: 'Reset filters',
+    filter_showing_count: 'Showing {shown} of {total}',
 
     // Sorting
     sort_label: 'Sort by:',
     sort_name: 'Name',
     sort_status: 'Status',
     sort_latency: 'Latency',
+    sort_load: 'Load',
     sort_name_asc: 'A→Z',
     sort_name_desc: 'Z→A',
     sort_status_online_first: 'Online',
     sort_status_offline_first: 'Sleeping',
     sort_latency_fast_first: 'Fastest',
     sort_latency_slow_first: 'Slowest',
+    sort_load_high_first: 'Highest',
+    sort_load_low_first: 'Lowest',
     sort_title_template: 'Sort by {mode}: {badge}. Click again to toggle order.',
 
     // Pull to refresh
@@ -548,6 +593,18 @@ export const translations: Record<Language, Translations> = {
     host_details_btn: 'Details',
     host_hide_details_btn: 'Hide',
     host_copy_ip: 'Copy IP address',
+    host_copy_mac: 'Copy MAC address',
+    host_copy_endpoint: 'Copy WebSocket endpoint',
+    host_copied_ip: 'Copied IP: {value}',
+    host_copied_mac: 'Copied MAC: {value}',
+    host_copied_endpoint: 'Copied endpoint: {value}',
+    host_copied_short: 'Copied',
+    host_pin: 'Pin to top',
+    host_unpin: 'Unpin favorite',
+    host_pinned_toast: 'Pinned: {name}',
+    host_unpinned_toast: 'Unpinned: {name}',
+    host_wol_ready: 'WoL Ready',
+    host_wol_no_mac: 'No MAC',
     host_ip_label: 'IP ADDRESS',
     host_mac_label: 'MAC ADDRESS',
     host_port_label: 'AI NETCONTROLLER AGENT PORT',

@@ -27,11 +27,11 @@
   --surface-border-subtle: rgba(99, 102, 241, 0.14);
   --surface-divider: rgba(99, 102, 241, 0.12);
 
-  /* High-Contrast Daylight Typography Ink */
-  --ink-primary: #141530;
-  --ink-secondary: #3f4468;
-  --ink-muted: #676c92;
-  --ink-subtle: #8388ad;
+  /* High-Contrast Daylight Typography Ink (WCAG AA+ over translucent glass) */
+  --ink-primary: #12142b;
+  --ink-secondary: #373c5e;
+  --ink-muted: #52577a;
+  --ink-subtle: #6b7094;
 
   /* Full Bright Daylight Terminal Tokens */
   --terminal-pane-bg: rgba(255, 255, 255, 0.68);
@@ -691,10 +691,49 @@
   line-height: 1.35;
 }
 
-/* Semantic Ink Utility Classes */
-.ink-primary { color: var(--ink-primary); }
-.ink-secondary { color: var(--ink-secondary); }
-.ink-muted { color: var(--ink-muted); }
+/* Semantic Ink Utilities (registered via @utility so hover:/group-hover: variants work in Tailwind v4) */
+@utility ink-primary {
+  color: var(--ink-primary);
+}
+@utility ink-secondary {
+  color: var(--ink-secondary);
+}
+@utility ink-muted {
+  color: var(--ink-muted);
+}
+
+/* Layout & Style Containment Helper (avoids clipping hover glows while isolating card layout) */
+.contain-paint-layout {
+  contain: layout style;
+}
+
+/* Crisp Accessible Keyboard Focus Ring (only shown for keyboard navigation) */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
+/* Pause ambient GPU background animations when tab is hidden to save idle battery/GPU */
+:root[data-page-hidden="true"] .fluid-blob-1,
+:root[data-page-hidden="true"] .fluid-blob-2,
+:root[data-page-hidden="true"] .fluid-blob-3,
+:root[data-page-hidden="true"] .fluid-vortex-layer,
+:root[data-page-hidden="true"] .aurora-ribbon-1,
+:root[data-page-hidden="true"] .aurora-ribbon-2,
+:root[data-page-hidden="true"] .aurora-ribbon-3,
+:root[data-page-hidden="true"] .cyber-core-pulse,
+:root[data-page-hidden="true"] .cyber-scan-beam,
+:root[data-page-hidden="true"] .beacon-pulse-emerald,
+:root[data-page-hidden="true"] .beacon-pulse-cyan,
+:root[data-page-hidden="true"] .beacon-pulse-amber,
+:root[data-page-hidden="true"] .iridescent-active-rim::before {
+  animation-play-state: paused !important;
+}
 
 /* ============================================================================
    ENERGETIC SHIFTING AURORA / LIQUID PLASMA BACKDROP ANIMATIONS (120Hz GPU)
@@ -924,14 +963,25 @@
 
 /* Curved-Lens Optical Refraction Enhancer for Hero Floating Pills (Chromium + Graceful Fallback) */
 .liquid-capsule-refract {
-  backdrop-filter: blur(26px) saturate(240%) brightness(var(--glass-brightness));
-  -webkit-backdrop-filter: blur(26px) saturate(240%) brightness(var(--glass-brightness));
+  backdrop-filter: blur(24px) saturate(225%) brightness(var(--glass-brightness));
+  -webkit-backdrop-filter: blur(24px) saturate(225%) brightness(var(--glass-brightness));
 }
 
 @supports (backdrop-filter: url(#liquid-glass-refraction)) {
-  .liquid-capsule-refract {
-    backdrop-filter: url(#liquid-glass-refraction) blur(20px) saturate(240%) brightness(var(--glass-brightness));
+  :root:not([data-glass="frosted"]) .liquid-capsule-refract {
+    backdrop-filter: url(#liquid-glass-refraction) blur(18px) saturate(225%) brightness(var(--glass-brightness));
   }
+}
+
+/* Suppress redundant nested compositor backdrop-filter readbacks inside already-blurred glass panels */
+.glass-liquid .liquid-control-pill,
+.glass-liquid-elevated .liquid-control-pill,
+.glass-liquid-modal .liquid-control-pill,
+.glass-liquid .glass-liquid-subtle,
+.glass-liquid-elevated .glass-liquid-subtle,
+.glass-liquid-modal .glass-liquid-subtle {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Tier 3 — Liquid Glass Modals & Spotlight Sheets */
@@ -1387,14 +1437,24 @@ button:disabled, [role="button"]:disabled {
 
 :root[data-theme="light"] .text-indigo-200:not(.preserve-white),
 :root[data-theme="light"] .text-indigo-300:not(.preserve-white),
+:root[data-theme="light"] .text-indigo-400:not(.preserve-white),
 :root[data-theme="light"] .text-violet-200:not(.preserve-white),
 :root[data-theme="light"] .text-violet-300:not(.preserve-white),
+:root[data-theme="light"] .text-violet-400:not(.preserve-white),
 :root[data-theme="light"] .text-purple-300:not(.preserve-white),
+:root[data-theme="light"] .text-purple-400:not(.preserve-white),
+:root[data-theme="light"] .text-fuchsia-300:not(.preserve-white),
+:root[data-theme="light"] .text-fuchsia-400:not(.preserve-white),
 :root:not([data-theme]) .text-indigo-200:not(.preserve-white),
 :root:not([data-theme]) .text-indigo-300:not(.preserve-white),
+:root:not([data-theme]) .text-indigo-400:not(.preserve-white),
 :root:not([data-theme]) .text-violet-200:not(.preserve-white),
 :root:not([data-theme]) .text-violet-300:not(.preserve-white),
-:root:not([data-theme]) .text-purple-300:not(.preserve-white) {
+:root:not([data-theme]) .text-violet-400:not(.preserve-white),
+:root:not([data-theme]) .text-purple-300:not(.preserve-white),
+:root:not([data-theme]) .text-purple-400:not(.preserve-white),
+:root:not([data-theme]) .text-fuchsia-300:not(.preserve-white),
+:root:not([data-theme]) .text-fuchsia-400:not(.preserve-white) {
   color: #6d28d9;
 }
 
@@ -1464,6 +1524,18 @@ button:disabled, [role="button"]:disabled {
 :root:not([data-theme]) .divide-white\/\[0\.06\] > :not(:last-child),
 :root:not([data-theme]) .divide-white\/\[0\.08\] > :not(:last-child) {
   border-color: rgba(99, 102, 241, 0.12);
+}
+
+/* Preserve luminous dark-surface ink & accent contrast inside always-dark video stages even in Light Mode */
+:root[data-theme="light"] .dark-video-stage,
+:root:not([data-theme]) .dark-video-stage {
+  --ink-primary: #f7f9ff;
+  --ink-secondary: #d8dff8;
+  --ink-muted: #a7b1d8;
+  --color-cyan-200: #a5f3fc;
+  --color-cyan-300: #67e8f9;
+  --color-cyan-400: #22d3ee;
+  --color-cyan-500: #06b6d4;
 }
 
 :root[data-theme="light"] .preserve-white,
@@ -1547,5 +1619,31 @@ button:disabled, [role="button"]:disabled {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .fluid-blob-1,
+  .fluid-blob-2,
+  .fluid-blob-3,
+  .fluid-vortex-layer,
+  .aurora-ribbon-1,
+  .aurora-ribbon-2,
+  .aurora-ribbon-3,
+  .cyber-core-pulse,
+  .cyber-scan-beam,
+  .beacon-pulse-emerald,
+  .beacon-pulse-cyan,
+  .beacon-pulse-amber,
+  .iridescent-active-rim::before {
+    animation: none !important;
+    will-change: auto !important;
+  }
+
+  .liquid-capsule-refract {
+    backdrop-filter: blur(20px) saturate(190%) brightness(var(--glass-brightness)) !important;
+    -webkit-backdrop-filter: blur(20px) saturate(190%) brightness(var(--glass-brightness)) !important;
+  }
+
+  .liquid-glint::after {
+    display: none !important;
   }
 }

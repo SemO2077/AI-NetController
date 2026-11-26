@@ -34,6 +34,8 @@ function loadInitialHosts(): HostDevice[] {
 export function useFleetState() {
   const [hosts, setHosts] = useState<HostDevice[]>(() => loadInitialHosts());
   const [selectedTarget, setSelectedTarget] = useState<string>(hosts[0]?.id || '');
+  const hostsRef = useRef<HostDevice[]>(hosts);
+  hostsRef.current = hosts;
 
   // Keep selected target in sync when hosts change
   useEffect(() => {
@@ -45,6 +47,8 @@ export function useFleetState() {
   }, [hosts, selectedTarget]);
   const [isScanning, setIsScanning] = useState(false);
   const [wolSchedules, setWolSchedules] = useState<WolSchedule[]>(() => loadWolSchedules());
+  const wolSchedulesRef = useRef<WolSchedule[]>(wolSchedules);
+  wolSchedulesRef.current = wolSchedules;
 
   // Hydrate WoL schedules from backend scheduler if running behind web control server
   useEffect(() => {
@@ -67,14 +71,41 @@ export function useFleetState() {
     };
   }, []);
 
-  // Automatically persist hosts state whenever changed
+  // Debounced hosts persistence avoids synchronous JSON serialization on every 1Hz telemetry tick
+  const persistDirtyRef = useRef(false);
   useEffect(() => {
-    try {
-      setPersistentItem(STORAGE_KEY, JSON.stringify(hosts));
-    } catch (e) {
-      console.error('Failed to persist hosts state:', e);
-    }
+    persistDirtyRef.current = true;
+    const timer = setTimeout(() => {
+      persistDirtyRef.current = false;
+      try {
+        setPersistentItem(STORAGE_KEY, JSON.stringify(hostsRef.current));
+      } catch (e) {
+        console.error('Failed to persist hosts state:', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
   }, [hosts]);
+
+  // Flush any pending debounced host persistence cleanly on page unload/hide
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const flushHosts = () => {
+      if (!persistDirtyRef.current) return;
+      persistDirtyRef.current = false;
+      try {
+        setPersistentItem(STORAGE_KEY, JSON.stringify(hostsRef.current));
+      } catch {
+        // ignore storage failures on unload
+      }
+    };
+    window.addEventListener('beforeunload', flushHosts);
+    window.addEventListener('pagehide', flushHosts);
+    return () => {
+      flushHosts();
+      window.removeEventListener('beforeunload', flushHosts);
+      window.removeEventListener('pagehide', flushHosts);
+    };
+  }, []);
 
   const updateHostTelemetry = useCallback((data: any) => {
     if (!data) return;
@@ -98,8 +129,9 @@ export function useFleetState() {
           ? data.diskUsage
           : undefined;
 
-    setHosts((prev) =>
-      prev.map((h) => {
+    setHosts((prev) => {
+      let matchedAny = false;
+      const next = prev.map((h) => {
         const matchesPort = !data.port || !h.port || Number(h.port) === Number(data.port);
         const matchesWsIp = Boolean(reportedIp && h.ip === reportedIp && matchesPort);
         const matchesLocalIp = Boolean(localIp && h.ip === localIp && matchesPort);
@@ -110,6 +142,7 @@ export function useFleetState() {
             (!reportedIp || h.ip === reportedIp || !localIp || h.ip === localIp)
         );
         if (matchesTarget || matchesWsIp || matchesLocalIp || matchesHostname) {
+          matchedAny = true;
           const newPing = typeof data.ping === 'number' && Number.isFinite(data.ping) ? data.ping : h.ping;
           const prevHistory = (h.latencyHistory || []).filter((p) => p.timestamp >= cutoff);
           const updatedHistory: LatencyDataPoint[] =
@@ -147,14 +180,23 @@ export function useFleetState() {
           };
         }
         return h;
-      })
-    );
+      });
+      return matchedAny ? next : prev;
+    });
   }, []);
 
   const markHostUnreachable = useCallback((targetId: string, reason: string) => {
-    setHosts((prev) =>
-      prev.map((h) => (h.id === targetId ? { ...h, isOnline: false } : h))
-    );
+    setHosts((prev) => {
+      let changed = false;
+      const next = prev.map((h) => {
+        if (h.id === targetId && h.isOnline) {
+          changed = true;
+          return { ...h, isOnline: false };
+        }
+        return h;
+      });
+      return changed ? next : prev;
+    });
     if (useUIStore.getState().isSystemStateAlerts) {
       logStore.addLog('SYSTEM_MDNS', targetId, 'error', `Хостът е недостъпен: ${reason}`);
     }
@@ -216,7 +258,7 @@ export function useFleetState() {
                   name: dh.name,
                   ip: dh.ip,
                   mac: dh.mac,
-                  os: dh.os || 'windows',
+                  os: dh.os === 'linux' ? 'linux' : 'windows',
                   tags: ['LAN', 'Discovered'],
                   isOnline: true,
                   ping: typeof dh.ping === 'number' ? dh.ping : undefined,
@@ -259,7 +301,7 @@ export function useFleetState() {
       customDeviceName?: string,
       skipConfirm: boolean = false
     ): Promise<boolean> => {
-      const matchedHost = hosts.find(
+      const matchedHost = hostsRef.current.find(
         (h) => h.id === deviceId || h.mac?.toUpperCase() === payload.mac?.toUpperCase()
       );
       const resolvedDeviceName =
@@ -394,14 +436,14 @@ export function useFleetState() {
 
       return dispatchSucceeded;
     },
-    [hosts]
+    []
   );
 
   const triggerSchedule = useCallback(
     (scheduleId: string) => {
-      const sched = wolSchedules.find((s) => s.id === scheduleId);
+      const sched = wolSchedulesRef.current.find((s) => s.id === scheduleId);
       if (!sched) return;
-      const targets = resolveScheduleTargets(sched, hosts);
+      const targets = resolveScheduleTargets(sched, hostsRef.current);
       targets.forEach((t) => {
         try {
           const p = generateMagicPacket(t.mac, sched.broadcastIp, sched.port);
@@ -422,7 +464,7 @@ export function useFleetState() {
         }
       });
     },
-    [hosts, sendWolPacket, wolSchedules]
+    [sendWolPacket]
   );
 
   const updateHostInstructions = useCallback((hostId: string, type: 'persistent' | 'session', instructions: string[]) => {
@@ -469,46 +511,49 @@ export function useFleetState() {
   const lastTriggeredScheduleRef = useRef<Map<string, string>>(new Map());
   const backendScheduleSyncOkRef = useRef<boolean>(false);
 
-  const updateSchedules = useCallback(
-    (s: WolSchedule[]) => {
-      setWolSchedules(s);
-      saveWolSchedules(s);
-      if (typeof window !== 'undefined' && typeof fetch === 'function') {
-        const enriched = s.map((sched) => {
-          const targets = resolveScheduleTargets(sched, hosts);
-          return {
-            ...sched,
-            targetMacs: targets.map((t) => t.mac).filter(Boolean),
-          };
-        });
-        fetch('/api/wol/schedules', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ schedules: enriched }),
+  const updateSchedules = useCallback((s: WolSchedule[]) => {
+    setWolSchedules(s);
+    saveWolSchedules(s);
+    if (typeof window !== 'undefined' && typeof fetch === 'function') {
+      const enriched = s.map((sched) => {
+        const targets = resolveScheduleTargets(sched, hostsRef.current);
+        return {
+          ...sched,
+          targetMacs: targets.map((t) => t.mac).filter(Boolean),
+        };
+      });
+      fetch('/api/wol/schedules', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedules: enriched }),
+      })
+        .then((res) => {
+          backendScheduleSyncOkRef.current = res.ok;
         })
-          .then((res) => {
-            backendScheduleSyncOkRef.current = res.ok;
-          })
-          .catch(() => {
-            backendScheduleSyncOkRef.current = false;
-          });
-      }
-    },
-    [hosts]
-  );
+        .catch(() => {
+          backendScheduleSyncOkRef.current = false;
+        });
+    }
+  }, []);
 
   useEffect(() => {
     const checkSchedules = () => {
       // Avoid duplicate firing when the Express backend scheduler owns execution
       if (backendScheduleSyncOkRef.current) return;
+      const activeSchedules = wolSchedulesRef.current;
+      if (activeSchedules.length === 0) return;
       const now = new Date();
       const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
       const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
       const dayToken = dayNames[now.getDay()];
       const dateKey = `${now.toDateString()}-${hhmm}`;
 
-      for (const sched of wolSchedules) {
+      if (lastTriggeredScheduleRef.current.size > 100) {
+        lastTriggeredScheduleRef.current.clear();
+      }
+
+      for (const sched of activeSchedules) {
         if (!sched.enabled) continue;
         if (sched.time !== hhmm) continue;
         const days = sched.days || [];
@@ -521,7 +566,7 @@ export function useFleetState() {
     };
     const timer = setInterval(checkSchedules, 20000);
     return () => clearInterval(timer);
-  }, [wolSchedules, triggerSchedule]);
+  }, [triggerSchedule]);
 
   const activeWolSchedulesCount = useMemo(
     () => wolSchedules.filter((s) => s.enabled).length,

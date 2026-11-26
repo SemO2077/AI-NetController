@@ -55,15 +55,18 @@ export class GlobalErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       const isBg = this.isBulgarian();
       return (
-        <div className="min-h-screen bg-[#050811] flex items-center justify-center p-4">
-          <div className="max-w-md w-full rounded-[2rem] bg-[#0c1424]/80 backdrop-blur-[36px] border border-white/10 p-6 text-center shadow-2xl">
-            <div className="w-14 h-14 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-400 flex items-center justify-center mx-auto mb-4">
+        <div
+          className="min-h-screen flex items-center justify-center p-4"
+          style={{ background: 'var(--canvas-gradient, #090b1d)' }}
+        >
+          <div className="max-w-md w-full rounded-[2rem] glass-liquid-modal p-6 text-center shadow-2xl">
+            <div className="w-14 h-14 rounded-2xl squircle-badge squircle-rose flex items-center justify-center mx-auto mb-4">
               <AlertOctagon className="w-7 h-7" />
             </div>
-            <h2 className="text-lg font-bold text-white tracking-tight">
+            <h2 className="text-lg font-display font-bold ink-primary tracking-tight">
               {isBg ? 'Възникна системна грешка в интерфейса' : 'A UI system error occurred'}
             </h2>
-            <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+            <p className="text-xs ink-muted mt-2 leading-relaxed break-words">
               {this.state.error?.message ||
                 (isBg
                   ? 'Неочакван срив в рендерирането на React компонента.'
@@ -72,7 +75,7 @@ export class GlobalErrorBoundary extends Component<Props, State> {
             <button
               type="button"
               onClick={this.handleRecover}
-              className="mt-6 px-6 py-2.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white font-semibold text-xs flex items-center justify-center space-x-2 mx-auto transition"
+              className="mt-6 px-6 py-2.5 rounded-full liquid-hero-btn font-semibold text-xs flex items-center justify-center gap-2 mx-auto transition"
             >
               <RotateCcw className="w-4 h-4" />
               <span>{isBg ? 'Възстанови сесията' : 'Recover Session'}</span>

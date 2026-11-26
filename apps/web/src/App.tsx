@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import { FloatingPillNav } from './components/layout/FloatingPillNav';
 import { FleetDashboard } from './components/fleet/FleetDashboard';
 import { CommandOmnibar } from './components/terminal/CommandOmnibar';
@@ -75,12 +75,47 @@ export default function App() {
     applyAppearanceToDocument({ themeMode, accentColor, fontFamily, glassIntensity, ambientMode });
   }, [themeMode, accentColor, fontFamily, glassIntensity, ambientMode]);
 
+  // Pause ambient GPU backdrop animations when the browser tab is backgrounded
+  useEffect(() => {
+    const syncVisibility = () => {
+      if (document.hidden) {
+        document.documentElement.setAttribute('data-page-hidden', 'true');
+      } else {
+        document.documentElement.removeAttribute('data-page-hidden');
+      }
+    };
+    syncVisibility();
+    document.addEventListener('visibilitychange', syncVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', syncVisibility);
+      document.documentElement.removeAttribute('data-page-hidden');
+    };
+  }, []);
+
+  // Allow Escape key to dismiss the LAN Session Sign-In modal
+  useEffect(() => {
+    if (!lanAuthRequired) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setLanAuthRequired(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [lanAuthRequired]);
+
   const fleet = useFleetState();
   const agent = useWorkerEngine({
     targetId: fleet.selectedTarget,
     onTelemetry: fleet.updateHostTelemetry,
     onHostUnreachable: fleet.markHostUnreachable,
   });
+
+  // Stable refs prevent 2.5s heartbeat ticks from invalidating callbacks passed to memoized views
+  const fleetRef = useRef(fleet);
+  fleetRef.current = fleet;
+  const agentRef = useRef(agent);
+  agentRef.current = agent;
 
   // Native Android Hardware Back Button & Gesture Navigation Handler
   useEffect(() => {
@@ -108,40 +143,39 @@ export default function App() {
     };
   }, [isOmnibarOpen, setOmnibarOpen, activeModal, closeModal, activeTab, setActiveTab]);
 
-  const syncAgentWithHost = useCallback(
-    (hostIdOrDev: string | any) => {
-      const targetHost =
-        typeof hostIdOrDev === 'string'
-          ? fleet.hosts.find((h) => h.id === hostIdOrDev)
-          : hostIdOrDev;
-      if (targetHost && targetHost.ip && targetHost.ip !== '0.0.0.0') {
-        const expectedWs = buildHostWsUri(targetHost.ip, targetHost.port || 8765);
-        if (agent.wsUrl !== expectedWs) {
-          agent.setWsUrl(expectedWs);
-          if (agent.isConnected || agent.isReconnecting) {
-            agent.connect(expectedWs);
-          }
+  const syncAgentWithHost = useCallback((hostIdOrDev: string | any) => {
+    const currentFleet = fleetRef.current;
+    const currentAgent = agentRef.current;
+    const targetHost =
+      typeof hostIdOrDev === 'string'
+        ? currentFleet.hosts.find((h) => h.id === hostIdOrDev)
+        : hostIdOrDev;
+    if (targetHost && targetHost.ip && targetHost.ip !== '0.0.0.0') {
+      const expectedWs = buildHostWsUri(targetHost.ip, targetHost.port || 8765);
+      if (currentAgent.wsUrl !== expectedWs) {
+        currentAgent.setWsUrl(expectedWs);
+        if (currentAgent.isConnected || currentAgent.isReconnecting) {
+          currentAgent.connect(expectedWs);
         }
       }
-    },
-    [fleet.hosts, agent]
-  );
+    }
+  }, []);
 
   const handleSelectHostTerminal = useCallback(
     (hostId: string) => {
-      fleet.setSelectedTarget(hostId);
+      fleetRef.current.setSelectedTarget(hostId);
       syncAgentWithHost(hostId);
       setActiveTab('terminal');
     },
-    [fleet, setActiveTab, syncAgentWithHost]
+    [setActiveTab, syncAgentWithHost]
   );
 
   const handleSelectHost = useCallback(
     (hostId: string) => {
-      fleet.setSelectedTarget(hostId);
+      fleetRef.current.setSelectedTarget(hostId);
       syncAgentWithHost(hostId);
     },
-    [fleet, syncAgentWithHost]
+    [syncAgentWithHost]
   );
 
   const handleInspectWol = useCallback(
@@ -151,17 +185,34 @@ export default function App() {
 
   const handleViewScreen = useCallback(
     (dev: any) => {
+      const currentAgent = agentRef.current;
       syncAgentWithHost(dev);
       if (dev?.ip && dev.ip !== '0.0.0.0') {
         const expectedWs = buildHostWsUri(dev.ip, dev.port || 8765);
-        if (!agent.isConnected && !agent.isConnecting && getStoredAuthToken(expectedWs)) {
-          agent.connect(expectedWs);
+        if (!currentAgent.isConnected && !currentAgent.isConnecting && getStoredAuthToken(expectedWs)) {
+          currentAgent.connect(expectedWs);
         }
       }
       openModal('screen', dev);
-      agent.requestScreenRefresh(dev.id, undefined, true);
+      currentAgent.requestScreenRefresh(dev.id, undefined, true);
     },
-    [openModal, agent, syncAgentWithHost]
+    [openModal, syncAgentWithHost]
+  );
+
+  const handleQuickSystemCommand = useCallback((cmd: string, targetOverride?: string) => {
+    agentRef.current.sendCommand({
+      target_id: targetOverride || fleetRef.current.selectedTarget,
+      command_type: 'system_command',
+      prompt: cmd,
+    });
+  }, []);
+
+  const handleAddHost = useCallback(
+    (newHost: any) => {
+      fleetRef.current.addCustomHost(newHost);
+      syncAgentWithHost(newHost);
+    },
+    [syncAgentWithHost]
   );
 
   const handleOpenMemory = useCallback(() => openModal('memory'), [openModal]);
@@ -169,7 +220,26 @@ export default function App() {
   const handleOpenWs = useCallback(() => openModal('wsConfig'), [openModal]);
   const handleOpenTerminal = useCallback(() => setActiveTab('terminal'), [setActiveTab]);
   const handleOpenUpdate = useCallback(() => openModal('update'), [openModal]);
+  const handleOpenDaemonGui = useCallback(() => openModal('pcDaemonGui'), [openModal]);
   const handleOpenWolScheduler = useCallback(() => openModal('wol', { tab: 'schedules' }), [openModal]);
+
+  const settingsExecutionLogs = useMemo(
+    () =>
+      agent.lastExecutionResult
+        ? [
+            {
+              id: agent.lastExecutionResult.command_id || 'latest-exec',
+              timestamp: agent.lastExecutionResult.timestamp,
+              target_id: agent.lastExecutionResult.target_id,
+              status: agent.lastExecutionResult.status,
+              output: agent.lastExecutionResult.output,
+              exitCode: agent.lastExecutionResult.exit_code,
+              execution_time_ms: agent.lastExecutionResult.execution_time_ms,
+            },
+          ]
+        : [],
+    [agent.lastExecutionResult]
+  );
 
   const [qolToast, setQolToast] = React.useState<string | null>(null);
   const triggerToast = useCallback((msg: string) => {
@@ -425,6 +495,7 @@ export default function App() {
   }, [setActiveTab, fleet, isOmnibarOpen, setOmnibarOpen, language, triggerToast]);
 
   return (
+    <MotionConfig reducedMotion="user">
     <GlobalErrorBoundary>
       <LiquidGlassDefs />
       <div
@@ -523,11 +594,13 @@ export default function App() {
         <AnimatePresence>
           {qolToast && (
             <motion.div
+              role="status"
+              aria-live="polite"
               initial={{ opacity: 0, y: -16, scale: 0.9 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -10, scale: 0.94, transition: { duration: 0.12 } }}
               transition={SPRING_POP}
-              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.6rem)] left-1/2 -translate-x-1/2 z-[96] px-4 py-2 rounded-full glass-liquid-elevated border border-cyan-400/45 ink-primary text-xs font-bold shadow-lg pointer-events-none whitespace-nowrap"
+              className="fixed top-[calc(env(safe-area-inset-top,8px)+0.6rem)] left-1/2 -translate-x-1/2 z-[96] max-w-[calc(100vw-2rem)] px-4 py-2 rounded-full glass-liquid-elevated border border-cyan-400/45 ink-primary text-xs font-bold shadow-lg pointer-events-none truncate"
             >
               {qolToast}
             </motion.div>
@@ -612,19 +685,14 @@ export default function App() {
                     onSelectHostForCommand={handleSelectHostTerminal}
                     onInspectWolPacket={handleInspectWol}
                     onWakeHost={fleet.sendWolPacket}
-                    onSendCommand={(cmd, targetOverride) =>
-                      agent.sendCommand({
-                        target_id: targetOverride || fleet.selectedTarget,
-                        command_type: 'system_command',
-                        prompt: cmd,
-                      })
-                    }
+                    onSendCommand={handleQuickSystemCommand}
                     onSendInputOpcode={agent.sendInputOpcode}
                     onViewScreen={handleViewScreen}
                     onRescan={fleet.scanMdns}
                     isScanning={fleet.isScanning}
                     isNetworkDisconnected={agent.isReconnecting}
                     onReconnectNetwork={agent.reconnectNow}
+                    onToast={triggerToast}
                   />
                 </motion.div>
               )}
@@ -667,21 +735,15 @@ export default function App() {
                     <GeminiChatbot
                       hosts={fleet.hosts}
                       selectedTarget={fleet.selectedTarget}
-                      onSendWol={(dev) => openModal('wol', { device: dev, tab: 'direct' })}
+                      onSendWol={handleInspectWol}
                       onSelectHost={handleSelectHostTerminal}
                       onTriggerRescan={fleet.scanMdns}
-                      onToggleLabMode={() => openModal('wsConfig')}
-                      onSendCommand={(cmd, targetOverride) =>
-                        agent.sendCommand({
-                          target_id: targetOverride || fleet.selectedTarget,
-                          command_type: 'system_command',
-                          prompt: cmd,
-                        })
-                      }
+                      onToggleLabMode={handleOpenWs}
+                      onSendCommand={handleQuickSystemCommand}
                       onViewScreen={handleViewScreen}
                       onSendInputOpcode={agent.sendInputOpcode}
                       onOpenUpdateCenter={handleOpenUpdate}
-                      onOpenDaemonGui={() => openModal('pcDaemonGui')}
+                      onOpenDaemonGui={handleOpenDaemonGui}
                       isRealWsConnected={agent.isConnected}
                       latency={agent.latency}
                       wolSchedules={fleet.wolSchedules}
@@ -712,21 +774,7 @@ export default function App() {
                       hostsCount={fleet.hosts.length}
                       hosts={fleet.hosts}
                       onSendWolPacket={fleet.sendWolPacket}
-                      executionLogs={
-                        agent.lastExecutionResult
-                          ? [
-                              {
-                                id: agent.lastExecutionResult.command_id || 'latest-exec',
-                                timestamp: agent.lastExecutionResult.timestamp,
-                                target_id: agent.lastExecutionResult.target_id,
-                                status: agent.lastExecutionResult.status,
-                                output: agent.lastExecutionResult.output,
-                                exitCode: agent.lastExecutionResult.exit_code,
-                                execution_time_ms: agent.lastExecutionResult.execution_time_ms,
-                              },
-                            ]
-                          : []
-                      }
+                      executionLogs={settingsExecutionLogs}
                     />
                   </React.Suspense>
                 </motion.div>
@@ -740,6 +788,7 @@ export default function App() {
           activeTab={activeTab}
           onChangeTab={setActiveTab}
           isConnected={agent.isConnected}
+          isReconnecting={agent.isReconnecting}
           latency={agent.latency}
           onOpenNetworkConfig={handleOpenWs}
         />
@@ -750,7 +799,7 @@ export default function App() {
           selectedTarget={fleet.selectedTarget}
           onSelectHost={handleSelectHostTerminal}
           onSendCommand={agent.sendCommand}
-          onSendWolDirect={(dev) => openModal('wol', { device: dev, tab: 'direct' })}
+          onSendWolDirect={handleInspectWol}
           onRescanMdns={fleet.scanMdns}
         />
 
@@ -852,10 +901,7 @@ export default function App() {
           onTriggerSchedule={fleet.triggerSchedule}
           onUpdateSchedules={fleet.updateSchedules}
           onUpdateHostInstructions={fleet.updateHostInstructions}
-          onAddHost={(newHost) => {
-            fleet.addCustomHost(newHost);
-            syncAgentWithHost(newHost);
-          }}
+          onAddHost={handleAddHost}
           onEditHost={fleet.editHost}
           onDeleteHost={fleet.deleteHost}
           isCapturingScreen={agent.isCapturingScreen}
@@ -884,5 +930,6 @@ export default function App() {
         />
       </div>
     </GlobalErrorBoundary>
+    </MotionConfig>
   );
 }

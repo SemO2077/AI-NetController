@@ -11,6 +11,7 @@ interface FloatingPillNavProps {
   activeTab: NavTab;
   onChangeTab: (tab: NavTab) => void;
   isConnected: boolean;
+  isReconnecting?: boolean;
   latency: number | null;
   onOpenNetworkConfig?: () => void;
 }
@@ -19,6 +20,7 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
   activeTab,
   onChangeTab,
   isConnected,
+  isReconnecting = false,
   latency,
   onOpenNetworkConfig,
 }) => {
@@ -81,6 +83,7 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
                   }
                 }}
                 className="relative flex flex-col items-center justify-center h-full rounded-full cursor-pointer min-w-0 px-1.5 group"
+                title={`${tab.label} (${tab.shortcut})`}
                 aria-label={tab.label}
                 aria-current={isActive ? 'page' : undefined}
               >
@@ -134,6 +137,8 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
             className={`relative z-10 shrink-0 h-[46px] px-3 sm:px-3.5 rounded-full border flex items-center gap-1.5 text-[11px] font-mono tabular-nums transition cursor-pointer ${
               isConnected
                 ? 'squircle-emerald preserve-white border-white/50'
+                : isReconnecting
+                ? 'squircle-amber preserve-white border-white/50'
                 : 'liquid-control-pill'
             }`}
             title={
@@ -141,18 +146,35 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
                 ? isBg
                   ? `Свързан (${latency !== null ? `${Math.round(latency)}ms` : 'на живо'})`
                   : `Connected (${latency !== null ? `${Math.round(latency)}ms` : 'live'})`
+                : isReconnecting
+                ? isBg
+                  ? 'Повторно свързване...'
+                  : 'Reconnecting to Host Agent...'
                 : isBg
                 ? 'Настрой адрес на хоста'
                 : 'Configure Host Endpoint'
             }
+            aria-label={
+              isConnected
+                ? isBg
+                  ? 'Свързан с хост агента'
+                  : 'Connected to host agent'
+                : isReconnecting
+                ? isBg
+                  ? 'Повторно свързване'
+                  : 'Reconnecting'
+                : isBg
+                ? 'Настрой мрежовата връзка'
+                : 'Configure host endpoint'
+            }
           >
             <span className="relative flex h-2 w-2 shrink-0">
-              {isConnected && (
+              {(isConnected || isReconnecting) && (
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-80" />
               )}
               <span
                 className={`relative inline-flex rounded-full h-2 w-2 ${
-                  isConnected ? 'bg-white' : 'bg-cyan-400'
+                  isConnected || isReconnecting ? 'bg-white' : 'bg-cyan-400'
                 }`}
               />
             </span>
@@ -161,6 +183,8 @@ const FloatingPillNavComponent: React.FC<FloatingPillNavProps> = ({
                 ? `${Math.round(latency)}ms`
                 : isConnected
                 ? t('nav_connected')
+                : isReconnecting
+                ? '...'
                 : 'LAN'}
             </span>
             <Radio className="w-3.5 h-3.5 xs:hidden" />
