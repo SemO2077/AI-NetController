@@ -14,6 +14,17 @@ const String kVaultSecretsBoxName = 'vault_secrets';
 /// Default remote cursor input mode for live desktop streaming.
 enum RemoteInputMode { touchscreen, trackpad }
 
+/// Fleet workstation list ordering preference (pinned hosts always float first).
+enum FleetSortMode {
+  defaultOrder(label: 'Default'),
+  onlineFirst(label: 'Online'),
+  nameAsc(label: 'Name'),
+  latencyAsc(label: 'Latency');
+
+  final String label;
+  const FleetSortMode({required this.label});
+}
+
 /// Logical grouping of user preferences for modified indicators & section resets.
 enum SettingsSection { streaming, touch, wol, security, network, appearance }
 
@@ -62,6 +73,7 @@ class AppPreferencesState {
   final String wolBroadcastOverride;
   final int wolBurstCount;
   final bool wolSendGratuitousArp;
+  final FleetSortMode fleetSortMode;
 
   const AppPreferencesState({
     this.themeMode = AppThemeMode.daylight,
@@ -92,6 +104,7 @@ class AppPreferencesState {
     this.wolBroadcastOverride = '',
     this.wolBurstCount = 1,
     this.wolSendGratuitousArp = true,
+    this.fleetSortMode = FleetSortMode.defaultOrder,
   });
 
   AppPreferencesState copyWith({
@@ -123,6 +136,7 @@ class AppPreferencesState {
     String? wolBroadcastOverride,
     int? wolBurstCount,
     bool? wolSendGratuitousArp,
+    FleetSortMode? fleetSortMode,
   }) {
     return AppPreferencesState(
       themeMode: themeMode ?? this.themeMode,
@@ -156,6 +170,7 @@ class AppPreferencesState {
       wolBroadcastOverride: wolBroadcastOverride ?? this.wolBroadcastOverride,
       wolBurstCount: wolBurstCount ?? this.wolBurstCount,
       wolSendGratuitousArp: wolSendGratuitousArp ?? this.wolSendGratuitousArp,
+      fleetSortMode: fleetSortMode ?? this.fleetSortMode,
     );
   }
 
@@ -242,7 +257,8 @@ class AppPreferencesState {
         other.wolPort == wolPort &&
         other.wolBroadcastOverride == wolBroadcastOverride &&
         other.wolBurstCount == wolBurstCount &&
-        other.wolSendGratuitousArp == wolSendGratuitousArp;
+        other.wolSendGratuitousArp == wolSendGratuitousArp &&
+        other.fleetSortMode == fleetSortMode;
   }
 
   @override
@@ -275,6 +291,7 @@ class AppPreferencesState {
     wolBroadcastOverride,
     wolBurstCount,
     wolSendGratuitousArp,
+    fleetSortMode,
   ]);
 }
 
@@ -289,6 +306,7 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
     'mac',
     'osName',
     'useTls',
+    'isPinned',
   };
 
   AppPreferencesNotifier({Box? boxOverride})
@@ -393,6 +411,12 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
       RemoteInputMode.values,
       baseState.defaultInputMode,
       defaults.defaultInputMode,
+    );
+    final fleetSortMode = readEnum(
+      'fleetSortMode',
+      FleetSortMode.values,
+      baseState.fleetSortMode,
+      defaults.fleetSortMode,
     );
 
     final fpsRaw = readInt('targetFps', baseState.targetFps, defaults.targetFps);
@@ -567,6 +591,7 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
         baseState.wolSendGratuitousArp,
         defaults.wolSendGratuitousArp,
       ),
+      fleetSortMode: fleetSortMode,
     );
   }
 
@@ -575,6 +600,12 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
     if (box != null) {
       await box.put(key, value);
     }
+  }
+
+  bool _isPersistedUnchanged(String key, bool valueMatches) {
+    if (!valueMatches) return false;
+    final box = _box;
+    return box == null || box.containsKey(key);
   }
 
   Map<String, Object?> _preferencesPayloadMap(
@@ -608,6 +639,7 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
       'wolBroadcastOverride': source.wolBroadcastOverride,
       'wolBurstCount': source.wolBurstCount,
       'wolSendGratuitousArp': source.wolSendGratuitousArp,
+      'fleetSortMode': source.fleetSortMode.name,
       if (includeRuntimeMeta) ...<String, Object?>{
         'hasCompletedOnboarding': source.hasCompletedOnboarding,
         'terminalHistory': source.terminalHistory,
@@ -621,6 +653,7 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
   bool isModified(SettingsSection section) => state.isModified(section);
 
   Future<void> setThemeMode(AppThemeMode mode) async {
+    if (_isPersistedUnchanged('themeMode', state.themeMode == mode)) return;
     state = state.copyWith(themeMode: mode);
     await _write('themeMode', mode.name);
   }
@@ -633,79 +666,148 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
   }
 
   Future<void> setAccent(CyberAccentPreset accent) async {
+    if (_isPersistedUnchanged('accent', state.accent == accent)) return;
     state = state.copyWith(accent: accent);
     await _write('accent', accent.name);
   }
 
   Future<void> setGlassIntensity(GlassIntensity intensity) async {
+    if (_isPersistedUnchanged(
+      'glassIntensity',
+      state.glassIntensity == intensity,
+    )) {
+      return;
+    }
     state = state.copyWith(glassIntensity: intensity);
     await _write('glassIntensity', intensity.name);
   }
 
   Future<void> setReducedMotion(bool enabled) async {
+    if (_isPersistedUnchanged('reducedMotion', state.reducedMotion == enabled)) {
+      return;
+    }
     state = state.copyWith(reducedMotion: enabled);
     await _write('reducedMotion', enabled);
   }
 
   Future<void> setTargetFps(int fps) async {
     final safeFps = kValidTargetFps.contains(fps) ? fps : 60;
+    if (_isPersistedUnchanged('targetFps', state.targetFps == safeFps)) return;
     state = state.copyWith(targetFps: safeFps);
     await _write('targetFps', safeFps);
   }
 
   Future<void> setCardSnapshotIntervalSec(int seconds) async {
     final safeSec = kValidCardSnapshotIntervals.contains(seconds) ? seconds : 3;
+    if (_isPersistedUnchanged(
+      'cardSnapshotIntervalSec',
+      state.cardSnapshotIntervalSec == safeSec,
+    )) {
+      return;
+    }
     state = state.copyWith(cardSnapshotIntervalSec: safeSec);
     await _write('cardSnapshotIntervalSec', safeSec);
   }
 
   Future<void> setBiometricLockEnabled(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'biometricLockEnabled',
+      state.biometricLockEnabled == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(biometricLockEnabled: enabled);
     await _write('biometricLockEnabled', enabled);
   }
 
   Future<void> setPreferTls(bool enabled) async {
+    if (_isPersistedUnchanged('preferTls', state.preferTls == enabled)) return;
     state = state.copyWith(preferTls: enabled);
     await _write('preferTls', enabled);
   }
 
   Future<void> setEnableE2eVault(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'enableE2eVault',
+      state.enableE2eVault == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(enableE2eVault: enabled);
     await _write('enableE2eVault', enabled);
   }
 
   Future<void> setHapticsEnabled(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'hapticsEnabled',
+      state.hapticsEnabled == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(hapticsEnabled: enabled);
     await _write('hapticsEnabled', enabled);
   }
 
   Future<void> setKeepScreenAwake(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'keepScreenAwake',
+      state.keepScreenAwake == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(keepScreenAwake: enabled);
     await _write('keepScreenAwake', enabled);
   }
 
   Future<void> setOnboardingCompleted(bool completed) async {
+    if (_isPersistedUnchanged(
+      'hasCompletedOnboarding',
+      state.hasCompletedOnboarding == completed,
+    )) {
+      return;
+    }
     state = state.copyWith(hasCompletedOnboarding: completed);
     await _write('hasCompletedOnboarding', completed);
   }
 
   Future<void> setCustomScanPort(int port) async {
     if (!NetworkValidators.isValidPort(port)) return;
+    if (_isPersistedUnchanged('customScanPort', state.customScanPort == port)) {
+      return;
+    }
     state = state.copyWith(customScanPort: port);
     await _write('customScanPort', port);
   }
 
   Future<void> setDefaultInputMode(RemoteInputMode mode) async {
+    if (_isPersistedUnchanged(
+      'defaultInputMode',
+      state.defaultInputMode == mode,
+    )) {
+      return;
+    }
     state = state.copyWith(defaultInputMode: mode);
     await _write('defaultInputMode', mode.name);
   }
 
   Future<void> setFullscreenAutoLandscape(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'fullscreenAutoLandscape',
+      state.fullscreenAutoLandscape == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(fullscreenAutoLandscape: enabled);
     await _write('fullscreenAutoLandscape', enabled);
   }
 
   Future<void> setTouchVisualFeedback(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'touchVisualFeedback',
+      state.touchVisualFeedback == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(touchVisualFeedback: enabled);
     await _write('touchVisualFeedback', enabled);
   }
@@ -715,6 +817,12 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
     final safePreset = kValidStreamQualityPresets.contains(normalized)
         ? normalized
         : 'auto';
+    if (_isPersistedUnchanged(
+      'streamQualityPreset',
+      state.streamQualityPreset == safePreset,
+    )) {
+      return;
+    }
     state = state.copyWith(streamQualityPreset: safePreset);
     await _write('streamQualityPreset', safePreset);
   }
@@ -722,17 +830,35 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
   Future<void> setTrackpadSensitivity(double sensitivity) async {
     final double safeSensitivity =
         sensitivity.isNaN ? 1.6 : sensitivity.clamp(0.6, 3.0).toDouble();
+    if (_isPersistedUnchanged(
+      'trackpadSensitivity',
+      (state.trackpadSensitivity - safeSensitivity).abs() < 1e-9,
+    )) {
+      return;
+    }
     state = state.copyWith(trackpadSensitivity: safeSensitivity);
     await _write('trackpadSensitivity', safeSensitivity);
   }
 
   Future<void> setInstantTapMode(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'instantTapMode',
+      state.instantTapMode == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(instantTapMode: enabled);
     await _write('instantTapMode', enabled);
   }
 
   Future<void> setLongPressDelayMs(int delayMs) async {
     final safeDelay = delayMs.clamp(250, 700);
+    if (_isPersistedUnchanged(
+      'longPressDelayMs',
+      state.longPressDelayMs == safeDelay,
+    )) {
+      return;
+    }
     state = state.copyWith(longPressDelayMs: safeDelay);
     await _write('longPressDelayMs', safeDelay);
   }
@@ -740,22 +866,38 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
   Future<void> setScrollSensitivity(double sensitivity) async {
     final double safeSensitivity =
         sensitivity.isNaN ? 1.6 : sensitivity.clamp(0.5, 3.0).toDouble();
+    if (_isPersistedUnchanged(
+      'scrollSensitivity',
+      (state.scrollSensitivity - safeSensitivity).abs() < 1e-9,
+    )) {
+      return;
+    }
     state = state.copyWith(scrollSensitivity: safeSensitivity);
     await _write('scrollSensitivity', safeSensitivity);
   }
 
   Future<void> setNaturalScroll(bool enabled) async {
+    if (_isPersistedUnchanged('naturalScroll', state.naturalScroll == enabled)) {
+      return;
+    }
     state = state.copyWith(naturalScroll: enabled);
     await _write('naturalScroll', enabled);
   }
 
   Future<void> setPinchZoomEnabled(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'pinchZoomEnabled',
+      state.pinchZoomEnabled == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(pinchZoomEnabled: enabled);
     await _write('pinchZoomEnabled', enabled);
   }
 
   Future<void> setWolPort(int port) async {
     if (!NetworkValidators.isValidPort(port)) return;
+    if (_isPersistedUnchanged('wolPort', state.wolPort == port)) return;
     state = state.copyWith(wolPort: port);
     await _write('wolPort', port);
   }
@@ -765,19 +907,42 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
     if (trimmed.isNotEmpty && !NetworkValidators.isValidIpv4(trimmed)) {
       return;
     }
+    if (_isPersistedUnchanged(
+      'wolBroadcastOverride',
+      state.wolBroadcastOverride == trimmed,
+    )) {
+      return;
+    }
     state = state.copyWith(wolBroadcastOverride: trimmed);
     await _write('wolBroadcastOverride', trimmed);
   }
 
   Future<void> setWolBurstCount(int count) async {
     final safeCount = count.clamp(1, 5);
+    if (_isPersistedUnchanged('wolBurstCount', state.wolBurstCount == safeCount)) {
+      return;
+    }
     state = state.copyWith(wolBurstCount: safeCount);
     await _write('wolBurstCount', safeCount);
   }
 
   Future<void> setWolSendGratuitousArp(bool enabled) async {
+    if (_isPersistedUnchanged(
+      'wolSendGratuitousArp',
+      state.wolSendGratuitousArp == enabled,
+    )) {
+      return;
+    }
     state = state.copyWith(wolSendGratuitousArp: enabled);
     await _write('wolSendGratuitousArp', enabled);
+  }
+
+  Future<void> setFleetSortMode(FleetSortMode mode) async {
+    if (_isPersistedUnchanged('fleetSortMode', state.fleetSortMode == mode)) {
+      return;
+    }
+    state = state.copyWith(fleetSortMode: mode);
+    await _write('fleetSortMode', mode.name);
   }
 
   Future<void> pushTerminalCommand(String cmd) async {
@@ -1063,6 +1228,7 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
       (raw['osName'] ?? '').toString(),
     );
     final useTls = raw['useTls'] == true;
+    final isPinned = raw['isPinned'] == true;
 
     final sanitized = <String, dynamic>{
       'id': id,
@@ -1072,6 +1238,7 @@ class AppPreferencesNotifier extends StateNotifier<AppPreferencesState> {
       'mac': mac,
       'osName': osName,
       'useTls': useTls,
+      if (isPinned) 'isPinned': true,
     };
     assert(
       sanitized.keys.every(_sanitizedHostKeys.contains),

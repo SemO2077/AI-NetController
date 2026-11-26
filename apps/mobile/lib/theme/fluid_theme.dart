@@ -217,12 +217,12 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
         primary: preset.daylightPrimary,
         secondary: preset.daylightSecondary,
         accent: const Color(0xFFE11D48),
-        success: const Color(0xFF059669),
-        warning: const Color(0xFFD97706),
-        sky: const Color(0xFF0284C7),
+        success: const Color(0xFF047857),
+        warning: const Color(0xFFB45309),
+        sky: const Color(0xFF0369A1),
         textPrimary: const Color(0xFF141530),
-        textSecondary: const Color(0xFF4B4F75),
-        textTertiary: const Color(0xFF7B80A6),
+        textSecondary: const Color(0xFF43476B),
+        textTertiary: const Color(0xFF5E648F),
         terminalBackground: const Color(0xCCFFFFFF),
         terminalText: const Color(0xFF161836),
       );
@@ -242,8 +242,8 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
       warning: const Color(0xFFFBBF24),
       sky: const Color(0xFF38BDF8),
       textPrimary: const Color(0xFFF7F9FF),
-      textSecondary: const Color(0xFFB5BFE0),
-      textTertiary: const Color(0xFF7C87B2),
+      textSecondary: const Color(0xFFBDC7E8),
+      textTertiary: const Color(0xFF8E99C4),
       terminalBackground: const Color(0xCC0D112B),
       terminalText: const Color(0xFFEEF2FF),
     );
@@ -258,14 +258,45 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
     return Theme.of(context).extension<CyberPalette>() ?? defaultPalette;
   }
 
+  /// High-contrast foreground colors computed from background luminance so
+  /// light & dark accent pills/buttons remain legible across all 6 presets.
+  Color get onPrimary =>
+      ThemeData.estimateBrightnessForColor(primary) == Brightness.dark
+          ? Colors.white
+          : const Color(0xFF090B1D);
+
+  Color get onSecondary =>
+      ThemeData.estimateBrightnessForColor(secondary) == Brightness.dark
+          ? Colors.white
+          : const Color(0xFF090B1D);
+
+  Color get onWarning =>
+      ThemeData.estimateBrightnessForColor(warning) == Brightness.dark
+          ? Colors.white
+          : const Color(0xFF090B1D);
+
+  Color get onAccent =>
+      ThemeData.estimateBrightnessForColor(accent) == Brightness.dark
+          ? Colors.white
+          : const Color(0xFF090B1D);
+
+  Color get onHeroGradient {
+    final mid = Color.lerp(primary, secondary, 0.5) ?? primary;
+    return ThemeData.estimateBrightnessForColor(mid) == Brightness.dark
+        ? Colors.white
+        : const Color(0xFF090B1D);
+  }
+
   Color get glassBorderActive => primary.withValues(alpha: isDaylight ? 0.56 : 0.62);
   Color get glassBorderIdle => isDaylight
-      ? Colors.white.withValues(alpha: 0.84)
-      : Colors.white.withValues(alpha: 0.17);
+      ? (glass == GlassIntensity.minimal
+          ? primary.withValues(alpha: 0.20)
+          : Colors.white.withValues(alpha: 0.86))
+      : Colors.white.withValues(alpha: 0.19);
 
   Color get dividerColor => isDaylight
-      ? primary.withValues(alpha: 0.12)
-      : Colors.white.withValues(alpha: 0.10);
+      ? primary.withValues(alpha: 0.16)
+      : Colors.white.withValues(alpha: 0.12);
 
   Color get cardSurfaceTop => isDaylight
       ? Colors.white.withValues(alpha: (glass.fillAlpha + 0.14).clamp(0.45, 0.94))
@@ -589,8 +620,8 @@ class CyberTheme {
             secondary: palette.secondary,
             surface: palette.surface,
             error: palette.accent,
-            onPrimary: Colors.white,
-            onSecondary: Colors.white,
+            onPrimary: palette.onPrimary,
+            onSecondary: palette.onSecondary,
             onSurface: palette.textPrimary,
           )
         : ColorScheme.dark(
@@ -598,8 +629,8 @@ class CyberTheme {
             secondary: palette.secondary,
             surface: palette.surface,
             error: palette.accent,
-            onPrimary: Colors.white,
-            onSecondary: Colors.white,
+            onPrimary: palette.onPrimary,
+            onSecondary: palette.onSecondary,
             onSurface: palette.textPrimary,
           );
 

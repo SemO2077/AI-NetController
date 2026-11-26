@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/fluid_theme.dart';
 
 // =====================================================================
@@ -9,6 +11,23 @@ class CyberNodeBadgePainter extends CustomPainter {
   final bool isOnline;
   final double pulsePhase;
   final Color activeColor;
+
+  final Paint _ringPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.5
+    ..isAntiAlias = true
+    ..strokeCap = StrokeCap.round;
+  final Paint _tickPaint = Paint()
+    ..strokeWidth = 1.2
+    ..strokeCap = StrokeCap.round;
+  final Paint _glowPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 2.8
+    ..isAntiAlias = true
+    ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.8);
+  final Paint _corePaint = Paint()
+    ..style = PaintingStyle.fill
+    ..isAntiAlias = true;
 
   CyberNodeBadgePainter({
     required this.isOnline,
@@ -20,23 +39,15 @@ class CyberNodeBadgePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (size.width / 2) - 2.0;
+    if (radius <= 0) return;
 
     final baseColor = isOnline ? activeColor : Colors.grey;
 
-    final ringPaint = Paint()
-      ..color = baseColor.withValues(alpha: isOnline ? 0.38 : 0.16)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5
-      ..isAntiAlias = true
-      ..strokeCap = StrokeCap.round;
-
-    canvas.drawCircle(center, radius, ringPaint);
+    _ringPaint.color = baseColor.withValues(alpha: isOnline ? 0.38 : 0.16);
+    canvas.drawCircle(center, radius, _ringPaint);
 
     // Subtle 4-quadrant tech ticks for 3D instrument depth
-    final tickPaint = Paint()
-      ..color = baseColor.withValues(alpha: isOnline ? 0.65 : 0.22)
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round;
+    _tickPaint.color = baseColor.withValues(alpha: isOnline ? 0.65 : 0.22);
     for (int i = 0; i < 4; i++) {
       final angle = (i * math.pi / 2) + (pulsePhase * 0.25);
       final inner = Offset(
@@ -47,41 +58,33 @@ class CyberNodeBadgePainter extends CustomPainter {
         center.dx + math.cos(angle) * (radius + 0.6),
         center.dy + math.sin(angle) * (radius + 0.6),
       );
-      canvas.drawLine(inner, outer, tickPaint);
+      canvas.drawLine(inner, outer, _tickPaint);
     }
 
     if (isOnline) {
-      final glowPaint = Paint()
-        ..color = activeColor
-            .withValues(alpha: 0.20 + (math.sin(pulsePhase) * 0.1).abs())
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.8
-        ..isAntiAlias = true
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.8);
-      canvas.drawCircle(center, radius - 1, glowPaint);
+      _glowPaint.color = activeColor
+          .withValues(alpha: 0.20 + (math.sin(pulsePhase) * 0.1).abs());
+      canvas.drawCircle(center, radius - 1, _glowPaint);
     }
 
     final coreRadius = radius * 0.46;
     final coreRect = Rect.fromCircle(center: center, radius: coreRadius);
-    final corePaint = Paint()
-      ..shader = RadialGradient(
-        center: const Alignment(-0.3, -0.3),
-        radius: 0.95,
-        colors: isOnline
-            ? [
-                Colors.white.withValues(alpha: 0.90),
-                activeColor,
-                Color.lerp(activeColor, Colors.black, 0.35)!,
-              ]
-            : [
-                Colors.grey.shade400,
-                Colors.grey.shade700,
-              ],
-      ).createShader(coreRect)
-      ..style = PaintingStyle.fill
-      ..isAntiAlias = true;
+    _corePaint.shader = RadialGradient(
+      center: const Alignment(-0.3, -0.3),
+      radius: 0.95,
+      colors: isOnline
+          ? [
+              Colors.white.withValues(alpha: 0.90),
+              activeColor,
+              Color.lerp(activeColor, Colors.black, 0.35)!,
+            ]
+          : [
+              Colors.grey.shade400,
+              Colors.grey.shade700,
+            ],
+    ).createShader(coreRect);
 
-    canvas.drawCircle(center, coreRadius, corePaint);
+    canvas.drawCircle(center, coreRadius, _corePaint);
   }
 
   @override
@@ -131,6 +134,9 @@ class ResponsiveDeviceCard extends StatefulWidget {
   final VoidCallback? onToggleMute;
   final VoidCallback? onLockPc;
   final VoidCallback? onOpenDiagnostics;
+  final bool isPinned;
+  final VoidCallback? onTogglePin;
+  final void Function(String label, String value)? onCopyText;
 
   const ResponsiveDeviceCard({
     super.key,
@@ -167,6 +173,9 @@ class ResponsiveDeviceCard extends StatefulWidget {
     this.onToggleMute,
     this.onLockPc,
     this.onOpenDiagnostics,
+    this.isPinned = false,
+    this.onTogglePin,
+    this.onCopyText,
   });
 
   @override
@@ -177,6 +186,8 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     with SingleTickerProviderStateMixin {
   late AnimationController _scaleController;
   late Animation<double> _scaleAnimation;
+  String? _copiedFieldId;
+  Timer? _copiedResetTimer;
 
   @override
   void initState() {
@@ -197,8 +208,25 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
 
   @override
   void dispose() {
+    _copiedResetTimer?.cancel();
     _scaleController.dispose();
     super.dispose();
+  }
+
+  void _handleCopy(String fieldId, String label, String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return;
+    unawaited(Clipboard.setData(ClipboardData(text: trimmed)).catchError((_) {}));
+    widget.onCopyText?.call(label, trimmed);
+    _copiedResetTimer?.cancel();
+    if (mounted) {
+      setState(() => _copiedFieldId = fieldId);
+      _copiedResetTimer = Timer(const Duration(milliseconds: 1400), () {
+        if (mounted && _copiedFieldId == fieldId) {
+          setState(() => _copiedFieldId = null);
+        }
+      });
+    }
   }
 
   void _onTapDown(TapDownDetails details) {
@@ -274,11 +302,14 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                     constraints.maxWidth.isFinite && constraints.maxWidth < 290;
                 final bool isTightHeight = constraints.maxHeight.isFinite &&
                     constraints.maxHeight < (isOnline ? 184.0 : 148.0);
-                final bool showFullOnlineCta =
-                    isOnline && openControlCallback != null && !isTightHeight;
+                final bool showFullOnlineCta = isOnline &&
+                    openControlCallback != null &&
+                    !isTightHeight &&
+                    !widget.isExpanded;
                 final bool showFullOfflineCta = !isOnline &&
                     widget.onWakeOnLan != null &&
-                    !isTightHeight;
+                    !isTightHeight &&
+                    !widget.isExpanded;
                 final double hPad = isCompactCard ? 11.0 : 15.0;
 
                 return AnimatedContainer(
@@ -296,8 +327,12 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                     border: Border.all(
                       color: isSelected
                           ? palette.primary.withValues(alpha: 0.85)
-                          : palette.glassBorderIdle,
-                      width: isSelected ? 1.8 : 1.15,
+                          : (widget.isPinned
+                              ? palette.warning.withValues(
+                                  alpha: palette.isDaylight ? 0.52 : 0.45,
+                                )
+                              : palette.glassBorderIdle),
+                      width: isSelected ? 1.8 : (widget.isPinned ? 1.35 : 1.15),
                     ),
                     boxShadow: palette.elevationShadows(
                       isSelected: isSelected,
@@ -368,16 +403,33 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text(
-                                  widget.name,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: context.fluidFont(14.0),
-                                    color: palette.textPrimary,
-                                    letterSpacing: -0.3,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                Row(
+                                  children: [
+                                    if (widget.isPinned &&
+                                        (isCompactCard ||
+                                            isTightHeight ||
+                                            widget.onTogglePin == null)) ...[
+                                      Icon(
+                                        Icons.star_rounded,
+                                        size: 13.5,
+                                        color: palette.warning,
+                                      ),
+                                      const SizedBox(width: 4),
+                                    ],
+                                    Expanded(
+                                      child: Text(
+                                        widget.name,
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: context.fluidFont(14.0),
+                                          color: palette.textPrimary,
+                                          letterSpacing: -0.3,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 3),
                                 _buildStatusPillsRow(
@@ -391,7 +443,8 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                           ),
                           if (isOnline &&
                               openControlCallback != null &&
-                              !showFullOnlineCta) ...[
+                              !showFullOnlineCta &&
+                              !widget.isExpanded) ...[
                             const SizedBox(width: 4),
                             _ActionOrbButton(
                               key: ValueKey(
@@ -404,7 +457,8 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                             ),
                           ] else if (!isOnline &&
                               widget.onWakeOnLan != null &&
-                              !showFullOfflineCta) ...[
+                              !showFullOfflineCta &&
+                              !widget.isExpanded) ...[
                             const SizedBox(width: 4),
                             _ActionOrbButton(
                               key: ValueKey('device-card-wol-cta-${widget.id}'),
@@ -414,11 +468,24 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               onPressed: widget.onWakeOnLan!,
                             ),
                           ],
+                          if (widget.onTogglePin != null &&
+                              !isCompactCard &&
+                              !isTightHeight) ...[
+                            const SizedBox(width: 4),
+                            _PinIconButton(
+                              key: ValueKey('device-card-pin-${widget.id}'),
+                              hostName: widget.name,
+                              isPinned: widget.isPinned,
+                              palette: palette,
+                              onPressed: widget.onTogglePin!,
+                            ),
+                          ],
                           const SizedBox(width: 4),
                           _ExpandChevronButton(
                             key: ValueKey('device-card-expand-${widget.id}'),
                             hostName: widget.name,
                             isExpanded: widget.isExpanded,
+                            isCompact: isCompactCard || isTightHeight,
                             duration: animDuration,
                             palette: palette,
                             onPressed: cardTapCallback,
@@ -429,17 +496,22 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               tooltip: 'Workstation options',
                               icon: Icon(
                                 Icons.more_vert_rounded,
-                                size: 18,
+                                size: 19,
                                 color: palette.textSecondary,
                               ),
                               style: IconButton.styleFrom(
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                minimumSize: const Size(26, 30),
+                                minimumSize: Size(
+                                  isCompactCard || isTightHeight ? 28 : 34,
+                                  isCompactCard || isTightHeight ? 30 : 34,
+                                ),
                                 padding: EdgeInsets.zero,
                               ),
-                              constraints: const BoxConstraints(
-                                minWidth: 26,
-                                minHeight: 30,
+                              constraints: BoxConstraints(
+                                minWidth:
+                                    isCompactCard || isTightHeight ? 28 : 34,
+                                minHeight:
+                                    isCompactCard || isTightHeight ? 30 : 34,
                               ),
                               padding: EdgeInsets.zero,
                               onPressed: widget.onMoreActions,
@@ -493,23 +565,35 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                               )
                             : const SizedBox.shrink(),
                       ),
-                      if (showFullOnlineCta) ...[
-                        SizedBox(height: isCompactCard ? 9.0 : 11.0),
-                        _buildPrimaryTouchCta(
-                          context: context,
-                          palette: palette,
-                          isCompact: isCompactCard,
-                          onPressed: openControlCallback,
-                        ),
-                      ] else if (showFullOfflineCta) ...[
-                        SizedBox(height: isCompactCard ? 8.0 : 10.0),
-                        _buildWakeQuickAction(
-                          context: context,
-                          palette: palette,
-                          isCompact: isCompactCard,
-                          onPressed: widget.onWakeOnLan!,
-                        ),
-                      ],
+                      AnimatedSize(
+                        duration: animDuration,
+                        curve: Curves.easeOutCubic,
+                        child: showFullOnlineCta
+                            ? Padding(
+                                padding: EdgeInsets.only(
+                                  top: isCompactCard ? 9.0 : 11.0,
+                                ),
+                                child: _buildPrimaryTouchCta(
+                                  context: context,
+                                  palette: palette,
+                                  isCompact: isCompactCard,
+                                  onPressed: openControlCallback,
+                                ),
+                              )
+                            : showFullOfflineCta
+                                ? Padding(
+                                    padding: EdgeInsets.only(
+                                      top: isCompactCard ? 8.0 : 10.0,
+                                    ),
+                                    child: _buildWakeQuickAction(
+                                      context: context,
+                                      palette: palette,
+                                      isCompact: isCompactCard,
+                                      onPressed: widget.onWakeOnLan!,
+                                    ),
+                                  )
+                                : const SizedBox.shrink(),
+                      ),
                       AnimatedSize(
                         duration: animDuration,
                         curve: Curves.easeOutCubic,
@@ -613,10 +697,9 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     final String diskText = '${widget.diskUsage}%';
     final String uptimeText = _formatUptime(widget.uptimeSec);
     final String trimmedMac = widget.mac.trim();
-    final String macText =
-        trimmedMac.isNotEmpty && trimmedMac != '00:00:00:00:00:00'
-            ? trimmedMac.toUpperCase()
-            : 'Not set';
+    final bool hasValidMac =
+        trimmedMac.isNotEmpty && trimmedMac != '00:00:00:00:00:00';
+    final String macText = hasValidMac ? trimmedMac.toUpperCase() : 'Not set';
     final String endpointText = '${widget.ip}:${widget.wsPort}';
     final String securityText = widget.useTls ? 'TLS+AEAD' : 'AEAD';
     final String controlText = widget.viewOnlyMode ? 'View-Only' : 'Interactive';
@@ -639,57 +722,70 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
             spacing: 6,
             runSpacing: 6,
             children: [
+              if (widget.isOnline || widget.osName.trim().isNotEmpty)
+                _TelemetryMetricChip(
+                  icon: Icons.desktop_windows_rounded,
+                  label: 'OS',
+                  value: osText,
+                  accent: palette.primary,
+                  maxWidth: maxWidth,
+                ),
+              if (widget.isOnline) ...[
+                _TelemetryMetricChip(
+                  icon: Icons.memory_rounded,
+                  label: 'CPU',
+                  value: cpuText,
+                  accent:
+                      widget.cpuUsage > 80 ? palette.accent : palette.primary,
+                  maxWidth: maxWidth,
+                ),
+                _TelemetryMetricChip(
+                  icon: Icons.developer_board_rounded,
+                  label: 'RAM',
+                  value: ramText,
+                  accent: widget.ramUsage > 85
+                      ? palette.warning
+                      : palette.secondary,
+                  maxWidth: maxWidth,
+                ),
+                _TelemetryMetricChip(
+                  icon: Icons.storage_rounded,
+                  label: 'Disk',
+                  value: diskText,
+                  accent: widget.diskUsage > 90 ? palette.warning : palette.sky,
+                  maxWidth: maxWidth,
+                ),
+                _TelemetryMetricChip(
+                  icon: Icons.schedule_rounded,
+                  label: 'Uptime',
+                  value: uptimeText,
+                  accent: palette.success,
+                  maxWidth: maxWidth,
+                ),
+              ],
               _TelemetryMetricChip(
-                icon: Icons.desktop_windows_rounded,
-                label: 'OS',
-                value: osText,
-                accent: palette.primary,
-                maxWidth: maxWidth,
-              ),
-              _TelemetryMetricChip(
-                icon: Icons.memory_rounded,
-                label: 'CPU',
-                value: cpuText,
-                accent: widget.cpuUsage > 80 ? palette.accent : palette.primary,
-                maxWidth: maxWidth,
-              ),
-              _TelemetryMetricChip(
-                icon: Icons.developer_board_rounded,
-                label: 'RAM',
-                value: ramText,
-                accent:
-                    widget.ramUsage > 85 ? palette.warning : palette.secondary,
-                maxWidth: maxWidth,
-              ),
-              _TelemetryMetricChip(
-                icon: Icons.storage_rounded,
-                label: 'Disk',
-                value: diskText,
-                accent: widget.diskUsage > 90 ? palette.warning : palette.sky,
-                maxWidth: maxWidth,
-              ),
-              _TelemetryMetricChip(
-                icon: Icons.schedule_rounded,
-                label: 'Uptime',
-                value: uptimeText,
-                accent: palette.success,
-                maxWidth: maxWidth,
-              ),
-              _TelemetryMetricChip(
+                key: ValueKey('device-card-copy-mac-${widget.id}'),
                 icon: Icons.router_rounded,
                 label: 'MAC',
                 value: macText,
                 accent: palette.textSecondary,
                 monospace: true,
                 maxWidth: maxWidth,
+                isCopied: _copiedFieldId == 'mac',
+                onTap: hasValidMac
+                    ? () => _handleCopy('mac', 'MAC', macText)
+                    : null,
               ),
               _TelemetryMetricChip(
+                key: ValueKey('device-card-copy-endpoint-${widget.id}'),
                 icon: Icons.lan_rounded,
                 label: 'Endpoint',
                 value: endpointText,
                 accent: palette.sky,
                 monospace: true,
                 maxWidth: maxWidth,
+                isCopied: _copiedFieldId == 'endpoint',
+                onTap: () => _handleCopy('endpoint', 'Endpoint', endpointText),
               ),
               _TelemetryMetricChip(
                 icon: widget.useTls
@@ -700,16 +796,17 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                 accent: widget.useTls ? palette.success : palette.primary,
                 maxWidth: maxWidth,
               ),
-              _TelemetryMetricChip(
-                icon: widget.viewOnlyMode
-                    ? Icons.visibility_rounded
-                    : Icons.touch_app_rounded,
-                label: 'Control',
-                value: controlText,
-                accent:
-                    widget.viewOnlyMode ? palette.warning : palette.success,
-                maxWidth: maxWidth,
-              ),
+              if (widget.isOnline)
+                _TelemetryMetricChip(
+                  icon: widget.viewOnlyMode
+                      ? Icons.visibility_rounded
+                      : Icons.touch_app_rounded,
+                  label: 'Control',
+                  value: controlText,
+                  accent:
+                      widget.viewOnlyMode ? palette.warning : palette.success,
+                  maxWidth: maxWidth,
+                ),
             ],
           );
         },
@@ -801,6 +898,19 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
         ),
       );
     }
+    if (widget.onTogglePin != null) {
+      pills.add(
+        _QuickActionPill(
+          key: ValueKey('device-card-quick-pin-${widget.id}'),
+          icon: widget.isPinned
+              ? Icons.star_rounded
+              : Icons.star_outline_rounded,
+          label: widget.isPinned ? 'Pinned' : 'Pin',
+          color: palette.warning,
+          onTap: widget.onTogglePin!,
+        ),
+      );
+    }
     if (widget.onMoreActions != null) {
       pills.add(
         _QuickActionPill(
@@ -825,120 +935,152 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     final bool isOnline = widget.isOnline;
     final Color statusColor = isOnline ? palette.success : palette.warning;
     final int? latency = widget.latencyMs;
+    final bool ipCopied = _copiedFieldId == 'ip';
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      physics: const NeverScrollableScrollPhysics(),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Live status dot pill
+    return Row(
+      children: [
+        // Live status dot pill
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+          decoration: BoxDecoration(
+            color: statusColor.withValues(
+              alpha: palette.isDaylight ? 0.13 : 0.18,
+            ),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: statusColor.withValues(alpha: 0.42)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 5.5,
+                height: 5.5,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: statusColor,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                statusLabel,
+                style: TextStyle(
+                  fontSize: context.fluidFont(9.5),
+                  fontWeight: FontWeight.w700,
+                  color: statusColor,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (isOnline && latency != null && latency > 0) ...[
+          const SizedBox(width: 5),
+          Builder(
+            builder: (_) {
+              final Color latColor = _latencyColor(palette, latency);
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: latColor.withValues(
+                    alpha: palette.isDaylight ? 0.10 : 0.16,
+                  ),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: latColor.withValues(alpha: 0.35)),
+                ),
+                child: Text(
+                  '${latency}ms',
+                  style: TextStyle(
+                    fontSize: context.fluidFont(9.5),
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'monospace',
+                    color: latColor,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+        if (widget.useTls && !isCompact) ...[
+          const SizedBox(width: 5),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
             decoration: BoxDecoration(
-              color: statusColor.withValues(
-                alpha: palette.isDaylight ? 0.13 : 0.18,
+              color: palette.primary.withValues(
+                alpha: palette.isDaylight ? 0.10 : 0.16,
               ),
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: statusColor.withValues(alpha: 0.42)),
+              border: Border.all(
+                color: palette.primary.withValues(alpha: 0.32),
+              ),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 5.5,
-                  height: 5.5,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: statusColor,
-                  ),
-                ),
-                const SizedBox(width: 4),
+                Icon(Icons.lock_rounded, size: 9, color: palette.primary),
+                const SizedBox(width: 2),
                 Text(
-                  statusLabel,
+                  'TLS',
                   style: TextStyle(
-                    fontSize: context.fluidFont(9.5),
+                    fontSize: context.fluidFont(8.5),
                     fontWeight: FontWeight.w700,
-                    color: statusColor,
-                    letterSpacing: 0.2,
+                    fontFamily: 'monospace',
+                    color: palette.primary,
                   ),
                 ),
               ],
             ),
           ),
-          if (isOnline && latency != null && latency > 0) ...[
-            const SizedBox(width: 5),
-            Builder(
-              builder: (_) {
-                final Color latColor = _latencyColor(palette, latency);
-                return Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                  decoration: BoxDecoration(
-                    color: latColor.withValues(
-                      alpha: palette.isDaylight ? 0.10 : 0.16,
-                    ),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: latColor.withValues(alpha: 0.35)),
-                  ),
-                  child: Text(
-                    '${latency}ms',
-                    style: TextStyle(
-                      fontSize: context.fluidFont(9.5),
-                      fontWeight: FontWeight.w700,
-                      fontFamily: 'monospace',
-                      color: latColor,
-                    ),
-                  ),
-                );
-              },
-            ),
-          ],
-          if (widget.useTls && !isCompact) ...[
-            const SizedBox(width: 5),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-              decoration: BoxDecoration(
-                color: palette.primary.withValues(
-                  alpha: palette.isDaylight ? 0.10 : 0.16,
-                ),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                  color: palette.primary.withValues(alpha: 0.32),
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.lock_rounded, size: 9, color: palette.primary),
-                  const SizedBox(width: 2),
-                  Text(
-                    'TLS',
-                    style: TextStyle(
-                      fontSize: context.fluidFont(8.5),
-                      fontWeight: FontWeight.w700,
-                      fontFamily: 'monospace',
-                      color: palette.primary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(width: 6),
-          Text(
-            widget.ip,
-            style: TextStyle(
-              fontSize: context.fluidFont(10.0),
-              fontWeight: FontWeight.w600,
-              color: palette.textSecondary,
-              fontFamily: 'monospace',
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
         ],
-      ),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Tooltip(
+            message: 'Tap to copy IP (${widget.ip})',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                key: ValueKey('device-card-copy-ip-${widget.id}'),
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => _handleCopy('ip', 'IP', widget.ip),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 3,
+                    vertical: 1,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          widget.ip,
+                          style: TextStyle(
+                            fontSize: context.fluidFont(10.0),
+                            fontWeight: FontWeight.w600,
+                            color: ipCopied
+                                ? palette.success
+                                : palette.textSecondary,
+                            fontFamily: 'monospace',
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (ipCopied) ...[
+                        const SizedBox(width: 3),
+                        Icon(
+                          Icons.check_rounded,
+                          size: 11,
+                          color: palette.success,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -948,6 +1090,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     required bool isCompact,
     required VoidCallback onPressed,
   }) {
+    final Color ctaFg = palette.onHeroGradient;
     return Semantics(
       button: true,
       label: 'Open Fullscreen Touchscreen Control for ${widget.name}',
@@ -962,7 +1105,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
             child: Ink(
               padding: EdgeInsets.symmetric(
                 horizontal: isCompact ? 10 : 12,
-                vertical: isCompact ? 7 : 8.5,
+                vertical: isCompact ? 7 : 9,
               ),
               decoration: BoxDecoration(
                 gradient: palette.heroGradient,
@@ -982,10 +1125,10 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.touch_app_rounded,
                     size: 16,
-                    color: Colors.white,
+                    color: ctaFg,
                   ),
                   const SizedBox(width: 7),
                   Flexible(
@@ -996,7 +1139,7 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: Colors.white,
+                        color: ctaFg,
                         fontWeight: FontWeight.w800,
                         fontSize: context.fluidFont(11.5),
                         letterSpacing: -0.1,
@@ -1004,10 +1147,10 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                     ),
                   ),
                   const SizedBox(width: 6),
-                  const Icon(
+                  Icon(
                     Icons.fullscreen_rounded,
                     size: 16,
-                    color: Colors.white,
+                    color: ctaFg,
                   ),
                 ],
               ),
@@ -1170,9 +1313,66 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
   }
 }
 
+class _PinIconButton extends StatelessWidget {
+  final String hostName;
+  final bool isPinned;
+  final CyberPalette palette;
+  final VoidCallback onPressed;
+
+  const _PinIconButton({
+    super.key,
+    required this.hostName,
+    required this.isPinned,
+    required this.palette,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color fgColor = isPinned ? palette.warning : palette.textSecondary;
+    final Color bgColor = isPinned
+        ? palette.warning.withValues(alpha: palette.isDaylight ? 0.13 : 0.18)
+        : (palette.isDaylight
+            ? Colors.black.withValues(alpha: 0.04)
+            : Colors.white.withValues(alpha: 0.06));
+    final Color borderColor = isPinned
+        ? palette.warning.withValues(alpha: 0.45)
+        : palette.dividerColor;
+
+    return Semantics(
+      button: true,
+      selected: isPinned,
+      label: isPinned ? 'Unpin $hostName' : 'Pin $hostName to top',
+      child: Tooltip(
+        message: isPinned ? 'Unpin workstation' : 'Pin workstation to top',
+        child: Material(
+          color: bgColor,
+          shape: CircleBorder(side: BorderSide(color: borderColor)),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            child: SizedBox(
+              width: 32,
+              height: 32,
+              child: Center(
+                child: Icon(
+                  isPinned ? Icons.star_rounded : Icons.star_outline_rounded,
+                  size: 17,
+                  color: fgColor,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ExpandChevronButton extends StatelessWidget {
   final String hostName;
   final bool isExpanded;
+  final bool isCompact;
   final Duration duration;
   final CyberPalette palette;
   final VoidCallback? onPressed;
@@ -1181,6 +1381,7 @@ class _ExpandChevronButton extends StatelessWidget {
     super.key,
     required this.hostName,
     required this.isExpanded,
+    this.isCompact = false,
     required this.duration,
     required this.palette,
     required this.onPressed,
@@ -1197,6 +1398,7 @@ class _ExpandChevronButton extends StatelessWidget {
     final Color borderColor = isExpanded
         ? palette.primary.withValues(alpha: 0.42)
         : palette.dividerColor;
+    final double dim = isCompact ? 30.0 : 34.0;
 
     return Semantics(
       button: true,
@@ -1215,8 +1417,8 @@ class _ExpandChevronButton extends StatelessWidget {
           child: InkWell(
             onTap: onPressed,
             child: SizedBox(
-              width: 28,
-              height: 28,
+              width: dim,
+              height: dim,
               child: Center(
                 child: AnimatedRotation(
                   turns: isExpanded ? 0.5 : 0.0,
@@ -1224,7 +1426,7 @@ class _ExpandChevronButton extends StatelessWidget {
                   curve: Curves.easeOutCubic,
                   child: Icon(
                     Icons.keyboard_arrow_down_rounded,
-                    size: 18,
+                    size: 19,
                     color: fgColor,
                   ),
                 ),
@@ -1244,70 +1446,104 @@ class _TelemetryMetricChip extends StatelessWidget {
   final Color accent;
   final bool monospace;
   final double maxWidth;
+  final VoidCallback? onTap;
+  final bool isCopied;
 
   const _TelemetryMetricChip({
+    super.key,
     required this.icon,
     required this.label,
     required this.value,
     required this.accent,
     this.monospace = false,
     required this.maxWidth,
+    this.onTap,
+    this.isCopied = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final CyberPalette palette = context.palette;
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxWidth),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(
-          color: palette.isDaylight
-              ? palette.primary.withValues(alpha: 0.05)
-              : Colors.white.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(11),
-          border: Border.all(
-            color: accent.withValues(alpha: 0.24),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 12.5, color: accent),
-            const SizedBox(width: 5),
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: context.fluidFont(8.5),
-                      fontWeight: FontWeight.w700,
-                      color: palette.textSecondary,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                  Text(
-                    value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: context.fluidFont(10.0),
-                      fontWeight: FontWeight.w700,
-                      fontFamily: monospace ? 'monospace' : null,
-                      color: palette.textPrimary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+    final Color effectiveAccent = isCopied ? palette.success : accent;
+    final Widget chipBody = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5.5),
+      decoration: BoxDecoration(
+        color: isCopied
+            ? palette.success.withValues(alpha: palette.isDaylight ? 0.12 : 0.18)
+            : (palette.isDaylight
+                ? palette.primary.withValues(alpha: 0.05)
+                : Colors.white.withValues(alpha: 0.05)),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(
+          color: effectiveAccent.withValues(alpha: isCopied ? 0.48 : 0.24),
         ),
       ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isCopied ? Icons.check_rounded : icon,
+            size: 12.5,
+            color: effectiveAccent,
+          ),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isCopied ? '$label · Copied' : label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: context.fluidFont(8.5),
+                    fontWeight: FontWeight.w700,
+                    color: isCopied ? palette.success : palette.textSecondary,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: context.fluidFont(10.0),
+                    fontWeight: FontWeight.w700,
+                    fontFamily: monospace ? 'monospace' : null,
+                    color: palette.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (onTap != null && !isCopied) ...[
+            const SizedBox(width: 4),
+            Icon(
+              Icons.copy_rounded,
+              size: 11,
+              color: palette.textTertiary,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: onTap == null
+          ? chipBody
+          : Tooltip(
+              message: 'Tap to copy $label',
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onTap,
+                  borderRadius: BorderRadius.circular(11),
+                  child: chipBody,
+                ),
+              ),
+            ),
     );
   }
 }
