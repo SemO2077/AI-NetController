@@ -230,6 +230,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   const [inputPrompt, setInputPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [confirmClearChat, setConfirmClearChat] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -238,6 +239,23 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipPersistRef = useRef(false);
   const handleSendMessageRef = useRef<(textOverride?: string) => Promise<void>>(async () => {});
+
+  // Smooth auto-grow composer textarea up to 120px
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    if (inputPrompt) {
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    }
+  }, [inputPrompt]);
+
+  // Reset inline Clear Chat confirmation when thread is cleared
+  useEffect(() => {
+    if (messages.length <= 1 && confirmClearChat) {
+      setConfirmClearChat(false);
+    }
+  }, [messages.length, confirmClearChat]);
 
   const scrollToBottom = useCallback((smooth = true) => {
     if (scrollRef.current) {

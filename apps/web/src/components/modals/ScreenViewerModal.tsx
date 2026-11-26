@@ -24,12 +24,16 @@ import {
   Globe,
   AppWindow,
   Play,
+  Pause,
   XCircle,
   CheckCircle2,
   Loader2,
   Hand,
   Clipboard,
-  KeyRound
+  KeyRound,
+  ChevronLeft,
+  ChevronRight,
+  EyeOff,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HostDevice } from '../../types';
@@ -94,12 +98,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const selectedModel = useUIStore((s) => s.selectedModel);
 
   const [quality, setQuality] = useState<'High' | 'Medium' | 'Low'>('High');
+  const [targetFps, setTargetFps] = useState<60 | 30 | 15>(60);
   const [aspectPreset, setAspectPreset] = useState<ScreenAspectPreset>('fit');
   const [zoomFactor, setZoomFactor] = useState<number>(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [localCapturing, setLocalCapturing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [stageSize, setStageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [streamResolution, setStreamResolution] = useState<{ width: number; height: number } | null>(null);
   const [streamTimedOut, setStreamTimedOut] = useState(false);
   const [hasFrame, setHasFrame] = useState(false);
   const [liveFps, setLiveFps] = useState(0);
@@ -107,6 +113,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const [isPairingInline, setIsPairingInline] = useState(false);
   const [inlinePairError, setInlinePairError] = useState<string | null>(null);
   const [pendingAiActions, setPendingAiActions] = useState<Array<Record<string, any>>>([]);
+  const [showGestureHint, setShowGestureHint] = useState(true);
+  const [pressEnterOnType, setPressEnterOnType] = useState(true);
 
   const isCapturing = localCapturing || externalCapturing;
   const isWsReady = isConnected !== false;
@@ -117,8 +125,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         (isWsReady && hasFrame))
   );
 
-  // Remote Input State
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number }>({ x: 50, y: 50 });
+  // Zero-re-render Remote Cursor DOM Refs
+  const cursorPosRef = useRef<{ x: number; y: number }>({ x: 50, y: 50 });
+  const cursorMarkerRef = useRef<HTMLDivElement>(null);
+  const cursorCoordsRef = useRef<HTMLSpanElement>(null);
+  const footerCursorRef = useRef<HTMLSpanElement>(null);
+  const quickActionsScrollRef = useRef<HTMLDivElement>(null);
+  const aiAbortRef = useRef<AbortController | null>(null);
 
   // AI & Keyboard Bar State
   const [inputMode, setInputMode] = useState<'ai' | 'keyboard'>('ai');
@@ -165,6 +178,24 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     pointerId: number;
   } | null>(null);
 
+  const updateCursorDom = useCallback((xPct: number, yPct: number) => {
+    cursorPosRef.current = { x: xPct, y: yPct };
+    const natW = canvasNatSizeRef.current.width || 1920;
+    const natH = canvasNatSizeRef.current.height || 1080;
+    const pxX = Math.round((xPct / 100) * natW);
+    const pxY = Math.round((yPct / 100) * natH);
+    if (cursorMarkerRef.current) {
+      cursorMarkerRef.current.style.left = `${xPct}%`;
+      cursorMarkerRef.current.style.top = `${yPct}%`;
+    }
+    if (cursorCoordsRef.current) {
+      cursorCoordsRef.current.textContent = `${pxX},${pxY}`;
+    }
+    if (footerCursorRef.current) {
+      footerCursorRef.current.textContent = `${pxX}×${pxY}`;
+    }
+  }, []);
+
   const scheduleTimer = useCallback((fn: () => void, ms: number) => {
     const id = window.setTimeout(() => {
       timersRef.current.delete(id);
@@ -179,6 +210,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     return () => {
       timers.forEach((id) => window.clearTimeout(id));
       timers.clear();
+      aiAbortRef.current?.abort();
     };
   }, []);
 
@@ -335,7 +367,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       const rawY = typeof act.y === 'number' ? act.y : natH / 2;
       const xPct = Math.max(1, Math.min(99, (rawX / natW) * 100));
       const yPct = Math.max(1, Math.min(99, (rawY / natH) * 100));
-      setCursorPos({ x: xPct, y: yPct });
+      updateCursorDom(xPct, yPct);
       if (type === 'mouse_click' || type === 'mouse_double_click') {
         const btn =
           type === 'mouse_double_click'
@@ -359,7 +391,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         );
       }
     },
-    [addRipple, isBg]
+    [addRipple, isBg, updateCursorDom]
   );
 
   // Send natural language prompt to the AI PC Copilot
@@ -372,10 +404,15 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     setIsAiBusy(true);
     setContextMenu(null);
 
+    aiAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         credentials: 'include',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: [{ role: 'user', content: promptText }],
@@ -428,6 +465,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       );
       triggerHapticFeedback('medium');
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       const msg = err instanceof Error ? err.message : 'Request failed';
       setAiStatusReply(
         isBg
@@ -436,7 +474,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       );
       showFeedback(isBg ? 'Грешка при връзка със сървъра' : 'Control server request failed');
     } finally {
-      setIsAiBusy(false);
+      if (aiAbortRef.current === controller) {
+        aiAbortRef.current = null;
+        setIsAiBusy(false);
+      }
     }
   };
 
@@ -451,16 +492,18 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       {
         type: 'type_text',
         text: textToSend,
-        pressEnter: true
+        pressEnter: pressEnterOnType
       },
-      isBg ? `Въведен текст: "${textToSend}"` : `Typed: "${textToSend}"`
+      isBg
+        ? `Въведен текст: "${textToSend}"${pressEnterOnType ? ' + Enter' : ''}`
+        : `Typed: "${textToSend}"${pressEnterOnType ? ' + Enter' : ''}`
     );
   };
 
   // Pointer Gesture Engine:
   // - Single Click / Tap (< 1000ms) => Left Click at (x, y)
   // - Press & Hold (>= 1000ms) => Right Click at (x, y) + Context Menu
-  const clearHoldTimer = () => {
+  const clearHoldTimer = useCallback(() => {
     if (holdTimerRef.current !== null) {
       window.clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
@@ -470,7 +513,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       holdIndicatorTimerRef.current = null;
     }
     setHoldIndicator(null);
-  };
+  }, []);
 
   const getNativeScreenDimensions = useCallback(() => {
     const nat = canvasNatSizeRef.current;
@@ -521,7 +564,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       const pxX = Math.round((xPct / 100) * natW);
       const pxY = Math.round((yPct / 100) * natH);
       triggerHapticFeedback('light');
-      setCursorPos({ x: xPct, y: yPct });
+      updateCursorDom(xPct, yPct);
       setContextMenu(null);
       addRipple(
         xPct,
@@ -539,7 +582,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         isBg ? `Ляв клик @ ${pxX}, ${pxY}` : `Left Click @ ${pxX}, ${pxY}`
       );
     },
-    [addRipple, dispatchPcAction, getNativeScreenDimensions, isBg]
+    [addRipple, dispatchPcAction, getNativeScreenDimensions, isBg, updateCursorDom]
   );
 
   const triggerRightClickAt = useCallback(
@@ -548,7 +591,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       const pxX = Math.round((xPct / 100) * natW);
       const pxY = Math.round((yPct / 100) * natH);
       triggerHapticFeedback('heavy');
-      setCursorPos({ x: xPct, y: yPct });
+      updateCursorDom(xPct, yPct);
       addRipple(
         xPct,
         yPct,
@@ -566,11 +609,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         isBg ? `Десен клик (задържане) @ ${pxX}, ${pxY}` : `Right Click (Hold) @ ${pxX}, ${pxY}`
       );
     },
-    [addRipple, dispatchPcAction, getNativeScreenDimensions, isBg]
+    [addRipple, dispatchPcAction, getNativeScreenDimensions, isBg, updateCursorDom]
   );
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!device || !isDeviceOnline) return;
+    if (!device || !isDeviceOnline || !isWsReady || isPaused) return;
     // Ignore clicks inside the floating context menu itself
     if ((e.target as HTMLElement).closest('[data-context-menu="true"]')) {
       return;
@@ -585,7 +628,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       return;
     }
 
-    setCursorPos({ x: xPct, y: yPct });
+    updateCursorDom(xPct, yPct);
+
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore synthetic events without active pointer capture support
+    }
 
     pointerDownInfoRef.current = {
       startX: e.clientX,
@@ -618,14 +667,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   };
 
   const handleViewportDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!device || !isDeviceOnline || !isWsReady) return;
+    if (!device || !isDeviceOnline || !isWsReady || isPaused) return;
     if ((e.target as HTMLElement).closest('[data-context-menu="true"]')) return;
     const { xPct, yPct } = computePointerPercentages(e.clientX, e.clientY);
     const { width: natW, height: natH } = getNativeScreenDimensions();
     const pxX = Math.round((xPct / 100) * natW);
     const pxY = Math.round((yPct / 100) * natH);
     triggerHapticFeedback('medium');
-    setCursorPos({ x: xPct, y: yPct });
+    updateCursorDom(xPct, yPct);
     addRipple(xPct, yPct, 'double', isBg ? `Двоен клик (${pxX}, ${pxY})` : `Double Click (${pxX}, ${pxY})`);
     dispatchPcAction(
       { type: 'mouse_click', button: 'double', x: pxX, y: pxY },
@@ -634,7 +683,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!device || !isDeviceOnline) return;
+    if (!device || !isDeviceOnline || !isWsReady || isPaused) return;
     const { xPct, yPct } = computePointerPercentages(e.clientX, e.clientY);
 
     if (pointerDownInfoRef.current) {
@@ -644,7 +693,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       // If user drags finger more than 14px, cancel long-press right click and move cursor smoothly
       if (dx > 14 || dy > 14) {
         clearHoldTimer();
-        setCursorPos({ x: xPct, y: yPct });
+        updateCursorDom(xPct, yPct);
         const now = Date.now();
         if (onSendInputOpcode && now - lastMouseMoveSentRef.current >= 55) {
           lastMouseMoveSentRef.current = now;
@@ -659,8 +708,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       return;
     }
 
-    if (e.pointerType === 'mouse') {
-      setCursorPos({ x: xPct, y: yPct });
+    if (e.pointerType === 'mouse' && hasFrame) {
+      updateCursorDom(xPct, yPct);
       const now = Date.now();
       if (onSendInputOpcode && now - lastMouseMoveSentRef.current >= 75) {
         lastMouseMoveSentRef.current = now;
@@ -680,6 +729,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     pointerDownInfoRef.current = null;
     clearHoldTimer();
 
+    try {
+      if (e.currentTarget.hasPointerCapture(info.pointerId)) {
+        e.currentTarget.releasePointerCapture(info.pointerId);
+      }
+    } catch {
+      // Ignore pointer capture release errors
+    }
+
     if (e.button === 2) return;
 
     const dx = Math.abs(e.clientX - info.startX);
@@ -691,26 +748,51 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     }
   };
 
-  const handlePointerCancel = () => {
+  const handlePointerCancel = (e?: React.PointerEvent<HTMLDivElement>) => {
+    const info = pointerDownInfoRef.current;
     pointerDownInfoRef.current = null;
     clearHoldTimer();
+    if (e && info) {
+      try {
+        if (e.currentTarget.hasPointerCapture(info.pointerId)) {
+          e.currentTarget.releasePointerCapture(info.pointerId);
+        }
+      } catch {
+        // Ignore
+      }
+    }
   };
 
-  // Track remote viewport stage size cleanly via ResizeObserver
+  // Track remote viewport stage size cleanly via rAF-throttled ResizeObserver
   useEffect(() => {
     if (!isOpen) return;
     const el = screenStageRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const updateSize = () => {
+    let resizeRaf: number | null = null;
+    const measure = () => {
+      resizeRaf = null;
       const rect = el.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        setStageSize({ width: Math.round(rect.width), height: Math.round(rect.height) });
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      if (width > 0 && height > 0) {
+        setStageSize((prev) =>
+          prev.width === width && prev.height === height ? prev : { width, height }
+        );
       }
     };
-    updateSize();
-    const observer = new ResizeObserver(updateSize);
+    const scheduleMeasure = () => {
+      if (resizeRaf !== null) return;
+      resizeRaf = window.requestAnimationFrame(measure);
+    };
+    measure();
+    const observer = new ResizeObserver(scheduleMeasure);
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeRaf !== null) {
+        window.cancelAnimationFrame(resizeRaf);
+      }
+    };
   }, [isOpen, isFullscreen]);
 
   // Zero-bufferbloat 60 FPS hardware canvas decoder (createImageBitmap + requestAnimationFrame)
@@ -719,6 +801,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       hasFrameRef.current = false;
       setHasFrame(false);
       setLiveFps(0);
+      setStreamResolution(null);
       setStreamTimedOut(false);
       return;
     }
@@ -746,6 +829,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
               canvas.width = bmp.width;
               canvas.height = bmp.height;
+              setStreamResolution((prev) =>
+                prev && prev.width === bmp.width && prev.height === bmp.height
+                  ? prev
+                  : { width: bmp.width, height: bmp.height }
+              );
             }
             canvasNatSizeRef.current = { width: bmp.width, height: bmp.height };
             const ctx = canvas.getContext('2d', { alpha: false });
@@ -818,6 +906,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 if (canvas.width !== nw || canvas.height !== nh) {
                   canvas.width = nw;
                   canvas.height = nh;
+                  setStreamResolution((prev) =>
+                    prev && prev.width === nw && prev.height === nh
+                      ? prev
+                      : { width: nw, height: nh }
+                  );
                 }
                 canvasNatSizeRef.current = { width: nw, height: nh };
                 const ctx = canvas.getContext('2d', { alpha: false });
@@ -891,12 +984,19 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     };
   }, [isOpen, device?.id, isDeviceOnline, isWsReady]);
 
-  // Reset transient AI proposals & context menu when switching target host
+  // Reset transient AI proposals, in-flight requests & context menu when switching target host or closing
   useEffect(() => {
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
+    setIsAiBusy(false);
     setPendingAiActions([]);
     setAiStatusReply(null);
     setContextMenu(null);
-  }, [device?.id]);
+    setInlinePairError(null);
+    setStreamResolution(null);
+    pointerDownInfoRef.current = null;
+    clearHoldTimer();
+  }, [device?.id, isOpen, clearHoldTimer]);
 
   // Trigger initial push-stream sync, display enumeration, and single 2.5s recovery keyframe request
   useEffect(() => {
@@ -922,15 +1022,15 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     };
   }, [isOpen, device?.id, isDeviceOnline, isWsReady]);
 
-  // Negotiate optimal viewport dimensions, quality & FPS with 180ms debounce
+  // Negotiate optimal viewport dimensions, quality & target FPS with 180ms debounce
   useEffect(() => {
     if (!isOpen || !device || !isDeviceOnline || !isWsReady) return;
     if (stageSize.width <= 0 || stageSize.height <= 0) return;
 
-    const qualityMap: Record<'High' | 'Medium' | 'Low', { maxW: number; maxH: number; q: number; fps: number }> = {
-      High: { maxW: 1920, maxH: 1080, q: 82, fps: 60 },
-      Medium: { maxW: 1280, maxH: 720, q: 65, fps: 45 },
-      Low: { maxW: 854, maxH: 480, q: 45, fps: 30 },
+    const qualityMap: Record<'High' | 'Medium' | 'Low', { maxW: number; maxH: number; q: number }> = {
+      High: { maxW: 1920, maxH: 1080, q: 82 },
+      Medium: { maxW: 1280, maxH: 720, q: 65 },
+      Low: { maxW: 854, maxH: 480, q: 45 },
     };
     const preset = qualityMap[quality];
     const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2);
@@ -942,12 +1042,12 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         width,
         height,
         quality: preset.q,
-        fps: preset.fps,
+        fps: targetFps,
       });
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [isOpen, device?.id, isDeviceOnline, isWsReady, stageSize.width, stageSize.height, quality]);
+  }, [isOpen, device?.id, isDeviceOnline, isWsReady, stageSize.width, stageSize.height, quality, targetFps]);
 
   // Avoid infinite spinner if WebSocket is connected but no JPEG frame arrives within 10s
   useEffect(() => {
@@ -959,14 +1059,20 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     return () => window.clearTimeout(timeoutId);
   }, [isOpen, device?.id, isDeviceOnline, isWsReady, hasFrame]);
 
-  // Clean up long-press hold timer on unmount
+  // Clean up pointer hold state on blur or unmount
   useEffect(() => {
-    return () => {
+    const handleWindowBlur = () => {
+      pointerDownInfoRef.current = null;
       clearHoldTimer();
     };
-  }, []);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('blur', handleWindowBlur);
+      clearHoldTimer();
+    };
+  }, [clearHoldTimer]);
 
-  // Keyboard shortcuts: Escape (exit fullscreen / close), F (fullscreen), I (focus input / Shift+I toggle mode)
+  // Keyboard shortcuts: Escape (context menu / fullscreen / close), F (fullscreen), P (pause), Q (quick actions), +/-/0 (zoom), I / Shift+I (input)
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -981,7 +1087,9 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
       if (e.key === 'Escape') {
         e.preventDefault();
-        if (isFullscreen) {
+        if (contextMenu) {
+          setContextMenu(null);
+        } else if (isFullscreen) {
           setIsFullscreen(false);
         } else {
           onClose();
@@ -994,6 +1102,34 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         setIsFullscreen((prev) => !prev);
+      } else if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        setIsPaused((prev) => {
+          const next = !prev;
+          if (!next) onRefreshFrameRef.current?.(undefined, true);
+          showFeedback(
+            next
+              ? isBg
+                ? 'Потокът е на пауза'
+                : 'Stream paused'
+              : isBg
+              ? 'Потокът е възобновен'
+              : 'Stream resumed'
+          );
+          return next;
+        });
+      } else if (e.key === 'q' || e.key === 'Q') {
+        e.preventDefault();
+        setShowQuickActions((prev) => !prev);
+      } else if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        setZoomFactor((prev) => (prev < 1.5 ? 1.5 : 2));
+      } else if (e.key === '-') {
+        e.preventDefault();
+        setZoomFactor((prev) => (prev > 1.5 ? 1.5 : 1));
+      } else if (e.key === '0') {
+        e.preventDefault();
+        setZoomFactor(1);
       } else if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
         if (e.shiftKey) {
@@ -1007,7 +1143,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isFullscreen, inputMode, onClose]);
+  }, [isOpen, isFullscreen, contextMenu, inputMode, isBg, onClose, showFeedback]);
 
   const handleCapture = () => {
     const canvas = canvasRef.current;
@@ -1025,8 +1161,9 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       document.body.appendChild(a);
       a.click();
       a.remove();
+      showFeedback(isBg ? `Снимката е запазена (${filename})` : `Screenshot saved (${filename})`);
     } catch {
-      // Ignore canvas export errors
+      showFeedback(isBg ? 'Грешка при запазване на снимката' : 'Failed to export screenshot');
     }
 
     scheduleTimer(() => {
@@ -1268,7 +1405,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           }`}
         >
           {/* Header */}
-          <div className="flex items-center justify-between gap-2 px-4 py-3 glass-liquid-subtle border-b border-[var(--glass-border)] shrink-0">
+          <div className="flex items-center justify-between gap-2 px-4 py-3 glass-liquid-subtle border-b border-[var(--surface-border-subtle)] shrink-0">
             <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
               <div className="relative w-9 h-9 squircle-badge squircle-sky shrink-0">
                 <Monitor className="w-4.5 h-4.5" />
@@ -1284,7 +1421,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   </span>
                 </h3>
                 <div className="flex items-center gap-2 text-[11px] ink-secondary min-w-0 truncate">
-                  <span className="flex items-center gap-1 text-[var(--accent-primary)] font-medium truncate">
+                  <span className="flex items-center gap-1 text-[var(--theme-accent)] font-medium truncate">
                     <Hand className="w-3 h-3" />
                     {isBg
                       ? '1 клик = Ляв бутон • Задръж 1 сек = Десен бутон'
@@ -1311,7 +1448,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
             <div className="flex items-center gap-1.5 sm:gap-2">
               {availableDisplays.length > 1 && onSendInputOpcode && isWsReady && (
-                <div className="hidden sm:flex items-center gap-1 liquid-terminal-entry border border-[var(--glass-border)] rounded-full p-0.5">
+                <div className="hidden sm:flex items-center gap-1 liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full p-0.5">
                   {availableDisplays.map((disp, idx) => {
                     const dispIdx = disp.index ?? disp.id ?? idx + 1;
                     const active = activeDisplayIndex === dispIdx;
@@ -1367,7 +1504,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   className="p-2 rounded-full liquid-control-pill ink-primary transition-colors cursor-pointer"
                   title={isBg ? 'Синхронизирай клипборд (Pull/Push)' : 'Sync Clipboard (Pull/Push)'}
                 >
-                  <Clipboard className="w-4 h-4 text-[var(--accent-primary)]" />
+                  <Clipboard className="w-4 h-4 text-[var(--theme-accent)]" />
                 </button>
               )}
 
@@ -1375,7 +1512,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 onClick={() => setShowQuickActions(!showQuickActions)}
                 className={`px-3 py-1.5 rounded-full border text-xs font-display font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
                   showQuickActions
-                    ? 'bg-[var(--accent-primary)]/16 text-[var(--accent-primary)] border-[var(--accent-primary)]/40'
+                    ? 'bg-[var(--theme-accent)]/16 text-[var(--theme-accent)] border-[var(--theme-accent)]/40'
                     : 'liquid-control-pill ink-secondary hover:ink-primary'
                 }`}
                 title={isBg ? 'Бързи контроли за ПК' : 'PC Quick Actions'}
@@ -1389,7 +1526,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
               <select
                 value={aspectPreset}
                 onChange={(e) => setAspectPreset(e.target.value as ScreenAspectPreset)}
-                className="liquid-control-pill ink-primary text-xs font-medium rounded-full px-2.5 py-1.5 outline-none focus:border-[var(--accent-primary)] cursor-pointer hidden md:block"
+                className="liquid-control-pill ink-primary text-xs font-medium rounded-full px-2.5 py-1.5 outline-none focus:border-[var(--theme-accent)] cursor-pointer hidden md:block"
                 title={isBg ? 'Съотношение на екрана' : 'Aspect Ratio Preset'}
               >
                 <option value="fit">{isBg ? 'Адаптивно (Fit)' : 'Auto Fit'}</option>
@@ -1400,7 +1537,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 <option value="fill">{isBg ? 'Запълване (Fill)' : 'Stretch Fill'}</option>
               </select>
 
-              <div className="hidden lg:flex items-center gap-0.5 liquid-terminal-entry border border-[var(--glass-border)] rounded-full p-0.5">
+              <div className="hidden lg:flex items-center gap-0.5 liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full p-0.5">
                 {[1, 1.5, 2].map((z) => (
                   <button
                     key={z}
@@ -1434,7 +1571,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     );
                   }
                 }}
-                className="liquid-control-pill ink-primary text-xs font-medium rounded-full px-2.5 py-1.5 outline-none focus:border-[var(--accent-primary)] hidden md:block cursor-pointer"
+                className="liquid-control-pill ink-primary text-xs font-medium rounded-full px-2.5 py-1.5 outline-none focus:border-[var(--theme-accent)] hidden md:block cursor-pointer"
               >
                 <option value="High">{isBg ? 'Високо (1080p)' : 'High (1080p)'}</option>
                 <option value="Medium">{isBg ? 'Средно (720p)' : 'Medium (720p)'}</option>
@@ -1907,11 +2044,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                className="glass-liquid-subtle border-t border-[var(--glass-border)] px-3.5 py-2.5 shrink-0 overflow-hidden"
+                className="glass-liquid-subtle border-t border-[var(--surface-border-subtle)] px-3.5 py-2.5 shrink-0 overflow-hidden"
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[11px] font-display font-bold ink-secondary flex items-center gap-1.5">
-                    <Cpu className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                    <Cpu className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                     {isBg ? 'Бързи действия (1 докосване)' : 'PC Quick Actions (1-Tap)'}
                   </span>
                   <div className="flex items-center gap-1.5">
@@ -1975,7 +2112,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
           {/* Built-in AI PC Command Text Box & Direct Keyboard Bar */}
           {isDeviceOnline && (
-            <div className="glass-liquid-subtle border-t border-[var(--glass-border)] px-3 sm:px-4 py-3 shrink-0 space-y-2">
+            <div className="glass-liquid-subtle border-t border-[var(--surface-border-subtle)] px-3 sm:px-4 py-3 shrink-0 space-y-2">
               {/* AI Status Reply Banner + Explicit 1-Tap Approval for Proposed Actions */}
               <AnimatePresence>
                 {(aiStatusReply || pendingAiActions.length > 0) && (
@@ -1983,10 +2120,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 6 }}
-                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-1.5 rounded-2xl bg-[var(--accent-primary)]/12 border border-[var(--accent-primary)]/30 text-xs ink-primary"
+                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-1.5 rounded-2xl bg-[var(--theme-accent)]/12 border border-[var(--theme-accent)]/30 text-xs ink-primary"
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <Sparkles className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
+                      <Sparkles className="w-3.5 h-3.5 text-[var(--theme-accent)] shrink-0" />
                       <span className="truncate">{aiStatusReply}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -2030,7 +2167,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
               {/* Mode Switcher + Input Form */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <div className="flex items-center liquid-terminal-entry p-1 rounded-full border border-[var(--glass-border)] shrink-0">
+                <div className="flex items-center liquid-terminal-entry p-1 rounded-full border border-[var(--surface-border-subtle)] shrink-0">
                   <button
                     type="button"
                     onClick={() => setInputMode('ai')}
@@ -2066,7 +2203,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     className="flex-1 flex items-center gap-2"
                   >
                     <div className="relative flex-1">
-                      <Sparkles className="w-4 h-4 text-[var(--accent-primary)] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <Sparkles className="w-4 h-4 text-[var(--theme-accent)] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
                         ref={aiInputRef}
                         type="text"
@@ -2077,7 +2214,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                             ? 'Кажете на ИИ какво да направи на ПК (напр. "Отвори Task Manager")...'
                             : 'Tell AI what to do on your PC (e.g. "Open Task Manager", "Show desktop")...'
                         }
-                        className="w-full liquid-terminal-entry border border-[var(--glass-border)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--accent-primary)]"
+                        className="w-full liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--theme-accent)]"
                       />
                     </div>
                     <button
@@ -2107,7 +2244,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                             ? 'Въведете текст директно към активния прозорец на компютъра...'
                             : 'Type text directly into the active window on the PC...'
                         }
-                        className="w-full liquid-terminal-entry border border-[var(--glass-border)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--accent-primary)]"
+                        className="w-full liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--theme-accent)]"
                       />
                     </div>
                     <button
@@ -2145,7 +2282,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           )}
 
           {/* Footer Status */}
-          <div className="px-4 py-2 glass-liquid-subtle border-t border-[var(--glass-border)] flex flex-wrap items-center justify-between gap-2 text-[11px] ink-muted shrink-0">
+          <div className="px-4 py-2 glass-liquid-subtle border-t border-[var(--surface-border-subtle)] flex flex-wrap items-center justify-between gap-2 text-[11px] ink-muted shrink-0">
             <div className="flex items-center gap-4">
               {(() => {
                 const isEncryptedWs = wsUrl
@@ -2167,18 +2304,18 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   : 'HMAC-Authenticated LAN Stream';
                 return (
                   <span className={`flex items-center gap-1.5 ${isVaultEncrypted ? 'text-emerald-600 dark:text-emerald-300 font-semibold' : ''}`}>
-                    <Shield className={`w-3.5 h-3.5 ${secureShield ? 'text-emerald-500' : 'text-[var(--accent-primary)]'}`} />
+                    <Shield className={`w-3.5 h-3.5 ${secureShield ? 'text-emerald-500' : 'text-[var(--theme-accent)]'}`} />
                     {badgeText}
                   </span>
                 );
               })()}
               <span className="hidden sm:flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                <Terminal className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                 {isBg ? 'Протокол: AI-NET/3.0' : 'Protocol: AI-NET/3.0'}
               </span>
             </div>
             <div className="flex items-center gap-3 font-mono">
-              <span className="text-[var(--accent-primary)] font-semibold">
+              <span className="text-[var(--theme-accent)] font-semibold">
                 {isBg ? 'Курсор' : 'Cursor'}:{' '}
                 {Math.round((cursorPos.x / 100) * (canvasNatSizeRef.current.width || 1920))}x
                 {Math.round((cursorPos.y / 100) * (canvasNatSizeRef.current.height || 1080))}

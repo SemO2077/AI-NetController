@@ -72,17 +72,27 @@ const DEFAULT_BUILTIN_MODEL_IDS = new Set([
 ]);
 
 const CyberToggle = React.memo(
-  ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
+  ({
+    checked,
+    onChange,
+    label = 'Toggle setting',
+  }: {
+    checked: boolean;
+    onChange: (v: boolean) => void;
+    label?: string;
+  }) => (
     <motion.button
       type="button"
+      role="switch"
+      aria-checked={checked}
       whileTap={{ scale: 0.9 }}
       transition={SPRING_POP}
       onClick={() => {
         triggerHapticFeedback('light');
         onChange(!checked);
       }}
-      className="p-1.5 min-w-[44px] min-h-[40px] flex items-center justify-center shrink-0 cursor-pointer"
-      aria-label="Toggle setting"
+      className="p-1.5 min-w-[44px] min-h-[40px] flex items-center justify-center shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--theme-accent)] rounded-full"
+      aria-label={label}
     >
       <div
         className={`w-12 h-7 rounded-full p-0.5 transition-all duration-200 flex items-center relative border ${

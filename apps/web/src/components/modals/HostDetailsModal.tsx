@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { HostDevice } from '../../types';
 import { BottomSheet } from '../ui/BottomSheet';
 import { HostLatencySparkline } from '../telemetry/HostLatencySparkline';
@@ -22,12 +22,14 @@ import {
   Trash2,
   ChevronDown,
   X,
+  ClipboardList,
 } from 'lucide-react';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { getBatteryConfig } from '../fleet/HostCard';
 import { useTranslation } from '../../i18n/useTranslation';
 import { copyToClipboard as copySafe } from '../../utils/clipboard';
 import { clampPercentage } from '../../utils/viewportScale';
+import { buildHostWsUri } from '../../services/securityService';
 
 interface HostDetailsModalProps {
   isOpen: boolean;
@@ -60,7 +62,7 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
 }) => {
   const { language } = useTranslation();
   const isBg = language === 'bg';
-  const [copiedField, setCopiedField] = useState<'ip' | 'mac' | null>(null);
+  const [copiedField, setCopiedField] = useState<'ip' | 'mac' | 'endpoint' | 'diag' | null>(null);
   const [showSecurityDrawer, setShowSecurityDrawer] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const copyTimerRef = useRef<number | null>(null);
@@ -96,7 +98,7 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
     DeviceIcon = Server;
   }
 
-  const copyToClipboard = (text: string, field: 'ip' | 'mac') => {
+  const copyToClipboard = (text: string, field: 'ip' | 'mac' | 'endpoint' | 'diag') => {
     triggerHapticFeedback('light');
     copySafe(text);
     setCopiedField(field);
@@ -107,6 +109,23 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
       copyTimerRef.current = null;
       setCopiedField(null);
     }, 1600);
+  };
+
+  const wsEndpoint = buildHostWsUri(host.ip, host.port || 8765);
+
+  const handleCopyDiagnostics = () => {
+    const lines = [
+      `Host: ${host.name} (${host.id})`,
+      `Status: ${host.isOnline ? 'Online' : 'Sleeping'}${typeof host.ping === 'number' && host.ping > 0 ? ` (${host.ping}ms RTT)` : ''}`,
+      `Endpoint: ${wsEndpoint}`,
+      `IPv4: ${host.ip}`,
+      `MAC: ${host.mac || 'N/A'}`,
+      `OS: ${host.os === 'windows' ? 'Windows' : 'Linux'}`,
+      `CPU: ${safeCpu}% | RAM: ${safeRam}% | Disk: ${host.diskUsage || 'N/A'}`,
+      `Last Seen: ${host.lastSeen || 'N/A'}`,
+      ...(host.tags?.length ? [`Tags: ${host.tags.join(', ')}`] : []),
+    ];
+    copyToClipboard(lines.join('\n'), 'diag');
   };
 
   return (
@@ -160,6 +179,24 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
           </div>
 
           <div className="flex items-center space-x-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleCopyDiagnostics}
+              className="px-2.5 py-1 rounded-full liquid-control-pill text-[11px] font-display font-semibold ink-secondary hover:ink-primary flex items-center gap-1.5 cursor-pointer focus-visible:ring-2 focus-visible:ring-[var(--theme-accent)]/60 focus-visible:outline-none"
+              title={isBg ? 'Копирай диагностична информация' : 'Copy full host diagnostics'}
+            >
+              {copiedField === 'diag' ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-400">{isBg ? 'Копирано' : 'Copied'}</span>
+                </>
+              ) : (
+                <>
+                  <ClipboardList className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="hidden sm:inline">{isBg ? 'Диагностика' : 'Copy Info'}</span>
+                </>
+              )}
+            </button>
             {host.isOnline ? (
               <span className="flex items-center space-x-1.5 text-emerald-400 text-xs font-mono font-semibold px-2.5 py-1 rounded-full bg-emerald-500/12 border border-emerald-500/30">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -301,7 +338,24 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
             <span className="ink-muted text-[10px] font-sans font-semibold uppercase block">
               {isBg ? 'Порт на агента' : 'Agent Port'}
             </span>
-            <span className="text-emerald-400 font-bold block">{host.port || 8765} (TCP/WS)</span>
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-emerald-400 font-bold truncate" title={wsEndpoint}>
+                {host.port || 8765} (TCP/WS)
+              </span>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(wsEndpoint, 'endpoint')}
+                className="ink-muted hover:ink-primary transition p-1 cursor-pointer shrink-0"
+                title={isBg ? `Копирай ${wsEndpoint}` : `Copy ${wsEndpoint}`}
+                aria-label={isBg ? 'Копирай WS адрес' : 'Copy WS endpoint'}
+              >
+                {copiedField === 'endpoint' ? (
+                  <Check className="w-3 h-3 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+              </button>
+            </div>
           </div>
 
           <div className="liquid-terminal-entry p-3 rounded-2xl space-y-1">
@@ -435,51 +489,61 @@ export const HostDetailsModal: React.FC<HostDetailsModalProps> = ({
             />
           </button>
 
-          {showSecurityDrawer && (
-            <div className="px-4 pb-4 pt-1 border-t border-white/[0.08] flex items-center gap-2 flex-wrap">
-              <motion.button
-                type="button"
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.94 }}
-                onClick={() => {
-                  triggerHapticFeedback('warning');
-                  onToggleQuarantine?.(host.id);
-                }}
-                className={`flex-1 min-h-[40px] py-2 px-4 rounded-full text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer ${
-                  isQuarantined
-                    ? 'squircle-rose preserve-white'
-                    : 'liquid-control-pill ink-primary'
-                }`}
+          <AnimatePresence initial={false}>
+            {showSecurityDrawer && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.16 }}
+                className="overflow-hidden"
               >
-                {isQuarantined ? <ShieldOff className="w-3.5 h-3.5" /> : <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />}
-                <span>
-                  {isQuarantined
-                    ? isBg
-                      ? 'Освободи от карантина'
-                      : 'Release from Quarantine'
-                    : isBg
-                    ? 'Постави под карантина'
-                    : 'Quarantine Host'}
-                </span>
-              </motion.button>
+                <div className="px-4 pb-4 pt-3 border-t border-white/[0.08] flex items-center gap-2 flex-wrap">
+                  <motion.button
+                    type="button"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.94 }}
+                    onClick={() => {
+                      triggerHapticFeedback('warning');
+                      onToggleQuarantine?.(host.id);
+                    }}
+                    className={`flex-1 min-h-[40px] py-2 px-4 rounded-full text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer ${
+                      isQuarantined
+                        ? 'squircle-rose preserve-white'
+                        : 'liquid-control-pill ink-primary'
+                    }`}
+                  >
+                    {isQuarantined ? <ShieldOff className="w-3.5 h-3.5" /> : <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />}
+                    <span>
+                      {isQuarantined
+                        ? isBg
+                          ? 'Освободи от карантина'
+                          : 'Release from Quarantine'
+                        : isBg
+                        ? 'Постави под карантина'
+                        : 'Quarantine Host'}
+                    </span>
+                  </motion.button>
 
-              {isCircuitTripped && (
-                <motion.button
-                  type="button"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.94 }}
-                  onClick={() => {
-                    triggerHapticFeedback('light');
-                    onResetCircuit?.(host.id);
-                  }}
-                  className="min-h-[40px] py-2 px-4 rounded-full text-xs font-bold squircle-amber preserve-white flex items-center space-x-1.5 cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>{isBg ? 'Нулирай прекъсвач' : 'Reset Circuit'}</span>
-                </motion.button>
-              )}
-            </div>
-          )}
+                  {isCircuitTripped && (
+                    <motion.button
+                      type="button"
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.94 }}
+                      onClick={() => {
+                        triggerHapticFeedback('light');
+                        onResetCircuit?.(host.id);
+                      }}
+                      className="min-h-[40px] py-2 px-4 rounded-full text-xs font-bold squircle-amber preserve-white flex items-center space-x-1.5 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>{isBg ? 'Нулирай прекъсвач' : 'Reset Circuit'}</span>
+                    </motion.button>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Host Management: Edit & Inline 2-Step Remove Confirmation */}

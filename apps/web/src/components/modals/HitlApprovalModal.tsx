@@ -88,7 +88,12 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && event && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center select-none">
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-label={language === 'bg' ? 'Потвърждение на команда' : 'Command Elevation Approval'}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center select-none sm:p-4"
+        >
           {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -105,16 +110,16 @@ export const HitlApprovalModal: React.FC<HitlApprovalModalProps> = ({
             dragConstraints={{ top: 0 }}
             dragElastic={0.2}
             onDragEnd={handleDragEnd}
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
+            initial={{ y: '100%', opacity: 0.6 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
             transition={{
               type: 'spring',
               stiffness: 400,
               damping: 35,
               mass: 0.8,
             }}
-            className="relative z-10 w-full max-w-xl rounded-t-[2.5rem] glass-liquid-modal border-t-2 border-t-rose-500/70 flex flex-col overflow-hidden transform-gpu will-change-transform max-h-[90vh]"
+            className="relative z-10 w-full max-w-xl rounded-t-[2.5rem] sm:rounded-[2.25rem] glass-liquid-modal border-t-2 border-t-rose-500/70 flex flex-col overflow-hidden transform-gpu will-change-transform max-h-[92dvh]"
           >
             {/* Tactile Drag Handle */}
             <div className="pt-3 pb-1 cursor-grab active:cursor-grabbing w-full flex justify-center">
