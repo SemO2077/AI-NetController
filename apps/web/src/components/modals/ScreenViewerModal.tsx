@@ -1887,13 +1887,21 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
                 {/* Simulated Remote Cursor Indicator */}
                 <div
-                  style={{ left: `${cursorPos.x}%`, top: `${cursorPos.y}%` }}
+                  ref={cursorMarkerRef}
+                  style={{
+                    left: `${cursorPosRef.current.x}%`,
+                    top: `${cursorPosRef.current.y}%`,
+                    display: hasFrame ? undefined : 'none',
+                  }}
                   className="absolute w-5 h-5 -ml-2.5 -mt-2.5 pointer-events-none transition-all duration-100 z-20"
                 >
                   <div className="w-full h-full rounded-full border-2 border-cyan-400 bg-cyan-400/30 shadow-[0_0_12px_rgba(34,211,238,0.9)]" />
-                  <span className="absolute left-6 top-0 px-2 py-0.5 rounded bg-black/85 border border-cyan-400/30 text-[10.5px] font-mono font-semibold text-cyan-300 whitespace-nowrap shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
-                    {Math.round((cursorPos.x / 100) * (canvasNatSizeRef.current.width || 1920))},
-                    {Math.round((cursorPos.y / 100) * (canvasNatSizeRef.current.height || 1080))}
+                  <span
+                    ref={cursorCoordsRef}
+                    className="absolute left-6 top-0 px-2 py-0.5 rounded bg-black/85 border border-cyan-400/30 text-[10.5px] font-mono font-semibold text-cyan-300 whitespace-nowrap shadow-[0_2px_8px_rgba(0,0,0,0.6)]"
+                  >
+                    {Math.round((cursorPosRef.current.x / 100) * (canvasNatSizeRef.current.width || 1920))},
+                    {Math.round((cursorPosRef.current.y / 100) * (canvasNatSizeRef.current.height || 1080))}
                   </span>
                 </div>
 
@@ -2317,8 +2325,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             <div className="flex items-center gap-3 font-mono">
               <span className="text-[var(--theme-accent)] font-semibold">
                 {isBg ? 'Курсор' : 'Cursor'}:{' '}
-                {Math.round((cursorPos.x / 100) * (canvasNatSizeRef.current.width || 1920))}x
-                {Math.round((cursorPos.y / 100) * (canvasNatSizeRef.current.height || 1080))}
+                <span ref={footerCursorRef}>
+                  {Math.round((cursorPosRef.current.x / 100) * (canvasNatSizeRef.current.width || 1920))}×
+                  {Math.round((cursorPosRef.current.y / 100) * (canvasNatSizeRef.current.height || 1080))}
+                </span>
               </span>
               <span>{device.ip}:{device.port || 8765}</span>
             </div>
