@@ -53,6 +53,23 @@ class TouchFeedbackController extends ChangeNotifier {
   Offset? _longPressPosition;
   DateTime? _longPressStartedAt;
   Duration _longPressDuration = const Duration(milliseconds: 450);
+  bool _disposed = false;
+
+  void _safeNotify() {
+    if (!_disposed) {
+      notifyListeners();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _ripples.clear();
+    _cursorPosition = null;
+    _longPressPosition = null;
+    _longPressStartedAt = null;
+    super.dispose();
+  }
 
   /// Number of currently animating ripples (for diagnostics & unit tests).
   int get activeRippleCount => _ripples.length;
@@ -76,7 +93,7 @@ class TouchFeedbackController extends ChangeNotifier {
     Offset position, {
     TouchRippleStyle style = TouchRippleStyle.tap,
   }) {
-    if (!position.dx.isFinite || !position.dy.isFinite) return;
+    if (_disposed || !position.dx.isFinite || !position.dy.isFinite) return;
     final Duration dur = switch (style) {
       TouchRippleStyle.doubleTap => const Duration(milliseconds: 480),
       TouchRippleStyle.rightClick => const Duration(milliseconds: 420),
@@ -95,25 +112,25 @@ class TouchFeedbackController extends ChangeNotifier {
         duration: dur,
       ),
     );
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Updates the live cursor reticle / target halo beneath the user's finger.
   void updateCursor(Offset position, {bool isDragging = false}) {
-    if (!position.dx.isFinite || !position.dy.isFinite) return;
+    if (_disposed || !position.dx.isFinite || !position.dy.isFinite) return;
     _cursorPosition = position;
     _isDragging = isDragging;
     _cursorUpdatedAt = DateTime.now();
     _cursorClearedAt = null;
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Smoothly fades out the cursor halo when the finger lifts.
   void clearCursor() {
-    if (_cursorPosition == null) return;
+    if (_disposed || _cursorPosition == null) return;
     _isDragging = false;
     _cursorClearedAt ??= DateTime.now();
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Starts the long-press radial right-click charge ring at [position].
@@ -121,24 +138,28 @@ class TouchFeedbackController extends ChangeNotifier {
     Offset position, {
     Duration duration = const Duration(milliseconds: 450),
   }) {
-    if (!position.dx.isFinite || !position.dy.isFinite) return;
+    if (_disposed || !position.dx.isFinite || !position.dy.isFinite) return;
     _longPressPosition = position;
     _longPressStartedAt = DateTime.now();
     _longPressDuration = duration;
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Cancels any active long-press radial ring.
   void cancelLongPress() {
-    if (_longPressPosition == null && _longPressStartedAt == null) return;
+    if (_disposed ||
+        (_longPressPosition == null && _longPressStartedAt == null)) {
+      return;
+    }
     _longPressPosition = null;
     _longPressStartedAt = null;
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Completes a long-press right-click: dismisses the charge ring and fires
   /// an accented right-click ripple.
   void completeLongPress(Offset position) {
+    if (_disposed) return;
     _longPressPosition = null;
     _longPressStartedAt = null;
     triggerRipple(position, style: TouchRippleStyle.rightClick);
@@ -146,7 +167,7 @@ class TouchFeedbackController extends ChangeNotifier {
 
   /// Immediately clears all active feedback visuals (e.g. on disconnect or toggle off).
   void clearAll() {
-    if (!hasActiveVisuals) return;
+    if (_disposed || !hasActiveVisuals) return;
     _ripples.clear();
     _cursorPosition = null;
     _isDragging = false;
@@ -154,7 +175,7 @@ class TouchFeedbackController extends ChangeNotifier {
     _cursorClearedAt = null;
     _longPressPosition = null;
     _longPressStartedAt = null;
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Prunes expired visuals at [now]. Returns `true` if any visuals remain active.
@@ -257,7 +278,13 @@ class _TouchFeedbackOverlayState extends State<TouchFeedbackOverlay>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final bool prevReduced = _reducedMotion;
     _reducedMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (prevReduced && !_reducedMotion) {
+      // Prune any stale visuals recorded while reduced motion suppressed ticking.
+      _frameNow = DateTime.now();
+      widget.controller._pruneAt(_frameNow);
+    }
     _syncTicker();
   }
 
@@ -267,6 +294,10 @@ class _TouchFeedbackOverlayState extends State<TouchFeedbackOverlay>
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_onControllerChanged);
       widget.controller.addListener(_onControllerChanged);
+    }
+    if (!oldWidget.enabled && widget.enabled) {
+      _frameNow = DateTime.now();
+      widget.controller._pruneAt(_frameNow);
     }
     if (!widget.enabled && _ticker.isActive) {
       _ticker.stop();
@@ -504,8 +535,16 @@ class _TouchFeedbackPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
     canvas.drawCircle(ripple.position, radius, fillPaint);
 
+    // Subtle dark outer contrast halo keeps ripples sharp on bright white PC windows
+    final Paint contrastHalo = Paint()
+      ..color = Colors.black.withValues(alpha: 0.28 * alpha)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.2 * (1.0 - 0.35 * t)
+      ..isAntiAlias = true;
+    canvas.drawCircle(ripple.position, radius, contrastHalo);
+
     final Paint strokePaint = Paint()
-      ..color = baseColor.withValues(alpha: 0.88 * alpha)
+      ..color = baseColor.withValues(alpha: 0.92 * alpha)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.2 * (1.0 - 0.35 * t)
       ..isAntiAlias = true;

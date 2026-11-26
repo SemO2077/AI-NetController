@@ -197,7 +197,11 @@ class TouchCoordinateMapper {
     if (transform == null || transform.isIdentity()) {
       return childPt;
     }
-    return MatrixUtils.transformPoint(transform, childPt);
+    final Offset transformed = MatrixUtils.transformPoint(transform, childPt);
+    if (!transformed.dx.isFinite || !transformed.dy.isFinite) {
+      return childPt;
+    }
+    return transformed;
   }
 
   /// Extracts the uniform zoom scale from a 2D zoom/pan [Matrix4].
@@ -234,16 +238,31 @@ class TouchCoordinateMapper {
     }
 
     final double currScale = extractScale(currentTransform);
-    final double currTx = currentTransform.storage[12];
-    final double currTy = currentTransform.storage[13];
+    final double currTx = currentTransform.storage[12].isFinite
+        ? currentTransform.storage[12]
+        : 0.0;
+    final double currTy = currentTransform.storage[13].isFinite
+        ? currentTransform.storage[13]
+        : 0.0;
+
+    final Offset fallbackCenter =
+        Offset(containerSize.width * 0.5, containerSize.height * 0.5);
+    final Offset safePrevFocal =
+        (previousFocalPoint.dx.isFinite && previousFocalPoint.dy.isFinite)
+            ? previousFocalPoint
+            : fallbackCenter;
+    final Offset safeCurrFocal =
+        (currentFocalPoint.dx.isFinite && currentFocalPoint.dy.isFinite)
+            ? currentFocalPoint
+            : safePrevFocal;
 
     // Content point currently beneath previousFocalPoint:
-    final double contentX = (previousFocalPoint.dx - currTx) / currScale;
-    final double contentY = (previousFocalPoint.dy - currTy) / currScale;
+    final double contentX = (safePrevFocal.dx - currTx) / currScale;
+    final double contentY = (safePrevFocal.dy - currTy) / currScale;
 
     // Translation needed so that same content point lands at currentFocalPoint:
-    final double rawTx = currentFocalPoint.dx - (nextScale * contentX);
-    final double rawTy = currentFocalPoint.dy - (nextScale * contentY);
+    final double rawTx = safeCurrFocal.dx - (nextScale * contentX);
+    final double rawTy = safeCurrFocal.dy - (nextScale * contentY);
 
     return _buildClampedMatrix(
       scale: nextScale,
@@ -264,14 +283,21 @@ class TouchCoordinateMapper {
     if (!_isValidSize(containerSize)) {
       return Matrix4.identity();
     }
-    final double safeScale = extractScale(transform).clamp(minScale, maxScale);
-    if (safeScale <= 1.001) {
+    final double safeMin = minScale.isFinite && minScale > 0 ? minScale : 1.0;
+    final double safeMax =
+        maxScale.isFinite && maxScale >= safeMin ? maxScale : safeMin;
+    final double safeScale = extractScale(transform).clamp(safeMin, safeMax);
+    if (safeScale <= safeMin + 0.001 && safeMin == 1.0) {
       return Matrix4.identity();
     }
+    final double tx =
+        transform.storage[12].isFinite ? transform.storage[12] : 0.0;
+    final double ty =
+        transform.storage[13].isFinite ? transform.storage[13] : 0.0;
     return _buildClampedMatrix(
       scale: safeScale,
-      tx: transform.storage[12],
-      ty: transform.storage[13],
+      tx: tx,
+      ty: ty,
       containerSize: containerSize,
     );
   }

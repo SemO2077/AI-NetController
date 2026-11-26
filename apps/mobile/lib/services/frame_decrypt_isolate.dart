@@ -124,6 +124,8 @@ class FrameDecryptIsolate {
 
   ReceivePort? _mainReceivePort;
   StreamSubscription<dynamic>? _mainSub;
+  ReceivePort? _exitReceivePort;
+  StreamSubscription<dynamic>? _exitSub;
   Isolate? _isolate;
   SendPort? _workerSendPort;
 
@@ -179,8 +181,11 @@ class FrameDecryptIsolate {
   Future<void> _spawnIsolate() async {
     try {
       final ReceivePort receivePort = ReceivePort();
+      final ReceivePort exitPort = ReceivePort();
       _mainReceivePort = receivePort;
       _mainSub = receivePort.listen(_handleWorkerMessage);
+      _exitReceivePort = exitPort;
+      _exitSub = exitPort.listen(_handleWorkerExit);
 
       final TransferableTypedData keyTransfer =
           TransferableTypedData.fromList(<TypedData>[
@@ -190,6 +195,7 @@ class FrameDecryptIsolate {
       final Isolate isolate = await Isolate.spawn(
         _frameDecryptWorkerEntry,
         (receivePort.sendPort, keyTransfer),
+        onExit: exitPort.sendPort,
         debugName: 'FrameDecryptWorker',
       );
 
@@ -205,9 +211,44 @@ class FrameDecryptIsolate {
       _mainSub = null;
       _mainReceivePort?.close();
       _mainReceivePort = null;
+      unawaited(_exitSub?.cancel());
+      _exitSub = null;
+      _exitReceivePort?.close();
+      _exitReceivePort = null;
       if (!_readyCompleter.isCompleted) {
         _readyCompleter.complete();
       }
+    }
+  }
+
+  void _handleWorkerExit(dynamic _) {
+    if (_disposed) return;
+    // Unexpected worker exit: fall back cleanly to synchronous decryption so
+    // the video pipeline can never deadlock with _isBusy stuck true.
+    debugPrint('[FrameDecryptIsolate] Worker exited unexpectedly; switching to sync fallback.');
+    _isolateUnavailable = true;
+    _workerSendPort = null;
+    _isolate = null;
+    _isBusy = false;
+    _inflightNonceSeq = null;
+    unawaited(_mainSub?.cancel());
+    _mainSub = null;
+    _mainReceivePort?.close();
+    _mainReceivePort = null;
+    unawaited(_exitSub?.cancel());
+    _exitSub = null;
+    _exitReceivePort?.close();
+    _exitReceivePort = null;
+    if (!_readyCompleter.isCompleted) {
+      _readyCompleter.complete();
+    }
+    final Uint8List? pendingPkt = _pendingPacket;
+    final int? pendingSeq = _pendingSeq;
+    _pendingPacket = null;
+    _pendingSeq = null;
+    _pendingNonceSeq = null;
+    if (pendingPkt != null && pendingSeq != null && !_disposed) {
+      _decryptSynchronously(pendingPkt, pendingSeq);
     }
   }
 
@@ -359,6 +400,10 @@ class FrameDecryptIsolate {
     _mainSub = null;
     _mainReceivePort?.close();
     _mainReceivePort = null;
+    unawaited(_exitSub?.cancel());
+    _exitSub = null;
+    _exitReceivePort?.close();
+    _exitReceivePort = null;
 
     zeroize(_fallbackKey);
     _fallbackCipher.dispose();
