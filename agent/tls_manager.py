@@ -16,7 +16,14 @@ import os
 import secrets
 import socket
 import ssl
-from typing import Iterable, Optional, Tuple
+import threading
+import time
+from typing import Any, Dict, Iterable, Optional, Tuple
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 try:
     from daemon_config import _restrict_file_permissions, get_config_dir
@@ -24,10 +31,28 @@ except ImportError:
     from agent.daemon_config import _restrict_file_permissions, get_config_dir
 
 logger = logging.getLogger("AI-NetController-TLS")
+_TLS_LOCK = threading.RLock()
 
 
 def _detect_local_san_ips() -> list[str]:
     ips = {"127.0.0.1", "::1"}
+    if psutil is not None:
+        try:
+            stats = psutil.net_if_stats()
+            addrs = psutil.net_if_addrs()
+            for if_name, if_addrs in addrs.items():
+                if if_name in stats and not stats[if_name].isup:
+                    continue
+                for addr in if_addrs:
+                    if addr.family in (socket.AF_INET, socket.AF_INET6) and addr.address:
+                        clean = addr.address.split("%", 1)[0].strip()
+                        if not clean or clean == "0.0.0.0" or clean == "::":
+                            continue
+                        if clean.startswith("169.254.") or clean.lower().startswith("fe80:"):
+                            continue
+                        ips.add(clean)
+        except Exception:
+            pass
     try:
         hostname = socket.gethostname()
         for info in socket.getaddrinfo(hostname, None):
@@ -54,8 +79,17 @@ def ensure_tls_certificate(
     """
     Ensures valid ECDSA P-256 cert/key PEM pair exists on disk.
     If AI_TLS_CERT and AI_TLS_KEY env vars exist, uses them directly.
+    Thread-safe: serializes generation/replacement so cert and key never mismatch.
     Returns (cert_path, key_path, sha256_fingerprint_hex).
     """
+    with _TLS_LOCK:
+        return _ensure_tls_certificate_locked(cert_dir=cert_dir, extra_ips=extra_ips)
+
+
+def _ensure_tls_certificate_locked(
+    cert_dir: Optional[str] = None,
+    extra_ips: Optional[Iterable[str]] = None,
+) -> Tuple[str, str, str]:
     env_cert = os.environ.get("AI_TLS_CERT") or os.environ.get("CST_TLS_CERT")
     env_key = os.environ.get("AI_TLS_KEY") or os.environ.get("CST_TLS_KEY")
     if env_cert and env_key and os.path.isfile(env_cert) and os.path.isfile(env_key):
@@ -150,8 +184,18 @@ def ensure_tls_certificate(
                     fh.flush()
                     os.fsync(fh.fileno())
                 _restrict_file_permissions(tmp_path, is_dir=False)
-            os.replace(tmp_path, dest_path)
-            _restrict_file_permissions(dest_path, is_dir=False)
+            last_err: Optional[OSError] = None
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, dest_path)
+                    _restrict_file_permissions(dest_path, is_dir=False)
+                    last_err = None
+                    break
+                except OSError as exc:
+                    last_err = exc
+                    time.sleep(0.02 * (attempt + 1))
+            if last_err is not None:
+                raise last_err
         except Exception:
             try:
                 if os.path.exists(tmp_path):
@@ -193,6 +237,11 @@ def _is_cert_valid_and_fresh(
             if cert_pub_bytes != key_pub_bytes:
                 return False
         now = datetime.datetime.now(datetime.timezone.utc)
+        not_before = getattr(cert, "not_valid_before_utc", None)
+        if not_before is None:
+            not_before = cert.not_valid_before.replace(tzinfo=datetime.timezone.utc)
+        if not_before > (now + datetime.timedelta(minutes=5)):
+            return False
         exp = getattr(cert, "not_valid_after_utc", None)
         if exp is None:
             exp = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc)
@@ -227,6 +276,40 @@ def compute_cert_fingerprint(cert_path: str) -> str:
         return cert.fingerprint(hashes.SHA256()).hex()
     except Exception:
         return ""
+
+
+def get_certificate_info(cert_path: str) -> Dict[str, Any]:
+    """Returns non-sensitive diagnostic metadata for an X.509 PEM certificate."""
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+
+        with open(cert_path, "rb") as f:
+            cert = x509.load_pem_x509_certificate(f.read())
+        now = datetime.datetime.now(datetime.timezone.utc)
+        not_before = getattr(cert, "not_valid_before_utc", None)
+        if not_before is None:
+            not_before = cert.not_valid_before.replace(tzinfo=datetime.timezone.utc)
+        not_after = getattr(cert, "not_valid_after_utc", None)
+        if not_after is None:
+            not_after = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+        san_ips: list[str] = []
+        try:
+            san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+            san_ips = sorted(str(ip) for ip in san_ext.get_values_for_type(x509.IPAddress))
+        except Exception:
+            pass
+        days_remaining = max(0, int((not_after - now).total_seconds() // 86400))
+        return {
+            "valid": True,
+            "fingerprint": cert.fingerprint(hashes.SHA256()).hex(),
+            "not_before": not_before.isoformat(),
+            "not_after": not_after.isoformat(),
+            "days_remaining": days_remaining,
+            "san_ips": san_ips,
+        }
+    except Exception:
+        return {"valid": False, "fingerprint": "", "days_remaining": 0, "san_ips": []}
 
 
 def build_server_ssl_context(

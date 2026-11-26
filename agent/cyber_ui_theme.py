@@ -221,7 +221,7 @@ def get_liquid_palette(theme_mode: str = "light", accent: str = "violet") -> Liq
             WARNING_SOFT="#FEF3C7",
             TEXT_PRIMARY="#141530",
             TEXT_SECONDARY="#4B4F75",
-            TEXT_TERTIARY="#7B80A6",
+            TEXT_TERTIARY="#5E648C",
             GLASS_BORDER=mix_hex("#FFFFFF", primary, 0.34),
             GLASS_BORDER_IDLE="#DCE2FA",
             GLASS_BORDER_BRIGHT=mix_hex("#FFFFFF", primary, 0.50),
@@ -262,7 +262,7 @@ def get_liquid_palette(theme_mode: str = "light", accent: str = "violet") -> Liq
         WARNING_SOFT="#36280E",
         TEXT_PRIMARY="#F7F9FF",
         TEXT_SECONDARY="#B5BFE0",
-        TEXT_TERTIARY="#7C87B2",
+        TEXT_TERTIARY="#8B96C4",
         GLASS_BORDER=mix_hex("#1C214A", primary, 0.42),
         GLASS_BORDER_IDLE="#2A3160",
         GLASS_BORDER_BRIGHT=mix_hex("#FFFFFF", primary, 0.65),
@@ -1090,7 +1090,7 @@ def render_qr_card_image(
         return None
     matrix = generate_qr_matrix(data)
     n = len(matrix)
-    quiet = 3
+    quiet = 4
     total_mod = n + quiet * 2
     scale = max(3, pixel_size // total_mod)
     qr_px = total_mod * scale

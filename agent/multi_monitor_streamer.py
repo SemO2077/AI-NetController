@@ -130,6 +130,7 @@ class MultiMonitorStreamer:
     def __init__(self):
         _enable_windows_dpi_awareness()
         self._lock = threading.Lock()
+        self._dxgi_lock = threading.Lock()
         self._tls = threading.local()
         self._all_scts: List[Any] = []
         self._sct = None
@@ -168,7 +169,7 @@ class MultiMonitorStreamer:
             return False
         return True
 
-    def _release_dxgi_cam(self) -> None:
+    def _release_dxgi_cam_locked(self) -> None:
         cam = self._dxgi_cam
         self._dxgi_cam = None
         self._dxgi_mon_idx = None
@@ -182,41 +183,46 @@ class MultiMonitorStreamer:
                     except Exception:
                         pass
 
+    def _release_dxgi_cam(self) -> None:
+        with self._dxgi_lock:
+            self._release_dxgi_cam_locked()
+
     def _grab_dxgi_frame(self, monitor_idx: int, expected_w: int, expected_h: int) -> Optional[Any]:
-        if not self._can_use_dxgi():
-            return None
-        dxgi_mod = dxcam if dxcam is not None else bettercam
-        if dxgi_mod is None:
-            return None
-        try:
-            if self._dxgi_cam is None or self._dxgi_mon_idx != monitor_idx:
-                self._release_dxgi_cam()
-                out_idx = max(0, int(monitor_idx) - 1)
-                self._dxgi_cam = dxgi_mod.create(output_idx=out_idx, output_color="BGRA")
-                self._dxgi_mon_idx = monitor_idx
-            arr = self._dxgi_cam.grab() if self._dxgi_cam is not None else None
-            if arr is None:
-                if (
-                    self._last_dxgi_arr is not None
-                    and self._last_dxgi_arr.shape[:2] == (expected_h, expected_w)
-                ):
-                    return self._last_dxgi_arr
+        with self._dxgi_lock:
+            if not self._can_use_dxgi():
                 return None
-            if not isinstance(arr, np.ndarray) or arr.ndim != 3 or arr.shape[2] != 4:
+            dxgi_mod = dxcam if dxcam is not None else bettercam
+            if dxgi_mod is None:
                 return None
-            if expected_w > 0 and expected_h > 0 and arr.shape[:2] != (expected_h, expected_w):
-                self._release_dxgi_cam()
+            try:
+                if self._dxgi_cam is None or self._dxgi_mon_idx != monitor_idx:
+                    self._release_dxgi_cam_locked()
+                    out_idx = max(0, int(monitor_idx) - 1)
+                    self._dxgi_cam = dxgi_mod.create(output_idx=out_idx, output_color="BGRA")
+                    self._dxgi_mon_idx = monitor_idx
+                arr = self._dxgi_cam.grab() if self._dxgi_cam is not None else None
+                if arr is None:
+                    if (
+                        self._last_dxgi_arr is not None
+                        and self._last_dxgi_arr.shape[:2] == (expected_h, expected_w)
+                    ):
+                        return self._last_dxgi_arr
+                    return None
+                if not isinstance(arr, np.ndarray) or arr.ndim != 3 or arr.shape[2] != 4:
+                    return None
+                if expected_w > 0 and expected_h > 0 and arr.shape[:2] != (expected_h, expected_w):
+                    self._release_dxgi_cam_locked()
+                    self._dxgi_disabled = True
+                    return None
+                if not arr.flags.c_contiguous:
+                    arr = np.ascontiguousarray(arr)
+                self._last_dxgi_arr = arr
+                return arr
+            except Exception as exc:
+                logger.debug("DXGI capture fallback to MSS (%s)", exc)
+                self._release_dxgi_cam_locked()
                 self._dxgi_disabled = True
                 return None
-            if not arr.flags.c_contiguous:
-                arr = np.ascontiguousarray(arr)
-            self._last_dxgi_arr = arr
-            return arr
-        except Exception as exc:
-            logger.debug("DXGI capture fallback to MSS (%s)", exc)
-            self._release_dxgi_cam()
-            self._dxgi_disabled = True
-            return None
 
     def _get_thread_sct(self):
         if not mss:
@@ -251,6 +257,7 @@ class MultiMonitorStreamer:
             scts = list(self._all_scts)
             self._all_scts.clear()
             self._sct = None
+            self._current_bbox.clear()
         for sct in scts:
             try:
                 sct.close()
@@ -258,6 +265,23 @@ class MultiMonitorStreamer:
                 pass
         if hasattr(self._tls, "sct"):
             self._tls.sct = None
+        if hasattr(self._tls, "bio"):
+            try:
+                self._tls.bio.close()
+            except Exception:
+                pass
+            self._tls.bio = None
+
+    @staticmethod
+    def _invalidate_mss_monitors_cache(sct: Any) -> None:
+        """Clears real MSS's cached monitor list so hot-plugged displays and DPI changes refresh."""
+        if sct is None:
+            return
+        if type(sct).__module__.split(".")[0] == "mss" and hasattr(sct, "_monitors"):
+            try:
+                sct._monitors = None
+            except Exception:
+                pass
 
     def _refresh_monitors_list(self) -> List[Dict[str, Any]]:
         """Queries MSS for connected monitors and binds default display."""
@@ -266,18 +290,22 @@ class MultiMonitorStreamer:
             if not self._sct:
                 logger.warning("MSS screen capture unavailable; returning empty monitor list.")
                 return []
+            self._invalidate_mss_monitors_cache(self._sct)
             # mss.monitors[0] is the unified virtual desktop bounding box
             # Individual physical screens are 1, 2, ...
             total_screens = len(self._sct.monitors)
             for idx in range(1, total_screens):
                 m = self._sct.monitors[idx]
+                is_primary = bool(m.get("is_primary", m["left"] == 0 and m["top"] == 0))
                 monitors.append({
                     "index": idx,
                     "width": m["width"],
                     "height": m["height"],
                     "left": m["left"],
                     "top": m["top"],
-                    "label": f"Display {idx} ({m['width']}x{m['height']})"
+                    "label": f"Display {idx} ({m['width']}x{m['height']})",
+                    "is_primary": is_primary,
+                    "is_active": idx == self._active_monitor_index,
                 })
 
             if not monitors and len(self._sct.monitors) > 0:
@@ -289,7 +317,9 @@ class MultiMonitorStreamer:
                     "height": m["height"],
                     "left": m["left"],
                     "top": m["top"],
-                    "label": f"Display 1 ({m['width']}x{m['height']})"
+                    "label": f"Display 1 ({m['width']}x{m['height']})",
+                    "is_primary": True,
+                    "is_active": True,
                 })
 
             # Ensure active monitor bounding box is populated
@@ -309,18 +339,22 @@ class MultiMonitorStreamer:
         """
         Dynamically changes active capture target to monitor_index without restarting server.
         """
+        switched = False
         with self._lock:
             if not self._sct:
                 return False
+            if not (1 <= monitor_index < len(self._sct.monitors)):
+                self._invalidate_mss_monitors_cache(self._sct)
             if 1 <= monitor_index < len(self._sct.monitors):
                 self._active_monitor_index = monitor_index
                 self._current_bbox = self._sct.monitors[monitor_index].copy()
-                self._release_dxgi_cam()
+                switched = True
                 logger.info(f"Switched capture display to Monitor {monitor_index}: {self._current_bbox}")
-                return True
             else:
                 logger.warning(f"Invalid monitor index {monitor_index}. Total monitors: {len(self._sct.monitors) - 1}")
-                return False
+        if switched:
+            self._release_dxgi_cam()
+        return switched
 
     def capture_frame(self, quality: int = DEFAULT_JPEG_QUALITY) -> Optional[Tuple[bytes, int, int]]:
         """
@@ -401,6 +435,10 @@ class MultiMonitorStreamer:
         except Exception as e:
             logger.error(f"Screen capture frame error: {e}")
             self._reset_thread_sct()
+            try:
+                self._refresh_monitors_list()
+            except Exception:
+                pass
             return None
 
     def _extract_dominant_color_fast(self, raw_bgra: bytes, width: int, height: int):

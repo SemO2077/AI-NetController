@@ -40,6 +40,7 @@ OP_VIEWPORT_RESIZE = 0x0A
 OP_LLM_STREAM = 0x0B
 OP_FILE_TRANSFER = 0x0C
 OP_DISPLAY_ENUM = 0x0D
+OP_FRAME_ACK = 0x0E
 OP_FRAME_SYNC = 0xED  # Keyframe resynchronization signal
 OP_ERR = 0xEE
 
@@ -85,9 +86,11 @@ class ChaosProfile:
         return random.uniform(0, 100) < loss_threshold
 
     def get_jitter_delay_seconds(self) -> float:
-        if not self.enabled:
+        if not self.enabled or self.max_jitter_ms <= 0:
             return 0.0
-        return random.uniform(0.010, self.max_jitter_ms / 1000.0)
+        hi = self.max_jitter_ms / 1000.0
+        lo = min(0.010, hi)
+        return random.uniform(lo, hi)
 
     def should_reorder(self) -> bool:
         if not self.enabled:
@@ -186,6 +189,8 @@ class NetworkFuzzerShield:
         """Terminates stalled clients that do not authenticate within SLA."""
         try:
             await asyncio.sleep(self.profile.handshake_timeout_sec)
+            if self.watchdogs.get(client_id) is not asyncio.current_task():
+                return
             state = self.client_states.get(client_id, ConnectionState.LISTENING)
             if state not in (ConnectionState.AUTHENTICATED_STREAMING, ConnectionState.TERMINATED):
                 logger.warning(
@@ -209,8 +214,15 @@ class NetworkFuzzerShield:
         close_callback: Optional[Callable] = None,
         reason: str = "",
     ) -> None:
-        """Terminates client, zeroizes in-memory keys, and bounds history state."""
-        logger.info("Cleaning up and zeroizing keys for %s. Reason: %s", client_id, reason)
+        """Terminates client, zeroizes in-memory keys, and bounds history state (idempotent)."""
+        already_terminated = (
+            self.client_states.get(client_id) == ConnectionState.TERMINATED
+            and client_id not in self.watchdogs
+            and client_id not in self.ephemeral_keys
+            and client_id not in self._reorder_buffer
+        )
+        if not already_terminated:
+            logger.info("Cleaning up and zeroizing keys for %s. Reason: %s", client_id, reason)
 
         wd = self.watchdogs.pop(client_id, None)
         if wd and not wd.done() and wd is not asyncio.current_task():
@@ -225,8 +237,10 @@ class NetworkFuzzerShield:
             scrub_bytes(key)
             logger.debug("Ephemeral key for %s scrubbed from RAM.", client_id)
 
+        prev_state = self.client_states.get(client_id)
         self.client_states[client_id] = ConnectionState.TERMINATED
-        self._terminated_order.append(client_id)
+        if prev_state != ConnectionState.TERMINATED:
+            self._terminated_order.append(client_id)
         while len(self._terminated_order) > _MAX_TERMINATED_HISTORY:
             old_id = self._terminated_order.popleft()
             if self.client_states.get(old_id) == ConnectionState.TERMINATED and old_id != client_id:
@@ -241,6 +255,24 @@ class NetworkFuzzerShield:
                     await res
             except Exception as e:
                 logger.error("Error invoking close callback for %s: %s", client_id, e)
+
+    def cancel_all_watchdogs_sync(self) -> None:
+        """Synchronously cancels all active handshake watchdogs and scrubs ephemeral keys."""
+        for cid in list(self.watchdogs.keys()):
+            wd = self.watchdogs.pop(cid, None)
+            if wd is not None and not wd.done():
+                wd.cancel()
+        for cid in list(self.ephemeral_keys.keys()):
+            key = self.ephemeral_keys.pop(cid, None)
+            if key:
+                scrub_bytes(key)
+        self._reorder_buffer.clear()
+
+    async def shutdown(self) -> None:
+        """Cleanly terminates and scrubs all tracked clients and watchdog tasks."""
+        for cid in list(self.client_states.keys()):
+            await self.cleanup_and_scrub(cid, reason="Shield shutting down")
+        self.cancel_all_watchdogs_sync()
 
     async def filter_incoming_packet(
         self,

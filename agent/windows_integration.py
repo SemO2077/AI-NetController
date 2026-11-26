@@ -1493,10 +1493,15 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
     prog_fill = prog_canvas.create_rectangle(0, 0, 0, 8, fill=CyberColors.PRIMARY, width=0)
 
     def _set_progress(pct: int, msg: str) -> None:
-        w = max(1, prog_canvas.winfo_width() or 560)
-        prog_canvas.coords(prog_fill, 0, 0, int(w * max(0, min(100, pct)) / 100.0), 8)
-        status_var.set(f"[{pct:3d}%] {msg}")
-        win.update()
+        try:
+            if not win.winfo_exists():
+                return
+            w = max(1, prog_canvas.winfo_width() or 560)
+            prog_canvas.coords(prog_fill, 0, 0, int(w * max(0, min(100, pct)) / 100.0), 8)
+            status_var.set(f"[{pct:3d}%] {msg}")
+            win.update()
+        except Exception:
+            pass
 
     tk.Button(
         btn_row,
@@ -1565,10 +1570,12 @@ def show_install_dialog(parent_root=None) -> Optional[Dict[str, Any]]:
         )
         outcome["result"] = res
         outcome["installed"] = bool(res.get("success"))
+        if not win.winfo_exists():
+            return
         if res.get("success"):
             status_lbl.config(fg=CyberColors.SUCCESS)
             status_var.set("Deployment & feature preferences verified cleanly. Closing wizard...")
-            win.after(900, win.destroy)
+            win.after(900, lambda: win.destroy() if win.winfo_exists() else None)
         else:
             status_lbl.config(fg=CyberColors.ACCENT)
             status_var.set(str(res.get("message") or "Installation error"))

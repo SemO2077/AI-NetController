@@ -100,6 +100,8 @@ class ActiveTransfer:
         self.file_handle = None
         self.last_activity = time.monotonic()
         self._written_intervals: list = []
+        self._aborted = threading.Event()
+        self.last_error_message: str = ""
 
     def open(self, truncate: bool = False):
         # Ensure parent directory exists and neither target nor temp path is a symlink/junction
@@ -178,9 +180,22 @@ class ActiveTransfer:
             self.file_handle.close()
         self.file_handle = None
 
+    def _unlink_temp_safely(self) -> None:
+        if self.temp_path.exists() and not _is_symlink_or_reparse(self.temp_path):
+            try:
+                self.temp_path.unlink()
+            except OSError:
+                pass
+
     def finalize(self) -> bool:
         self.close()
+        self.last_error_message = ""
+        if self._aborted.is_set():
+            self.last_error_message = "Transfer aborted"
+            self._unlink_temp_safely()
+            return False
         if _is_symlink_or_reparse(self.temp_path):
+            self.last_error_message = "Unsafe symlink or reparse point detected"
             logger.error("Aborted finalize: temp file became symlink/reparse point: %s", self.temp_path)
             return False
 
@@ -189,40 +204,44 @@ class ActiveTransfer:
         try:
             actual_size = self.temp_path.stat().st_size
             if actual_size != self.total_size:
+                self.last_error_message = f"Incomplete transfer: expected {self.total_size} bytes, got {actual_size}"
                 logger.error("Size mismatch for %s: expected %d bytes, got %d", self.filename, self.total_size, actual_size)
-                if self.temp_path.exists():
-                    self.temp_path.unlink()
+                self._unlink_temp_safely()
                 return False
             with open(self.temp_path, "rb") as f:
                 while chunk := f.read(65536):
+                    if self._aborted.is_set():
+                        self.last_error_message = "Transfer aborted"
+                        break
                     hasher.update(chunk)
+            if self._aborted.is_set():
+                self._unlink_temp_safely()
+                return False
             calculated_sha = hasher.hexdigest().lower()
         except Exception as e:
+            self.last_error_message = f"Checksum I/O error: {e}"
             logger.error("Failed to calculate checksum for %s: %s", self.filename, e)
-            if self.temp_path.exists():
-                try:
-                    self.temp_path.unlink()
-                except Exception:
-                    pass
+            self._unlink_temp_safely()
             return False
 
         if calculated_sha != self.expected_sha256:
+            self.last_error_message = "SHA-256 mismatch"
             logger.error(
                 "Checksum mismatch for %s! Expected %s, got %s",
                 self.filename,
                 self.expected_sha256,
                 calculated_sha,
             )
-            if self.temp_path.exists():
-                try:
-                    self.temp_path.unlink()
-                except Exception:
-                    pass
+            self._unlink_temp_safely()
             return False
 
         # Atomic rename part file to final filename (serialized to prevent concurrent collision races)
         try:
             with _RENAME_LOCK:
+                if self._aborted.is_set():
+                    self.last_error_message = "Transfer aborted"
+                    self._unlink_temp_safely()
+                    return False
                 if self.target_path.exists() or _is_symlink_or_reparse(self.target_path):
                     stem = self.target_path.stem
                     ext = self.target_path.suffix
@@ -232,12 +251,9 @@ class ActiveTransfer:
                         counter += 1
                 self.temp_path.replace(self.target_path)
         except OSError as exc:
+            self.last_error_message = f"Failed to save finalized file: {exc}"
             logger.error("Failed to finalize atomic rename for %s: %s", self.filename, exc)
-            if self.temp_path.exists() and not _is_symlink_or_reparse(self.temp_path):
-                try:
-                    self.temp_path.unlink()
-                except OSError:
-                    pass
+            self._unlink_temp_safely()
             return False
         try:
             try:
@@ -251,12 +267,9 @@ class ActiveTransfer:
         return True
 
     def abort(self):
+        self._aborted.set()
         self.close()
-        if self.temp_path.exists() and not _is_symlink_or_reparse(self.temp_path):
-            try:
-                self.temp_path.unlink()
-            except Exception:
-                pass
+        self._unlink_temp_safely()
 
 
 class HostFileWriter:
@@ -270,7 +283,9 @@ class HostFileWriter:
 
         self.allow_executables = allow_executables
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
         self.active_transfers: Dict[int, ActiveTransfer] = {}
+        self._finalizing_transfers: set = set()
         logger.info("HostFileWriter initialized. Target chroot directory: %s", self.download_dir)
 
     _WINDOWS_RESERVED_NAMES = {
@@ -339,36 +354,40 @@ class HostFileWriter:
             logger.error("Path traversal blocked for transfer %s: %s -> %s", transfer_id, raw_filename, target_path)
             return self._build_ack(transfer_id, STATUS_ERR_TRAVERSAL, 0, "Access denied: path traversal attempt")
 
-        existing = self.active_transfers.pop(transfer_id, None)
-        if existing is not None:
-            existing.abort()
+        with self._lock:
+            existing = self.active_transfers.pop(transfer_id, None)
+            if existing is not None:
+                existing.abort()
 
-        self.prune_stale_transfers(max_idle_sec=300.0)
-        if len(self.active_transfers) >= MAX_CONCURRENT_TRANSFERS:
-            return self._build_ack(transfer_id, STATUS_ERR_SIZE_LIMIT, 0, "Maximum concurrent transfers exceeded")
+            self.prune_stale_transfers(max_idle_sec=300.0)
+            if len(self.active_transfers) >= MAX_CONCURRENT_TRANSFERS:
+                return self._build_ack(transfer_id, STATUS_ERR_SIZE_LIMIT, 0, "Maximum concurrent transfers exceeded")
 
-        try:
-            free_bytes = shutil.disk_usage(self.download_dir).free
-            if total_size + MIN_DISK_RESERVE_BYTES > free_bytes:
-                return self._build_ack(transfer_id, STATUS_ERR_SIZE_LIMIT, 0, "Insufficient free disk space on host")
-        except Exception:
-            pass
+            reserved_bytes = sum(
+                max(0, t.total_size - t.bytes_written) for t in self.active_transfers.values()
+            )
+            try:
+                free_bytes = shutil.disk_usage(self.download_dir).free
+                if total_size + reserved_bytes + MIN_DISK_RESERVE_BYTES > free_bytes:
+                    return self._build_ack(transfer_id, STATUS_ERR_SIZE_LIMIT, 0, "Insufficient free disk space on host")
+            except Exception:
+                pass
 
-        transfer: Optional[ActiveTransfer] = None
-        try:
-            transfer = ActiveTransfer(transfer_id, clean_name, total_size, sha256_hex, target_path)
-            if not self._verify_path_contained(transfer.temp_path):
-                return self._build_ack(transfer_id, STATUS_ERR_TRAVERSAL, 0, "Access denied: unsafe temp path")
-            transfer.open(truncate=True)
-            transfer.close()
-            self.active_transfers[transfer_id] = transfer
-            logger.info("Transfer initiated: ID %s, File: '%s', Size: %d bytes", transfer_id, clean_name, total_size)
-            return self._build_ack(transfer_id, STATUS_OK, 0, "Ready for chunks")
-        except Exception as e:
-            if transfer is not None:
-                transfer.abort()
-            logger.error("Failed to initialize transfer %s: %s", transfer_id, e)
-            return self._build_ack(transfer_id, STATUS_ERR_IO, 0, str(e))
+            transfer: Optional[ActiveTransfer] = None
+            try:
+                transfer = ActiveTransfer(transfer_id, clean_name, total_size, sha256_hex, target_path)
+                if not self._verify_path_contained(transfer.temp_path):
+                    return self._build_ack(transfer_id, STATUS_ERR_TRAVERSAL, 0, "Access denied: unsafe temp path")
+                transfer.open(truncate=True)
+                transfer.close()
+                self.active_transfers[transfer_id] = transfer
+                logger.info("Transfer initiated: ID %s, File: '%s', Size: %d bytes", transfer_id, clean_name, total_size)
+                return self._build_ack(transfer_id, STATUS_OK, 0, "Ready for chunks")
+            except Exception as e:
+                if transfer is not None:
+                    transfer.abort()
+                logger.error("Failed to initialize transfer %s: %s", transfer_id, e)
+                return self._build_ack(transfer_id, STATUS_ERR_IO, 0, str(e))
 
     def handle_packet(self, payload: bytes) -> bytes:
         """
@@ -384,36 +403,45 @@ class HostFileWriter:
             return self._prepare_transfer(transfer_id, payload)
 
         elif sub_cmd == CMD_CHUNK:
-            transfer = self.active_transfers.get(transfer_id)
-            if not transfer:
-                return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown transfer ID")
+            with self._lock:
+                transfer = self.active_transfers.get(transfer_id)
+                if not transfer:
+                    return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown transfer ID")
 
-            if len(payload) < 1 + 4 + 8:
-                return self._build_ack(transfer_id, STATUS_ERR_IO, transfer.bytes_written, "Chunk header truncated")
+                if len(payload) < 1 + 4 + 8:
+                    return self._build_ack(transfer_id, STATUS_ERR_IO, transfer.bytes_written, "Chunk header truncated")
 
-            offset = _U64_STRUCT.unpack_from(payload, 5)[0]
-            chunk_data = payload[13:]
+                offset = _U64_STRUCT.unpack_from(payload, 5)[0]
+                chunk_data = payload[13:]
 
-            try:
-                transfer.write_chunk(offset, chunk_data)
-                return self._build_ack(transfer_id, STATUS_PROGRESS, transfer.bytes_written, "Chunk accepted")
-            except Exception as e:
-                transfer.close()
-                logger.error("IO error writing chunk for transfer %s: %s", transfer_id, e)
-                return self._build_ack(transfer_id, STATUS_ERR_IO, transfer.bytes_written, str(e))
+                try:
+                    transfer.write_chunk(offset, chunk_data)
+                    return self._build_ack(transfer_id, STATUS_PROGRESS, transfer.bytes_written, "Chunk accepted")
+                except Exception as e:
+                    transfer.close()
+                    logger.error("IO error writing chunk for transfer %s: %s", transfer_id, e)
+                    return self._build_ack(transfer_id, STATUS_ERR_IO, transfer.bytes_written, str(e))
 
         elif sub_cmd == CMD_FINISH:
-            transfer = self.active_transfers.pop(transfer_id, None)
-            if not transfer:
-                return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown transfer ID")
+            with self._lock:
+                transfer = self.active_transfers.pop(transfer_id, None)
+                if not transfer:
+                    return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown transfer ID")
+                self._finalizing_transfers.add(transfer)
 
-            success = transfer.finalize()
+            try:
+                success = transfer.finalize()
+            finally:
+                with self._lock:
+                    self._finalizing_transfers.discard(transfer)
             if success:
                 return self._build_ack(transfer_id, STATUS_COMPLETED, transfer.bytes_written, "File verified and saved")
-            return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, transfer.bytes_written, "SHA-256 mismatch")
+            err_msg = transfer.last_error_message or "SHA-256 mismatch"
+            return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, transfer.bytes_written, err_msg)
 
         elif sub_cmd == CMD_ABORT:
-            transfer = self.active_transfers.pop(transfer_id, None)
+            with self._lock:
+                transfer = self.active_transfers.pop(transfer_id, None)
             if transfer:
                 transfer.abort()
             return self._build_ack(transfer_id, STATUS_OK, 0, "Transfer aborted")
@@ -426,37 +454,65 @@ class HostFileWriter:
         """
         if len(payload) >= 5 and payload[0] == CMD_FINISH:
             transfer_id = _TRANSFER_ID_STRUCT.unpack_from(payload, 1)[0]
-            transfer = self.active_transfers.pop(transfer_id, None)
-            if not transfer:
-                return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown transfer ID")
-            success = await asyncio.to_thread(transfer.finalize)
+            with self._lock:
+                transfer = self.active_transfers.pop(transfer_id, None)
+                if not transfer:
+                    return self._build_ack(transfer_id, STATUS_ERR_IO, 0, "Unknown transfer ID")
+                self._finalizing_transfers.add(transfer)
+            try:
+                success = await asyncio.to_thread(transfer.finalize)
+            finally:
+                with self._lock:
+                    self._finalizing_transfers.discard(transfer)
             if success:
                 return self._build_ack(transfer_id, STATUS_COMPLETED, transfer.bytes_written, "File verified and saved")
-            return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, transfer.bytes_written, "SHA-256 mismatch")
+            err_msg = transfer.last_error_message or "SHA-256 mismatch"
+            return self._build_ack(transfer_id, STATUS_ERR_CHECKSUM, transfer.bytes_written, err_msg)
         return self.handle_packet(payload)
 
     def abort_all(self) -> int:
-        """Aborts and deletes temp files for all active transfers (e.g., on disconnect)."""
+        """Aborts and deletes temp files for all active and finalizing transfers (e.g., on disconnect)."""
         count = 0
-        for tid in list(self.active_transfers.keys()):
-            transfer = self.active_transfers.pop(tid, None)
-            if transfer:
-                transfer.abort()
-                count += 1
+        with self._lock:
+            active_list = list(self.active_transfers.values())
+            self.active_transfers.clear()
+            finalizing_list = list(self._finalizing_transfers)
+        for transfer in active_list:
+            transfer.abort()
+            count += 1
+        for transfer in finalizing_list:
+            transfer._aborted.set()
+            count += 1
         return count
 
     def prune_stale_transfers(self, max_idle_sec: float = 3600.0) -> int:
         """Aborts transfers that have been idle longer than max_idle_sec."""
         now = time.monotonic()
-        stale_ids = [
-            tid for tid, t in self.active_transfers.items()
-            if (now - t.last_activity) > max_idle_sec
-        ]
-        for tid in stale_ids:
-            transfer = self.active_transfers.pop(tid, None)
-            if transfer:
-                transfer.abort()
-        return len(stale_ids)
+        stale_transfers = []
+        with self._lock:
+            stale_ids = [
+                tid for tid, t in self.active_transfers.items()
+                if (now - t.last_activity) > max_idle_sec
+            ]
+            for tid in stale_ids:
+                transfer = self.active_transfers.pop(tid, None)
+                if transfer:
+                    stale_transfers.append(transfer)
+        for transfer in stale_transfers:
+            transfer.abort()
+        return len(stale_transfers)
+
+    def get_active_transfers_summary(self) -> Dict[str, int]:
+        """Returns a lightweight zero-secret summary of active and finalizing uploads."""
+        with self._lock:
+            active_vals = list(self.active_transfers.values())
+            finalizing_count = len(self._finalizing_transfers)
+        return {
+            "active_count": len(active_vals),
+            "finalizing_count": finalizing_count,
+            "bytes_written": sum(t.bytes_written for t in active_vals),
+            "bytes_expected": sum(t.total_size for t in active_vals),
+        }
 
     def _build_ack(self, transfer_id: int, status: int, bytes_written: int, message: str, seq: int = 0) -> bytes:
         """
