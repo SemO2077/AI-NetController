@@ -187,10 +187,29 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
   const [newModelDesc, setNewModelDesc] = useState('');
   const [newModelEndpointUrl, setNewModelEndpointUrl] = useState('');
   const [newModelApiKey, setNewModelApiKey] = useState('');
+  const [addModelError, setAddModelError] = useState<string | null>(null);
+  const [isSavingModel, setIsSavingModel] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [isTestingModel, setIsTestingModel] = useState(false);
   const [settingsSyncError, setSettingsSyncError] = useState<string | null>(null);
   const [biometricNotice, setBiometricNotice] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!isAddModelOpen && !isModelDropdownOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (isAddModelOpen) {
+          setIsAddModelOpen(false);
+          setAddModelError(null);
+        } else if (isModelDropdownOpen) {
+          setIsModelDropdownOpen(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAddModelOpen, isModelDropdownOpen]);
 
   const persistSettingPatch = async (
     patch: Partial<{
@@ -417,19 +436,48 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
 
   const handleAddCustomModel = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newModelId.trim() || !newModelName.trim()) return;
+    const cleanId = newModelId.trim();
+    const cleanName = newModelName.trim();
+    const cleanEndpoint = newModelEndpointUrl.trim();
+    setAddModelError(null);
 
+    if (!cleanId || !cleanName) {
+      setAddModelError(
+        isBg ? 'Въведете ID и показвано име на модела.' : 'Enter both a model ID and display name.'
+      );
+      return;
+    }
+    if (modelsList.some((m) => m.id.toLowerCase() === cleanId.toLowerCase())) {
+      setAddModelError(
+        isBg ? 'Вече съществува модел с този ID.' : 'A model with this identifier already exists.'
+      );
+      return;
+    }
+    if (newModelProvider === 'custom' && !cleanEndpoint) {
+      setAddModelError(
+        isBg ? 'URL адресът е задължителен за персонализиран модел.' : 'Endpoint URL is required for custom models.'
+      );
+      return;
+    }
+    if (cleanEndpoint && !/^https?:\/\/\S+/i.test(cleanEndpoint)) {
+      setAddModelError(
+        isBg ? 'URL адресът трябва да започва с http:// или https://' : 'Endpoint URL must start with http:// or https://'
+      );
+      return;
+    }
+
+    setIsSavingModel(true);
     try {
       const res = await fetch('/api/ai/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          id: newModelId,
-          name: newModelName,
+          id: cleanId,
+          name: cleanName,
           provider: newModelProvider,
-          description: newModelDesc || 'Custom Model Endpoint',
-          ...(newModelEndpointUrl.trim() ? { endpointUrl: newModelEndpointUrl.trim() } : {}),
+          description: newModelDesc.trim() || 'Custom Model Endpoint',
+          ...(cleanEndpoint ? { endpointUrl: cleanEndpoint } : {}),
           ...(newModelApiKey.trim() ? { apiKey: newModelApiKey.trim() } : {}),
         }),
       });
@@ -437,18 +485,24 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
       if (res.ok && data.success && data.models) {
         setModelsList(data.models);
         setSelectedModel(data.model.id);
+        setTestResult(null);
         setNewModelId('');
         setNewModelName('');
         setNewModelDesc('');
         setNewModelEndpointUrl('');
         setNewModelApiKey('');
+        setAddModelError(null);
         setIsAddModelOpen(false);
         triggerHapticFeedback('medium');
       } else {
-        setTestResult(`${data.error || `HTTP ${res.status}`}`);
+        setAddModelError(
+          data.error || (isBg ? `Грешка при запазване (HTTP ${res.status})` : `Failed to save model (HTTP ${res.status})`)
+        );
       }
     } catch {
-      setTestResult(language === 'bg' ? 'Грешка при запазване' : 'Failed to save model');
+      setAddModelError(language === 'bg' ? 'Грешка при връзка със сървъра.' : 'Failed to reach control server.');
+    } finally {
+      setIsSavingModel(false);
     }
   };
 
@@ -615,7 +669,11 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
           2. PILL-TABBED SETTINGS HUB SUB-NAV + INSTANT LIVE SEARCH
          ===================================================================== */}
       <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5">
-        <div className="flex items-center gap-1 p-1.5 rounded-full glass-liquid-subtle overflow-x-auto scrollbar-none">
+        <div
+          role="tablist"
+          aria-label={isBg ? 'Раздели за настройки' : 'Settings sections'}
+          className="flex flex-wrap sm:flex-nowrap items-center gap-1 p-1.5 rounded-[22px] sm:rounded-full glass-liquid-subtle sm:overflow-x-auto scrollbar-none"
+        >
           {settingsTabs.map((tab) => {
             const TabIcon = tab.icon;
             const active = activeSettingsTab === tab.id;
@@ -623,11 +681,13 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
               <button
                 key={tab.id}
                 type="button"
+                role="tab"
+                aria-selected={active}
                 onClick={() => {
                   triggerHapticFeedback('selection');
                   setActiveSettingsTab(tab.id);
                 }}
-                className={`relative h-9 px-3.5 rounded-full text-xs font-display font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition cursor-pointer ${
+                className={`relative h-9 px-2.5 sm:px-3.5 rounded-full text-xs font-display font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition cursor-pointer ${
                   active ? 'preserve-white' : 'ink-secondary hover:ink-primary'
                 }`}
               >
@@ -655,11 +715,24 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
         </div>
 
         <div className="relative lg:w-72 shrink-0">
-          <Search className="w-3.5 h-3.5 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <Search className="w-3.5 h-3.5 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none z-10" />
           <input
             type="text"
             value={settingsSearch}
             onChange={(e) => setSettingsSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && settingsSearch) {
+                e.preventDefault();
+                setSettingsSearch('');
+              } else if (e.key === 'Enter' && searchMatches.length > 0) {
+                e.preventDefault();
+                const first = searchMatches[0];
+                triggerHapticFeedback('light');
+                setActiveSettingsTab(first.tab);
+                if (first.action) first.action();
+                setSettingsSearch('');
+              }
+            }}
             placeholder={isBg ? 'Търси в настройките...' : 'Search all settings...'}
             className="w-full h-10 pl-9 pr-8 rounded-full glass-liquid-subtle text-xs ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80 focus:border-cyan-400/65 focus:outline-none"
           />
@@ -667,7 +740,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
             <button
               type="button"
               onClick={() => setSettingsSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer"
+              className="absolute right-3 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer z-10"
               aria-label="Clear settings search"
             >
               <X className="w-3.5 h-3.5" />
@@ -685,33 +758,48 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
             exit={{ opacity: 0, y: -6 }}
             className="glass-liquid rounded-[24px] p-3.5 space-y-2"
           >
-            <div className="text-[11px] font-mono font-bold text-cyan-400 px-1">
-              {searchMatches.length > 0
-                ? isBg
-                  ? `Намерени настройки (${searchMatches.length})`
-                  : `Matching settings (${searchMatches.length})`
-                : isBg
-                ? 'Няма намерени настройки за това търсене'
-                : 'No settings match your search'}
+            <div className="flex items-center justify-between gap-2 px-1">
+              <div className="text-[11px] font-mono font-bold text-cyan-400">
+                {searchMatches.length > 0
+                  ? isBg
+                    ? `Намерени настройки (${searchMatches.length})`
+                    : `Matching settings (${searchMatches.length})`
+                  : isBg
+                  ? 'Няма намерени настройки за това търсене'
+                  : 'No settings match your search'}
+              </div>
+              {searchMatches.length > 0 && (
+                <span className="hidden sm:inline text-[10px] font-mono ink-muted">
+                  Enter ↵ · Esc
+                </span>
+              )}
             </div>
             {searchMatches.length > 0 && (
               <div className="flex flex-wrap gap-2">
-                {searchMatches.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => {
-                      triggerHapticFeedback('light');
-                      setActiveSettingsTab(m.tab);
-                      if (m.action) m.action();
-                      setSettingsSearch('');
-                    }}
-                    className="px-3 py-1.5 rounded-full liquid-control-pill text-xs font-semibold ink-primary flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <span>{m.title}</span>
-                    <ChevronRight className="w-3 h-3 text-cyan-400" />
-                  </button>
-                ))}
+                {searchMatches.map((m) => {
+                  const tabMeta = settingsTabs.find((st) => st.id === m.tab);
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        triggerHapticFeedback('light');
+                        setActiveSettingsTab(m.tab);
+                        if (m.action) m.action();
+                        setSettingsSearch('');
+                      }}
+                      className="px-3 py-1.5 rounded-full liquid-control-pill text-xs font-semibold ink-primary flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <span>{m.title}</span>
+                      {tabMeta && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-cyan-500/12 text-[10px] font-mono ink-secondary">
+                          {tabMeta.label}
+                        </span>
+                      )}
+                      <ChevronRight className="w-3 h-3 text-cyan-400 shrink-0" />
+                    </button>
+                  );
+                })}
               </div>
             )}
           </motion.div>
@@ -1289,7 +1377,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
               {isBg ? 'Контролни центрове за бърз достъп' : 'Quick-Launch Control Centers'}
             </span>
 
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {/* 1. Pair Phone & PC */}
               <motion.button
                 type="button"
@@ -1309,7 +1397,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
                     {isBg ? 'Сдвои Телефон & PC' : 'Pair Phone & PC'}
                   </div>
-                  <div className="text-[11px] ink-muted truncate mt-0.5">
+                  <div className="text-[11px] ink-muted line-clamp-2 leading-snug mt-0.5">
                     {isBg ? '1-клик QR код и 6-цифрен PIN' : '1-Tap QR & 6-Digit PIN Setup'}
                   </div>
                 </div>
@@ -1334,9 +1422,9 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
                     {isBg ? 'PC Демон Център' : 'PC Daemon Center'}
                   </div>
-                  <div className="text-[11px] text-emerald-400 font-mono font-semibold truncate mt-0.5 flex items-center gap-1">
+                  <div className="text-[11px] text-emerald-700 dark:text-emerald-300 font-mono font-semibold mt-0.5 flex items-center gap-1">
                     <ShieldCheck className="w-3 h-3 shrink-0" />
-                    <span className="truncate">{isBg ? 'Защита и Сесии' : 'Safeguards & Peers'}</span>
+                    <span className="line-clamp-1">{isBg ? 'Защита и Сесии' : 'Safeguards & Peers'}</span>
                   </div>
                 </div>
               </motion.button>
@@ -1360,7 +1448,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
                     {isBg ? 'Системен & AI Център' : 'System & AI Center'}
                   </div>
-                  <div className="text-[11px] text-cyan-400 font-mono font-semibold truncate mt-0.5">
+                  <div className="text-[11px] text-cyan-400 font-mono font-semibold line-clamp-1 mt-0.5">
                     Beta v0.90.0 • AI-NET/3.0
                   </div>
                 </div>
@@ -1385,7 +1473,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
                     {isBg ? 'WoL & Енергия' : 'WoL & Energy'}
                   </div>
-                  <div className="text-[11px] ink-muted truncate mt-0.5">
+                  <div className="text-[11px] ink-muted line-clamp-2 leading-snug mt-0.5">
                     {isBg ? 'Magic пакети, графици и CO₂' : 'Magic Packet Log & CO₂ savings'}
                   </div>
                 </div>
@@ -1410,7 +1498,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
                     {isBg ? 'Одитен дневник' : 'Security Audit Log'}
                   </div>
-                  <div className="text-[11px] ink-muted truncate mt-0.5">
+                  <div className="text-[11px] ink-muted line-clamp-2 leading-snug mt-0.5">
                     {isBg ? 'Команди, HITL и Демон логове' : 'Commands, HITL & Daemon trail'}
                   </div>
                 </div>
@@ -1435,7 +1523,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   <div className="font-display text-xs sm:text-sm font-bold ink-primary truncate">
                     {isBg ? 'Интерактивно ръководство' : 'Interactive Guide'}
                   </div>
-                  <div className="text-[11px] ink-muted truncate mt-0.5">
+                  <div className="text-[11px] ink-muted line-clamp-2 leading-snug mt-0.5">
                     {isBg ? 'Обиколка на функциите и помощ' : 'Guided walkthrough & tips'}
                   </div>
                 </div>
@@ -1499,7 +1587,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   }}
                   className={`px-3.5 py-1.5 h-8.5 rounded-full text-[10.5px] font-mono font-bold uppercase transition shrink-0 cursor-pointer ${
                     isAutoDiscovery
-                      ? 'bg-emerald-500/16 text-emerald-400 border border-emerald-500/35'
+                      ? 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 border border-emerald-500/45'
                       : 'liquid-control-pill ink-secondary'
                   }`}
                 >
@@ -1702,6 +1790,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                             type="button"
                             onClick={() => {
                               setIsModelDropdownOpen(false);
+                              setAddModelError(null);
                               setIsAddModelOpen(true);
                             }}
                             className="text-cyan-400 hover:underline font-bold cursor-pointer"
@@ -1724,6 +1813,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                               onClick={() => {
                                 triggerHapticFeedback('light');
                                 setSelectedModel(m.id);
+                                setTestResult(null);
                                 setIsModelDropdownOpen(false);
                               }}
                               className="flex-1 min-w-0 text-left px-3 py-2.5 flex flex-col cursor-pointer"
@@ -1764,13 +1854,22 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                     <div
                       className="fixed inset-0 z-[110] flex items-center justify-center p-4 backdrop-blur-md modal-backdrop-scrim"
                       style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+                      onClick={(e) => {
+                        if (e.target === e.currentTarget && !isSavingModel) {
+                          setIsAddModelOpen(false);
+                          setAddModelError(null);
+                        }
+                      }}
                     >
                       <motion.div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label={isBg ? 'Добави персонализиран AI модел' : 'Add Custom AI Model'}
                         variants={MODAL_BUBBLE_VARIANTS}
                         initial="initial"
                         animate="animate"
                         exit="exit"
-                        className="w-full max-w-md rounded-[28px] glass-liquid-modal p-5 space-y-4 ink-primary"
+                        className="w-full max-w-md max-h-[90dvh] overflow-y-auto bouncy-scroll rounded-[28px] glass-liquid-modal p-5 space-y-4 ink-primary"
                       >
                         <div className="flex items-center justify-between border-b border-white/[0.10] pb-3">
                           <h3 className="text-sm sm:text-base font-display font-extrabold text-cyan-400">
@@ -1778,13 +1877,23 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                           </h3>
                           <button
                             type="button"
-                            onClick={() => setIsAddModelOpen(false)}
+                            onClick={() => {
+                              setIsAddModelOpen(false);
+                              setAddModelError(null);
+                            }}
                             className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center cursor-pointer"
                             aria-label={isBg ? 'Затвори' : 'Close'}
                           >
                             <X className="w-4 h-4" />
                           </button>
                         </div>
+
+                        {addModelError && (
+                          <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-rose-500/14 border border-rose-500/35 text-rose-500 dark:text-rose-300 text-xs font-mono">
+                            <AlertTriangle className="w-4 h-4 shrink-0" />
+                            <span>{addModelError}</span>
+                          </div>
+                        )}
 
                         <form onSubmit={handleAddCustomModel} className="space-y-3 font-mono text-xs">
                           <div>
@@ -1794,8 +1903,12 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                             <input
                               type="text"
                               required
+                              autoFocus
                               value={newModelId}
-                              onChange={(e) => setNewModelId(e.target.value)}
+                              onChange={(e) => {
+                                setNewModelId(e.target.value);
+                                if (addModelError) setAddModelError(null);
+                              }}
                               placeholder="e.g. gemini-2.5-flash or ollama/llama3.3"
                               className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                             />
@@ -1809,7 +1922,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                               type="text"
                               required
                               value={newModelName}
-                              onChange={(e) => setNewModelName(e.target.value)}
+                              onChange={(e) => {
+                                setNewModelName(e.target.value);
+                                if (addModelError) setAddModelError(null);
+                              }}
                               placeholder="e.g. Custom Gemini Flash"
                               className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                             />
@@ -1821,7 +1937,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                             </label>
                             <select
                               value={newModelProvider}
-                              onChange={(e) => setNewModelProvider(e.target.value as any)}
+                              onChange={(e) => {
+                                setNewModelProvider(e.target.value as any);
+                                if (addModelError) setAddModelError(null);
+                              }}
                               className="w-full px-3.5 py-2.5 rounded-full liquid-terminal-entry ink-primary outline-none focus:border-cyan-400"
                             >
                               <option value="gemini">Google Gemini API</option>
@@ -1859,7 +1978,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                                   type="url"
                                   required={newModelProvider === 'custom'}
                                   value={newModelEndpointUrl}
-                                  onChange={(e) => setNewModelEndpointUrl(e.target.value)}
+                                  onChange={(e) => {
+                                    setNewModelEndpointUrl(e.target.value);
+                                    if (addModelError) setAddModelError(null);
+                                  }}
                                   placeholder={
                                     newModelProvider === 'ollama'
                                       ? 'http://127.0.0.1:11434'
@@ -1891,16 +2013,30 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                           <div className="pt-2 flex justify-end gap-2">
                             <button
                               type="button"
-                              onClick={() => setIsAddModelOpen(false)}
-                              className="px-4 py-2 rounded-full liquid-control-pill font-sans font-semibold cursor-pointer"
+                              disabled={isSavingModel}
+                              onClick={() => {
+                                setIsAddModelOpen(false);
+                                setAddModelError(null);
+                              }}
+                              className="px-4 py-2 rounded-full liquid-control-pill font-sans font-semibold disabled:opacity-45 cursor-pointer"
                             >
                               {isBg ? 'Отказ' : 'Cancel'}
                             </button>
                             <button
                               type="submit"
-                              className="px-4 py-2 rounded-full liquid-hero-btn font-sans font-bold cursor-pointer"
+                              disabled={isSavingModel}
+                              className="px-4 py-2 rounded-full liquid-hero-btn font-sans font-bold disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
                             >
-                              {isBg ? 'Запази' : 'Save Model'}
+                              {isSavingModel && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                              <span>
+                                {isSavingModel
+                                  ? isBg
+                                    ? 'Запазване...'
+                                    : 'Saving...'
+                                  : isBg
+                                  ? 'Запази'
+                                  : 'Save Model'}
+                              </span>
                             </button>
                           </div>
                         </form>
@@ -1973,16 +2109,36 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
             </span>
 
             {settingsSyncError && (
-              <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-rose-500/12 border border-rose-500/35 text-rose-400 text-xs font-mono">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>{settingsSyncError}</span>
+              <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-rose-500/12 border border-rose-500/35 text-rose-500 dark:text-rose-400 text-xs font-mono">
+                <div className="flex items-center gap-2 min-w-0">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{settingsSyncError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSyncError(null)}
+                  aria-label={isBg ? 'Затвори' : 'Dismiss'}
+                  className="p-1 ink-muted hover:ink-primary cursor-pointer shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
 
             {biometricNotice && (
-              <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-amber-500/12 border border-amber-500/35 text-amber-400 text-xs font-mono">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>{biometricNotice}</span>
+              <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-amber-500/12 border border-amber-500/35 text-amber-700 dark:text-amber-400 text-xs font-mono">
+                <div className="flex items-center gap-2 min-w-0">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{biometricNotice}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBiometricNotice(null)}
+                  aria-label={isBg ? 'Затвори' : 'Dismiss'}
+                  className="p-1 ink-muted hover:ink-primary cursor-pointer shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
 
@@ -2003,6 +2159,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   </div>
                 </div>
                 <CyberToggle
+                  label={t('settings_hitl')}
                   checked={isHitlEnabled}
                   onChange={(v) => void persistSettingPatch({ isHitlEnabled: v })}
                 />
@@ -2024,6 +2181,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   </div>
                 </div>
                 <CyberToggle
+                  label={t('settings_biometric')}
                   checked={isBiometricEnabled}
                   onChange={(v) => void handleToggleBiometric(v)}
                 />
@@ -2045,6 +2203,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   </div>
                 </div>
                 <CyberToggle
+                  label={t('settings_confirmations')}
                   checked={isCommandConfirmations}
                   onChange={(v) => void persistSettingPatch({ isCommandConfirmations: v })}
                 />
@@ -2066,6 +2225,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({
                   </div>
                 </div>
                 <CyberToggle
+                  label={t('settings_alerts')}
                   checked={isSystemStateAlerts}
                   onChange={(v) => void persistSettingPatch({ isSystemStateAlerts: v })}
                 />
