@@ -801,19 +801,56 @@ class AdaptiveScaffold extends StatelessWidget {
                                   ? MainAxisAlignment.start
                                   : MainAxisAlignment.center,
                               children: [
-                                AnimatedScale(
-                                  scale: isSelected ? 1.10 : 1.0,
-                                  duration: dur,
-                                  curve: Curves.easeOutBack,
-                                  child: Icon(
-                                    isSelected
-                                        ? (item.activeIcon ?? item.icon)
-                                        : item.icon,
-                                    size: 20,
-                                    color: isSelected
-                                        ? activeFg
-                                        : palette.textSecondary,
-                                  ),
+                                Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    AnimatedScale(
+                                      scale: isSelected ? 1.10 : 1.0,
+                                      duration: dur,
+                                      curve: Curves.easeOutBack,
+                                      child: Icon(
+                                        isSelected
+                                            ? (item.activeIcon ?? item.icon)
+                                            : item.icon,
+                                        size: 20,
+                                        color: isSelected
+                                            ? activeFg
+                                            : palette.textSecondary,
+                                      ),
+                                    ),
+                                    if (!extended && hasBadge)
+                                      Positioned(
+                                        top: -6,
+                                        right: -9,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                            vertical: 1,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: isSelected
+                                                ? activeFg
+                                                : palette.success,
+                                            borderRadius:
+                                                BorderRadius.circular(999),
+                                          ),
+                                          child: Text(
+                                            item.badgeCount! > 99
+                                                ? '99+'
+                                                : '${item.badgeCount}',
+                                            textScaler: TextScaler.noScaling,
+                                            style: TextStyle(
+                                              fontSize: 8.5,
+                                              height: 1.1,
+                                              fontWeight: FontWeight.w800,
+                                              color: isSelected
+                                                  ? palette.primary
+                                                  : palette.onPrimary,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
                                 ),
                                 if (extended) ...[
                                   const SizedBox(width: 10),
@@ -847,7 +884,9 @@ class AdaptiveScaffold extends StatelessWidget {
                                         borderRadius: BorderRadius.circular(10),
                                       ),
                                       child: Text(
-                                        '${item.badgeCount}',
+                                        item.badgeCount! > 99
+                                            ? '99+'
+                                            : '${item.badgeCount}',
                                         style: TextStyle(
                                           fontSize: 10,
                                           fontWeight: FontWeight.w800,
@@ -858,18 +897,6 @@ class AdaptiveScaffold extends StatelessWidget {
                                       ),
                                     ),
                                   ],
-                                ] else if (hasBadge) ...[
-                                  const SizedBox(width: 3),
-                                  Text(
-                                    '${item.badgeCount}',
-                                    style: TextStyle(
-                                      fontSize: 9.5,
-                                      fontWeight: FontWeight.w800,
-                                      color: isSelected
-                                          ? activeFg
-                                          : palette.success,
-                                    ),
-                                  ),
                                 ],
                               ],
                             ),

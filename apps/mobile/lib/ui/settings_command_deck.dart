@@ -1607,11 +1607,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
             final swatchSecondary = preset.resolvedSecondary(prefs.themeMode);
             final swatchMid =
                 Color.lerp(swatchColor, swatchSecondary, 0.5) ?? swatchColor;
-            final swatchOnFill =
-                ThemeData.estimateBrightnessForColor(swatchMid) ==
-                        Brightness.dark
-                    ? Colors.white
-                    : const Color(0xFF090B1D);
+            final swatchOnFill = CyberPalette.contrastInkFor(swatchMid);
             final isSelected = prefs.accent == preset;
             return Semantics(
               button: true,
@@ -3461,6 +3457,7 @@ class _ImportConfigDialogState extends State<_ImportConfigDialog> {
           onPressed: _isImporting
               ? null
               : () async {
+                  final navigator = Navigator.of(context);
                   setState(() => _isImporting = true);
                   final res = await widget.onImport(_ctrl.text);
                   if (!mounted) return;
@@ -3471,7 +3468,7 @@ class _ImportConfigDialogState extends State<_ImportConfigDialog> {
                     });
                     return;
                   }
-                  Navigator.of(context).pop(res);
+                  navigator.pop(res);
                 },
           child: Text(_isImporting ? 'Importing...' : 'Import'),
         ),

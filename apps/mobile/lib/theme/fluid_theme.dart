@@ -258,33 +258,22 @@ class CyberPalette extends ThemeExtension<CyberPalette> {
     return Theme.of(context).extension<CyberPalette>() ?? defaultPalette;
   }
 
-  /// High-contrast foreground colors computed from background luminance so
-  /// light & dark accent pills/buttons remain legible across all 6 presets.
-  Color get onPrimary =>
-      ThemeData.estimateBrightnessForColor(primary) == Brightness.dark
-          ? Colors.white
-          : const Color(0xFF090B1D);
+  /// High-contrast foreground colors computed from relative luminance (WCAG
+  /// crossover ~0.184) so light & dark accent pills/buttons maintain >= 4.4:1
+  /// contrast across all 6 presets in both Daylight and Dark modes.
+  static Color contrastInkFor(Color background) =>
+      background.computeLuminance() > 0.184
+          ? const Color(0xFF070916)
+          : Colors.white;
 
-  Color get onSecondary =>
-      ThemeData.estimateBrightnessForColor(secondary) == Brightness.dark
-          ? Colors.white
-          : const Color(0xFF090B1D);
-
-  Color get onWarning =>
-      ThemeData.estimateBrightnessForColor(warning) == Brightness.dark
-          ? Colors.white
-          : const Color(0xFF090B1D);
-
-  Color get onAccent =>
-      ThemeData.estimateBrightnessForColor(accent) == Brightness.dark
-          ? Colors.white
-          : const Color(0xFF090B1D);
+  Color get onPrimary => contrastInkFor(primary);
+  Color get onSecondary => contrastInkFor(secondary);
+  Color get onWarning => contrastInkFor(warning);
+  Color get onAccent => contrastInkFor(accent);
 
   Color get onHeroGradient {
     final mid = Color.lerp(primary, secondary, 0.5) ?? primary;
-    return ThemeData.estimateBrightnessForColor(mid) == Brightness.dark
-        ? Colors.white
-        : const Color(0xFF090B1D);
+    return contrastInkFor(mid);
   }
 
   Color get glassBorderActive => primary.withValues(alpha: isDaylight ? 0.56 : 0.62);

@@ -1509,12 +1509,14 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           }
         }),
       );
-      _showToast(
-        'Health check complete: $onlineCount / ${hosts.length} online',
-        accentColor: onlineCount > 0
-            ? context.palette.success
-            : context.palette.warning,
-      );
+      if (mounted) {
+        _showToast(
+          'Health check complete: $onlineCount / ${hosts.length} online',
+          accentColor: onlineCount > 0
+              ? context.palette.success
+              : context.palette.warning,
+        );
+      }
     } finally {
       if (mounted) {
         setState(() => _isPinging = false);
@@ -2961,49 +2963,53 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
       if (mounted) {
         final String trimmedOut =
             out.length > 360 ? '${out.substring(0, 360)}…' : out;
-        unawaited(
-          ref.read(historyProvider.notifier).recordCommand(
-                command: trimmed,
-                hostName: targetHost.name,
-                hostIp: targetHost.ip,
-                mac: targetHost.mac,
-                success: !failed,
-                exitCode: res.exitCode,
-                latencyMs: cmdWatch.elapsedMilliseconds,
-                detail: trimmedOut.isNotEmpty
-                    ? '$trimmed\n$trimmedOut'
-                    : trimmed,
-                extraMeta: <String, dynamic>{'status': res.status},
-              ),
-        );
+        try {
+          unawaited(
+            ref.read(historyProvider.notifier).recordCommand(
+                  command: trimmed,
+                  hostName: targetHost.name,
+                  hostIp: targetHost.ip,
+                  mac: targetHost.mac,
+                  success: !failed,
+                  exitCode: res.exitCode,
+                  latencyMs: cmdWatch.elapsedMilliseconds,
+                  detail: trimmedOut.isNotEmpty
+                      ? '$trimmed\n$trimmedOut'
+                      : trimmed,
+                  extraMeta: <String, dynamic>{'status': res.status},
+                ),
+          );
+        } catch (_) {}
       }
     } catch (e) {
       cmdWatch.stop();
       updateLatestStatus('Dispatch error: $e', isError: true);
       if (mounted) {
-        if (!wasVaultEstablished) {
+        try {
+          if (!wasVaultEstablished) {
+            unawaited(
+              ref.read(historyProvider.notifier).recordConnection(
+                    hostIp: targetHost.ip,
+                    hostName: targetHost.name,
+                    mac: targetHost.mac,
+                    success: false,
+                    event: 'Session handshake failed: $e',
+                    port: targetHost.wsPort,
+                  ),
+            );
+          }
           unawaited(
-            ref.read(historyProvider.notifier).recordConnection(
-                  hostIp: targetHost.ip,
+            ref.read(historyProvider.notifier).recordCommand(
+                  command: trimmed,
                   hostName: targetHost.name,
+                  hostIp: targetHost.ip,
                   mac: targetHost.mac,
                   success: false,
-                  event: 'Session handshake failed: $e',
-                  port: targetHost.wsPort,
+                  latencyMs: cmdWatch.elapsedMilliseconds,
+                  detail: '$trimmed — Dispatch error: $e',
                 ),
           );
-        }
-        unawaited(
-          ref.read(historyProvider.notifier).recordCommand(
-                command: trimmed,
-                hostName: targetHost.name,
-                hostIp: targetHost.ip,
-                mac: targetHost.mac,
-                success: false,
-                latencyMs: cmdWatch.elapsedMilliseconds,
-                detail: '$trimmed — Dispatch error: $e',
-              ),
-        );
+        } catch (_) {}
       }
     } finally {
       retainedClient?.release();
@@ -3321,8 +3327,10 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
               'WORKSTATIONS ($onlineCount/${hosts.length} ONLINE)',
             ),
             if (hosts.isNotEmpty)
-              Row(
-                mainAxisSize: MainAxisSize.min,
+              Wrap(
+                spacing: 4,
+                runSpacing: 2,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   if (hosts.length <= 2)
                     IconButton(
@@ -4415,16 +4423,12 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
                               ElevatedButton.icon(
                                 icon: Icon(
                                   Icons.bolt_rounded,
-                                  color: palette.isDaylight
-                                      ? Colors.white
-                                      : Colors.black,
+                                  color: palette.onWarning,
                                 ),
                                 label: const Text('WAKE ON LAN (WoL)'),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: palette.warning,
-                                  foregroundColor: palette.isDaylight
-                                      ? Colors.white
-                                      : Colors.black,
+                                  foregroundColor: palette.onWarning,
                                 ),
                                 onPressed: () => _sendWakeOnLan(
                                   host.mac,
@@ -4441,13 +4445,16 @@ class _MainAdaptiveScreenState extends ConsumerState<MainAdaptiveScreen> {
           ),
         );
 
+        final switcherDuration = MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 240);
         return Padding(
           padding: EdgeInsets.all(pad),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               AnimatedSwitcher(
-                duration: const Duration(milliseconds: 240),
+                duration: switcherDuration,
                 switchInCurve: Curves.easeOutCubic,
                 child: previewWidget,
               ),
@@ -5370,6 +5377,7 @@ class _HostEditorDialogState extends State<_HostEditorDialog> {
                       ? NetworkValidators.sanitizeLabel(_nameCtrl.text)
                       : 'PC-$ip';
 
+                  final navigator = Navigator.of(context);
                   final err = await widget.onSave(
                     name: name,
                     ip: ip,
@@ -5386,7 +5394,7 @@ class _HostEditorDialogState extends State<_HostEditorDialog> {
                     });
                     return;
                   }
-                  Navigator.of(context).pop();
+                  navigator.pop();
                 },
           child: Text(
             _isSaving
@@ -5597,13 +5605,14 @@ class _PairingSecretDialogState extends State<_PairingSecretDialog> {
           onPressed: _isSaving
               ? null
               : () async {
+                  final navigator = Navigator.of(context);
                   setState(() => _isSaving = true);
                   final res = await widget.onSubmit(
                     secretInput: _secretCtrl.text.trim(),
                     pin: _pinCtrl.text.trim(),
                   );
                   if (!mounted) return;
-                  Navigator.of(context).pop(res);
+                  navigator.pop(res);
                 },
           child: Text(
             _isSaving ? 'Pairing...' : 'Save & Pair',
