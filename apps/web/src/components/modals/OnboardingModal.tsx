@@ -140,7 +140,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={isBg ? 'Добре дошли в AI NetController' : 'Welcome to AI NetController'}
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
+        >
           {/* Adaptive Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -160,26 +165,26 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             className="relative w-full max-w-2xl glass-liquid-modal rounded-[28px] overflow-hidden flex flex-col my-auto max-h-[92dvh] z-10"
           >
             {/* Top Progress Glow Line */}
-            <div className="w-full bg-[var(--glass-border)] h-1.5 relative overflow-hidden">
+            <div className="w-full bg-[var(--surface-border-subtle)] h-1.5 relative overflow-hidden">
               <motion.div
-                className="h-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)]"
+                className="h-full bg-gradient-to-r from-[var(--theme-accent)] via-[var(--theme-secondary)] to-[var(--theme-tertiary)]"
                 animate={{ width: `${((currentStep + 1) / TOTAL_STEPS) * 100}%` }}
                 transition={SPRING_BUBBLY}
               />
             </div>
 
             {/* Header Bar */}
-            <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-[var(--glass-border)] flex items-center justify-between shrink-0">
+            <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-[var(--surface-border-subtle)] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 squircle-badge squircle-hero shrink-0">
                   <Sparkles className="w-4.5 h-4.5" />
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-display font-bold tracking-wide text-[var(--accent-primary)] truncate">
+                    <span className="text-[11px] font-display font-bold tracking-wide text-[var(--theme-accent)] truncate">
                       AI NetController
                     </span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-[var(--accent-primary)]/14 border border-[var(--accent-primary)]/30 text-[var(--accent-primary)] shrink-0">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-[var(--theme-accent)]/14 border border-[var(--theme-accent)]/30 text-[var(--theme-accent)] shrink-0">
                       v0.90.0
                     </span>
                   </div>
@@ -220,7 +225,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     className="space-y-5"
                   >
                     <div className="text-center space-y-2 py-1">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--accent-primary)]/12 border border-[var(--accent-primary)]/30 text-[var(--accent-primary)] text-xs font-display font-semibold">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--theme-accent)]/12 border border-[var(--theme-accent)]/30 text-[var(--theme-accent)] text-xs font-display font-semibold">
                         <Radio className="w-3.5 h-3.5 animate-pulse" />
                         {isBg ? 'Автономен локален системен мост' : 'Autonomous Local-First SysAdmin'}
                       </div>
@@ -238,7 +243,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
                     {/* 3 Core Highlights */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                         <div className="w-9 h-9 squircle-badge squircle-sky mb-2.5">
                           <Lock className="w-4 h-4" />
                         </div>
@@ -252,7 +257,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </p>
                       </div>
 
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                         <div className="w-9 h-9 squircle-badge squircle-emerald mb-2.5">
                           <Zap className="w-4 h-4" />
                         </div>
@@ -266,7 +271,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </p>
                       </div>
 
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                         <div className="w-9 h-9 squircle-badge squircle-violet mb-2.5">
                           <Cpu className="w-4 h-4" />
                         </div>
@@ -283,9 +288,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
                     {/* Quick Personalization: Language & Daylight/Dark Glass */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div className="flex items-center justify-between gap-2 p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] text-xs">
+                      <div className="flex items-center justify-between gap-2 p-3 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] text-xs">
                         <div className="flex items-center gap-2 min-w-0">
-                          <Globe className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                          <Globe className="w-4 h-4 text-[var(--theme-accent)] shrink-0" />
                           <span className="ink-primary font-display font-semibold truncate">
                             {isBg ? 'Език' : 'Language'}
                           </span>
@@ -322,12 +327,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between gap-2 p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] text-xs">
+                      <div className="flex items-center justify-between gap-2 p-3 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] text-xs">
                         <div className="flex items-center gap-2 min-w-0">
                           {themeMode === 'light' ? (
                             <Sun className="w-4 h-4 text-amber-500 shrink-0" />
                           ) : (
-                            <Moon className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                            <Moon className="w-4 h-4 text-[var(--theme-accent)] shrink-0" />
                           )}
                           <span className="ink-primary font-display font-semibold truncate">
                             {isBg ? 'Визия' : 'Glass Mode'}
@@ -397,7 +402,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     </div>
 
                     <div className="space-y-2.5">
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex items-start gap-3">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex items-start gap-3">
                         <div className="w-9 h-9 squircle-badge squircle-sky shrink-0 mt-0.5">
                           <Lock className="w-4 h-4" />
                         </div>
@@ -420,7 +425,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex items-start gap-3">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex items-start gap-3">
                         <div className="w-9 h-9 squircle-badge squircle-amber shrink-0 mt-0.5">
                           <ShieldCheck className="w-4 h-4" />
                         </div>
@@ -441,7 +446,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex items-start gap-3">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex items-start gap-3">
                         <div className="w-9 h-9 squircle-badge squircle-emerald shrink-0 mt-0.5">
                           <TerminalSquare className="w-4 h-4" />
                         </div>
@@ -476,7 +481,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     className="space-y-4"
                   >
                     <div className="space-y-1">
-                      <span className="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-display font-bold bg-[var(--accent-primary)]/14 text-[var(--accent-primary)] border border-[var(--accent-primary)]/25">
+                      <span className="inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-display font-bold bg-[var(--theme-accent)]/14 text-[var(--theme-accent)] border border-[var(--theme-accent)]/25">
                         {isBg ? 'Лесно свързване' : 'Host Pairing'}
                       </span>
                       <h3 className="text-lg font-display font-extrabold ink-primary">
@@ -492,7 +497,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="p-4 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex flex-col justify-between">
+                      <div className="p-4 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex flex-col justify-between">
                         <div className="space-y-2">
                           <div className="w-9 h-9 squircle-badge squircle-sky">
                             <Monitor className="w-4.5 h-4.5" />
@@ -507,15 +512,15 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           </p>
                         </div>
 
-                        <div className="mt-3 pt-3 border-t border-[var(--glass-border)] flex items-center justify-between text-[11px] font-mono">
-                          <span className="text-[var(--accent-primary)] font-semibold">Port 8765</span>
+                        <div className="mt-3 pt-3 border-t border-[var(--surface-border-subtle)] flex items-center justify-between text-[11px] font-mono">
+                          <span className="text-[var(--theme-accent)] font-semibold">Port 8765</span>
                           <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-300 font-semibold">
                             <Check className="w-3.5 h-3.5" /> mDNS Ready
                           </span>
                         </div>
                       </div>
 
-                      <div className="p-4 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex flex-col justify-between">
+                      <div className="p-4 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex flex-col justify-between">
                         <div className="space-y-2">
                           <div className="w-9 h-9 squircle-badge squircle-emerald">
                             <Smartphone className="w-4.5 h-4.5" />
@@ -530,19 +535,19 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           </p>
                         </div>
 
-                        <div className="mt-3 pt-3 border-t border-[var(--glass-border)] flex items-center justify-between text-[11px] font-mono">
+                        <div className="mt-3 pt-3 border-t border-[var(--surface-border-subtle)] flex items-center justify-between text-[11px] font-mono">
                           <span className="text-emerald-600 dark:text-emerald-300 font-semibold">
                             PWA / Android
                           </span>
-                          <span className="flex items-center gap-1 text-[var(--accent-primary)] font-semibold">
+                          <span className="flex items-center gap-1 text-[var(--theme-accent)] font-semibold">
                             <QrCode className="w-3.5 h-3.5" /> QR Scan
                           </span>
                         </div>
                       </div>
                     </div>
 
-                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center justify-between font-mono text-xs">
-                      <div className="flex items-center gap-2 text-[var(--accent-primary)] font-semibold">
+                    <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex items-center justify-between font-mono text-xs">
+                      <div className="flex items-center gap-2 text-[var(--theme-accent)] font-semibold">
                         <Wifi className="w-4 h-4" />
                         <span>ws://localhost:8765</span>
                       </div>
@@ -580,7 +585,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex items-start gap-2.5">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex items-start gap-2.5">
                         <div className="w-8 h-8 squircle-badge squircle-sky shrink-0">
                           <Activity className="w-4 h-4" />
                         </div>
@@ -596,7 +601,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex items-start gap-2.5">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex items-start gap-2.5">
                         <div className="w-8 h-8 squircle-badge squircle-emerald shrink-0">
                           <TerminalSquare className="w-4 h-4" />
                         </div>
@@ -612,7 +617,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex items-start gap-2.5">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex items-start gap-2.5">
                         <div className="w-8 h-8 squircle-badge squircle-violet shrink-0">
                           <Sparkles className="w-4 h-4" />
                         </div>
@@ -628,7 +633,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] flex items-start gap-2.5">
+                      <div className="p-3.5 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex items-start gap-2.5">
                         <div className="w-8 h-8 squircle-badge squircle-amber shrink-0">
                           <Zap className="w-4 h-4" />
                         </div>
@@ -645,8 +650,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       </div>
                     </div>
 
-                    <div className="p-3 rounded-2xl bg-[var(--accent-primary)]/10 border border-[var(--accent-primary)]/25 flex items-center justify-between gap-2 text-xs">
-                      <div className="flex items-center gap-2 text-[var(--accent-primary)] font-display font-semibold">
+                    <div className="p-3 rounded-2xl bg-[var(--theme-accent)]/10 border border-[var(--theme-accent)]/25 flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 text-[var(--theme-accent)] font-display font-semibold">
                         <SlidersHorizontal className="w-4 h-4 shrink-0" />
                         <span>
                           {isBg
@@ -654,7 +659,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                             : 'Quick Omnibar: Press [Ctrl + K] or [/] anytime'}
                         </span>
                       </div>
-                      <span className="font-mono text-[10.5px] font-bold px-2.5 py-0.5 rounded-full bg-[var(--accent-primary)]/18 text-[var(--accent-primary)] shrink-0">
+                      <span className="font-mono text-[10.5px] font-bold px-2.5 py-0.5 rounded-full bg-[var(--theme-accent)]/18 text-[var(--theme-accent)] shrink-0">
                         Spotlight
                       </span>
                     </div>
@@ -698,8 +703,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           }}
                           className={`p-3.5 rounded-2xl text-left border transition cursor-pointer flex items-start gap-3 ${
                             selectedModel === 'gemini-2.5-flash'
-                              ? 'bg-[var(--accent-primary)]/14 border-[var(--accent-primary)]/50 shadow-sm'
-                              : 'glass-liquid-subtle border-[var(--glass-border)] hover:border-[var(--accent-primary)]/35'
+                              ? 'bg-[var(--theme-accent)]/14 border-[var(--theme-accent)]/50 shadow-sm'
+                              : 'glass-liquid-subtle border-[var(--surface-border-subtle)] hover:border-[var(--theme-accent)]/35'
                           }`}
                         >
                           <div className="w-8 h-8 squircle-badge squircle-hero shrink-0">
@@ -724,7 +729,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                           className={`p-3.5 rounded-2xl text-left border transition cursor-pointer flex items-start gap-3 ${
                             selectedModel === 'deepseek-r1:latest'
                               ? 'bg-emerald-500/14 border-emerald-500/50 shadow-sm'
-                              : 'glass-liquid-subtle border-[var(--glass-border)] hover:border-emerald-500/35'
+                              : 'glass-liquid-subtle border-[var(--surface-border-subtle)] hover:border-emerald-500/35'
                           }`}
                         >
                           <div className="w-8 h-8 squircle-badge squircle-emerald shrink-0">
@@ -751,7 +756,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         id="dontShowAgain"
                         checked={dontShowAgain}
                         onChange={(e) => setDontShowAgain(e.target.checked)}
-                        className="w-4 h-4 rounded accent-[var(--accent-primary)] cursor-pointer"
+                        className="w-4 h-4 rounded accent-[var(--theme-accent)] cursor-pointer"
                       />
                       <span>
                         {isBg
@@ -765,7 +770,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </div>
 
             {/* Footer Navigation Bar */}
-            <div className="px-4 sm:px-5 py-3.5 border-t border-[var(--glass-border)] glass-liquid-subtle flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <div className="px-4 sm:px-5 py-3.5 border-t border-[var(--surface-border-subtle)] glass-liquid-subtle flex flex-wrap items-center justify-between gap-2 shrink-0">
               <div className="shrink-0">
                 {currentStep > 0 && (
                   <button
@@ -796,10 +801,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     <span
                       className={`h-2 rounded-full transition-all ${
                         idx === currentStep
-                          ? 'w-6 bg-[var(--accent-primary)]'
+                          ? 'w-6 bg-[var(--theme-accent)]'
                           : idx < currentStep
                           ? 'w-2 bg-emerald-500'
-                          : 'w-2 bg-[var(--glass-border)] hover:bg-[var(--accent-primary)]/50'
+                          : 'w-2 bg-[var(--surface-border-subtle)] hover:bg-[var(--theme-accent)]/50'
                       }`}
                     />
                   </button>
@@ -827,7 +832,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       className="min-h-[40px] px-4 py-2 rounded-full liquid-control-pill ink-primary font-display font-semibold text-xs sm:text-sm flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
                       title={isBg ? 'Свържи реален PC демон сега' : 'Pair Live PC Daemon Now'}
                     >
-                      <QrCode className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
+                      <QrCode className="w-3.5 h-3.5 text-[var(--theme-accent)] shrink-0" />
                       <span>{isBg ? 'Сдвояване' : 'Pair Host'}</span>
                     </button>
                     <motion.button

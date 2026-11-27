@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../security/network_validators.dart';
+
 /// Metadata for a PC Host Agent discovered via LAN UDP broadcast (`CST_DISCOVER_V1`).
 @immutable
 class DiscoveredLanHost {
@@ -13,6 +15,7 @@ class DiscoveredLanHost {
   final bool useTls;
   final String os;
   final String version;
+  final String mac;
 
   const DiscoveredLanHost({
     required this.ip,
@@ -21,6 +24,7 @@ class DiscoveredLanHost {
     this.useTls = false,
     this.os = 'Unknown',
     this.version = '',
+    this.mac = '',
   });
 
   @override
@@ -32,16 +36,18 @@ class DiscoveredLanHost {
         other.wsPort == wsPort &&
         other.useTls == useTls &&
         other.os == os &&
-        other.version == version;
+        other.version == version &&
+        other.mac == mac;
   }
 
   @override
-  int get hashCode => Object.hash(ip, hostname, wsPort, useTls, os, version);
+  int get hashCode =>
+      Object.hash(ip, hostname, wsPort, useTls, os, version, mac);
 
   @override
   String toString() =>
       'DiscoveredLanHost(ip: $ip, hostname: $hostname, wsPort: $wsPort, '
-      'useTls: $useTls, os: $os, version: $version)';
+      'useTls: $useTls, os: $os, version: $version, mac: $mac)';
 }
 
 /// Lightweight UDP LAN broadcast discovery client for AI NetController Host Agents.
@@ -119,6 +125,10 @@ class LanDiscoveryService {
         decoded['version'],
         fallback: '',
       );
+      final dynamic rawMac = decoded['mac'];
+      final String mac = rawMac is String
+          ? (NetworkValidators.normalizeMac(rawMac) ?? '')
+          : '';
 
       return DiscoveredLanHost(
         ip: cleanIp,
@@ -127,6 +137,7 @@ class LanDiscoveryService {
         useTls: useTls,
         os: os,
         version: version,
+        mac: mac,
       );
     } catch (_) {
       return null;
@@ -153,8 +164,12 @@ class LanDiscoveryService {
         octets.add(v);
       }
       if (!valid) continue;
-      // Skip loopback (127.x.x.x) and unspecified (0.x.x.x)
-      if (octets[0] == 127 || octets[0] == 0) continue;
+      // Skip loopback (127.x), unspecified (0.x), and APIPA link-local (169.254.x)
+      if (octets[0] == 127 ||
+          octets[0] == 0 ||
+          (octets[0] == 169 && octets[1] == 254)) {
+        continue;
+      }
       targets.add('${octets[0]}.${octets[1]}.${octets[2]}.255');
     }
     return targets.toList(growable: false);
@@ -212,12 +227,15 @@ class LanDiscoveryService {
       final Map<String, DiscoveredLanHost> discovered =
           <String, DiscoveredLanHost>{};
 
+      const int maxDatagramsPerEvent = 64;
       sub = socket.listen(
         (RawSocketEvent event) {
           if (event != RawSocketEvent.read || socket == null) return;
-          while (true) {
+          int processed = 0;
+          while (processed < maxDatagramsPerEvent) {
             final Datagram? datagram = socket.receive();
             if (datagram == null) break;
+            processed++;
             if (datagram.data.length > _maxPayloadBytes) continue;
             final String raw = utf8.decode(datagram.data, allowMalformed: true);
             final DiscoveredLanHost? host = parseDiscoveryPayload(

@@ -35,6 +35,7 @@ import time
 import types
 import zlib
 import base64
+from collections import OrderedDict
 import ipaddress
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Set, Tuple, Any
@@ -46,8 +47,15 @@ except ImportError:
 
 def is_local_or_private_ip(ip_str: str) -> bool:
     """Returns True if IP is localhost, link-local, or private RFC1918 LAN address."""
+    if not isinstance(ip_str, str):
+        return False
+    clean = ip_str.strip()
+    if "%" in clean:
+        clean = clean.split("%", 1)[0]
     try:
-        ip = ipaddress.ip_address(ip_str)
+        ip = ipaddress.ip_address(clean)
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
         return ip.is_loopback or ip.is_private or ip.is_link_local
     except ValueError:
         return False
@@ -421,6 +429,113 @@ if platform.system() == "Windows":
         ]
 
 _WIN_USER32_INPUT_BOUND = False
+_WIN_CLIPBOARD_BOUND = False
+_CF_UNICODETEXT = 13
+_GMEM_MOVEABLE = 0x0002
+
+
+def _ensure_win32_clipboard():
+    global _WIN_CLIPBOARD_BOUND
+    u32 = ctypes.windll.user32
+    k32 = ctypes.windll.kernel32
+    if not _WIN_CLIPBOARD_BOUND:
+        u32.OpenClipboard.argtypes = [wintypes.HWND]
+        u32.OpenClipboard.restype = wintypes.BOOL
+        u32.CloseClipboard.argtypes = []
+        u32.CloseClipboard.restype = wintypes.BOOL
+        u32.EmptyClipboard.argtypes = []
+        u32.EmptyClipboard.restype = wintypes.BOOL
+        u32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+        u32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+        u32.GetClipboardData.argtypes = [wintypes.UINT]
+        u32.GetClipboardData.restype = wintypes.HANDLE
+        u32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        u32.SetClipboardData.restype = wintypes.HANDLE
+        k32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        k32.GlobalAlloc.restype = wintypes.HGLOBAL
+        k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        k32.GlobalLock.restype = ctypes.c_void_p
+        k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        k32.GlobalUnlock.restype = wintypes.BOOL
+        k32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        k32.GlobalFree.restype = wintypes.HGLOBAL
+        _WIN_CLIPBOARD_BOUND = True
+    return u32, k32
+
+
+def _win32_clipboard_set(text: str) -> bool:
+    """Writes UTF-16 text to the Windows clipboard natively without spawning clip.exe."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        u32, k32 = _ensure_win32_clipboard()
+        encoded = (str(text) + "\x00").encode("utf-16-le")
+        opened = False
+        for _ in range(4):
+            if u32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.015)
+        if not opened:
+            return False
+        try:
+            if not u32.EmptyClipboard():
+                return False
+            h_mem = k32.GlobalAlloc(_GMEM_MOVEABLE, len(encoded))
+            if not h_mem:
+                return False
+            ptr = k32.GlobalLock(h_mem)
+            if not ptr:
+                k32.GlobalFree(h_mem)
+                return False
+            try:
+                ctypes.memmove(ptr, encoded, len(encoded))
+            finally:
+                k32.GlobalUnlock(h_mem)
+            if not u32.SetClipboardData(_CF_UNICODETEXT, h_mem):
+                k32.GlobalFree(h_mem)
+                return False
+            return True
+        finally:
+            u32.CloseClipboard()
+    except Exception:
+        return False
+
+
+def _win32_clipboard_get(max_chars: int = 524_288) -> Optional[str]:
+    """Reads UTF-16 text from the Windows clipboard natively with lock-contention retry."""
+    if platform.system() != "Windows":
+        return None
+    try:
+        u32, k32 = _ensure_win32_clipboard()
+        if not u32.IsClipboardFormatAvailable(_CF_UNICODETEXT):
+            return ""
+        opened = False
+        for _ in range(4):
+            if u32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.015)
+        if not opened:
+            return None
+        try:
+            h_data = u32.GetClipboardData(_CF_UNICODETEXT)
+            if not h_data:
+                return ""
+            ptr = k32.GlobalLock(h_data)
+            if not ptr:
+                return ""
+            try:
+                text = ctypes.wstring_at(ptr)
+                return text[:max_chars] if len(text) > max_chars else text
+            finally:
+                k32.GlobalUnlock(h_data)
+        finally:
+            u32.CloseClipboard()
+    except Exception:
+        return None
+
+
 _SM_XVIRTUALSCREEN = 76
 _SM_YVIRTUALSCREEN = 77
 _SM_CXVIRTUALSCREEN = 78
@@ -847,10 +962,14 @@ class CursorOverlayCompositor:
     _MAX_SPRITE_CACHE = 32
 
     def __init__(self) -> None:
-        self._sprite_cache: Dict[int, Tuple[Any, Any, int, int]] = {}
+        self._sprite_cache: "OrderedDict[int, Tuple[Any, Any, int, int]]" = OrderedDict()
         self._fallback_np: Optional[Tuple[Any, Any, int, int]] = None
         self._fallback_pil: Optional[Tuple[Any, int, int]] = None
-        self._pil_cache: Dict[int, Tuple[Any, Any, int, int]] = {}
+        self._pil_cache: "OrderedDict[int, Tuple[Any, Any, int, int]]" = OrderedDict()
+
+    def clear_caches(self) -> None:
+        self._sprite_cache.clear()
+        self._pil_cache.clear()
 
     @staticmethod
     def _ensure_win32_bindings() -> Tuple[Any, Any]:
@@ -865,6 +984,8 @@ class CursorOverlayCompositor:
                 u32.GetCursorPos.restype = wintypes.BOOL
                 u32.GetIconInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
                 u32.GetIconInfo.restype = wintypes.BOOL
+                u32.GetSystemMetrics.argtypes = [ctypes.c_int]
+                u32.GetSystemMetrics.restype = ctypes.c_int
                 u32.DrawIconEx.argtypes = [
                     wintypes.HDC,
                     ctypes.c_int,
@@ -991,6 +1112,7 @@ class CursorOverlayCompositor:
         ):
             return None
         if hcursor in self._sprite_cache:
+            self._sprite_cache.move_to_end(hcursor)
             return self._sprite_cache[hcursor]
 
         hdc = None
@@ -998,18 +1120,26 @@ class CursorOverlayCompositor:
         old_obj = None
         try:
             u32, g32 = self._ensure_win32_bindings()
+            size = 32
+            try:
+                # SM_CXCURSOR = 13: matches system HiDPI cursor size (32/48/64) so hotspot stays aligned
+                sys_cx = int(u32.GetSystemMetrics(13))
+                if 32 <= sys_cx <= 64:
+                    size = sys_cx
+            except Exception:
+                size = 32
+
             ii = _WIN_ICONINFO()
             ok_info = u32.GetIconInfo(wintypes.HANDLE(hcursor), ctypes.byref(ii))
             hx, hy = 0, 0
             if isinstance(ok_info, (int, bool)) and ok_info:
-                hx = max(0, min(31, int(ii.xHotspot)))
-                hy = max(0, min(31, int(ii.yHotspot)))
+                hx = max(0, min(size - 1, int(ii.xHotspot)))
+                hy = max(0, min(size - 1, int(ii.yHotspot)))
                 if ii.hbmMask:
                     g32.DeleteObject(ii.hbmMask)
                 if ii.hbmColor:
                     g32.DeleteObject(ii.hbmColor)
 
-            size = 32
             hdc = g32.CreateCompatibleDC(0)
             if not hdc:
                 return None
@@ -1072,7 +1202,7 @@ class CursorOverlayCompositor:
 
             sprite = (rgba, xor_crop, hx - x0, hy - y0)
             if len(self._sprite_cache) >= self._MAX_SPRITE_CACHE:
-                self._sprite_cache.pop(next(iter(self._sprite_cache)), None)
+                self._sprite_cache.popitem(last=False)
             self._sprite_cache[hcursor] = sprite
             return sprite
         except Exception:
@@ -1175,6 +1305,7 @@ class CursorOverlayCompositor:
             if hcursor and np is not None:
                 cached = self._pil_cache.get(hcursor)
                 if cached is not None:
+                    self._pil_cache.move_to_end(hcursor)
                     pil_im, xor_mask, hx, hy = cached
                 else:
                     native = self._capture_win32_cursor_np(hcursor)
@@ -1182,7 +1313,7 @@ class CursorOverlayCompositor:
                         rgba, xor_mask, hx, hy = native
                         pil_im = Image.fromarray(rgba, mode="RGBA")
                         if len(self._pil_cache) >= self._MAX_SPRITE_CACHE:
-                            self._pil_cache.pop(next(iter(self._pil_cache)), None)
+                            self._pil_cache.popitem(last=False)
                         self._pil_cache[hcursor] = (pil_im, xor_mask, hx, hy)
 
             if pil_im is None:
@@ -1785,6 +1916,17 @@ class AdaptiveScreenPipeline:
 
         return res
 
+    def release_idle_buffers(self) -> None:
+        """Releases large reusable frame arrays and DXGI duplication session when no clients are streaming."""
+        self._release_dxgi_cam()
+        self._work_bgra = None
+        self._scaled_bgrx = None
+        self._snapshot_bgrx = None
+        self._last_encoded_frame = None
+        self._last_diff_sample = None
+        self._last_cursor_state = None
+        self.force_keyframe = True
+
     def close(self):
         """Shuts down executor and releases thread-local resources cleanly (idempotent)."""
         if not self.is_running and not self._worker_scts and self._dxgi_cam is None:
@@ -1796,6 +1938,18 @@ class AdaptiveScreenPipeline:
         self._work_bgra = None
         self._scaled_bgrx = None
         self._snapshot_bgrx = None
+        self._last_encoded_frame = None
+        self._last_diff_sample = None
+        self._resize_cache = None
+        self._snapshot_resize_cache = None
+        self.cursor_compositor.clear_caches()
+        bio = getattr(self._local, "bio_buf", None)
+        if bio is not None:
+            try:
+                bio.close()
+            except Exception:
+                pass
+            self._local.bio_buf = None
         try:
             with self._sct_lock:
                 for sct in self._worker_scts:
@@ -1866,7 +2020,10 @@ class _LanDiscoveryProtocol(asyncio.DatagramProtocol):
         self.transport = transport  # type: ignore[assignment]
 
     def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
-        if not self._daemon.is_running or self._daemon.is_paused:
+        if not self._daemon.is_running or not addr:
+            return
+        self._daemon._refresh_runtime_policies_throttled(1.0)
+        if self._daemon.is_paused:
             return
         if not data or len(data) > 64:
             return
@@ -1895,6 +2052,14 @@ class _LanDiscoveryProtocol(asyncio.DatagramProtocol):
 
     def error_received(self, exc: Exception) -> None:
         logger.debug("UDP discovery socket error: %s", exc)
+
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        if self._daemon._udp_discovery_transport is self.transport:
+            self._daemon._udp_discovery_transport = None
+            self._daemon._udp_discovery_port_bound = None
+        ev = self._daemon._udp_discovery_closed_event
+        if ev is not None:
+            ev.set()
 
 
 # =====================================================================
@@ -1934,6 +2099,8 @@ class HostAgentDaemon:
         self._client_unacked_frames: Dict[WebSocketServerProtocol, int] = {}
         self._client_last_frame_sent_ts: Dict[WebSocketServerProtocol, float] = {}
         self._client_credit_waiting: Set[WebSocketServerProtocol] = set()
+        self._client_pressed_buttons: Dict[WebSocketServerProtocol, Set[str]] = {}
+        self._pressed_buttons_lock = threading.Lock()
         self._crypto_executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="CryptoTx"
         )
@@ -1963,11 +2130,15 @@ class HostAgentDaemon:
         self._last_cfg_rev: int = int(get_config_revision())
         self._last_cfg_stat_ts: float = 0.0
         self._local_ip_cache: Tuple[float, str] = (0.0, "")
+        self._cached_mac_entry: Tuple[float, str, str] = (0.0, "", "")
+        self._cached_monitor_count: int = 1
         self._disk_pct_cache: Tuple[float, float] = (0.0, 0.0)
         self.tls_fingerprint: str = ""
         self._tls_active: bool = False
         self._udp_discovery_transport: Optional[asyncio.DatagramTransport] = None
         self._udp_discovery_port_bound: Optional[int] = None
+        self._udp_discovery_closed_event: Optional[asyncio.Event] = None
+        self._last_tray_title: str = ""
         if discovery_port is not None:
             self.discovery_port: int = max(0, min(65535, int(discovery_port)))
         else:
@@ -2023,6 +2194,13 @@ class HostAgentDaemon:
         self.screen_pipeline = AdaptiveScreenPipeline()
         self.screen_pipeline.set_target_fps(self.target_fps)
         self.multi_monitor = MultiMonitorStreamer() if MultiMonitorStreamer else None
+        if self.multi_monitor is not None and getattr(self.multi_monitor, "_sct", None) is not None:
+            try:
+                mons = getattr(self.multi_monitor._sct, "monitors", None)
+                if mons:
+                    self._cached_monitor_count = max(1, len(mons) - 1)
+            except Exception:
+                pass
         self.zeroconf: Optional[AsyncZeroconf] = None
         self.service_info: Optional[ServiceInfo] = None
         self.server = None
@@ -2147,6 +2325,7 @@ class HostAgentDaemon:
         loop = self.loop or asyncio.get_running_loop()
         bind_host = "127.0.0.1" if self.host in ("127.0.0.1", "localhost") else "0.0.0.0"
         try:
+            self._udp_discovery_closed_event = asyncio.Event()
             transport, _ = await loop.create_datagram_endpoint(
                 lambda: _LanDiscoveryProtocol(self),
                 local_addr=(bind_host, self.discovery_port),
@@ -2165,6 +2344,7 @@ class HostAgentDaemon:
         except Exception as exc:
             self._udp_discovery_transport = None
             self._udp_discovery_port_bound = None
+            self._udp_discovery_closed_event = None
             logger.warning(
                 "LAN UDP Discovery Responder skipped (could not bind UDP %s:%d): %s",
                 bind_host,
@@ -2182,6 +2362,34 @@ class HostAgentDaemon:
                 tr.close()
             except Exception:
                 pass
+            # If no running event loop will pump connection_lost, release OS socket immediately
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    sock = tr.get_extra_info("socket")
+                    if sock is not None:
+                        sock.close()
+                except Exception:
+                    pass
+
+    async def _close_udp_discovery_async(self) -> None:
+        """Closes LAN UDP discovery transport and waits briefly for OS socket teardown."""
+        tr = self._udp_discovery_transport
+        ev = self._udp_discovery_closed_event
+        self._udp_discovery_transport = None
+        self._udp_discovery_port_bound = None
+        if tr is not None:
+            try:
+                tr.close()
+            except Exception:
+                pass
+            if ev is not None and not ev.is_set():
+                try:
+                    await asyncio.wait_for(ev.wait(), timeout=0.25)
+                except Exception:
+                    pass
+        self._udp_discovery_closed_event = None
 
     @property
     def _pin_fail_count(self) -> int:
@@ -2427,6 +2635,29 @@ class HostAgentDaemon:
         async with self._get_ws_write_lock(ws):
             await ws.send(data)
 
+    @staticmethod
+    def _has_running_event_loop() -> bool:
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
+
+    def _schedule_ws_close_safe(self, ws: WebSocketServerProtocol, code: int = 1001, reason: str = "") -> None:
+        """Closes a WebSocket only creating a close coroutine when a running loop exists (zero RuntimeWarnings)."""
+        if self._has_running_event_loop():
+            try:
+                self._track_task(ws.close(code=code, reason=reason))
+                return
+            except Exception:
+                pass
+        tr = getattr(ws, "transport", None)
+        if tr is not None:
+            try:
+                tr.close()
+            except Exception:
+                pass
+
     def force_disconnect_client(self, client_id_or_ip: str):
         """Forcefully disconnects active client socket by id or IP in real time."""
         def _close_matching():
@@ -2436,10 +2667,7 @@ class HostAgentDaemon:
                 peer_port = str(peer[1]) if peer and len(peer) > 1 else ""
                 cid = f"{peer_ip}:{peer_port}"
                 if client_id_or_ip in (cid, peer_ip, f"{peer_ip}:*"):
-                    try:
-                        asyncio.create_task(ws.close(code=1008, reason="Disconnected by host operator"))
-                    except Exception:
-                        pass
+                    self._schedule_ws_close_safe(ws, code=1008, reason="Disconnected by host operator")
         if self.loop and self.loop.is_running():
             self.loop.call_soon_threadsafe(_close_matching)
         else:
@@ -2648,6 +2876,7 @@ class HostAgentDaemon:
                     writer.write(b"HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n")
                     await writer.drain()
                     writer.close()
+                    await writer.wait_closed()
                     return
                 line_str = line.decode('utf-8', errors='ignore')
                 lower = line_str.lower()
@@ -2661,11 +2890,13 @@ class HostAgentDaemon:
                     writer.write(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
                     await writer.drain()
                     writer.close()
+                    await writer.wait_closed()
                     return
             if not key:
                 writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
                 await writer.drain()
                 writer.close()
+                await writer.wait_closed()
                 return
             accept_val = base64.b64encode(
                 hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode('utf-8')).digest()
@@ -2758,6 +2989,7 @@ class HostAgentDaemon:
                                     ^ int.from_bytes(repeated_mask, "little")
                                 ).to_bytes(length, "little")
                             if opcode == 0x08:  # CLOSE
+                                await self.close(code=1000)
                                 raise StopAsyncIteration
                             if opcode == 0x09:  # PING -> PONG
                                 await self._send_raw_frame(0x8A, raw_payload)
@@ -2800,6 +3032,7 @@ class HostAgentDaemon:
             try:
                 if not writer.is_closing():
                     writer.close()
+                await writer.wait_closed()
             except Exception:
                 pass
 
@@ -2824,11 +3057,12 @@ class HostAgentDaemon:
                 'tls': '1' if self.tls_fingerprint else '0',
                 'fp': self.tls_fingerprint if self.tls_fingerprint else '',
             }
+            eff_port = self._get_effective_ws_port()
             info = ServiceInfo(
                 "_cst-agent._tcp.local.",
                 f"{hostname}._cst-agent._tcp.local.",
                 addresses=[socket.inet_aton(local_ip)],
-                port=self.port,
+                port=eff_port,
                 properties=desc,
                 server=f"{hostname}.local."
             )
@@ -2837,7 +3071,7 @@ class HostAgentDaemon:
             if not self.is_running:
                 await self._close_zeroconf_async()
                 return
-            logger.info(f"mDNS Registered: {hostname}._cst-agent._tcp.local at {local_ip}:{self.port}")
+            logger.info(f"mDNS Registered: {hostname}._cst-agent._tcp.local at {local_ip}:{eff_port}")
         except Exception as e:
             logger.warning(f"mDNS Registration error: {e}")
             if self.zeroconf is not None:
@@ -2888,6 +3122,48 @@ class HostAgentDaemon:
         self._local_ip_cache = (now_mono, resolved)
         return resolved
 
+    def _build_tray_tooltip(self) -> str:
+        """Builds a concise live system tray tooltip (<= 127 chars for Win32 NOTIFYICONDATAW)."""
+        eff_port = self._get_effective_ws_port()
+        local_ip = self._get_local_ip()
+        peers = len(self.authenticated_clients)
+        if self.is_paused:
+            status = "PAUSED"
+        elif self.view_only_mode:
+            status = "VIEW-ONLY"
+        else:
+            status = "ONLINE (TLS)" if self._tls_active else "ONLINE"
+        peer_str = f"{peers} peer" if peers == 1 else f"{peers} peers"
+        return f"AI NetController — {status} | {local_ip}:{eff_port} | {peer_str}"[:127]
+
+    def _update_tray_tooltip(self) -> None:
+        """Updates the live system tray hover tooltip if a tray icon is active."""
+        with self._tray_lock:
+            icon = self.tray_icon
+        if icon is None:
+            return
+        try:
+            title = self._build_tray_tooltip()
+            if title != self._last_tray_title:
+                self._last_tray_title = title
+                icon.title = title
+        except Exception:
+            pass
+
+    def _copy_to_host_clipboard(self, text: str) -> bool:
+        """Copies text to the local host clipboard using pyperclip or native Win32 clipboard."""
+        if not text:
+            return False
+        if pyperclip is not None:
+            try:
+                pyperclip.copy(text)
+                return True
+            except Exception:
+                pass
+        if platform.system() == "Windows":
+            return _win32_clipboard_set(text)
+        return False
+
     def _start_system_tray(self):
         """Initializes high-visibility background Windows system tray icon with rich controls."""
         if not self._enable_tray or not pystray or not Image:
@@ -2915,6 +3191,17 @@ class HostAgentDaemon:
                 elif show_install_dialog:
                     show_install_dialog()
 
+            def _copy_endpoint_tray():
+                scheme = "wss" if self._tls_active else "ws"
+                uri = f"{scheme}://{self._get_local_ip()}:{self._get_effective_ws_port()}"
+                if self._copy_to_host_clipboard(uri) and self.gui_state:
+                    self.gui_state.add_log("INFO", f"Copied endpoint URI from System Tray: {uri}")
+
+            def _copy_pin_tray():
+                pin = str(self.pairing_pin or "").strip()
+                if pin and self._copy_to_host_clipboard(pin) and self.gui_state:
+                    self.gui_state.add_log("SECURITY", "6-digit pairing PIN copied from System Tray.")
+
             def _toggle_view_only():
                 self.view_only_mode = not self.view_only_mode
                 if self.gui_state:
@@ -2928,6 +3215,7 @@ class HostAgentDaemon:
                         save_config(cfg)
                 except Exception:
                     pass
+                self._update_tray_tooltip()
 
             def _toggle_pause():
                 self.is_paused = not self.is_paused
@@ -2935,6 +3223,15 @@ class HostAgentDaemon:
                     self.gui_state.is_paused = self.is_paused
                     status = "PAUSED" if self.is_paused else "RESUMED"
                     self.gui_state.add_log("WARN" if self.is_paused else "INFO", f"Daemon {status} from System Tray.")
+                try:
+                    cfg = load_config() if load_config else {}
+                    cfg["paused"] = self.is_paused
+                    if save_config:
+                        save_config(cfg)
+                except Exception:
+                    pass
+                self._wake_stream()
+                self._update_tray_tooltip()
 
             def _toggle_autostart_tray():
                 curr = bool(get_windows_autostart_enabled()) if callable(get_windows_autostart_enabled) else False
@@ -2973,7 +3270,9 @@ class HostAgentDaemon:
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("AI NetController Beta 0.90.00", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
-                pystray.MenuItem(lambda text: f"Port: {self.port} (WebSocket)", lambda: None, enabled=False),
+                pystray.MenuItem(lambda text: f"Endpoint: {self._get_local_ip()}:{self._get_effective_ws_port()}", lambda: None, enabled=False),
+                pystray.MenuItem("Copy LAN Endpoint", _copy_endpoint_tray),
+                pystray.MenuItem("Copy 6-Digit PIN", _copy_pin_tray),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem(lambda text: "Resume Daemon" if self.is_paused else "Pause Daemon", _toggle_pause),
                 pystray.MenuItem(lambda text: "Allow Remote Input" if self.view_only_mode else "Lock Input (View-Only)", _toggle_view_only),
@@ -2993,10 +3292,12 @@ class HostAgentDaemon:
             with self._tray_lock:
                 if not self.is_running or self._tray_stop_event.is_set():
                     return
+                initial_title = self._build_tray_tooltip()
+                self._last_tray_title = initial_title
                 icon = pystray.Icon(
                     "AI_NetController_Agent",
                     img,
-                    f"AI NetController — Port: {self.port} (Online)",
+                    initial_title,
                     menu
                 )
                 self.tray_icon = icon
@@ -3024,6 +3325,57 @@ class HostAgentDaemon:
             self._tray_thread = tray_thread
         tray_thread.start()
 
+    def _record_client_button_state(self, ws: WebSocketServerProtocol, btn_name: str, down: bool) -> None:
+        """Thread-safely tracks per-client pressed mouse buttons for disconnect/panic cleanup."""
+        with self._pressed_buttons_lock:
+            if down:
+                self._client_pressed_buttons.setdefault(ws, set()).add(btn_name)
+            else:
+                held = self._client_pressed_buttons.get(ws)
+                if held is not None:
+                    held.discard(btn_name)
+                    if not held:
+                        self._client_pressed_buttons.pop(ws, None)
+
+    def _release_held_mouse_buttons_sync(self, buttons: Set[str]) -> None:
+        """Releases any stuck mouse buttons on the host OS without raising."""
+        if not buttons or pyautogui is None:
+            return
+        use_w32 = _should_use_win32_sendinput()
+        for btn in list(buttons):
+            try:
+                if use_w32 and _win32_mouse_button_current(button=btn, down=False):
+                    continue
+                pyautogui.mouseUp(button=btn, _pause=False)
+            except Exception:
+                pass
+
+    def _drain_and_release_buttons_sync(self, ws: Optional[WebSocketServerProtocol] = None) -> None:
+        """Atomically pops held buttons under lock and releases them on the host OS."""
+        buttons_to_release: Set[str] = set()
+        with self._pressed_buttons_lock:
+            if ws is None:
+                for btns in self._client_pressed_buttons.values():
+                    buttons_to_release.update(btns)
+                self._client_pressed_buttons.clear()
+            else:
+                btns = self._client_pressed_buttons.pop(ws, None)
+                if btns:
+                    buttons_to_release.update(btns)
+        if buttons_to_release:
+            self._release_held_mouse_buttons_sync(buttons_to_release)
+
+    def _release_client_held_buttons(self, ws: Optional[WebSocketServerProtocol] = None) -> None:
+        """Releases mouse buttons held by a disconnected client FIFO after queued input tasks."""
+        exec_obj = self._input_executor
+        if exec_obj is not None and self.is_running:
+            try:
+                exec_obj.submit(self._drain_and_release_buttons_sync, ws)
+                return
+            except RuntimeError:
+                pass
+        self._drain_and_release_buttons_sync(ws)
+
     def kill_all_tasks(self):
         """Emergency Panic Switch: Terminates all active child processes, approvals, vaults, and sockets."""
         logger.warning("PANIC TRIGGERED: Aborting all active tasks, approvals, and client sessions.")
@@ -3036,16 +3388,22 @@ class HostAgentDaemon:
             self.pending_approvals.clear()
 
             for ws in list(self.clients):
-                try:
-                    self._track_task(ws.close(code=1008, reason="Emergency panic disconnect"))
-                except Exception:
-                    pass
+                self._schedule_ws_close_safe(ws, code=1008, reason="Emergency panic disconnect")
             self.authenticated_clients.clear()
             self._clients_need_keyframe.clear()
             self._clients_explicit_sync.clear()
             self._client_auth_ts.clear()
             self._client_frame_inflight.clear()
             self._client_frame_timeouts.clear()
+            self._client_ack_capable.clear()
+            self._client_unacked_frames.clear()
+            self._client_last_frame_sent_ts.clear()
+            self._client_credit_waiting.clear()
+            self._stream_paused_clients.clear()
+            self._client_replay.clear()
+            self._client_secrets.clear()
+            self._latest_abs_move = None
+            self._release_client_held_buttons(None)
             self._cancel_post_auth_wake_handles()
             for v in self._client_vaults.values():
                 try:
@@ -3057,10 +3415,16 @@ class HostAgentDaemon:
                 if scrub_memory is not None and isinstance(pending[0], bytearray):
                     scrub_memory(pending[0])
             self._pending_pairings.clear()
+            if self.file_writer:
+                try:
+                    self.file_writer.abort_all()
+                except Exception:
+                    pass
             if self.gui_state is not None:
                 with self.gui_state.lock:
                     self.gui_state.connected_clients.clear()
                 self.gui_state.add_log("ALERT", "Emergency PANIC triggered: disconnected all sessions & terminated subprocesses.")
+            self._update_tray_tooltip()
 
         if self.loop and self.loop.is_running() and threading.get_ident() != self._loop_thread_id:
             self.loop.call_soon_threadsafe(_panic_abort_async)
@@ -3116,6 +3480,7 @@ class HostAgentDaemon:
                         "isTrusted": True,
                         "inputAllowed": True,
                     })
+        self._update_tray_tooltip()
 
     # =================================================================
     # CLIENT CONNECTION LIFECYCLE
@@ -3776,10 +4141,12 @@ class HostAgentDaemon:
             self._client_last_frame_sent_ts.pop(ws, None)
             self._client_credit_waiting.discard(ws)
             self._stream_paused_clients.discard(ws)
+            self._release_client_held_buttons(ws)
             was_authenticated = ws in self.authenticated_clients
             self.clients.discard(ws)
             self.authenticated_clients.discard(ws)
             self.active_nonces.pop(ws, None)
+            self._update_tray_tooltip()
             if self.file_writer:
                 try:
                     self.file_writer.prune_stale_transfers()
@@ -4282,15 +4649,28 @@ class HostAgentDaemon:
                     logger.info("Clipboard write rejected: host in View-Only Mode or client input locked.")
                     return
                 text = payload.decode('utf-8', errors='replace')
+                copied_ok = False
                 if pyperclip:
-                    await loop.run_in_executor(None, pyperclip.copy, text)
-                elif platform.system() == "Windows":
-                    import subprocess
-                    await loop.run_in_executor(
-                        None,
-                        lambda: subprocess.run(["clip"], input=b"\xff\xfe" + text.encode("utf-16-le"), check=False, timeout=2.0),
-                    )
-                elif platform.system() == "Darwin":
+                    try:
+                        await loop.run_in_executor(None, pyperclip.copy, text)
+                        copied_ok = True
+                    except Exception:
+                        copied_ok = False
+                if not copied_ok and platform.system() == "Windows":
+                    copied_ok = await loop.run_in_executor(None, _win32_clipboard_set, text)
+                    if not copied_ok:
+                        import subprocess
+                        await loop.run_in_executor(
+                            None,
+                            lambda: subprocess.run(
+                                ["clip"],
+                                input=b"\xff\xfe" + text.encode("utf-16-le"),
+                                check=False,
+                                timeout=2.0,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                            ),
+                        )
+                elif not copied_ok and platform.system() == "Darwin":
                     import subprocess
                     await loop.run_in_executor(
                         None,
@@ -4298,11 +4678,17 @@ class HostAgentDaemon:
                     )
 
             host_clip = ""
+            paste_ok = False
             if pyperclip:
                 try:
                     host_clip = await loop.run_in_executor(None, pyperclip.paste)
+                    paste_ok = True
                 except Exception:
-                    pass
+                    paste_ok = False
+            if not paste_ok and platform.system() == "Windows":
+                w32_clip = await loop.run_in_executor(None, _win32_clipboard_get)
+                if w32_clip is not None:
+                    host_clip = w32_clip
             if host_clip or not payload:
                 await self._send_encrypted_or_plain(
                     ws, OP_CLIP, (host_clip or "")[:1_048_576].encode('utf-8')
@@ -4564,6 +4950,8 @@ class HostAgentDaemon:
                             spec = _btn_state_map.get(btn_code)
                             if spec is not None:
                                 state_dir, btn_name = spec
+                                if ws is not None:
+                                    self._record_client_button_state(ws, btn_name, state_dir == "down")
                                 if use_w32 and _win32_mouse_button_abs(tx, ty, button=btn_name, down=(state_dir == "down")):
                                     return
                                 if state_dir == "down":
@@ -4736,6 +5124,8 @@ class HostAgentDaemon:
                 elif action in ("mouse_down", "mousedown"):
                     raw_btn = str(data.get("button", "left")).lower()
                     btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
+                    if ws is not None:
+                        self._record_client_button_state(ws, btn, True)
                     target = _resolve_target_xy()
                     if target is not None:
                         if not (use_w32 and _win32_mouse_button_abs(target[0], target[1], button=btn, down=True)):
@@ -4746,6 +5136,8 @@ class HostAgentDaemon:
                 elif action in ("mouse_up", "mouseup"):
                     raw_btn = str(data.get("button", "left")).lower()
                     btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
+                    if ws is not None:
+                        self._record_client_button_state(ws, btn, False)
                     target = _resolve_target_xy()
                     if target is not None:
                         if not (use_w32 and _win32_mouse_button_abs(target[0], target[1], button=btn, down=False)):
@@ -4802,7 +5194,24 @@ class HostAgentDaemon:
                     if press_enter:
                         pyautogui.press('enter', _pause=False)
                 elif action in ("key", "key_press"):
-                    key = str(data.get("key", "")).strip().lower()
+                    raw_key = str(data.get("key", ""))
+                    if raw_key == " ":
+                        key = "space"
+                    else:
+                        key = raw_key.strip().lower()
+                    _single_key_aliases = {
+                        "arrowup": "up",
+                        "arrowdown": "down",
+                        "arrowleft": "left",
+                        "arrowright": "right",
+                        "escape": "esc",
+                        "return": "enter",
+                        "control": "ctrl",
+                        "meta": "command" if platform.system() == "Darwin" else "win",
+                        "super": "command" if platform.system() == "Darwin" else "win",
+                        "cmd": "command" if platform.system() == "Darwin" else "win",
+                    }
+                    key = _single_key_aliases.get(key, key)
                     if key and len(key) <= 32 and key in getattr(pyautogui, "KEYBOARD_KEYS", {key}):
                         pyautogui.press(key, _pause=False)
                 elif action in ("hotkey", "key_combo", "keyboard_hotkey"):
@@ -4811,9 +5220,22 @@ class HostAgentDaemon:
                         normalized_keys = raw_keys.replace("+", ",")
                         keys = [k.strip().lower() for k in normalized_keys.split(",") if k.strip()][:6]
                     elif isinstance(raw_keys, list):
-                        keys = [str(k).strip().lower() for k in raw_keys if str(k).strip()][:6]
+                        keys = [("space" if str(k) == " " else str(k).strip().lower()) for k in raw_keys if str(k)][:6]
                     else:
                         keys = []
+                    _wire_key_aliases = {
+                        "control": "ctrl",
+                        "escape": "esc",
+                        "return": "enter",
+                        "arrowup": "up",
+                        "arrowdown": "down",
+                        "arrowleft": "left",
+                        "arrowright": "right",
+                        "meta": "command" if platform.system() == "Darwin" else "win",
+                        "super": "command" if platform.system() == "Darwin" else "win",
+                        "cmd": "command" if platform.system() == "Darwin" else "win",
+                    }
+                    keys = [_wire_key_aliases.get(k, k) for k in keys if k]
                     _key_aliases = {
                         "ctrlleft": "ctrl",
                         "ctrlright": "ctrl",
@@ -4927,6 +5349,7 @@ class HostAgentDaemon:
     def _switch_active_monitor(self, idx: int) -> None:
         monitors = self.multi_monitor.enumerate_monitors() if self.multi_monitor else []
         max_idx = max(1, len(monitors))
+        self._cached_monitor_count = max_idx
         clamped = max(1, min(max_idx, int(idx)))
         self.screen_pipeline.monitor_index = clamped
         self.screen_pipeline.force_keyframe = True
@@ -5094,6 +5517,7 @@ class HostAgentDaemon:
             monitors = self.multi_monitor.enumerate_monitors() if self.multi_monitor else [
                 {"index": 1, "width": self.screen_pipeline.target_res[0], "height": self.screen_pipeline.target_res[1], "left": 0, "top": 0, "label": "Display 1"}
             ]
+            self._cached_monitor_count = max(1, len(monitors))
             resp = json.dumps({"monitors": monitors, "active": self.screen_pipeline.monitor_index}).encode("utf-8")
             await self._send_encrypted_or_plain(
                 ws, OP_DISPLAY_ENUM, resp
@@ -5298,18 +5722,32 @@ class HostAgentDaemon:
         """Streams desktop frames at deadline-paced adaptive framerates with lock-pause, backpressure, and idle wake."""
         fps_window_start = time.perf_counter()
         fps_frame_count = 0
+        idle_since: Optional[float] = None
+        idle_buffers_released = False
         while self.is_running:
             frame_start = time.perf_counter()
-            ready_clients = [
-                ws for ws in list(self.authenticated_clients)
-                if self._is_client_ready_for_stream(ws)
-            ]
+            self._refresh_runtime_policies_throttled(0.5)
+            ready_clients = (
+                []
+                if self.is_paused
+                else [
+                    ws for ws in list(self.authenticated_clients)
+                    if self._is_client_ready_for_stream(ws)
+                ]
+            )
             if not ready_clients:
                 self.capture_fps = 0.0
                 if self.gui_state is not None:
                     self.gui_state.capture_fps = 0.0
                 fps_window_start = frame_start
                 fps_frame_count = 0
+                now_idle = time.monotonic()
+                if idle_since is None:
+                    idle_since = now_idle
+                    idle_buffers_released = False
+                elif not idle_buffers_released and (now_idle - idle_since) >= 15.0:
+                    self.screen_pipeline.release_idle_buffers()
+                    idle_buffers_released = True
                 ev = self._stream_wake_event
                 if ev is not None:
                     ev.clear()
@@ -5320,6 +5758,9 @@ class HostAgentDaemon:
                 else:
                     await asyncio.sleep(0.5)
                 continue
+
+            idle_since = None
+            idle_buffers_released = False
 
             now_mono = time.monotonic()
             if (now_mono - self._lock_check_cache[0]) >= 0.5:
@@ -5353,6 +5794,15 @@ class HostAgentDaemon:
 
                 self._dispatch_frame_to_clients(ready_clients, frame)
             else:
+                now = time.perf_counter()
+                elapsed = now - fps_window_start
+                if elapsed >= 1.5:
+                    self.capture_fps = round(fps_frame_count / elapsed, 1) if fps_frame_count > 0 else 0.0
+                    fps_window_start = now
+                    fps_frame_count = 0
+                    if self.gui_state is not None:
+                        self.gui_state.capture_fps = self.capture_fps
+
                 sync_targets = [
                     ws for ws in ready_clients
                     if ws in self._clients_need_keyframe
@@ -5387,13 +5837,14 @@ class HostAgentDaemon:
                 await asyncio.sleep(sleep_dt)
 
     def _get_primary_mac(self) -> str:
-        cached = getattr(self, "_cached_mac", None)
-        if cached:
-            return cached
+        local_ip = self._get_local_ip()
+        now_mono = time.monotonic()
+        cached_ts, cached_ip, cached_mac = self._cached_mac_entry
+        if cached_ip == local_ip and (now_mono - cached_ts) < 30.0:
+            return cached_mac
         mac_val = ""
         try:
             if psutil is not None:
-                local_ip = self._get_local_ip()
                 stats = psutil.net_if_stats()
                 addrs = psutil.net_if_addrs()
                 af_link = getattr(psutil, "AF_LINK", getattr(socket, "AF_PACKET", None))
@@ -5412,8 +5863,52 @@ class HostAgentDaemon:
                         break
         except Exception:
             pass
-        self._cached_mac = mac_val
+        self._cached_mac_entry = (now_mono, local_ip, mac_val)
         return mac_val
+
+    def get_status_summary(self) -> Dict[str, Any]:
+        """Returns a zero-secret runtime diagnostic snapshot (never includes PINs, tokens, or keys)."""
+        eff_port = self._get_effective_ws_port()
+        local_ip = self._get_local_ip()
+        scheme = "wss" if self._tls_active else "ws"
+        cap_backend = (
+            "dxgi"
+            if (self.screen_pipeline._dxgi_cam is not None and not self.screen_pipeline._dxgi_disabled)
+            else "mss"
+        )
+        jpeg_enc = "turbojpeg" if self.screen_pipeline.turbo is not None else "pillow"
+        return {
+            "hostname": self._hostname,
+            "os": self._os_name,
+            "version": "0.90.0",
+            "is_running": self.is_running,
+            "is_paused": self.is_paused,
+            "is_locked": bool(self._lock_check_cache[1]),
+            "local_ip": local_ip,
+            "port": eff_port,
+            "ws_uri": f"{scheme}://{local_ip}:{eff_port}",
+            "tls_enabled": bool(self._tls_active),
+            "discovery_udp_port": self._udp_discovery_port_bound,
+            "mdns_active": bool(self.zeroconf is not None),
+            "connected_clients": len(self.clients),
+            "authenticated_clients": len(self.authenticated_clients),
+            "capture_fps": self.capture_fps,
+            "target_fps": self.target_fps,
+            "jpeg_quality": self.screen_pipeline.jpeg_quality,
+            "capture_backend": cap_backend,
+            "jpeg_encoder": jpeg_enc,
+            "active_monitor": self.screen_pipeline.monitor_index,
+            "monitors_count": self._cached_monitor_count,
+            "security_profile": self.security_profile,
+            "view_only_mode": self.view_only_mode,
+            "uptime_sec": int(max(0.0, time.time() - self._start_time)),
+            "file_transfers": (
+                self.file_writer.get_active_transfers_summary()
+                if self.file_writer and hasattr(self.file_writer, "get_active_transfers_summary")
+                else {"active_count": 0, "finalizing_count": 0, "bytes_written": 0, "bytes_expected": 0}
+            ),
+            "shield_metrics": self.chaos_shield.get_audit_metrics() if self.chaos_shield else {},
+        }
 
     async def _telemetry_heartbeat_loop(self):
         """Periodically dispatches hardware CPU/RAM/Disk/FPS telemetry with monotonic seq."""
@@ -5457,6 +5952,12 @@ class HostAgentDaemon:
                     ram_used_gb = 0.0
                     ram_total_gb = 0.0
                     disk_pct = 0.0
+                cap_backend = (
+                    "dxgi"
+                    if (self.screen_pipeline._dxgi_cam is not None and not self.screen_pipeline._dxgi_disabled)
+                    else "mss"
+                )
+                jpeg_enc = "turbojpeg" if self.screen_pipeline.turbo is not None else "pillow"
                 telemetry = {
                     "hostname": self._hostname,
                     "cpu_percent": round(float(cpu), 1),
@@ -5466,19 +5967,35 @@ class HostAgentDaemon:
                     "ram_total_gb": ram_total_gb,
                     "disk_percent": disk_pct,
                     "capture_fps": self.capture_fps,
+                    "target_fps": self.target_fps,
+                    "jpeg_quality": self.screen_pipeline.jpeg_quality,
+                    "capture_backend": cap_backend,
+                    "jpeg_encoder": jpeg_enc,
                     "os": self._os_name,
                     "version": "0.90.0",
                     "protocol": "CST/3.0",
                     "local_ip": self._get_local_ip(),
                     "mac": self._get_primary_mac(),
-                    "port": self.port,
+                    "port": self._get_effective_ws_port(),
+                    "tls_enabled": bool(self._tls_active),
+                    "security_profile": self.security_profile,
                     "uptime_sec": int(max(0.0, time.time() - self._start_time)),
                     "view_only_mode": self.view_only_mode,
                     "require_hitl_approval": self.require_hitl_approval,
                     "clipboard_sync_allowed": self.clipboard_sync_allowed,
                     "active_monitor": self.screen_pipeline.monitor_index,
+                    "monitors_count": self._cached_monitor_count,
+                    "is_locked": bool(self._lock_check_cache[1]),
+                    "is_paused": self.is_paused,
                     "connected_clients_count": len(self.authenticated_clients),
-                    "status": "ready"
+                    "capabilities": [
+                        "frame_ack",
+                        "snapshot",
+                        "cursor_overlay",
+                        "udp_discovery",
+                        "x25519_aead",
+                    ],
+                    "status": "paused" if self.is_paused else "ready"
                 }
                 payload = json.dumps(telemetry).encode('utf-8')
                 clients_snapshot = list(self.authenticated_clients)
@@ -5562,7 +6079,7 @@ class HostAgentDaemon:
         self.active_nonces.clear()
 
     def _close_sync_handles(self) -> None:
-        """Releases file writers, executors, screen encoder thread pools, monitor handles, and job objects."""
+        """Releases file writers, executors, held mouse buttons, screen encoder thread pools, monitor handles, and job objects."""
         if self.file_writer:
             try:
                 self.file_writer.abort_all()
@@ -5576,6 +6093,8 @@ class HostAgentDaemon:
                     exec_obj.shutdown(wait=True, cancel_futures=True)
                 except Exception:
                     pass
+        # Drain any still-held mouse buttons after _input_executor finishes all in-flight tasks
+        self._release_client_held_buttons(None)
         self.screen_pipeline.close()
         if self.multi_monitor:
             try:
@@ -5605,7 +6124,7 @@ class HostAgentDaemon:
     async def _cleanup_loop_resources_async(self) -> None:
         """Cancels background tasks, closes client sockets, awaits server close, and tears down mDNS/UDP."""
         self._cancel_post_auth_wake_handles()
-        self._close_udp_discovery()
+        await self._close_udp_discovery_async()
         tasks = [
             t for t in (list(self._background_tasks) + list(self._background_task_set))
             if not t.done()
@@ -5631,11 +6150,14 @@ class HostAgentDaemon:
                 pass
 
         if self.chaos_shield is not None:
-            for cid in list(self.chaos_shield.client_states.keys()):
-                try:
-                    await self.chaos_shield.cleanup_and_scrub(cid, reason="Daemon shutting down")
-                except Exception:
-                    pass
+            try:
+                await self.chaos_shield.shutdown()
+            except Exception:
+                for cid in list(self.chaos_shield.client_states.keys()):
+                    try:
+                        await self.chaos_shield.cleanup_and_scrub(cid, reason="Daemon shutting down")
+                    except Exception:
+                        pass
 
         self._close_vaults_and_approvals()
 
@@ -5654,6 +6176,7 @@ class HostAgentDaemon:
         """Awaitable clean shutdown hook closing tasks, WebSockets, mDNS, tray, and hardware handles."""
         logger.info("Stopping AI NetController Host Agent Daemon (async)...")
         self.is_running = False
+        self._wake_stream()
         self._stop_tray_sync()
         await self._cleanup_loop_resources_async()
         self._close_sync_handles()
@@ -5664,6 +6187,7 @@ class HostAgentDaemon:
         """Clean shutdown hook closing background tasks, WebSockets, vaults, and hardware handles."""
         logger.info("Stopping AI NetController Host Agent Daemon...")
         self.is_running = False
+        self._wake_stream()
         self._stop_tray_sync()
 
         def _cleanup_loop_resources_sync():
@@ -5674,13 +6198,16 @@ class HostAgentDaemon:
                     t.cancel()
             self._background_tasks.clear()
             self._background_task_set.clear()
+            has_loop = self._has_running_event_loop()
             for ws in list(self.clients):
-                try:
-                    asyncio.create_task(ws.close(code=1001, reason="Daemon shutting down"))
-                except Exception:
-                    pass
+                self._schedule_ws_close_safe(ws, code=1001, reason="Daemon shutting down")
             self.clients.clear()
             self.authenticated_clients.clear()
+            if self.chaos_shield is not None and hasattr(self.chaos_shield, "cancel_all_watchdogs_sync"):
+                try:
+                    self.chaos_shield.cancel_all_watchdogs_sync()
+                except Exception:
+                    pass
             self._close_vaults_and_approvals()
             server = self.server
             self.server = None
@@ -5689,9 +6216,9 @@ class HostAgentDaemon:
                     server.close()
                 except Exception:
                     pass
-            if self.zeroconf is not None:
+            if self.zeroconf is not None and has_loop:
                 try:
-                    asyncio.create_task(self._close_zeroconf_async())
+                    self._track_task(self._close_zeroconf_async())
                 except Exception:
                     pass
             if self._owns_loop and self.loop and self.loop.is_running():

@@ -24,12 +24,16 @@ import {
   Globe,
   AppWindow,
   Play,
+  Pause,
   XCircle,
   CheckCircle2,
   Loader2,
   Hand,
   Clipboard,
-  KeyRound
+  KeyRound,
+  ChevronLeft,
+  ChevronRight,
+  EyeOff,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HostDevice } from '../../types';
@@ -94,12 +98,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const selectedModel = useUIStore((s) => s.selectedModel);
 
   const [quality, setQuality] = useState<'High' | 'Medium' | 'Low'>('High');
+  const [targetFps, setTargetFps] = useState<60 | 30 | 15>(60);
   const [aspectPreset, setAspectPreset] = useState<ScreenAspectPreset>('fit');
   const [zoomFactor, setZoomFactor] = useState<number>(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [localCapturing, setLocalCapturing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [stageSize, setStageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [streamResolution, setStreamResolution] = useState<{ width: number; height: number } | null>(null);
   const [streamTimedOut, setStreamTimedOut] = useState(false);
   const [hasFrame, setHasFrame] = useState(false);
   const [liveFps, setLiveFps] = useState(0);
@@ -107,6 +113,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   const [isPairingInline, setIsPairingInline] = useState(false);
   const [inlinePairError, setInlinePairError] = useState<string | null>(null);
   const [pendingAiActions, setPendingAiActions] = useState<Array<Record<string, any>>>([]);
+  const [showGestureHint, setShowGestureHint] = useState(true);
+  const [pressEnterOnType, setPressEnterOnType] = useState(true);
 
   const isCapturing = localCapturing || externalCapturing;
   const isWsReady = isConnected !== false;
@@ -117,8 +125,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         (isWsReady && hasFrame))
   );
 
-  // Remote Input State
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number }>({ x: 50, y: 50 });
+  // Zero-re-render Remote Cursor DOM Refs
+  const cursorPosRef = useRef<{ x: number; y: number }>({ x: 50, y: 50 });
+  const cursorMarkerRef = useRef<HTMLDivElement>(null);
+  const cursorCoordsRef = useRef<HTMLSpanElement>(null);
+  const footerCursorRef = useRef<HTMLSpanElement>(null);
+  const quickActionsScrollRef = useRef<HTMLDivElement>(null);
+  const aiAbortRef = useRef<AbortController | null>(null);
 
   // AI & Keyboard Bar State
   const [inputMode, setInputMode] = useState<'ai' | 'keyboard'>('ai');
@@ -165,6 +178,24 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     pointerId: number;
   } | null>(null);
 
+  const updateCursorDom = useCallback((xPct: number, yPct: number) => {
+    cursorPosRef.current = { x: xPct, y: yPct };
+    const natW = canvasNatSizeRef.current.width || 1920;
+    const natH = canvasNatSizeRef.current.height || 1080;
+    const pxX = Math.round((xPct / 100) * natW);
+    const pxY = Math.round((yPct / 100) * natH);
+    if (cursorMarkerRef.current) {
+      cursorMarkerRef.current.style.left = `${xPct}%`;
+      cursorMarkerRef.current.style.top = `${yPct}%`;
+    }
+    if (cursorCoordsRef.current) {
+      cursorCoordsRef.current.textContent = `${pxX},${pxY}`;
+    }
+    if (footerCursorRef.current) {
+      footerCursorRef.current.textContent = `${pxX}×${pxY}`;
+    }
+  }, []);
+
   const scheduleTimer = useCallback((fn: () => void, ms: number) => {
     const id = window.setTimeout(() => {
       timersRef.current.delete(id);
@@ -179,6 +210,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     return () => {
       timers.forEach((id) => window.clearTimeout(id));
       timers.clear();
+      aiAbortRef.current?.abort();
     };
   }, []);
 
@@ -335,7 +367,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       const rawY = typeof act.y === 'number' ? act.y : natH / 2;
       const xPct = Math.max(1, Math.min(99, (rawX / natW) * 100));
       const yPct = Math.max(1, Math.min(99, (rawY / natH) * 100));
-      setCursorPos({ x: xPct, y: yPct });
+      updateCursorDom(xPct, yPct);
       if (type === 'mouse_click' || type === 'mouse_double_click') {
         const btn =
           type === 'mouse_double_click'
@@ -359,7 +391,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         );
       }
     },
-    [addRipple, isBg]
+    [addRipple, isBg, updateCursorDom]
   );
 
   // Send natural language prompt to the AI PC Copilot
@@ -372,10 +404,15 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     setIsAiBusy(true);
     setContextMenu(null);
 
+    aiAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         credentials: 'include',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: [{ role: 'user', content: promptText }],
@@ -428,6 +465,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       );
       triggerHapticFeedback('medium');
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       const msg = err instanceof Error ? err.message : 'Request failed';
       setAiStatusReply(
         isBg
@@ -436,7 +474,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       );
       showFeedback(isBg ? 'Грешка при връзка със сървъра' : 'Control server request failed');
     } finally {
-      setIsAiBusy(false);
+      if (aiAbortRef.current === controller) {
+        aiAbortRef.current = null;
+        setIsAiBusy(false);
+      }
     }
   };
 
@@ -451,16 +492,18 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       {
         type: 'type_text',
         text: textToSend,
-        pressEnter: true
+        pressEnter: pressEnterOnType
       },
-      isBg ? `Въведен текст: "${textToSend}"` : `Typed: "${textToSend}"`
+      isBg
+        ? `Въведен текст: "${textToSend}"${pressEnterOnType ? ' + Enter' : ''}`
+        : `Typed: "${textToSend}"${pressEnterOnType ? ' + Enter' : ''}`
     );
   };
 
   // Pointer Gesture Engine:
   // - Single Click / Tap (< 1000ms) => Left Click at (x, y)
   // - Press & Hold (>= 1000ms) => Right Click at (x, y) + Context Menu
-  const clearHoldTimer = () => {
+  const clearHoldTimer = useCallback(() => {
     if (holdTimerRef.current !== null) {
       window.clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
@@ -470,7 +513,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       holdIndicatorTimerRef.current = null;
     }
     setHoldIndicator(null);
-  };
+  }, []);
 
   const getNativeScreenDimensions = useCallback(() => {
     const nat = canvasNatSizeRef.current;
@@ -521,7 +564,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       const pxX = Math.round((xPct / 100) * natW);
       const pxY = Math.round((yPct / 100) * natH);
       triggerHapticFeedback('light');
-      setCursorPos({ x: xPct, y: yPct });
+      updateCursorDom(xPct, yPct);
       setContextMenu(null);
       addRipple(
         xPct,
@@ -539,7 +582,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         isBg ? `Ляв клик @ ${pxX}, ${pxY}` : `Left Click @ ${pxX}, ${pxY}`
       );
     },
-    [addRipple, dispatchPcAction, getNativeScreenDimensions, isBg]
+    [addRipple, dispatchPcAction, getNativeScreenDimensions, isBg, updateCursorDom]
   );
 
   const triggerRightClickAt = useCallback(
@@ -548,7 +591,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       const pxX = Math.round((xPct / 100) * natW);
       const pxY = Math.round((yPct / 100) * natH);
       triggerHapticFeedback('heavy');
-      setCursorPos({ x: xPct, y: yPct });
+      updateCursorDom(xPct, yPct);
       addRipple(
         xPct,
         yPct,
@@ -566,11 +609,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         isBg ? `Десен клик (задържане) @ ${pxX}, ${pxY}` : `Right Click (Hold) @ ${pxX}, ${pxY}`
       );
     },
-    [addRipple, dispatchPcAction, getNativeScreenDimensions, isBg]
+    [addRipple, dispatchPcAction, getNativeScreenDimensions, isBg, updateCursorDom]
   );
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!device || !isDeviceOnline) return;
+    if (!device || !isDeviceOnline || !isWsReady || isPaused) return;
     // Ignore clicks inside the floating context menu itself
     if ((e.target as HTMLElement).closest('[data-context-menu="true"]')) {
       return;
@@ -585,7 +628,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       return;
     }
 
-    setCursorPos({ x: xPct, y: yPct });
+    updateCursorDom(xPct, yPct);
+
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore synthetic events without active pointer capture support
+    }
 
     pointerDownInfoRef.current = {
       startX: e.clientX,
@@ -618,14 +667,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   };
 
   const handleViewportDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!device || !isDeviceOnline || !isWsReady) return;
+    if (!device || !isDeviceOnline || !isWsReady || isPaused) return;
     if ((e.target as HTMLElement).closest('[data-context-menu="true"]')) return;
     const { xPct, yPct } = computePointerPercentages(e.clientX, e.clientY);
     const { width: natW, height: natH } = getNativeScreenDimensions();
     const pxX = Math.round((xPct / 100) * natW);
     const pxY = Math.round((yPct / 100) * natH);
     triggerHapticFeedback('medium');
-    setCursorPos({ x: xPct, y: yPct });
+    updateCursorDom(xPct, yPct);
     addRipple(xPct, yPct, 'double', isBg ? `Двоен клик (${pxX}, ${pxY})` : `Double Click (${pxX}, ${pxY})`);
     dispatchPcAction(
       { type: 'mouse_click', button: 'double', x: pxX, y: pxY },
@@ -634,7 +683,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!device || !isDeviceOnline) return;
+    if (!device || !isDeviceOnline || !isWsReady || isPaused) return;
     const { xPct, yPct } = computePointerPercentages(e.clientX, e.clientY);
 
     if (pointerDownInfoRef.current) {
@@ -644,7 +693,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       // If user drags finger more than 14px, cancel long-press right click and move cursor smoothly
       if (dx > 14 || dy > 14) {
         clearHoldTimer();
-        setCursorPos({ x: xPct, y: yPct });
+        updateCursorDom(xPct, yPct);
         const now = Date.now();
         if (onSendInputOpcode && now - lastMouseMoveSentRef.current >= 55) {
           lastMouseMoveSentRef.current = now;
@@ -659,8 +708,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       return;
     }
 
-    if (e.pointerType === 'mouse') {
-      setCursorPos({ x: xPct, y: yPct });
+    if (e.pointerType === 'mouse' && hasFrame) {
+      updateCursorDom(xPct, yPct);
       const now = Date.now();
       if (onSendInputOpcode && now - lastMouseMoveSentRef.current >= 75) {
         lastMouseMoveSentRef.current = now;
@@ -680,6 +729,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     pointerDownInfoRef.current = null;
     clearHoldTimer();
 
+    try {
+      if (e.currentTarget.hasPointerCapture(info.pointerId)) {
+        e.currentTarget.releasePointerCapture(info.pointerId);
+      }
+    } catch {
+      // Ignore pointer capture release errors
+    }
+
     if (e.button === 2) return;
 
     const dx = Math.abs(e.clientX - info.startX);
@@ -691,26 +748,51 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     }
   };
 
-  const handlePointerCancel = () => {
+  const handlePointerCancel = (e?: React.PointerEvent<HTMLDivElement>) => {
+    const info = pointerDownInfoRef.current;
     pointerDownInfoRef.current = null;
     clearHoldTimer();
+    if (e && info) {
+      try {
+        if (e.currentTarget.hasPointerCapture(info.pointerId)) {
+          e.currentTarget.releasePointerCapture(info.pointerId);
+        }
+      } catch {
+        // Ignore
+      }
+    }
   };
 
-  // Track remote viewport stage size cleanly via ResizeObserver
+  // Track remote viewport stage size cleanly via rAF-throttled ResizeObserver
   useEffect(() => {
     if (!isOpen) return;
     const el = screenStageRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const updateSize = () => {
+    let resizeRaf: number | null = null;
+    const measure = () => {
+      resizeRaf = null;
       const rect = el.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        setStageSize({ width: Math.round(rect.width), height: Math.round(rect.height) });
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      if (width > 0 && height > 0) {
+        setStageSize((prev) =>
+          prev.width === width && prev.height === height ? prev : { width, height }
+        );
       }
     };
-    updateSize();
-    const observer = new ResizeObserver(updateSize);
+    const scheduleMeasure = () => {
+      if (resizeRaf !== null) return;
+      resizeRaf = window.requestAnimationFrame(measure);
+    };
+    measure();
+    const observer = new ResizeObserver(scheduleMeasure);
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeRaf !== null) {
+        window.cancelAnimationFrame(resizeRaf);
+      }
+    };
   }, [isOpen, isFullscreen]);
 
   // Zero-bufferbloat 60 FPS hardware canvas decoder (createImageBitmap + requestAnimationFrame)
@@ -719,6 +801,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       hasFrameRef.current = false;
       setHasFrame(false);
       setLiveFps(0);
+      setStreamResolution(null);
       setStreamTimedOut(false);
       return;
     }
@@ -746,6 +829,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
               canvas.width = bmp.width;
               canvas.height = bmp.height;
+              setStreamResolution((prev) =>
+                prev && prev.width === bmp.width && prev.height === bmp.height
+                  ? prev
+                  : { width: bmp.width, height: bmp.height }
+              );
             }
             canvasNatSizeRef.current = { width: bmp.width, height: bmp.height };
             const ctx = canvas.getContext('2d', { alpha: false });
@@ -818,6 +906,11 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 if (canvas.width !== nw || canvas.height !== nh) {
                   canvas.width = nw;
                   canvas.height = nh;
+                  setStreamResolution((prev) =>
+                    prev && prev.width === nw && prev.height === nh
+                      ? prev
+                      : { width: nw, height: nh }
+                  );
                 }
                 canvasNatSizeRef.current = { width: nw, height: nh };
                 const ctx = canvas.getContext('2d', { alpha: false });
@@ -891,12 +984,19 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     };
   }, [isOpen, device?.id, isDeviceOnline, isWsReady]);
 
-  // Reset transient AI proposals & context menu when switching target host
+  // Reset transient AI proposals, in-flight requests & context menu when switching target host or closing
   useEffect(() => {
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
+    setIsAiBusy(false);
     setPendingAiActions([]);
     setAiStatusReply(null);
     setContextMenu(null);
-  }, [device?.id]);
+    setInlinePairError(null);
+    setStreamResolution(null);
+    pointerDownInfoRef.current = null;
+    clearHoldTimer();
+  }, [device?.id, isOpen, clearHoldTimer]);
 
   // Trigger initial push-stream sync, display enumeration, and single 2.5s recovery keyframe request
   useEffect(() => {
@@ -922,15 +1022,15 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     };
   }, [isOpen, device?.id, isDeviceOnline, isWsReady]);
 
-  // Negotiate optimal viewport dimensions, quality & FPS with 180ms debounce
+  // Negotiate optimal viewport dimensions, quality & target FPS with 180ms debounce
   useEffect(() => {
     if (!isOpen || !device || !isDeviceOnline || !isWsReady) return;
     if (stageSize.width <= 0 || stageSize.height <= 0) return;
 
-    const qualityMap: Record<'High' | 'Medium' | 'Low', { maxW: number; maxH: number; q: number; fps: number }> = {
-      High: { maxW: 1920, maxH: 1080, q: 82, fps: 60 },
-      Medium: { maxW: 1280, maxH: 720, q: 65, fps: 45 },
-      Low: { maxW: 854, maxH: 480, q: 45, fps: 30 },
+    const qualityMap: Record<'High' | 'Medium' | 'Low', { maxW: number; maxH: number; q: number }> = {
+      High: { maxW: 1920, maxH: 1080, q: 82 },
+      Medium: { maxW: 1280, maxH: 720, q: 65 },
+      Low: { maxW: 854, maxH: 480, q: 45 },
     };
     const preset = qualityMap[quality];
     const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2);
@@ -942,12 +1042,12 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
         width,
         height,
         quality: preset.q,
-        fps: preset.fps,
+        fps: targetFps,
       });
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [isOpen, device?.id, isDeviceOnline, isWsReady, stageSize.width, stageSize.height, quality]);
+  }, [isOpen, device?.id, isDeviceOnline, isWsReady, stageSize.width, stageSize.height, quality, targetFps]);
 
   // Avoid infinite spinner if WebSocket is connected but no JPEG frame arrives within 10s
   useEffect(() => {
@@ -959,14 +1059,20 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     return () => window.clearTimeout(timeoutId);
   }, [isOpen, device?.id, isDeviceOnline, isWsReady, hasFrame]);
 
-  // Clean up long-press hold timer on unmount
+  // Clean up pointer hold state on blur or unmount
   useEffect(() => {
-    return () => {
+    const handleWindowBlur = () => {
+      pointerDownInfoRef.current = null;
       clearHoldTimer();
     };
-  }, []);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('blur', handleWindowBlur);
+      clearHoldTimer();
+    };
+  }, [clearHoldTimer]);
 
-  // Keyboard shortcuts: Escape (exit fullscreen / close), F (fullscreen), I (focus input / Shift+I toggle mode)
+  // Keyboard shortcuts: Escape (context menu / fullscreen / close), F (fullscreen), P (pause), Q (quick actions), +/-/0 (zoom), I / Shift+I (input)
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -981,7 +1087,9 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
       if (e.key === 'Escape') {
         e.preventDefault();
-        if (isFullscreen) {
+        if (contextMenu) {
+          setContextMenu(null);
+        } else if (isFullscreen) {
           setIsFullscreen(false);
         } else {
           onClose();
@@ -994,6 +1102,34 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         setIsFullscreen((prev) => !prev);
+      } else if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        setIsPaused((prev) => {
+          const next = !prev;
+          if (!next) onRefreshFrameRef.current?.(undefined, true);
+          showFeedback(
+            next
+              ? isBg
+                ? 'Потокът е на пауза'
+                : 'Stream paused'
+              : isBg
+              ? 'Потокът е възобновен'
+              : 'Stream resumed'
+          );
+          return next;
+        });
+      } else if (e.key === 'q' || e.key === 'Q') {
+        e.preventDefault();
+        setShowQuickActions((prev) => !prev);
+      } else if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        setZoomFactor((prev) => (prev < 1.5 ? 1.5 : 2));
+      } else if (e.key === '-') {
+        e.preventDefault();
+        setZoomFactor((prev) => (prev > 1.5 ? 1.5 : 1));
+      } else if (e.key === '0') {
+        e.preventDefault();
+        setZoomFactor(1);
       } else if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
         if (e.shiftKey) {
@@ -1007,7 +1143,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isFullscreen, inputMode, onClose]);
+  }, [isOpen, isFullscreen, contextMenu, inputMode, isBg, onClose, showFeedback]);
 
   const handleCapture = () => {
     const canvas = canvasRef.current;
@@ -1025,8 +1161,9 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       document.body.appendChild(a);
       a.click();
       a.remove();
+      showFeedback(isBg ? `Снимката е запазена (${filename})` : `Screenshot saved (${filename})`);
     } catch {
-      // Ignore canvas export errors
+      showFeedback(isBg ? 'Грешка при запазване на снимката' : 'Failed to export screenshot');
     }
 
     scheduleTimer(() => {
@@ -1047,7 +1184,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
       label: isBg ? 'Диспечер на задачи' : 'Task Manager',
       shortcut: device?.os === 'linux' ? 'SysMon' : 'taskmgr',
       icon: Activity,
-      color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20',
+      color: 'text-emerald-700 dark:text-emerald-300 border-emerald-500/30 bg-emerald-500/12 hover:bg-emerald-500/20',
       onClick: () => {
         triggerHapticFeedback('medium');
         setContextMenu(null);
@@ -1252,23 +1389,31 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
     <AnimatePresence>
       {isOpen && device ? (
         <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        style={{ backgroundColor: 'var(--backdrop-scrim)' }}
-        className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-md p-2 sm:p-4 modal-backdrop-scrim"
-      >
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          style={{ backgroundColor: 'var(--backdrop-scrim)' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isFullscreen) {
+              onClose();
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-md p-2 sm:p-4 modal-backdrop-scrim"
+        >
         <motion.div
+          role="dialog"
+          aria-modal="true"
+          aria-label={isBg ? `Дистанционен екран: ${device.name}` : `Remote Screen: ${device.name}`}
           initial={{ scale: 0.94, y: 18 }}
           animate={{ scale: 1, y: 0 }}
           exit={{ scale: 0.95, y: 16 }}
           transition={{ type: 'spring', stiffness: 380, damping: 22 }}
           className={`glass-liquid-modal overflow-hidden flex flex-col shadow-2xl transition-all duration-300 ${
-            isFullscreen ? 'w-full h-full rounded-none' : 'w-full max-w-6xl max-h-[96vh] rounded-[28px]'
+            isFullscreen ? 'w-full h-full rounded-none' : 'w-full max-w-6xl max-h-[96dvh] rounded-[28px]'
           }`}
         >
-          {/* Header */}
-          <div className="flex items-center justify-between gap-2 px-4 py-3 glass-liquid-subtle border-b border-[var(--glass-border)] shrink-0">
+          {/* Row 1: Primary Header (Identity, Live Telemetry Badges & Core Controls) */}
+          <div className="flex items-center justify-between gap-2 px-3.5 sm:px-4 py-2.5 glass-liquid-subtle border-b border-[var(--surface-border-subtle)] shrink-0">
             <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
               <div className="relative w-9 h-9 squircle-badge squircle-sky shrink-0">
                 <Monitor className="w-4.5 h-4.5" />
@@ -1276,70 +1421,289 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full ring-2 ring-white/80 dark:ring-slate-900" />
                 )}
               </div>
-              <div className="min-w-0">
-                <h3 className="ink-primary font-display font-extrabold text-sm flex items-center gap-2 truncate">
-                  {device.name}
-                  <span className="text-[11px] font-mono ink-secondary liquid-control-pill px-2 py-0.5 rounded-full hidden sm:inline">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 min-w-0">
+                  <h3 className="ink-primary font-display font-extrabold text-sm truncate">
+                    {device.name}
+                  </h3>
+                  <span className="text-[11px] font-mono ink-secondary liquid-control-pill px-2 py-0.5 rounded-full hidden sm:inline shrink-0">
                     {device.ip}
                   </span>
-                </h3>
-                <div className="flex items-center gap-2 text-[11px] ink-secondary min-w-0 truncate">
-                  <span className="flex items-center gap-1 text-[var(--accent-primary)] font-medium truncate">
-                    <Hand className="w-3 h-3" />
-                    {isBg
-                      ? '1 клик = Ляв бутон • Задръж 1 сек = Десен бутон'
-                      : '1 Tap = Left Click • Hold 1s = Right Click'}
-                  </span>
-                  {typeof device.ping === 'number' && device.ping > 0 && (
-                    <span className="hidden md:flex items-center gap-1">
-                      <Activity className="w-3 h-3 text-emerald-500" />
-                      {device.ping}ms
+                </div>
+                <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                  {isPaused ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/45">
+                      {isBg ? 'ПАУЗА' : 'PAUSED'}
                     </span>
-                  )}
-                  {hasFrame ? (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/18 text-emerald-700 dark:text-emerald-300 border border-emerald-500/35 tabular-nums">
+                  ) : hasFrame ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 border border-emerald-500/40 tabular-nums">
                       LIVE · {liveFps} FPS
                     </span>
+                  ) : !isWsReady ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/45">
+                      {isBg ? 'НЕ Е СВЪРЗАН' : 'WS DISCONNECTED'}
+                    </span>
                   ) : (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono text-amber-700 dark:text-amber-300 bg-amber-500/14 border border-amber-500/30 hidden lg:inline">
-                      AWAITING STREAM
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/45">
+                      {isBg ? 'ИЗЧАКВАНЕ НА ПОТОК' : 'AWAITING STREAM'}
+                    </span>
+                  )}
+
+                  {streamResolution && hasFrame && (
+                    <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold liquid-control-pill ink-secondary tabular-nums">
+                      {streamResolution.width}×{streamResolution.height}
+                    </span>
+                  )}
+
+                  {typeof device.ping === 'number' && device.ping > 0 && (
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold tabular-nums border ${
+                        device.ping < 40
+                          ? 'bg-emerald-500/16 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
+                          : device.ping < 120
+                          ? 'bg-amber-500/18 text-amber-800 dark:text-amber-200 border-amber-500/40'
+                          : 'bg-rose-500/18 text-rose-700 dark:text-rose-300 border-rose-500/40'
+                      }`}
+                    >
+                      <Activity className="w-2.5 h-2.5" />
+                      {device.ping}ms
                     </span>
                   )}
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5 sm:gap-2">
-              {availableDisplays.length > 1 && onSendInputOpcode && isWsReady && (
-                <div className="hidden sm:flex items-center gap-1 liquid-terminal-entry border border-[var(--glass-border)] rounded-full p-0.5">
-                  {availableDisplays.map((disp, idx) => {
-                    const dispIdx = disp.index ?? disp.id ?? idx + 1;
-                    const active = activeDisplayIndex === dispIdx;
-                    return (
-                      <button
-                        key={dispIdx}
-                        type="button"
-                        onClick={() => {
-                          triggerHapticFeedback('light');
-                          onSendInputOpcode(0x0d, { monitor: dispIdx });
-                          showFeedback(
-                            isBg ? `Монитор ${dispIdx}` : `Switched to Display ${dispIdx}`
-                          );
-                        }}
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-mono font-bold transition cursor-pointer ${
-                          active
-                            ? 'liquid-hero-btn preserve-white'
-                            : 'ink-secondary hover:ink-primary'
-                        }`}
-                        title={disp.label || disp.name || `Display ${dispIdx}`}
-                      >
-                        M{dispIdx}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  const nextPaused = !isPaused;
+                  setIsPaused(nextPaused);
+                  if (!nextPaused) {
+                    onRefreshFrame?.(undefined, true);
+                  }
+                  showFeedback(
+                    nextPaused
+                      ? isBg
+                        ? 'Потокът е на пауза'
+                        : 'Stream paused'
+                      : isBg
+                      ? 'Потокът е възобновен'
+                      : 'Stream resumed'
+                  );
+                }}
+                disabled={!isDeviceOnline || !isWsReady}
+                className={`p-2 rounded-full border transition-colors disabled:opacity-45 cursor-pointer ${
+                  isPaused
+                    ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200 border-amber-500/45'
+                    : 'liquid-control-pill ink-primary'
+                }`}
+                title={
+                  isPaused
+                    ? isBg
+                      ? 'Продължи потока (P)'
+                      : 'Resume Stream (P)'
+                    : isBg
+                    ? 'Пауза на потока (P)'
+                    : 'Pause Stream (P)'
+                }
+                aria-label={isPaused ? 'Resume stream' : 'Pause stream'}
+              >
+                {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+              </button>
 
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  setStreamTimedOut(false);
+                  onRefreshFrame?.(undefined, true);
+                  showFeedback(isBg ? 'Заявен нов видео кадър' : 'Requested fresh keyframe');
+                }}
+                disabled={!isDeviceOnline || !isWsReady || isPaused}
+                className="p-2 rounded-full liquid-control-pill ink-primary transition-colors disabled:opacity-45 cursor-pointer"
+                title={isBg ? 'Опресни кадъра' : 'Refresh Keyframe'}
+                aria-label={isBg ? 'Опресни кадъра' : 'Refresh Keyframe'}
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCapture}
+                disabled={isCapturing || !isDeviceOnline || !hasFrame}
+                className="p-2 rounded-full liquid-control-pill ink-primary transition-colors disabled:opacity-45 cursor-pointer"
+                title={isBg ? 'Снимка на екрана' : 'Take Screenshot'}
+                aria-label={isBg ? 'Снимка на екрана' : 'Take Screenshot'}
+              >
+                <Camera className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="p-2 rounded-full liquid-control-pill ink-primary transition-colors cursor-pointer"
+                title={isBg ? 'Цял екран (F)' : 'Toggle Fullscreen (F)'}
+                aria-label={isBg ? 'Цял екран' : 'Toggle Fullscreen'}
+              >
+                {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-2 rounded-full bg-rose-500/14 text-rose-600 dark:text-rose-300 border border-rose-500/30 hover:bg-rose-500/24 transition-colors cursor-pointer"
+                title={isBg ? 'Затвори (Esc)' : 'Close (Esc)'}
+                aria-label={isBg ? 'Затвори' : 'Close'}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Row 2: Compact Responsive Stream HUD Toolbar (Mobile & Desktop) */}
+          <div className="flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 glass-liquid-subtle border-b border-[var(--surface-border-subtle)] overflow-x-auto no-scrollbar shrink-0">
+            <div
+              className="flex items-center gap-0.5 liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full p-0.5 shrink-0"
+              role="group"
+              aria-label={isBg ? 'Качество на потока' : 'Stream quality'}
+            >
+              {(
+                [
+                  { id: 'High', label: '1080p' },
+                  { id: 'Medium', label: '720p' },
+                  { id: 'Low', label: '480p' },
+                ] as const
+              ).map((q) => (
+                <button
+                  key={q.id}
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback('selection');
+                    setQuality(q.id);
+                    if (isDeviceOnline) {
+                      showFeedback(
+                        isWsReady
+                          ? isBg
+                            ? `Качество: ${q.label}`
+                            : `Stream quality: ${q.label}`
+                          : isBg
+                          ? `Запазено качество: ${q.label}`
+                          : `Quality preset saved: ${q.label}`
+                      );
+                    }
+                  }}
+                  className={`px-2 py-0.5 rounded-full text-[10.5px] font-mono font-bold transition cursor-pointer ${
+                    quality === q.id
+                      ? 'liquid-hero-btn preserve-white'
+                      : 'ink-secondary hover:ink-primary'
+                  }`}
+                >
+                  {q.label}
+                </button>
+              ))}
+            </div>
+
+            <div
+              className="flex items-center gap-0.5 liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full p-0.5 shrink-0"
+              role="group"
+              aria-label={isBg ? 'Целева честота (FPS)' : 'Target frame rate'}
+            >
+              {([60, 30, 15] as const).map((fpsOpt) => (
+                <button
+                  key={fpsOpt}
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback('selection');
+                    setTargetFps(fpsOpt);
+                    if (isDeviceOnline) {
+                      showFeedback(
+                        isBg ? `Целева честота: ${fpsOpt} FPS` : `Target frame rate: ${fpsOpt} FPS`
+                      );
+                    }
+                  }}
+                  className={`px-2 py-0.5 rounded-full text-[10.5px] font-mono font-bold transition cursor-pointer ${
+                    targetFps === fpsOpt
+                      ? 'liquid-hero-btn preserve-white'
+                      : 'ink-secondary hover:ink-primary'
+                  }`}
+                >
+                  {fpsOpt}fps
+                </button>
+              ))}
+            </div>
+
+            <select
+              value={aspectPreset}
+              onChange={(e) => setAspectPreset(e.target.value as ScreenAspectPreset)}
+              aria-label={isBg ? 'Съотношение на екрана' : 'Aspect Ratio Preset'}
+              className="liquid-control-pill ink-primary text-[11px] font-medium rounded-full px-2.5 py-1 outline-none focus:border-[var(--theme-accent)] cursor-pointer shrink-0"
+              title={isBg ? 'Съотношение на екрана' : 'Aspect Ratio Preset'}
+            >
+              <option value="fit">{isBg ? 'Адаптивно (Fit)' : 'Auto Fit'}</option>
+              <option value="16:9">16:9</option>
+              <option value="16:10">16:10</option>
+              <option value="21:9">21:9</option>
+              <option value="4:3">4:3</option>
+              <option value="fill">{isBg ? 'Запълване (Fill)' : 'Stretch Fill'}</option>
+            </select>
+
+            <div
+              className="flex items-center gap-0.5 liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full p-0.5 shrink-0"
+              role="group"
+              aria-label={isBg ? 'Мащаб' : 'Zoom level'}
+            >
+              {[1, 1.5, 2].map((z) => (
+                <button
+                  key={z}
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback('selection');
+                    setZoomFactor(z);
+                  }}
+                  className={`px-2 py-0.5 rounded-full text-[10.5px] font-mono font-bold transition cursor-pointer ${
+                    zoomFactor === z
+                      ? 'liquid-hero-btn preserve-white'
+                      : 'ink-secondary hover:ink-primary'
+                  }`}
+                >
+                  {z}x
+                </button>
+              ))}
+            </div>
+
+            {availableDisplays.length > 1 && onSendInputOpcode && isWsReady && (
+              <div className="flex items-center gap-0.5 liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full p-0.5 shrink-0">
+                {availableDisplays.map((disp, idx) => {
+                  const dispIdx = disp.index ?? disp.id ?? idx + 1;
+                  const active = activeDisplayIndex === dispIdx;
+                  return (
+                    <button
+                      key={dispIdx}
+                      type="button"
+                      onClick={() => {
+                        triggerHapticFeedback('light');
+                        onSendInputOpcode(0x0d, { monitor: dispIdx });
+                        showFeedback(
+                          isBg ? `Монитор ${dispIdx}` : `Switched to Display ${dispIdx}`
+                        );
+                      }}
+                      className={`px-2 py-0.5 rounded-full text-[10.5px] font-mono font-bold transition cursor-pointer ${
+                        active
+                          ? 'liquid-hero-btn preserve-white'
+                          : 'ink-secondary hover:ink-primary'
+                      }`}
+                      title={disp.label || disp.name || `Display ${dispIdx}`}
+                    >
+                      M{dispIdx}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5 ml-auto shrink-0">
               {onSendInputOpcode && isWsReady && (
                 <button
                   type="button"
@@ -1364,132 +1728,51 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                         : 'Pulling PC clipboard...'
                     );
                   }}
-                  className="p-2 rounded-full liquid-control-pill ink-primary transition-colors cursor-pointer"
+                  className="px-2.5 py-1 rounded-full liquid-control-pill ink-primary text-[11px] font-display font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                   title={isBg ? 'Синхронизирай клипборд (Pull/Push)' : 'Sync Clipboard (Pull/Push)'}
                 >
-                  <Clipboard className="w-4 h-4 text-[var(--accent-primary)]" />
+                  <Clipboard className="w-3.5 h-3.5 text-[var(--theme-accent)] shrink-0" />
+                  <span className="hidden md:inline">{isBg ? 'Клипборд' : 'Clipboard'}</span>
                 </button>
               )}
 
               <button
-                onClick={() => setShowQuickActions(!showQuickActions)}
-                className={`px-3 py-1.5 rounded-full border text-xs font-display font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                type="button"
+                onClick={() => setShowQuickActions((prev) => !prev)}
+                className={`px-2.5 py-1 rounded-full border text-[11px] font-display font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
                   showQuickActions
-                    ? 'bg-[var(--accent-primary)]/16 text-[var(--accent-primary)] border-[var(--accent-primary)]/40'
+                    ? 'bg-[var(--theme-accent)]/16 text-[var(--theme-accent)] border-[var(--theme-accent)]/40'
                     : 'liquid-control-pill ink-secondary hover:ink-primary'
                 }`}
-                title={isBg ? 'Бързи контроли за ПК' : 'PC Quick Actions'}
+                title={isBg ? 'Бързи контроли за ПК (Q)' : 'PC Quick Actions (Q)'}
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">
-                  {isBg ? 'Бързи действия' : 'Quick Actions'}
-                </span>
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span>{isBg ? 'Бързи действия' : 'Quick Actions'}</span>
               </button>
 
-              <select
-                value={aspectPreset}
-                onChange={(e) => setAspectPreset(e.target.value as ScreenAspectPreset)}
-                className="liquid-control-pill ink-primary text-xs font-medium rounded-full px-2.5 py-1.5 outline-none focus:border-[var(--accent-primary)] cursor-pointer hidden md:block"
-                title={isBg ? 'Съотношение на екрана' : 'Aspect Ratio Preset'}
-              >
-                <option value="fit">{isBg ? 'Адаптивно (Fit)' : 'Auto Fit'}</option>
-                <option value="16:9">16:9 (1080p/4K)</option>
-                <option value="16:10">16:10 (Workstation)</option>
-                <option value="21:9">21:9 (Ultrawide)</option>
-                <option value="4:3">4:3 (Classic)</option>
-                <option value="fill">{isBg ? 'Запълване (Fill)' : 'Stretch Fill'}</option>
-              </select>
-
-              <div className="hidden lg:flex items-center gap-0.5 liquid-terminal-entry border border-[var(--glass-border)] rounded-full p-0.5">
-                {[1, 1.5, 2].map((z) => (
-                  <button
-                    key={z}
-                    type="button"
-                    onClick={() => setZoomFactor(z)}
-                    className={`px-2 py-1 rounded-full text-[11px] font-mono font-bold transition cursor-pointer ${
-                      zoomFactor === z
-                        ? 'liquid-hero-btn preserve-white'
-                        : 'ink-secondary hover:ink-primary'
-                    }`}
-                  >
-                    {z}x
-                  </button>
-                ))}
-              </div>
-
-              <select
-                value={quality}
-                onChange={(e) => {
-                  const nextQuality = e.target.value as 'High' | 'Medium' | 'Low';
-                  setQuality(nextQuality);
-                  if (isDeviceOnline) {
-                    showFeedback(
-                      isWsReady
-                        ? isBg
-                          ? `Качество: ${nextQuality}`
-                          : `Stream quality: ${nextQuality}`
-                        : isBg
-                        ? 'Качеството ще се приложи при активен поток'
-                        : 'Quality preset saved for active stream'
-                    );
+              {isWsReady && hasFrame && (
+                <button
+                  type="button"
+                  onClick={() => setShowGestureHint((prev) => !prev)}
+                  className="p-1.5 rounded-full liquid-control-pill ink-secondary hover:ink-primary transition-colors cursor-pointer"
+                  title={
+                    showGestureHint
+                      ? isBg
+                        ? 'Скрий подсказката за жестове'
+                        : 'Hide gesture hint overlay'
+                      : isBg
+                      ? 'Покажи подсказката за жестове'
+                      : 'Show gesture hint overlay'
                   }
-                }}
-                className="liquid-control-pill ink-primary text-xs font-medium rounded-full px-2.5 py-1.5 outline-none focus:border-[var(--accent-primary)] hidden md:block cursor-pointer"
-              >
-                <option value="High">{isBg ? 'Високо (1080p)' : 'High (1080p)'}</option>
-                <option value="Medium">{isBg ? 'Средно (720p)' : 'Medium (720p)'}</option>
-                <option value="Low">{isBg ? 'Ниско (480p)' : 'Low (480p)'}</option>
-              </select>
-
-              <button
-                onClick={() => {
-                  const nextPaused = !isPaused;
-                  setIsPaused(nextPaused);
-                  if (!nextPaused) {
-                    onRefreshFrame?.(undefined, true);
-                  }
-                }}
-                className={`p-2 rounded-full border transition-colors cursor-pointer ${
-                  isPaused
-                    ? 'bg-amber-500/18 text-amber-700 dark:text-amber-300 border-amber-500/35'
-                    : 'liquid-control-pill ink-primary'
-                }`}
-                title={isPaused ? (isBg ? 'Продължи потока' : 'Resume Stream') : (isBg ? 'Пауза на потока' : 'Pause Stream')}
-              >
-                <RefreshCw
-                  className={`w-4 h-4 ${!isPaused && isDeviceOnline && isWsReady ? 'animate-spin' : ''}`}
-                  style={{ animationDuration: '4s' }}
-                />
-              </button>
-
-              <button
-                onClick={handleCapture}
-                disabled={isCapturing || !isDeviceOnline || !hasFrame}
-                className="p-2 rounded-full liquid-control-pill ink-primary transition-colors disabled:opacity-45 hidden sm:flex cursor-pointer"
-                title={isBg ? 'Снимка на екрана' : 'Take Screenshot'}
-              >
-                <Camera className="w-4 h-4" />
-              </button>
-
-              <button
-                onClick={toggleFullscreen}
-                className="p-2 rounded-full liquid-control-pill ink-primary transition-colors cursor-pointer"
-                title={isBg ? 'Цял екран' : 'Toggle Fullscreen'}
-              >
-                {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-              </button>
-
-              <button
-                onClick={onClose}
-                className="p-2 rounded-full bg-rose-500/14 text-rose-600 dark:text-rose-300 border border-rose-500/30 hover:bg-rose-500/24 transition-colors cursor-pointer"
-                title={isBg ? 'Затвори' : 'Close'}
-              >
-                <X className="w-4 h-4" />
-              </button>
+                  aria-label={showGestureHint ? 'Hide gesture hint' : 'Show gesture hint'}
+                >
+                  {showGestureHint ? <EyeOff className="w-3.5 h-3.5" /> : <Hand className="w-3.5 h-3.5" />}
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Interactive Remote Screen Viewport */}
+          {/* Interactive Remote Screen Viewport (Explicit hex tokens immune to Daylight remap) */}
           <div
             ref={screenStageRef}
             onPointerDown={handlePointerDown}
@@ -1501,21 +1784,26 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
               // Prevent mobile browser native long-press menu
               e.preventDefault();
             }}
-            className="dark-video-stage relative flex-1 min-h-[250px] sm:min-h-[380px] bg-black flex items-center justify-center overflow-hidden select-none touch-none cursor-crosshair"
+            className={`dark-video-stage relative flex-1 min-h-[250px] sm:min-h-[380px] bg-black flex items-center justify-center overflow-hidden select-none touch-none ${
+              isWsReady && hasFrame && !isPaused ? 'cursor-crosshair' : 'cursor-default'
+            }`}
           >
             {isDeviceOnline ? (
               <>
                 {!isWsReady ? (
-                  <div className="flex flex-col items-center gap-3 text-slate-300 px-6 text-center max-w-md z-10">
-                    <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-400/35 flex items-center justify-center text-amber-300">
+                  <div
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="flex flex-col items-center gap-3 px-5 py-6 mx-4 text-center max-w-md z-10 rounded-3xl bg-[#0b1120]/90 border border-[#ffffff]/15 shadow-2xl"
+                  >
+                    <div className="w-12 h-12 rounded-2xl bg-[#f59e0b]/15 border border-[#fbbf24]/40 flex items-center justify-center text-[#fcd34d]">
                       <KeyRound className="w-6 h-6" />
                     </div>
-                    <p className="text-sm font-semibold text-white">
+                    <p className="text-sm font-semibold text-[#f8fafc]">
                       {isBg
                         ? 'Свържете се с PC агента за жива картина'
                         : 'Connect to PC Agent for Live Screen'}
                     </p>
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-[#cbd5e1] leading-relaxed">
                       {isBg
                         ? `Въведете 6-цифрения PIN от ${device.name} (${device.ip}) или натиснете Свържи, ако вече сте сдвоени.`
                         : `Enter the 6-digit PIN shown on ${device.name} (${device.ip}), or click Connect if already paired.`}
@@ -1530,14 +1818,17 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                         inputMode="numeric"
                         maxLength={6}
                         value={inlinePin}
-                        onChange={(e) => setInlinePin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        onChange={(e) => {
+                          setInlinePin(e.target.value.replace(/\D/g, '').slice(0, 6));
+                          if (inlinePairError) setInlinePairError(null);
+                        }}
                         placeholder={isBg ? '6-цифрен PIN (по избор)' : '6-digit PIN (optional)'}
-                        className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-950 border border-white/15 focus:border-cyan-400 text-xs font-mono text-amber-200 tracking-widest outline-none"
+                        className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-[#090d1a] border border-[#ffffff]/20 focus:border-[#22d3ee] text-xs font-mono text-[#fcd34d] placeholder:text-[#94a3b8] tracking-widest outline-none"
                       />
                       <button
                         type="submit"
                         disabled={isPairingInline}
-                        className="min-h-[40px] px-4 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 text-slate-950 text-xs font-mono font-bold transition cursor-pointer shrink-0"
+                        className="min-h-[40px] px-4 py-2 rounded-xl bg-[#22d3ee] hover:bg-[#67e8f9] disabled:opacity-50 text-[#020617] text-xs font-mono font-bold transition cursor-pointer shrink-0"
                       >
                         {isPairingInline
                           ? isBg
@@ -1553,14 +1844,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                       </button>
                     </form>
                     {inlinePairError && (
-                      <p className="text-[11px] text-rose-300 font-mono">{inlinePairError}</p>
+                      <p className="text-[11px] text-[#fda4af] font-mono">{inlinePairError}</p>
                     )}
                     {onOpenConnection && (
                       <button
                         type="button"
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={onOpenConnection}
-                        className="text-[11px] text-cyan-300 hover:text-cyan-200 underline cursor-pointer"
+                        className="text-[11px] text-[#67e8f9] hover:text-[#a5f3fc] underline cursor-pointer"
                       >
                         {isBg ? 'Разширени WebSocket настройки' : 'Advanced WebSocket Settings'}
                       </button>
@@ -1613,11 +1904,14 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                         </div>
 
                         {!hasFrame && (
-                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400 px-6 text-center pointer-events-auto">
+                          <div
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[#cbd5e1] px-6 text-center pointer-events-auto"
+                          >
                             {streamTimedOut ? (
                               <>
-                                <XCircle className="w-8 h-8 text-amber-400" />
-                                <p className="text-sm font-mono text-amber-200 max-w-md">
+                                <XCircle className="w-8 h-8 text-[#fbbf24]" />
+                                <p className="text-sm font-mono text-[#fcd34d] max-w-md">
                                   {isBg
                                     ? 'Няма получен видео кадър от хост агента.'
                                     : 'No video frame received yet from host agent.'}
@@ -1629,7 +1923,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                                       setStreamTimedOut(false);
                                       onRefreshFrame(undefined, true);
                                     }}
-                                    className="px-3.5 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-mono font-bold transition cursor-pointer"
+                                    className="px-3.5 py-1.5 rounded-xl bg-[#06b6d4]/25 hover:bg-[#06b6d4]/35 border border-[#22d3ee]/50 text-[#a5f3fc] text-xs font-mono font-bold transition cursor-pointer"
                                   >
                                     {isBg ? 'Поискай кадър отново' : 'Request Screen Frame'}
                                   </button>
@@ -1637,8 +1931,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                               </>
                             ) : (
                               <>
-                                <RefreshCw className="w-8 h-8 animate-spin text-cyan-500" />
-                                <p className="text-sm font-mono">
+                                <RefreshCw className="w-8 h-8 animate-spin text-[#22d3ee]" />
+                                <p className="text-sm font-mono text-[#e2e8f0]">
                                   {isBg
                                     ? 'Установяване на автентикиран видео поток...'
                                     : 'Establishing authenticated screen stream...'}
@@ -1652,20 +1946,22 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   })()
                 )}
 
-                {/* Touch Gesture Helper Pill (Top Left) */}
-                <div className="absolute top-3 left-3 pointer-events-none flex flex-wrap items-center gap-2 z-20">
-                  <div className="px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/15 text-[11px] text-slate-200 flex items-center gap-2 shadow-lg">
-                    <span className="inline-flex items-center gap-1 text-cyan-400 font-semibold">
-                      <span className="w-2 h-2 rounded-full bg-cyan-400" />
-                      {isBg ? '1 Докосване = Ляв клик' : '1 Tap = Left Click'}
-                    </span>
-                    <span className="text-slate-600">|</span>
-                    <span className="inline-flex items-center gap-1 text-purple-400 font-semibold">
-                      <span className="w-2 h-2 rounded-full bg-purple-400" />
-                      {isBg ? 'Задръж 1 сек = Десен клик' : 'Hold 1s = Right Click'}
-                    </span>
+                {/* Touch Gesture Helper Pill (Only when Live Stream is Active & Hint Enabled) */}
+                {showGestureHint && isWsReady && hasFrame && !isPaused && (
+                  <div className="absolute top-3 left-3 pointer-events-none flex flex-wrap items-center gap-2 z-20">
+                    <div className="px-2.5 py-1 rounded-lg bg-[#090d1a]/85 backdrop-blur-md border border-[#ffffff]/15 text-[11px] text-[#e2e8f0] flex items-center gap-2 shadow-lg">
+                      <span className="inline-flex items-center gap-1 text-[#67e8f9] font-semibold">
+                        <span className="w-2 h-2 rounded-full bg-[#22d3ee]" />
+                        {isBg ? '1 Докосване = Ляв клик' : '1 Tap = Left Click'}
+                      </span>
+                      <span className="text-[#64748b]">|</span>
+                      <span className="inline-flex items-center gap-1 text-[#c084fc] font-semibold">
+                        <span className="w-2 h-2 rounded-full bg-[#a855f7]" />
+                        {isBg ? 'Задръж 1 сек = Десен клик' : 'Hold 1s = Right Click'}
+                      </span>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Live Action Feedback Toast */}
                 <AnimatePresence>
@@ -1674,10 +1970,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                       initial={{ opacity: 0, y: -12 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -12 }}
-                      className="absolute top-3 right-3 px-3 py-1.5 rounded-xl bg-black/85 border border-cyan-500/40 text-cyan-300 text-xs font-mono shadow-xl pointer-events-none z-30 flex items-center gap-2"
+                      className="absolute top-3 right-3 px-3 py-1.5 rounded-xl bg-[#090d1a]/90 border border-[#22d3ee]/45 text-[#a5f3fc] text-xs font-mono shadow-xl pointer-events-none z-30 flex items-center gap-2 max-w-[80%]"
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>{lastActionFeedback}</span>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#34d399] shrink-0" />
+                      <span className="truncate">{lastActionFeedback}</span>
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -1718,7 +2014,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                           transition={{ duration: 1.0, ease: 'linear' }}
                         />
                       </svg>
-                      <span className="mt-1 px-2 py-0.5 rounded bg-purple-950/90 border border-purple-500/40 text-[10px] font-bold text-purple-200 whitespace-nowrap shadow">
+                      <span className="mt-1 px-2 py-0.5 rounded bg-[#3b0764]/95 border border-[#a855f7]/50 text-[10px] font-bold text-[#f3e8ff] whitespace-nowrap shadow">
                         {isBg ? 'Задръж за Десен клик...' : 'Hold for Right Click...'}
                       </span>
                     </motion.div>
@@ -1740,23 +2036,31 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                       <div
                         className={`w-12 h-12 rounded-full border-2 ${
                           r.button === 'right'
-                            ? 'border-purple-400 bg-purple-500/25 shadow-[0_0_25px_rgba(168,85,247,0.7)]'
-                            : 'border-cyan-400 bg-cyan-500/25 shadow-[0_0_25px_rgba(34,211,238,0.7)]'
+                            ? 'border-[#c084fc] bg-[#a855f7]/25 shadow-[0_0_25px_rgba(168,85,247,0.7)]'
+                            : 'border-[#22d3ee] bg-[#06b6d4]/25 shadow-[0_0_25px_rgba(34,211,238,0.7)]'
                         }`}
                       />
                     </motion.div>
                   ))}
                 </AnimatePresence>
 
-                {/* Simulated Remote Cursor Indicator */}
+                {/* Zero-Re-Render Remote Cursor Indicator (Hidden until Live Frame is Active) */}
                 <div
-                  style={{ left: `${cursorPos.x}%`, top: `${cursorPos.y}%` }}
-                  className="absolute w-5 h-5 -ml-2.5 -mt-2.5 pointer-events-none transition-all duration-100 z-20"
+                  ref={cursorMarkerRef}
+                  style={{
+                    left: `${cursorPosRef.current.x}%`,
+                    top: `${cursorPosRef.current.y}%`,
+                    display: isWsReady && hasFrame && !isPaused ? undefined : 'none',
+                  }}
+                  className="absolute w-5 h-5 -ml-2.5 -mt-2.5 pointer-events-none transition-[left,top] duration-75 z-20"
                 >
-                  <div className="w-full h-full rounded-full border-2 border-cyan-400 bg-cyan-400/30 shadow-[0_0_12px_rgba(34,211,238,0.9)]" />
-                  <span className="absolute left-6 top-0 px-2 py-0.5 rounded bg-black/85 border border-cyan-400/30 text-[10.5px] font-mono font-semibold text-cyan-300 whitespace-nowrap shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
-                    {Math.round((cursorPos.x / 100) * (canvasNatSizeRef.current.width || 1920))},
-                    {Math.round((cursorPos.y / 100) * (canvasNatSizeRef.current.height || 1080))}
+                  <div className="w-full h-full rounded-full border-2 border-[#22d3ee] bg-[#22d3ee]/30 shadow-[0_0_12px_rgba(34,211,238,0.9)]" />
+                  <span
+                    ref={cursorCoordsRef}
+                    className="absolute left-6 top-0 px-2 py-0.5 rounded bg-[#090d1a]/90 border border-[#22d3ee]/40 text-[10.5px] font-mono font-semibold text-[#67e8f9] whitespace-nowrap shadow-[0_2px_8px_rgba(0,0,0,0.6)]"
+                  >
+                    {Math.round((cursorPosRef.current.x / 100) * (canvasNatSizeRef.current.width || 1920))},
+                    {Math.round((cursorPosRef.current.y / 100) * (canvasNatSizeRef.current.height || 1080))}
                   </span>
                 </div>
 
@@ -1765,6 +2069,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   {contextMenu && (
                     <motion.div
                       data-context-menu="true"
+                      onPointerDown={(e) => e.stopPropagation()}
                       initial={{ opacity: 0, scale: 0.92 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.92 }}
@@ -1772,21 +2077,24 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                         left: `${Math.min(72, Math.max(6, contextMenu.xPct))}%`,
                         top: `${Math.min(62, Math.max(8, contextMenu.yPct))}%`
                       }}
-                      className="absolute z-40 w-56 rounded-xl bg-[#111827]/95 backdrop-blur-xl border border-purple-500/40 shadow-2xl p-1.5 text-xs text-slate-200"
+                      className="absolute z-40 w-56 rounded-xl bg-[#111827]/95 backdrop-blur-xl border border-[#a855f7]/45 shadow-2xl p-1.5 text-xs text-[#f1f5f9]"
                     >
-                      <div className="px-2.5 py-1.5 border-b border-white/10 flex items-center justify-between text-[10px] font-mono text-purple-300">
+                      <div className="px-2.5 py-1.5 border-b border-[#ffffff]/10 flex items-center justify-between text-[10px] font-mono text-[#d8b4fe]">
                         <span>
                           {isBg ? 'ДЕСЕН КЛИК МЕНЮ' : 'RIGHT-CLICK MENU'} ({contextMenu.pxX}, {contextMenu.pxY})
                         </span>
                         <button
+                          type="button"
                           onClick={() => setContextMenu(null)}
-                          className="text-slate-400 hover:text-white"
+                          className="text-[#94a3b8] hover:text-[#ffffff] cursor-pointer"
+                          aria-label={isBg ? 'Затвори менюто' : 'Close menu'}
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
                       <div className="py-1 space-y-0.5">
                         <button
+                          type="button"
                           onClick={() => {
                             setContextMenu(null);
                             dispatchPcAction(
@@ -1799,12 +2107,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                               isBg ? 'Двоен клик изпълнен' : 'Double Click executed'
                             );
                           }}
-                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-white/10 flex items-center justify-between text-left transition-colors"
+                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff]/10 flex items-center justify-between text-left transition-colors cursor-pointer"
                         >
                           <span>{isBg ? 'Отвори / Двоен клик тук' : 'Open / Double-Click Here'}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">2x Click</span>
+                          <span className="text-[10px] text-[#94a3b8] font-mono">2x Click</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => {
                             setContextMenu(null);
                             dispatchPcAction(
@@ -1818,14 +2127,15 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                               isBg ? 'Стартиран Диспечер на задачите' : 'Launched Task Manager'
                             );
                           }}
-                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-white/10 flex items-center justify-between text-left transition-colors text-emerald-300"
+                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff]/10 flex items-center justify-between text-left transition-colors text-[#6ee7b7] cursor-pointer"
                         >
                           <span>{isBg ? 'Диспечер на задачите' : 'Open Task Manager'}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">
+                          <span className="text-[10px] text-[#94a3b8] font-mono">
                             {device?.os === 'linux' ? 'SysMon' : 'taskmgr'}
                           </span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => {
                             setContextMenu(null);
                             dispatchPcAction(
@@ -1833,12 +2143,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                               isBg ? 'Отворен Файлов мениджър' : 'Opened File Explorer'
                             );
                           }}
-                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-white/10 flex items-center justify-between text-left transition-colors"
+                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff]/10 flex items-center justify-between text-left transition-colors cursor-pointer"
                         >
                           <span>{isBg ? 'Файлов мениджър' : 'Open File Explorer'}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">Win+E</span>
+                          <span className="text-[10px] text-[#94a3b8] font-mono">Win+E</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => {
                             setContextMenu(null);
                             dispatchPcAction(
@@ -1846,12 +2157,13 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                               isBg ? 'Покажи работния плот' : 'Show Desktop'
                             );
                           }}
-                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-white/10 flex items-center justify-between text-left transition-colors"
+                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff]/10 flex items-center justify-between text-left transition-colors cursor-pointer"
                         >
                           <span>{isBg ? 'Покажи работния плот' : 'Show Desktop'}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">Win+D</span>
+                          <span className="text-[10px] text-[#94a3b8] font-mono">Win+D</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => {
                             setContextMenu(null);
                             dispatchPcAction(
@@ -1859,10 +2171,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                               isBg ? 'Опресняване (F5)' : 'Refreshed Desktop (F5)'
                             );
                           }}
-                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-white/10 flex items-center justify-between text-left transition-colors"
+                          className="w-full px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff]/10 flex items-center justify-between text-left transition-colors cursor-pointer"
                         >
                           <span>{isBg ? 'Опресни екрана' : 'Refresh Screen'}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">F5</span>
+                          <span className="text-[10px] text-[#94a3b8] font-mono">F5</span>
                         </button>
                       </div>
                     </motion.div>
@@ -1870,28 +2182,32 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 </AnimatePresence>
 
                 {isPaused && (
-                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-30">
-                    <div className="bg-[#141414] border border-white/10 px-6 py-4 rounded-2xl flex flex-col items-center gap-2">
-                      <span className="text-amber-400 font-bold tracking-widest uppercase text-xs">
+                  <div
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="absolute inset-0 bg-[#020617]/70 backdrop-blur-sm flex items-center justify-center z-30"
+                  >
+                    <div className="bg-[#0f172a] border border-[#ffffff]/15 px-6 py-4 rounded-2xl flex flex-col items-center gap-2 shadow-2xl">
+                      <span className="text-[#fcd34d] font-bold tracking-widest uppercase text-xs">
                         {isBg ? 'Потокът е на пауза' : 'Stream Paused'}
                       </span>
                       <button
+                        type="button"
                         onClick={() => {
                           setIsPaused(false);
                           onRefreshFrame?.(undefined, true);
                         }}
-                        className="mt-2 px-4 py-1.5 bg-cyan-500 text-black font-semibold text-xs rounded-lg hover:bg-cyan-400 transition-colors"
+                        className="mt-2 px-4 py-1.5 bg-[#22d3ee] text-[#020617] font-semibold text-xs rounded-lg hover:bg-[#67e8f9] transition-colors cursor-pointer"
                       >
-                        {isBg ? 'Продължи' : 'Resume'}
+                        {isBg ? 'Продължи (P)' : 'Resume (P)'}
                       </button>
                     </div>
                   </div>
                 )}
               </>
             ) : (
-              <div className="flex flex-col items-center gap-3 text-slate-500 p-6 text-center">
-                <Monitor className="w-12 h-12 text-slate-700" />
-                <p className="text-sm">
+              <div className="flex flex-col items-center gap-3 text-[#94a3b8] p-6 text-center">
+                <Monitor className="w-12 h-12 text-[#475569]" />
+                <p className="text-sm text-[#cbd5e1] max-w-sm">
                   {isBg
                     ? 'Устройството е офлайн. Стартирайте компютъра, за да гледате и управлявате екрана.'
                     : 'Device is offline. Wake the PC to view and control its screen.'}
@@ -1900,74 +2216,91 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
             )}
           </div>
 
-          {/* Common PC Quick Actions Strip */}
+          {/* Common PC Quick Actions Strip (With Scroll Arrows & Quick Macro Keys) */}
           <AnimatePresence>
             {showQuickActions && isDeviceOnline && (
               <motion.div
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                className="glass-liquid-subtle border-t border-[var(--glass-border)] px-3.5 py-2.5 shrink-0 overflow-hidden"
+                className="glass-liquid-subtle border-t border-[var(--surface-border-subtle)] px-3.5 py-2.5 shrink-0 overflow-hidden"
               >
-                <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
                   <span className="text-[11px] font-display font-bold ink-secondary flex items-center gap-1.5">
-                    <Cpu className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                    <Cpu className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                     {isBg ? 'Бързи действия (1 докосване)' : 'PC Quick Actions (1-Tap)'}
                   </span>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() =>
-                        dispatchPcAction(
-                          { type: 'key_combo', keys: 'enter' },
-                          isBg ? 'Клавиш Enter' : 'Sent Enter Key'
-                        )
-                      }
-                      className="px-2.5 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-primary cursor-pointer"
-                    >
-                      Enter
-                    </button>
-                    <button
-                      onClick={() =>
-                        dispatchPcAction(
-                          { type: 'key_combo', keys: 'esc' },
-                          isBg ? 'Клавиш Escape' : 'Sent Escape Key'
-                        )
-                      }
-                      className="px-2.5 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-primary cursor-pointer"
-                    >
-                      Esc
-                    </button>
-                    <button
-                      onClick={() =>
-                        dispatchPcAction(
-                          { type: 'key_combo', keys: 'backspace' },
-                          isBg ? 'Клавиш Backspace' : 'Sent Backspace'
-                        )
-                      }
-                      className="px-2.5 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-primary cursor-pointer"
-                    >
-                      Backspace
-                    </button>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {(
+                      [
+                        { keys: 'enter', label: 'Enter' },
+                        { keys: 'esc', label: 'Esc' },
+                        { keys: 'backspace', label: 'Backspace' },
+                        { keys: 'tab', label: 'Tab' },
+                        { keys: 'ctrl,c', label: 'Ctrl+C' },
+                        { keys: 'ctrl,v', label: 'Ctrl+V' },
+                      ] as const
+                    ).map((macro) => (
+                      <button
+                        key={macro.keys}
+                        type="button"
+                        onClick={() =>
+                          dispatchPcAction(
+                            { type: 'key_combo', keys: macro.keys },
+                            isBg ? `Клавиш ${macro.label}` : `Sent ${macro.label}`
+                          )
+                        }
+                        className="px-2 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-primary cursor-pointer"
+                      >
+                        {macro.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-0.5">
-                  {commonQuickActions.map((item) => {
-                    const IconComponent = item.icon;
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={item.onClick}
-                        className={`shrink-0 px-3 py-1.5 rounded-full border text-xs font-display font-semibold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${item.color}`}
-                      >
-                        <IconComponent className="w-3.5 h-3.5 shrink-0" />
-                        <span className="whitespace-nowrap">{item.label}</span>
-                        <span className="text-[10px] opacity-65 font-mono hidden sm:inline">
-                          {item.shortcut}
-                        </span>
-                      </button>
-                    );
-                  })}
+                <div className="relative flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      quickActionsScrollRef.current?.scrollBy({ left: -220, behavior: 'smooth' })
+                    }
+                    aria-label={isBg ? 'Превърти наляво' : 'Scroll quick actions left'}
+                    className="hidden sm:flex w-7 h-7 rounded-full liquid-control-pill items-center justify-center ink-secondary hover:ink-primary shrink-0 cursor-pointer"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <div
+                    ref={quickActionsScrollRef}
+                    className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar pb-0.5 scroll-smooth"
+                  >
+                    {commonQuickActions.map((item) => {
+                      const IconComponent = item.icon;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={item.onClick}
+                          className={`shrink-0 px-3 py-1.5 rounded-full border text-xs font-display font-semibold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${item.color}`}
+                        >
+                          <IconComponent className="w-3.5 h-3.5 shrink-0" />
+                          <span className="whitespace-nowrap">{item.label}</span>
+                          <span className="text-[10px] opacity-65 font-mono hidden sm:inline">
+                            {item.shortcut}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      quickActionsScrollRef.current?.scrollBy({ left: 220, behavior: 'smooth' })
+                    }
+                    aria-label={isBg ? 'Превърти надясно' : 'Scroll quick actions right'}
+                    className="hidden sm:flex w-7 h-7 rounded-full liquid-control-pill items-center justify-center ink-secondary hover:ink-primary shrink-0 cursor-pointer"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </motion.div>
             )}
@@ -1975,7 +2308,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
           {/* Built-in AI PC Command Text Box & Direct Keyboard Bar */}
           {isDeviceOnline && (
-            <div className="glass-liquid-subtle border-t border-[var(--glass-border)] px-3 sm:px-4 py-3 shrink-0 space-y-2">
+            <div className="glass-liquid-subtle border-t border-[var(--surface-border-subtle)] px-3 sm:px-4 py-3 shrink-0 space-y-2">
               {/* AI Status Reply Banner + Explicit 1-Tap Approval for Proposed Actions */}
               <AnimatePresence>
                 {(aiStatusReply || pendingAiActions.length > 0) && (
@@ -1983,10 +2316,10 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 6 }}
-                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-1.5 rounded-2xl bg-[var(--accent-primary)]/12 border border-[var(--accent-primary)]/30 text-xs ink-primary"
+                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-1.5 rounded-2xl bg-[var(--theme-accent)]/12 border border-[var(--theme-accent)]/30 text-xs ink-primary"
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <Sparkles className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
+                      <Sparkles className="w-3.5 h-3.5 text-[var(--theme-accent)] shrink-0" />
                       <span className="truncate">{aiStatusReply}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -2020,6 +2353,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                           setPendingAiActions([]);
                         }}
                         className="ink-secondary hover:ink-primary shrink-0 p-1 cursor-pointer"
+                        aria-label={isBg ? 'Затвори' : 'Dismiss'}
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -2030,7 +2364,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
 
               {/* Mode Switcher + Input Form */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <div className="flex items-center liquid-terminal-entry p-1 rounded-full border border-[var(--glass-border)] shrink-0">
+                <div className="flex items-center liquid-terminal-entry p-1 rounded-full border border-[var(--surface-border-subtle)] shrink-0">
                   <button
                     type="button"
                     onClick={() => setInputMode('ai')}
@@ -2066,7 +2400,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                     className="flex-1 flex items-center gap-2"
                   >
                     <div className="relative flex-1">
-                      <Sparkles className="w-4 h-4 text-[var(--accent-primary)] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <Sparkles className="w-4 h-4 text-[var(--theme-accent)] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none z-10" />
                       <input
                         ref={aiInputRef}
                         type="text"
@@ -2077,7 +2411,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                             ? 'Кажете на ИИ какво да направи на ПК (напр. "Отвори Task Manager")...'
                             : 'Tell AI what to do on your PC (e.g. "Open Task Manager", "Show desktop")...'
                         }
-                        className="w-full liquid-terminal-entry border border-[var(--glass-border)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--accent-primary)]"
+                        className="w-full liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--theme-accent)]"
                       />
                     </div>
                     <button
@@ -2096,7 +2430,7 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                 ) : (
                   <form onSubmit={handleSendKeyboardText} className="flex-1 flex items-center gap-2">
                     <div className="relative flex-1">
-                      <Keyboard className="w-4 h-4 ink-muted absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <Keyboard className="w-4 h-4 ink-muted absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none z-10" />
                       <input
                         ref={keyboardInputRef}
                         type="text"
@@ -2107,9 +2441,29 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                             ? 'Въведете текст директно към активния прозорец на компютъра...'
                             : 'Type text directly into the active window on the PC...'
                         }
-                        className="w-full liquid-terminal-entry border border-[var(--glass-border)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--accent-primary)]"
+                        className="w-full liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-full pl-10 pr-3.5 py-2 text-xs sm:text-sm ink-primary placeholder:opacity-55 focus:outline-none focus:border-[var(--theme-accent)]"
                       />
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setPressEnterOnType((prev) => !prev)}
+                      className={`px-2.5 py-2 rounded-full border text-[11px] font-mono font-bold transition shrink-0 cursor-pointer ${
+                        pressEnterOnType
+                          ? 'bg-[var(--theme-accent)]/16 text-[var(--theme-accent)] border-[var(--theme-accent)]/40'
+                          : 'liquid-control-pill ink-muted'
+                      }`}
+                      title={
+                        pressEnterOnType
+                          ? isBg
+                            ? 'Натисни Enter след текста (Вкл.)'
+                            : 'Press Enter after typing (On)'
+                          : isBg
+                          ? 'Без Enter след текста (Изкл.)'
+                          : 'Do not press Enter after typing (Off)'
+                      }
+                    >
+                      +↵
+                    </button>
                     <button
                       type="submit"
                       disabled={!keyboardText.trim()}
@@ -2145,8 +2499,8 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
           )}
 
           {/* Footer Status */}
-          <div className="px-4 py-2 glass-liquid-subtle border-t border-[var(--glass-border)] flex flex-wrap items-center justify-between gap-2 text-[11px] ink-muted shrink-0">
-            <div className="flex items-center gap-4">
+          <div className="px-4 py-2 glass-liquid-subtle border-t border-[var(--surface-border-subtle)] flex flex-wrap items-center justify-between gap-2 text-[11px] ink-muted shrink-0">
+            <div className="flex items-center gap-3.5">
               {(() => {
                 const isEncryptedWs = wsUrl
                   ? wsUrl.startsWith('wss://')
@@ -2167,21 +2521,26 @@ export const ScreenViewerModal: React.FC<ScreenViewerModalProps> = ({
                   : 'HMAC-Authenticated LAN Stream';
                 return (
                   <span className={`flex items-center gap-1.5 ${isVaultEncrypted ? 'text-emerald-600 dark:text-emerald-300 font-semibold' : ''}`}>
-                    <Shield className={`w-3.5 h-3.5 ${secureShield ? 'text-emerald-500' : 'text-[var(--accent-primary)]'}`} />
+                    <Shield className={`w-3.5 h-3.5 ${secureShield ? 'text-emerald-500' : 'text-[var(--theme-accent)]'}`} />
                     {badgeText}
                   </span>
                 );
               })()}
               <span className="hidden sm:flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                <Terminal className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                 {isBg ? 'Протокол: AI-NET/3.0' : 'Protocol: AI-NET/3.0'}
+              </span>
+              <span className="hidden lg:inline font-mono text-[10px] opacity-75">
+                F · P · Q · +/- · Esc
               </span>
             </div>
             <div className="flex items-center gap-3 font-mono">
-              <span className="text-[var(--accent-primary)] font-semibold">
+              <span className="text-[var(--theme-accent)] font-semibold tabular-nums">
                 {isBg ? 'Курсор' : 'Cursor'}:{' '}
-                {Math.round((cursorPos.x / 100) * (canvasNatSizeRef.current.width || 1920))}x
-                {Math.round((cursorPos.y / 100) * (canvasNatSizeRef.current.height || 1080))}
+                <span ref={footerCursorRef}>
+                  {Math.round((cursorPosRef.current.x / 100) * (canvasNatSizeRef.current.width || 1920))}×
+                  {Math.round((cursorPosRef.current.y / 100) * (canvasNatSizeRef.current.height || 1080))}
+                </span>
               </span>
               <span>{device.ip}:{device.port || 8765}</span>
             </div>

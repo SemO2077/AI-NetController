@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/fluid_theme.dart';
 
 // =====================================================================
@@ -338,12 +340,13 @@ class AdaptiveScaffold extends StatelessWidget {
   // Floating Liquid Glass Pill Dock for Mobile
   Widget _buildFloatingPillNav(BuildContext context) {
     final palette = context.palette;
-    final sigma = palette.glass.blurSigma;
+    final sigma = palette.glass.blurSigma.clamp(0.0, 14.0);
     final disableAnim = MediaQuery.disableAnimationsOf(context);
     final dur = disableAnim ? Duration.zero : const Duration(milliseconds: 240);
     final isShort = context.isShortViewport;
     final isUltraCompact = context.isUltraCompact;
     final pillHeight = isShort ? 52.0 : 62.0;
+    final Color activeFg = palette.onHeroGradient;
 
     final Widget pillContent = Container(
       height: pillHeight,
@@ -397,104 +400,123 @@ class AdaptiveScaffold extends StatelessWidget {
                 final item = navItems[index];
                 final isSelected = selectedIndex == index;
                 return Flexible(
-                  child: FluidPressScale(
-                    onTap: () => onIndexChanged(index),
-                    pressedScale: 0.91,
-                    child: AnimatedContainer(
-                      duration: dur,
-                      curve: Curves.easeOutCubic,
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isSelected
-                            ? (isUltraCompact ? 11 : 16)
-                            : (isUltraCompact ? 8 : 12),
-                        vertical: isShort ? 5 : 8,
-                      ),
-                      decoration: BoxDecoration(
-                        gradient: isSelected ? palette.heroGradient : null,
-                        color: isSelected ? null : Colors.transparent,
-                        borderRadius: BorderRadius.circular(26),
-                        border: isSelected
-                            ? Border.all(
-                                color: Colors.white.withValues(alpha: 0.55),
-                                width: 1,
-                              )
-                            : null,
-                        boxShadow: isSelected
-                            ? [
-                                BoxShadow(
-                                  color:
-                                      palette.primary.withValues(alpha: 0.36),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ]
-                            : null,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          AnimatedScale(
-                            scale: isSelected ? 1.12 : 1.0,
+                  child: Semantics(
+                    button: true,
+                    selected: isSelected,
+                    label: item.label,
+                    child: Tooltip(
+                      message: item.label,
+                      child: FluidPressScale(
+                        onTap: () => onIndexChanged(index),
+                        pressedScale: 0.91,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minWidth: isUltraCompact ? 38 : 46,
+                            minHeight: isShort ? 38 : 44,
+                          ),
+                          child: AnimatedContainer(
                             duration: dur,
-                            curve: Curves.easeOutBack,
-                            child: Icon(
-                              isSelected
-                                  ? (item.activeIcon ?? item.icon)
-                                  : item.icon,
-                              size: isUltraCompact ? 17 : 19,
-                              color: isSelected
-                                  ? Colors.white
-                                  : palette.textSecondary,
+                            curve: Curves.easeOutCubic,
+                            padding: EdgeInsets.symmetric(
+                              horizontal: isSelected
+                                  ? (isUltraCompact ? 11 : 16)
+                                  : (isUltraCompact ? 9 : 13),
+                              vertical: isShort ? 5 : 8,
                             ),
-                          ),
-                          if (item.badgeCount != null &&
-                              item.badgeCount! > 0) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 5.5, vertical: 1),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? Colors.white.withValues(alpha: 0.28)
-                                    : palette.success.withValues(alpha: 0.18),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Text(
-                                '${item.badgeCount}',
-                                style: TextStyle(
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w800,
-                                  color: isSelected
-                                      ? Colors.white
-                                      : palette.success,
-                                ),
-                              ),
-                            ),
-                          ],
-                          Flexible(
-                            child: AnimatedSize(
-                              duration: dur,
-                              curve: Curves.easeOutCubic,
-                              child: isSelected
-                                  ? Padding(
-                                      padding: EdgeInsets.only(
-                                          left: isUltraCompact ? 5 : 7),
-                                      child: Text(
-                                        item.label,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: context.fluidFont(11),
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: -0.1,
-                                        ),
-                                      ),
+                            decoration: BoxDecoration(
+                              gradient:
+                                  isSelected ? palette.heroGradient : null,
+                              color: isSelected ? null : Colors.transparent,
+                              borderRadius: BorderRadius.circular(26),
+                              border: isSelected
+                                  ? Border.all(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.55),
+                                      width: 1,
                                     )
-                                  : const SizedBox.shrink(),
+                                  : null,
+                              boxShadow: isSelected
+                                  ? [
+                                      BoxShadow(
+                                        color: palette.primary
+                                            .withValues(alpha: 0.36),
+                                        blurRadius: 16,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ]
+                                  : null,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                AnimatedScale(
+                                  scale: isSelected ? 1.10 : 1.0,
+                                  duration: dur,
+                                  curve: Curves.easeOutBack,
+                                  child: Icon(
+                                    isSelected
+                                        ? (item.activeIcon ?? item.icon)
+                                        : item.icon,
+                                    size: isUltraCompact ? 17 : 19,
+                                    color: isSelected
+                                        ? activeFg
+                                        : palette.textSecondary,
+                                  ),
+                                ),
+                                if (item.badgeCount != null &&
+                                    item.badgeCount! > 0) ...[
+                                  const SizedBox(width: 4),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 5.5, vertical: 1),
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? activeFg.withValues(alpha: 0.22)
+                                          : palette.success
+                                              .withValues(alpha: 0.18),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      '${item.badgeCount}',
+                                      style: TextStyle(
+                                        fontSize: 9.5,
+                                        fontWeight: FontWeight.w800,
+                                        color: isSelected
+                                            ? activeFg
+                                            : palette.success,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                                Flexible(
+                                  child: AnimatedSize(
+                                    duration: dur,
+                                    curve: Curves.easeOutCubic,
+                                    child: isSelected
+                                        ? Padding(
+                                            padding: EdgeInsets.only(
+                                                left: isUltraCompact ? 5 : 7),
+                                            child: Text(
+                                              item.label,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: activeFg,
+                                                fontSize:
+                                                    context.fluidFont(11),
+                                                fontWeight: FontWeight.w800,
+                                                letterSpacing: -0.1,
+                                              ),
+                                            ),
+                                          )
+                                        : const SizedBox.shrink(),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -728,79 +750,157 @@ class AdaptiveScaffold extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final item = navItems[index];
                   final isSelected = selectedIndex == index;
+                  final Color activeFg = palette.onHeroGradient;
+                  final bool hasBadge =
+                      item.badgeCount != null && item.badgeCount! > 0;
                   return Padding(
                     padding: EdgeInsets.symmetric(
                       horizontal: 8,
                       vertical: isShort ? 2 : 4,
                     ),
-                    child: FluidPressScale(
-                      onTap: () => onIndexChanged(index),
-                      pressedScale: 0.94,
-                      child: AnimatedContainer(
-                        duration: dur,
-                        curve: Curves.easeOutCubic,
-                        padding: EdgeInsets.symmetric(
-                          vertical: isShort ? 8 : 10,
-                          horizontal: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          gradient: isSelected ? palette.heroGradient : null,
-                          color: isSelected ? null : Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                          border: isSelected
-                              ? Border.all(
-                                  color: Colors.white.withValues(alpha: 0.55),
-                                )
-                              : Border.all(color: Colors.transparent),
-                          boxShadow: isSelected
-                              ? [
-                                  BoxShadow(
-                                    color:
-                                        palette.primary.withValues(alpha: 0.30),
-                                    blurRadius: 14,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ]
-                              : null,
-                        ),
-                        child: Row(
-                          mainAxisAlignment: extended
-                              ? MainAxisAlignment.start
-                              : MainAxisAlignment.center,
-                          children: [
-                            AnimatedScale(
-                              scale: isSelected ? 1.10 : 1.0,
-                              duration: dur,
-                              curve: Curves.easeOutBack,
-                              child: Icon(
-                                isSelected
-                                    ? (item.activeIcon ?? item.icon)
-                                    : item.icon,
-                                size: 20,
-                                color: isSelected
-                                    ? Colors.white
-                                    : palette.textSecondary,
-                              ),
+                    child: Semantics(
+                      button: true,
+                      selected: isSelected,
+                      label: item.label,
+                      child: Tooltip(
+                        message: extended ? '' : item.label,
+                        child: FluidPressScale(
+                          onTap: () => onIndexChanged(index),
+                          pressedScale: 0.94,
+                          child: AnimatedContainer(
+                            duration: dur,
+                            curve: Curves.easeOutCubic,
+                            padding: EdgeInsets.symmetric(
+                              vertical: isShort ? 8 : 11,
+                              horizontal: extended ? 12 : 8,
                             ),
-                            if (extended) ...[
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  item.label,
-                                  style: TextStyle(
-                                    color: isSelected
-                                        ? Colors.white
-                                        : palette.textSecondary,
-                                    fontWeight: isSelected
-                                        ? FontWeight.w800
-                                        : FontWeight.w600,
-                                    fontSize: context.fluidFont(12),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
+                            decoration: BoxDecoration(
+                              gradient:
+                                  isSelected ? palette.heroGradient : null,
+                              color: isSelected ? null : Colors.transparent,
+                              borderRadius: BorderRadius.circular(20),
+                              border: isSelected
+                                  ? Border.all(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.55),
+                                    )
+                                  : Border.all(color: Colors.transparent),
+                              boxShadow: isSelected
+                                  ? [
+                                      BoxShadow(
+                                        color: palette.primary
+                                            .withValues(alpha: 0.30),
+                                        blurRadius: 14,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ]
+                                  : null,
+                            ),
+                            child: Row(
+                              mainAxisAlignment: extended
+                                  ? MainAxisAlignment.start
+                                  : MainAxisAlignment.center,
+                              children: [
+                                Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    AnimatedScale(
+                                      scale: isSelected ? 1.10 : 1.0,
+                                      duration: dur,
+                                      curve: Curves.easeOutBack,
+                                      child: Icon(
+                                        isSelected
+                                            ? (item.activeIcon ?? item.icon)
+                                            : item.icon,
+                                        size: 20,
+                                        color: isSelected
+                                            ? activeFg
+                                            : palette.textSecondary,
+                                      ),
+                                    ),
+                                    if (!extended && hasBadge)
+                                      Positioned(
+                                        top: -6,
+                                        right: -9,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                            vertical: 1,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: isSelected
+                                                ? activeFg
+                                                : palette.success,
+                                            borderRadius:
+                                                BorderRadius.circular(999),
+                                          ),
+                                          child: Text(
+                                            item.badgeCount! > 99
+                                                ? '99+'
+                                                : '${item.badgeCount}',
+                                            textScaler: TextScaler.noScaling,
+                                            style: TextStyle(
+                                              fontSize: 8.5,
+                                              height: 1.1,
+                                              fontWeight: FontWeight.w800,
+                                              color: isSelected
+                                                  ? palette.primary
+                                                  : palette.onPrimary,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
                                 ),
-                              ),
-                            ],
-                          ],
+                                if (extended) ...[
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      item.label,
+                                      style: TextStyle(
+                                        color: isSelected
+                                            ? activeFg
+                                            : palette.textSecondary,
+                                        fontWeight: isSelected
+                                            ? FontWeight.w800
+                                            : FontWeight.w600,
+                                        fontSize: context.fluidFont(12),
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (hasBadge) ...[
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 1.5,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: isSelected
+                                            ? activeFg.withValues(alpha: 0.22)
+                                            : palette.success
+                                                .withValues(alpha: 0.18),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Text(
+                                        item.badgeCount! > 99
+                                            ? '99+'
+                                            : '${item.badgeCount}',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w800,
+                                          color: isSelected
+                                              ? activeFg
+                                              : palette.success,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -918,8 +1018,8 @@ class AdaptiveScaffold extends StatelessWidget {
                     style: isNarrow
                         ? IconButton.styleFrom(
                             visualDensity: VisualDensity.compact,
-                            padding: EdgeInsets.all(isTight ? 3 : 5),
-                            minimumSize: Size(isTight ? 28 : 32, isTight ? 28 : 32),
+                            padding: EdgeInsets.all(isTight ? 4 : 6),
+                            minimumSize: Size(isTight ? 32 : 36, isTight ? 32 : 36),
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           )
                         : null,
@@ -1004,7 +1104,6 @@ class _HitlSheetContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final sigma = palette.glass.blurSigma;
     final isUltraCompact = context.isUltraCompact;
     final viewHeight = MediaQuery.sizeOf(context).height;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
@@ -1012,11 +1111,15 @@ class _HitlSheetContent extends StatelessWidget {
     final Widget sheetBody = Container(
       padding: EdgeInsets.all(isUltraCompact ? 16 : 24),
       decoration: BoxDecoration(
-        color: palette.surfaceElevated.withValues(alpha: 0.96),
+        color: palette.surfaceElevated.withValues(alpha: 0.97),
         borderRadius: BorderRadius.circular(isDialog ? 24 : 28),
         border: Border.all(
           color: palette.accent.withValues(alpha: 0.6),
           width: 1.5,
+        ),
+        boxShadow: palette.elevationShadows(
+          isSelected: true,
+          glowColor: palette.accent,
         ),
       ),
       child: SingleChildScrollView(
@@ -1067,14 +1170,40 @@ class _HitlSheetContent extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
-            Text(
-              'PROPOSED SHELL COMMAND',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.2,
-                color: palette.textSecondary,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'PROPOSED SHELL COMMAND',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                      color: palette.textSecondary,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Copy proposed command',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
+                  padding: EdgeInsets.zero,
+                  icon: Icon(
+                    Icons.copy_rounded,
+                    size: 16,
+                    color: palette.textSecondary,
+                  ),
+                  onPressed: () {
+                    unawaited(
+                      Clipboard.setData(ClipboardData(text: command))
+                          .catchError((_) {}),
+                    );
+                  },
+                ),
+              ],
             ),
             const SizedBox(height: 6),
             Container(
@@ -1128,7 +1257,7 @@ class _HitlSheetContent extends StatelessWidget {
                     onPressed: () => Navigator.of(context).pop(true),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: palette.accent,
-                      foregroundColor: Colors.white,
+                      foregroundColor: palette.onAccent,
                       padding: const EdgeInsets.symmetric(vertical: 13),
                       elevation: 8,
                       shadowColor: palette.accent.withValues(alpha: 0.45),
@@ -1161,17 +1290,7 @@ class _HitlSheetContent extends StatelessWidget {
         ),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxHeight: viewHeight * 0.88),
-          child: RepaintBoundary(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(isDialog ? 24 : 28),
-              child: sigma > 0
-                  ? BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-                      child: sheetBody,
-                    )
-                  : sheetBody,
-            ),
-          ),
+          child: RepaintBoundary(child: sheetBody),
         ),
       ),
     );

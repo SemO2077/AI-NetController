@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../security/network_validators.dart';
 import '../services/host_connection_client.dart';
@@ -25,6 +25,7 @@ class HostSnapshotPreview extends StatefulWidget {
   final int refreshIntervalSec;
   final VoidCallback? onTapFullscreen;
   final VoidCallback? onWakeOnLan;
+  final VoidCallback? onCopyMac;
 
   const HostSnapshotPreview({
     super.key,
@@ -40,6 +41,7 @@ class HostSnapshotPreview extends StatefulWidget {
     this.refreshIntervalSec = 3,
     this.onTapFullscreen,
     this.onWakeOnLan,
+    this.onCopyMac,
   });
 
   @override
@@ -60,12 +62,14 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
   Timer? _refreshTimer;
   Timer? _ageTimer;
   Timer? _refreshPulseTimer;
+  Timer? _macCopiedTimer;
 
   Uint8List? _previewBytes;
   DateTime? _lastUpdatedAt;
   HostConnectionSnapshot _snapshot = const HostConnectionSnapshot();
   bool _initialSnapshotRequested = false;
   bool _isRefreshing = false;
+  bool _macCopied = false;
   bool _isAppActive = true;
   String? _validationError;
 
@@ -228,6 +232,10 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
         _snapshot = snap;
         if (!snap.isVaultEstablished) {
           _initialSnapshotRequested = false;
+          if (snap.phase == HostConnectionPhase.authFailed ||
+              snap.phase == HostConnectionPhase.disconnected) {
+            _isRefreshing = false;
+          }
         }
       });
       if ((!wasVault || !_initialSnapshotRequested) && snap.isVaultEstablished) {
@@ -340,13 +348,27 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
     _stopAgeTimer();
     _refreshPulseTimer?.cancel();
     _refreshPulseTimer = null;
-    unawaited(_frameSub?.cancel());
-    unawaited(_stateSub?.cancel());
-    _frameSub = null;
-    _stateSub = null;
+    _macCopiedTimer?.cancel();
+    _macCopiedTimer = null;
     _releaseClient();
     _ageTickNotifier.dispose();
     super.dispose();
+  }
+
+  void _copyMacAddress(String normalizedMac) {
+    unawaited(
+      Clipboard.setData(ClipboardData(text: normalizedMac)).catchError((_) {}),
+    );
+    widget.onCopyMac?.call();
+    _macCopiedTimer?.cancel();
+    if (mounted) {
+      setState(() => _macCopied = true);
+      _macCopiedTimer = Timer(const Duration(milliseconds: 1400), () {
+        if (mounted && _macCopied) {
+          setState(() => _macCopied = false);
+        }
+      });
+    }
   }
 
   String _formatAge(DateTime updatedAt) {
@@ -371,93 +393,99 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
     final Uint8List? bytes = _previewBytes;
     final bool hasSecret = widget.sharedSecret.trim().isNotEmpty;
 
-    return AspectRatio(
-      aspectRatio: 16 / 9,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          decoration: BoxDecoration(
-            color: palette.isDaylight
-                ? const Color(0xFF10162F)
-                : const Color(0xFF070A18),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: palette.primary.withValues(alpha: 0.34),
-              width: 1.1,
+    return RepaintBoundary(
+      child: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            decoration: BoxDecoration(
+              color: palette.isDaylight
+                  ? const Color(0xFF10162F)
+                  : const Color(0xFF070A18),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: palette.primary.withValues(alpha: 0.34),
+                width: 1.1,
+              ),
             ),
-          ),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: widget.onTapFullscreen,
-                  child: bytes != null && bytes.isNotEmpty
-                      ? Image.memory(
-                          bytes,
-                          gaplessPlayback: true,
-                          fit: BoxFit.cover,
-                          filterQuality: FilterQuality.medium,
-                          errorBuilder: (_, _, _) => _buildFallbackCenter(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: widget.onTapFullscreen,
+                    child: bytes != null && bytes.isNotEmpty
+                        ? Image.memory(
+                            bytes,
+                            gaplessPlayback: true,
+                            fit: BoxFit.cover,
+                            filterQuality: FilterQuality.medium,
+                            errorBuilder: (_, _, _) => _buildFallbackCenter(
+                              context,
+                              palette,
+                              hasSecret: hasSecret,
+                              decodeError: true,
+                            ),
+                          )
+                        : _buildFallbackCenter(
                             context,
                             palette,
                             hasSecret: hasSecret,
-                            decodeError: true,
                           ),
-                        )
-                      : _buildFallbackCenter(
-                          context,
-                          palette,
-                          hasSecret: hasSecret,
-                        ),
+                  ),
                 ),
-              ),
-              if (bytes != null && bytes.isNotEmpty)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          stops: const [0.0, 0.28, 0.70, 1.0],
-                          colors: [
-                            Colors.black.withValues(alpha: 0.42),
-                            Colors.transparent,
-                            Colors.transparent,
-                            Colors.black.withValues(alpha: 0.52),
-                          ],
+                if (bytes != null && bytes.isNotEmpty)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            stops: const [0.0, 0.28, 0.70, 1.0],
+                            colors: [
+                              Colors.black.withValues(alpha: 0.42),
+                              Colors.transparent,
+                              Colors.transparent,
+                              Colors.black.withValues(alpha: 0.52),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  right: 8,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Flexible(
+                        child: _buildPreviewAgePill(context, palette),
+                      ),
+                      const SizedBox(width: 6),
+                      _buildRefreshButton(palette),
+                    ],
+                  ),
                 ),
-              Positioned(
-                top: 8,
-                left: 8,
-                right: 8,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Flexible(
-                      child: _buildPreviewAgePill(context, palette),
+                Positioned(
+                  bottom: 8,
+                  left: 8,
+                  right: 8,
+                  child: Align(
+                    alignment: Alignment.bottomRight,
+                    child: _buildFullscreenOverlayPill(
+                      context,
+                      palette,
+                      hasSecret: hasSecret,
                     ),
-                    const SizedBox(width: 6),
-                    _buildRefreshButton(palette),
-                  ],
+                  ),
                 ),
-              ),
-              Positioned(
-                bottom: 8,
-                left: 8,
-                right: 8,
-                child: Align(
-                  alignment: Alignment.bottomRight,
-                  child: _buildFullscreenOverlayPill(context, palette),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -538,13 +566,13 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
             key: ValueKey('snapshot-refresh-${widget.hostId}'),
             onTap: () => _requestSnapshotNow(showSpinner: true),
             child: SizedBox(
-              width: 30,
-              height: 30,
+              width: 36,
+              height: 36,
               child: Center(
                 child: _isRefreshing
                     ? const SizedBox(
-                        width: 14,
-                        height: 14,
+                        width: 15,
+                        height: 15,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
                           valueColor:
@@ -553,7 +581,7 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
                       )
                     : const Icon(
                         Icons.refresh_rounded,
-                        size: 16,
+                        size: 17,
                         color: Colors.white,
                       ),
               ),
@@ -566,11 +594,21 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
 
   Widget _buildFullscreenOverlayPill(
     BuildContext context,
-    CyberPalette palette,
-  ) {
+    CyberPalette palette, {
+    required bool hasSecret,
+  }) {
+    final bool needsPair =
+        !hasSecret || _snapshot.phase == HostConnectionPhase.authFailed;
+    final String pillLabel = needsPair ? 'Configure Pairing' : 'Open Fullscreen';
+    final IconData pillIcon =
+        needsPair ? Icons.vpn_key_rounded : Icons.fullscreen_rounded;
+    final Color borderColor = needsPair
+        ? palette.warning.withValues(alpha: 0.75)
+        : palette.primary.withValues(alpha: 0.65);
+
     return Semantics(
       button: true,
-      label: 'Open Fullscreen control for ${widget.hostName}',
+      label: '$pillLabel for ${widget.hostName}',
       child: Material(
         color: const Color(0xC9090E22),
         borderRadius: BorderRadius.circular(999),
@@ -578,25 +616,23 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
           onTap: widget.onTapFullscreen,
           borderRadius: BorderRadius.circular(999),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(
-                color: palette.primary.withValues(alpha: 0.65),
-              ),
+              border: Border.all(color: borderColor),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(
-                  Icons.fullscreen_rounded,
+                Icon(
+                  pillIcon,
                   size: 14,
                   color: Colors.white,
                 ),
                 const SizedBox(width: 4),
                 Flexible(
                   child: Text(
-                    'Open Fullscreen',
+                    pillLabel,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -796,41 +832,93 @@ class _HostSnapshotPreviewState extends State<HostSnapshotPreview>
                 ],
               ),
               const SizedBox(height: 9),
-              Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                decoration: BoxDecoration(
-                  color: palette.isDaylight
-                      ? palette.primary.withValues(alpha: 0.06)
-                      : Colors.white.withValues(alpha: 0.05),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  key: ValueKey('snapshot-copy-mac-${widget.hostId}'),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: palette.dividerColor),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.router_rounded,
-                      size: 14,
-                      color: palette.textSecondary,
+                  onTap: hasMac ? () => _copyMacAddress(normalizedMac) : null,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
                     ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        hasMac ? normalizedMac : 'MAC not configured',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: context.fluidFont(10.5),
-                          fontWeight: FontWeight.w700,
-                          color: hasMac
-                              ? palette.textPrimary
-                              : palette.textSecondary,
-                        ),
+                    decoration: BoxDecoration(
+                      color: _macCopied
+                          ? palette.success.withValues(
+                              alpha: palette.isDaylight ? 0.12 : 0.18,
+                            )
+                          : (palette.isDaylight
+                              ? palette.primary.withValues(alpha: 0.06)
+                              : Colors.white.withValues(alpha: 0.05)),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _macCopied
+                            ? palette.success.withValues(alpha: 0.48)
+                            : palette.dividerColor,
                       ),
                     ),
-                  ],
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              _macCopied
+                                  ? Icons.check_rounded
+                                  : Icons.router_rounded,
+                              size: 14,
+                              color: _macCopied
+                                  ? palette.success
+                                  : palette.textSecondary,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                hasMac ? normalizedMac : 'MAC not configured',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: context.fluidFont(10.5),
+                                  fontWeight: FontWeight.w700,
+                                  color: hasMac
+                                      ? palette.textPrimary
+                                      : palette.textSecondary,
+                                ),
+                              ),
+                            ),
+                            if (hasMac) ...[
+                              const SizedBox(width: 6),
+                              Text(
+                                _macCopied ? 'Copied' : 'Copy',
+                                style: TextStyle(
+                                  fontSize: context.fluidFont(9.5),
+                                  fontWeight: FontWeight.w700,
+                                  color: _macCopied
+                                      ? palette.success
+                                      : palette.primary,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        if (!hasMac) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            'Add a MAC address in Workstation Options to enable Wake-on-LAN.',
+                            style: TextStyle(
+                              fontSize: context.fluidFont(9.5),
+                              color: palette.textSecondary,
+                              height: 1.3,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
               ),
               if (widget.onWakeOnLan != null) ...[

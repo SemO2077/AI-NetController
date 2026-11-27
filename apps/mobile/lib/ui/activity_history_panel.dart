@@ -36,6 +36,7 @@ class ActivityHistoryPanel extends ConsumerStatefulWidget {
 
 class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
   ActivityCategory? _selectedCategory;
+  bool _failedOnly = false;
   late final TextEditingController _searchController;
   String _query = '';
   final Set<String> _expandedIds = <String>{};
@@ -382,12 +383,16 @@ class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
     final int systemCount = entries
         .where((e) => e.category == ActivityCategory.system)
         .length;
+    final int failedCount = entries.where((e) => e.status == 'failed').length;
 
     final String q = _query.trim().toLowerCase();
     final List<ActivityHistoryEntry> filtered =
         entries
             .where((e) {
               if (_selectedCategory != null && e.category != _selectedCategory) {
+                return false;
+              }
+              if (_failedOnly && e.status != 'failed') {
                 return false;
               }
               return _matchesQuery(e, q);
@@ -398,6 +403,8 @@ class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
     final int scopedExportCount = _selectedCategory == null
         ? allCount
         : entries.where((e) => e.category == _selectedCategory).length;
+    final bool hasNarrowingFilter =
+        _selectedCategory != null || _failedOnly || q.isNotEmpty;
 
     final Widget headerAndControls = Container(
       padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
@@ -467,6 +474,15 @@ class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
                   onTap: () => setState(
                     () => _selectedCategory = ActivityCategory.system,
                   ),
+                ),
+              if (failedCount > 0)
+                _buildFilterChip(
+                  context,
+                  key: const ValueKey('history-filter-failed'),
+                  label: 'Errors ($failedCount)',
+                  selected: _failedOnly,
+                  color: palette.accent,
+                  onTap: () => setState(() => _failedOnly = !_failedOnly),
                 ),
             ],
           ),
@@ -573,6 +589,18 @@ class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
               ),
             ],
           ),
+          if (hasNarrowingFilter && entries.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Showing ${filtered.length} of $allCount recorded ${allCount == 1 ? 'event' : 'events'}',
+              style: TextStyle(
+                color: palette.textSecondary,
+                fontFamily: 'monospace',
+                fontSize: context.fluidFont(10),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -703,6 +731,7 @@ class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
                 setState(() {
                   _query = '';
                   _selectedCategory = null;
+                  _failedOnly = false;
                 });
               },
               icon: const Icon(Icons.clear_all_rounded, size: 16),
@@ -737,92 +766,114 @@ class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
         entry.category == ActivityCategory.wol &&
         NetworkValidators.normalizeMac(entry.mac) != null;
 
-    return Container(
-      key: ValueKey('history-entry-${entry.id}'),
-      decoration: BoxDecoration(
-        gradient: palette.cardBevelGradient(isSelected: isExpanded),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: isExpanded
-              ? catColor.withValues(alpha: 0.45)
-              : palette.glassBorderIdle,
-          width: 1.15,
-        ),
-        boxShadow: palette.elevationShadows(isSelected: isExpanded),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          FluidSpecularBar(
-            isSelected: isExpanded,
-            height: 1.1,
-            margin: const EdgeInsets.only(left: 14, right: 14, top: 8),
+    final String detailPreview = entry.detail.trim().split('\n').first.trim();
+    final bool showCollapsedPreview =
+        !isExpanded &&
+        detailPreview.isNotEmpty &&
+        detailPreview != entry.title.trim();
+
+    return RepaintBoundary(
+      child: Container(
+        key: ValueKey('history-entry-${entry.id}'),
+        decoration: BoxDecoration(
+          gradient: palette.cardBevelGradient(isSelected: isExpanded),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: isExpanded
+                ? catColor.withValues(alpha: 0.45)
+                : palette.glassBorderIdle,
+            width: 1.15,
           ),
-          InkWell(
-            onTap: () {
-              _hapticTap();
-              setState(() {
-                if (isExpanded) {
-                  _expandedIds.remove(entry.id);
-                } else {
-                  _expandedIds.add(entry.id);
-                }
-              });
-            },
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(13, 10, 13, 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(11),
-                      color: catColor.withValues(
-                        alpha: palette.isDaylight ? 0.14 : 0.20,
-                      ),
-                      border: Border.all(
-                        color: catColor.withValues(alpha: 0.42),
-                      ),
-                    ),
-                    child: Icon(
-                      _categoryIcon(entry.category),
-                      color: catColor,
-                      size: 18,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          entry.title.trim().isNotEmpty
-                              ? entry.title.trim()
-                              : _categoryLabel(entry.category),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontWeight: FontWeight.w800,
-                            fontSize: context.fluidFont(12.5),
+          boxShadow: palette.elevationShadows(isSelected: isExpanded),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FluidSpecularBar(
+                isSelected: isExpanded,
+                height: 1.1,
+                margin: const EdgeInsets.only(left: 14, right: 14, top: 8),
+              ),
+              InkWell(
+                onTap: () {
+                  _hapticTap();
+                  setState(() {
+                    if (isExpanded) {
+                      _expandedIds.remove(entry.id);
+                    } else {
+                      _expandedIds.add(entry.id);
+                    }
+                  });
+                },
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(13, 10, 13, 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(11),
+                          color: catColor.withValues(
+                            alpha: palette.isDaylight ? 0.14 : 0.20,
+                          ),
+                          border: Border.all(
+                            color: catColor.withValues(alpha: 0.42),
                           ),
                         ),
-                        if (hostLine.isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            hostLine,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: palette.textSecondary,
-                              fontFamily: 'monospace',
-                              fontSize: context.fluidFont(10.5),
+                        child: Icon(
+                          _categoryIcon(entry.category),
+                          color: catColor,
+                          size: 18,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              entry.title.trim().isNotEmpty
+                                  ? entry.title.trim()
+                                  : _categoryLabel(entry.category),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: palette.textPrimary,
+                                fontWeight: FontWeight.w800,
+                                fontSize: context.fluidFont(12.5),
+                              ),
                             ),
-                          ),
-                        ],
+                            if (showCollapsedPreview) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                detailPreview,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: palette.textSecondary,
+                                  fontFamily: 'monospace',
+                                  fontSize: context.fluidFont(10.5),
+                                ),
+                              ),
+                            ],
+                            if (hostLine.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                hostLine,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: palette.textTertiary,
+                                  fontFamily: 'monospace',
+                                  fontSize: context.fluidFont(10),
+                                ),
+                              ),
+                            ],
                         const SizedBox(height: 5),
                         Wrap(
                           spacing: 6,
@@ -1072,10 +1123,13 @@ class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
                             IconButton(
                               key: ValueKey('history-delete-${entry.id}'),
                               tooltip: 'Remove entry',
-                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints(
+                                minWidth: 36,
+                                minHeight: 36,
+                              ),
                               icon: Icon(
                                 Icons.delete_outline_rounded,
-                                size: 17,
+                                size: 18,
                                 color: palette.textTertiary,
                               ),
                               onPressed: () {
@@ -1095,6 +1149,8 @@ class _ActivityHistoryPanelState extends ConsumerState<ActivityHistoryPanel> {
                 : const SizedBox.shrink(),
           ),
         ],
+      ),
+      ),
       ),
     );
   }

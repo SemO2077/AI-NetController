@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link, Activity, AlertCircle, CheckCircle2, ShieldCheck, Key, Lock } from 'lucide-react';
+import { Link, Activity, AlertCircle, CheckCircle2, ShieldCheck, Key, Lock, Copy, Check } from 'lucide-react';
 import { HeartbeatMetrics } from '../../types';
 import { HeartbeatSparkline } from '../telemetry/HeartbeatSparkline';
 import { BottomSheet } from '../ui/BottomSheet';
 import { triggerHapticFeedback } from '../../services/hapticService';
 import { getStoredAuthToken, saveAuthToken, pairHostWithPin } from '../../services/securityService';
+import { copyToClipboard } from '../../utils/clipboard';
 import { useTranslation } from '../../i18n/useTranslation';
 
 export interface WsConfigModalProps {
@@ -48,21 +49,39 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
   const [localConnecting, setLocalConnecting] = useState(false);
   const [pairingPin, setPairingPin] = useState('');
   const [isPairingPin, setIsPairingPin] = useState(false);
-  const [pinStatusMsg, setPinStatusMsg] = useState<string | null>(null);
+  const [pinStatusMsg, setPinStatusMsg] = useState<{ text: string; tone: 'success' | 'error' } | null>(null);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [copiedUrl, setCopiedUrl] = useState(false);
+  const [tokenSavedBadge, setTokenSavedBadge] = useState(false);
   const connectTimerRef = useRef<number | null>(null);
+  const feedbackTimerRef = useRef<number | null>(null);
 
   const connected = isRealWsConnected ?? isConnected ?? false;
   const connecting = isConnecting || localConnecting;
   const connectFn = onConnectRealWs ?? onConnect ?? (() => {});
   const disconnectFn = onDisconnectRealWs ?? onDisconnect ?? (() => {});
 
+  const isValidWsUrl = (raw: string): boolean => {
+    const trimmed = raw.trim();
+    if (!/^wss?:\/\/[^\s/]+/i.test(trimmed)) return false;
+    try {
+      const parsed = new URL(trimmed);
+      return (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') && Boolean(parsed.hostname);
+    } catch {
+      return false;
+    }
+  };
+
   useEffect(() => {
     setInputUrl(wsUrl);
+    setUrlError(null);
   }, [wsUrl]);
 
   useEffect(() => {
     if (isOpen) {
       setAuthToken(getStoredAuthToken(wsUrl));
+      setUrlError(null);
+      setPinStatusMsg(null);
     }
   }, [isOpen, wsUrl]);
 
@@ -70,6 +89,9 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
     return () => {
       if (connectTimerRef.current !== null) {
         window.clearTimeout(connectTimerRef.current);
+      }
+      if (feedbackTimerRef.current !== null) {
+        window.clearTimeout(feedbackTimerRef.current);
       }
     };
   }, []);
@@ -81,36 +103,88 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
     triggerHapticFeedback('light');
     const upgraded = inputUrl.replace(/^ws:\/\//i, 'wss://');
     setInputUrl(upgraded);
+    setUrlError(null);
   };
 
-  const handlePairWithPin = async () => {
+  const handleCopyEndpoint = () => {
+    const cleanUrl = inputUrl.trim();
+    if (!cleanUrl) return;
+    triggerHapticFeedback('light');
+    copyToClipboard(cleanUrl);
+    setCopiedUrl(true);
+    if (feedbackTimerRef.current !== null) window.clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = window.setTimeout(() => {
+      feedbackTimerRef.current = null;
+      setCopiedUrl(false);
+    }, 1600);
+  };
+
+  const handlePairWithPin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     const cleanPin = pairingPin.trim();
+    const cleanUrl = inputUrl.trim();
     if (!cleanPin || isPairingPin) return;
+    if (!isValidWsUrl(cleanUrl)) {
+      setUrlError(
+        isBg
+          ? 'Въведете валиден WebSocket адрес (напр. ws://192.168.1.100:8765).'
+          : 'Enter a valid WebSocket URI (e.g. ws://192.168.1.100:8765).'
+      );
+      return;
+    }
+    if (!/^\d{6}$/.test(cleanPin)) {
+      setPinStatusMsg({
+        text: isBg ? 'PIN кодът трябва да съдържа точно 6 цифри.' : 'Pairing PIN must be exactly 6 digits.',
+        tone: 'error',
+      });
+      return;
+    }
     setIsPairingPin(true);
     setPinStatusMsg(null);
     triggerHapticFeedback('medium');
     try {
-      const token = await pairHostWithPin(inputUrl.trim(), cleanPin, 'AI-NetController-Web');
+      const token = await pairHostWithPin(cleanUrl, cleanPin, 'AI-NetController-Web');
       if (token) {
         setAuthToken(token);
+        saveAuthToken(token, cleanUrl);
         saveAuthToken(token);
-        setWsUrl(inputUrl.trim());
+        setWsUrl(cleanUrl);
         setPairingPin('');
-        setPinStatusMsg(isBg ? 'PIN сдвояването е успешно. Свързване...' : 'PIN paired successfully. Connecting...');
-        connectFn(inputUrl.trim());
+        setPinStatusMsg({
+          text: isBg ? '✓ PIN сдвояването е успешно. Свързване...' : '✓ PIN paired successfully. Connecting...',
+          tone: 'success',
+        });
+        connectFn(cleanUrl);
       } else {
-        setPinStatusMsg(isBg ? 'Невалиден или изтекъл PIN.' : 'Invalid or expired PIN.');
+        setPinStatusMsg({
+          text: isBg ? 'Невалиден или изтекъл PIN.' : 'Invalid or expired PIN.',
+          tone: 'error',
+        });
       }
     } catch {
-      setPinStatusMsg(isBg ? 'Грешка при сдвояване с хоста.' : 'Failed to exchange pairing PIN.');
+      setPinStatusMsg({
+        text: isBg ? 'Грешка при сдвояване с хоста.' : 'Failed to exchange pairing PIN.',
+        tone: 'error',
+      });
     } finally {
       setIsPairingPin(false);
     }
   };
 
-  const handleConnect = () => {
-    triggerHapticFeedback('medium');
+  const handleConnect = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     const cleanUrl = inputUrl.trim();
+    if (!isValidWsUrl(cleanUrl)) {
+      triggerHapticFeedback('warning');
+      setUrlError(
+        isBg
+          ? 'Невалиден WebSocket адрес — използвайте ws:// или wss:// (напр. ws://127.0.0.1:8765).'
+          : 'Invalid WebSocket URI — must start with ws:// or wss:// (e.g. ws://127.0.0.1:8765).'
+      );
+      return;
+    }
+    setUrlError(null);
+    triggerHapticFeedback('medium');
     saveAuthToken(authToken, cleanUrl);
     saveAuthToken(authToken);
     setWsUrl(cleanUrl);
@@ -134,6 +208,12 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
     triggerHapticFeedback('light');
     saveAuthToken(authToken, inputUrl.trim());
     saveAuthToken(authToken);
+    setTokenSavedBadge(true);
+    if (feedbackTimerRef.current !== null) window.clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = window.setTimeout(() => {
+      feedbackTimerRef.current = null;
+      setTokenSavedBadge(false);
+    }, 1800);
   };
 
   return (
@@ -218,7 +298,7 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
         )}
 
         {/* Endpoint Input + Quick Preset Chips */}
-        <div className="space-y-2">
+        <form onSubmit={handleConnect} className="space-y-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <label className="text-xs font-display font-bold ink-primary">
               {t('ws_endpoint_label')}
@@ -228,50 +308,78 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
                 <button
                   key={preset}
                   type="button"
-                  onClick={() => setInputUrl(preset)}
-                  className="px-2 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-secondary cursor-pointer"
+                  onClick={() => {
+                    setInputUrl(preset);
+                    setUrlError(null);
+                  }}
+                  className="px-2 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-secondary hover:ink-primary cursor-pointer"
                 >
                   {preset.startsWith('wss') ? 'Local WSS' : 'Local WS'}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={handleCopyEndpoint}
+                className="px-2 py-0.5 rounded-full liquid-control-pill text-[10px] font-mono ink-secondary hover:ink-primary flex items-center gap-1 cursor-pointer"
+                title={isBg ? 'Копирай адреса' : 'Copy endpoint URI'}
+              >
+                {copiedUrl ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-cyan-400" />}
+                <span>{copiedUrl ? (isBg ? 'Копирано' : 'Copied') : isBg ? 'Копирай' : 'Copy'}</span>
+              </button>
             </div>
           </div>
           <div className="flex gap-2">
             <input
               type="text"
               value={inputUrl}
-              onChange={(e) => setInputUrl(e.target.value)}
+              onChange={(e) => {
+                setInputUrl(e.target.value);
+                if (urlError) setUrlError(null);
+              }}
               placeholder="ws://localhost:8765"
-              className="flex-1 liquid-terminal-entry rounded-full px-4 py-2.5 text-xs sm:text-sm font-mono ink-primary focus:outline-none focus:border-cyan-400"
+              className={`flex-1 min-w-0 liquid-terminal-entry rounded-full px-4 py-2.5 text-xs sm:text-sm font-mono ink-primary focus:outline-none transition ${
+                urlError ? 'border-rose-500/70' : 'focus:border-cyan-400'
+              }`}
             />
             {connected ? (
               <button
                 type="button"
                 onClick={handleDisconnect}
-                className="px-4 py-2.5 squircle-rose preserve-white rounded-full text-xs font-bold transition cursor-pointer"
+                className="px-4 py-2.5 squircle-rose preserve-white rounded-full text-xs font-bold transition cursor-pointer shrink-0"
               >
                 {t('ws_btn_disconnect')}
               </button>
             ) : (
               <button
-                type="button"
-                onClick={handleConnect}
+                type="submit"
                 disabled={connecting}
-                className="px-4 py-2.5 liquid-hero-btn rounded-full text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                className="px-4 py-2.5 liquid-hero-btn rounded-full text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer disabled:opacity-50 shrink-0"
               >
                 <Link className="w-3.5 h-3.5" />
                 <span>{connecting ? t('ws_btn_connecting') : t('ws_btn_connect')}</span>
               </button>
             )}
           </div>
-        </div>
+          {urlError && (
+            <p className="text-[11px] text-rose-400 font-medium flex items-center gap-1.5 px-1">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>{urlError}</span>
+            </p>
+          )}
+        </form>
 
         {/* Pre-Shared Key / Auth Token */}
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <label className="flex items-center space-x-1.5 text-xs font-display font-bold ink-primary">
               <Key className="w-3.5 h-3.5 text-cyan-400" />
               <span>{t('ws_psk_label')}</span>
+              {tokenSavedBadge && (
+                <span className="text-[10px] font-mono text-emerald-400 font-semibold flex items-center gap-0.5">
+                  <Check className="w-3 h-3" />
+                  {isBg ? 'Запазено' : 'Saved'}
+                </span>
+              )}
             </label>
             <button
               type="button"
@@ -286,39 +394,63 @@ export const WsConfigModal: React.FC<WsConfigModalProps> = ({
             value={authToken}
             onChange={(e) => setAuthToken(e.target.value)}
             onBlur={handleSaveTokenOnly}
-            placeholder="Paste host pairing token or use 6-digit PIN below..."
+            placeholder={
+              isBg
+                ? 'Поставете токена за сдвояване или ползвайте 6-цифрен PIN...'
+                : 'Paste host pairing token or use 6-digit PIN below...'
+            }
             className="w-full liquid-terminal-entry rounded-full px-4 py-2.5 text-xs sm:text-sm font-mono ink-primary focus:outline-none focus:border-cyan-400"
           />
         </div>
 
         {/* 6-Digit Ephemeral PIN Exchange */}
-        <div className="space-y-1.5">
-          <label className="block text-xs font-display font-bold ink-primary">
-            {isBg ? 'Сдвояване с 6-цифрен PIN' : '6-Digit Host PIN Pairing'}
-          </label>
+        <form onSubmit={handlePairWithPin} className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="block text-xs font-display font-bold ink-primary">
+              {isBg ? 'Сдвояване с 6-цифрен PIN' : '6-Digit Host PIN Pairing'}
+            </label>
+            {pairingPin.length > 0 && (
+              <span
+                className={`text-[10px] font-mono font-bold tabular-nums ${
+                  pairingPin.length === 6 ? 'text-emerald-400' : 'text-amber-400'
+                }`}
+              >
+                {pairingPin.length}/6
+              </span>
+            )}
+          </div>
           <div className="flex gap-2">
             <input
               type="text"
               inputMode="numeric"
-              maxLength={8}
+              maxLength={6}
               value={pairingPin}
-              onChange={(e) => setPairingPin(e.target.value.replace(/[^0-9]/g, ''))}
+              onChange={(e) => {
+                setPairingPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+                if (pinStatusMsg) setPinStatusMsg(null);
+              }}
               placeholder={isBg ? 'Въведете 6-цифрен PIN от HostAgent...' : 'Enter 6-digit PIN shown on HostAgent...'}
-              className="flex-1 liquid-terminal-entry rounded-full px-4 py-2.5 text-xs sm:text-sm font-mono ink-primary focus:outline-none focus:border-cyan-400"
+              className="flex-1 min-w-0 liquid-terminal-entry rounded-full px-4 py-2.5 text-xs sm:text-sm font-mono tracking-widest ink-primary focus:outline-none focus:border-cyan-400"
             />
             <button
-              type="button"
-              onClick={handlePairWithPin}
-              disabled={!pairingPin.trim() || isPairingPin}
-              className="px-4 py-2.5 squircle-emerald preserve-white rounded-full text-xs font-bold transition disabled:opacity-40 cursor-pointer"
+              type="submit"
+              disabled={pairingPin.length !== 6 || isPairingPin}
+              className="px-4 py-2.5 squircle-emerald preserve-white rounded-full text-xs font-bold transition disabled:opacity-40 cursor-pointer shrink-0"
             >
               {isPairingPin ? (isBg ? 'Сдвояване...' : 'Pairing...') : isBg ? 'Сдвои PIN' : 'Pair PIN'}
             </button>
           </div>
           {pinStatusMsg && (
-            <p className="text-[11px] font-mono text-cyan-400 font-semibold">{pinStatusMsg}</p>
+            <p
+              className={`text-[11px] font-mono font-semibold flex items-center gap-1.5 px-1 ${
+                pinStatusMsg.tone === 'success' ? 'text-emerald-400' : 'text-rose-400'
+              }`}
+            >
+              {pinStatusMsg.tone === 'error' && <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
+              <span>{pinStatusMsg.text}</span>
+            </p>
           )}
-        </div>
+        </form>
 
         {/* Security & Protocol Compliance Badges */}
         <div className="grid grid-cols-2 gap-2.5 pt-1 text-[11px]">

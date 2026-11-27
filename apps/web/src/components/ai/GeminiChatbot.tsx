@@ -230,6 +230,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   const [inputPrompt, setInputPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [confirmClearChat, setConfirmClearChat] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -238,6 +239,23 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipPersistRef = useRef(false);
   const handleSendMessageRef = useRef<(textOverride?: string) => Promise<void>>(async () => {});
+
+  // Smooth auto-grow composer textarea up to 120px
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    if (inputPrompt) {
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    }
+  }, [inputPrompt]);
+
+  // Reset inline Clear Chat confirmation when thread is cleared
+  useEffect(() => {
+    if (messages.length <= 1 && confirmClearChat) {
+      setConfirmClearChat(false);
+    }
+  }, [messages.length, confirmClearChat]);
 
   const scrollToBottom = useCallback((smooth = true) => {
     if (scrollRef.current) {
@@ -1037,7 +1055,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
     ];
   }, [language, primaryHost]);
 
-  const renderFormattedContent = (content: string) => {
+  const renderFormattedContent = (content: string, messageId: string) => {
     const cleanText = content.replace(/\[ACTION:[^\]]+\]/gi, '').trim();
     const parts = cleanText.split(/(```[\s\S]*?```)/g);
 
@@ -1048,22 +1066,23 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
         const hasLang = /^[a-z0-9_-]+$/i.test(firstLine);
         const lang = hasLang ? firstLine : '';
         const code = (hasLang ? lines.slice(1) : lines).join('\n');
+        const codeCopyKey = `code-${messageId}-${index}`;
 
         return (
           <div
             key={index}
-            className="my-2 rounded-xl bg-black/60 border border-white/10 overflow-hidden text-[12px] font-mono"
+            className="my-2 rounded-xl liquid-terminal-entry border border-[var(--surface-border-subtle)] overflow-hidden text-[12px] font-mono"
           >
-            <div className="flex items-center justify-between px-3 py-1.5 bg-white/[0.04] border-b border-white/5 text-[10px] text-slate-400">
+            <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--surface-border-subtle)] text-[10px] ink-muted">
               <span className="uppercase tracking-wider font-semibold text-cyan-400">
                 {lang || 'SHELL'}
               </span>
               <button
                 type="button"
-                onClick={() => handleCopy(`code-${index}`, code)}
-                className="hover:text-white transition flex items-center gap-1 px-1.5 py-0.5"
+                onClick={() => handleCopy(codeCopyKey, code)}
+                className="hover:ink-primary transition flex items-center gap-1 px-1.5 py-0.5 cursor-pointer"
               >
-                {copiedId === `code-${index}` ? (
+                {copiedId === codeCopyKey ? (
                   <>
                     <Check className="w-3 h-3 text-emerald-400" />
                     <span className="text-emerald-400 font-medium">
@@ -1078,7 +1097,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                 )}
               </button>
             </div>
-            <pre className="p-3 overflow-x-auto text-slate-200 select-text leading-relaxed">
+            <pre className="p-3 overflow-x-auto ink-primary select-text leading-relaxed">
               <code>{code}</code>
             </pre>
           </div>
@@ -1241,20 +1260,41 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             })}
           </div>
 
-          {messages.length > 1 && (
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.06 }}
-              whileTap={{ scale: 0.9 }}
-              transition={SPRING_POP}
-              onClick={handleClearHistory}
-              className="w-9 h-9 rounded-full liquid-control-pill ink-secondary hover:text-rose-400 flex items-center justify-center cursor-pointer"
-              title={language === 'bg' ? 'Изчисти чата' : 'Clear chat'}
-              aria-label={language === 'bg' ? 'Изчисти чата' : 'Clear chat'}
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </motion.button>
-          )}
+          {messages.length > 1 &&
+            (confirmClearChat ? (
+              <div className="flex items-center gap-1 px-2 h-9 rounded-full bg-rose-500/15 border border-rose-500/35">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleClearHistory();
+                    setConfirmClearChat(false);
+                  }}
+                  className="px-2.5 py-1 rounded-full squircle-rose preserve-white text-[11px] font-bold cursor-pointer"
+                >
+                  {language === 'bg' ? 'Изчисти' : 'Clear'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearChat(false)}
+                  className="px-2 py-1 rounded-full text-[11px] font-semibold ink-secondary hover:ink-primary cursor-pointer"
+                >
+                  {language === 'bg' ? 'Отказ' : 'Cancel'}
+                </button>
+              </div>
+            ) : (
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.06 }}
+                whileTap={{ scale: 0.9 }}
+                transition={SPRING_POP}
+                onClick={() => setConfirmClearChat(true)}
+                className="w-9 h-9 rounded-full liquid-control-pill ink-secondary hover:text-rose-400 flex items-center justify-center cursor-pointer"
+                title={language === 'bg' ? 'Изчисти чата' : 'Clear chat'}
+                aria-label={language === 'bg' ? 'Изчисти чата' : 'Clear chat'}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </motion.button>
+            ))}
         </div>
       </header>
 
@@ -1352,7 +1392,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                             msg.content.replace(/\[ACTION:[^\]]+\]/gi, '').trim()
                           )
                         }
-                        className="p-1 rounded-full ink-muted hover:text-cyan-400 hover:bg-cyan-500/10 transition flex items-center justify-center"
+                        className="p-1 rounded-full ink-muted hover:text-cyan-400 hover:bg-cyan-500/10 transition flex items-center justify-center cursor-pointer"
                         title={language === 'bg' ? 'Копирай отговора' : 'Copy response'}
                       >
                         {copiedId === msg.id ? (
@@ -1365,7 +1405,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                   </div>
                 )}
 
-                {renderFormattedContent(msg.content)}
+                {renderFormattedContent(msg.content, msg.id)}
 
                 {msg.actions && msg.actions.length > 0 && (
                   <div className="mt-3.5 pt-3 border-t border-white/10 space-y-2">
@@ -1466,7 +1506,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onOpenUpdateCenter()}
-                                    className="px-2.5 py-1.5 rounded-full liquid-control-pill text-[11px] font-semibold flex items-center gap-1"
+                                    className="px-2.5 py-1.5 rounded-full liquid-control-pill text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
                                   >
                                     <span>{language === 'bg' ? 'Детайли' : 'Details'}</span>
                                     <ChevronRight className="w-3 h-3" />
@@ -1477,7 +1517,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onOpenDaemonGui()}
-                                    className="px-2.5 py-1.5 rounded-full liquid-control-pill text-[11px] font-semibold flex items-center gap-1"
+                                    className="px-2.5 py-1.5 rounded-full liquid-control-pill text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
                                   >
                                     <span>{language === 'bg' ? 'Демон' : 'Daemon'}</span>
                                     <ChevronRight className="w-3 h-3" />
@@ -1527,14 +1567,23 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             e.preventDefault();
             handleSendMessage();
           }}
-          className="relative glass-liquid-elevated iridescent-active-rim rounded-full p-2 pl-4 flex items-center gap-2"
+          className="relative glass-liquid-elevated iridescent-active-rim rounded-[28px] p-2 pl-4 flex items-end gap-2"
         >
-          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 mb-3" />
           <textarea
             ref={textareaRef}
             value={inputPrompt}
             onChange={(e) => setInputPrompt(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                if (isLoading) {
+                  e.preventDefault();
+                  handleStopGeneration();
+                } else if (confirmClearChat) {
+                  setConfirmClearChat(false);
+                }
+                return;
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 handleSendMessage();
@@ -1542,8 +1591,12 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
             }}
             placeholder={activeRoleConfig.placeholder}
             rows={1}
-            className="flex-1 bg-transparent py-1.5 text-xs sm:text-sm ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80 focus:outline-none resize-none max-h-24 leading-relaxed font-medium"
+            className="flex-1 bg-transparent py-2 text-xs sm:text-sm ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80 focus:outline-none resize-none max-h-[120px] leading-relaxed font-medium"
           />
+
+          <span className="hidden lg:inline text-[10px] font-mono ink-muted shrink-0 mb-3 pr-1">
+            {isLoading ? 'Esc' : '↵ · ⇧↵'}
+          </span>
 
           {isLoading ? (
             <motion.button
@@ -1553,7 +1606,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
               transition={SPRING_POP}
               onClick={handleStopGeneration}
               className="w-10 h-10 rounded-full squircle-rose preserve-white flex items-center justify-center shrink-0 cursor-pointer"
-              title={language === 'bg' ? 'Спри генерирането' : 'Stop generation'}
+              title={language === 'bg' ? 'Спри генерирането (Esc)' : 'Stop generation (Esc)'}
             >
               <Square className="w-4 h-4 fill-current" />
             </motion.button>
@@ -1569,6 +1622,7 @@ const GeminiChatbotComponent: React.FC<GeminiChatbotProps> = ({
                   ? 'liquid-hero-btn cursor-pointer'
                   : 'liquid-control-pill opacity-40 cursor-not-allowed'
               }`}
+              title={language === 'bg' ? 'Изпрати (Enter)' : 'Send (Enter)'}
             >
               <ArrowUp className="w-4 h-4 stroke-[2.6]" />
             </motion.button>

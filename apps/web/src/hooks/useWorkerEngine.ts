@@ -65,10 +65,17 @@ export function useWorkerEngine({
   const lastThumbnailSyncRef = useRef<number>(0);
   const targetIdRef = useRef(targetId);
   const wsUrlRef = useRef(wsUrl);
+  const isConnectedRef = useRef(isConnected);
+  const quarantinedHostsRef = useRef(quarantinedHosts);
+  const activeHitlEventRef = useRef(activeHitlEvent);
   const latencyRef = useRef<number | null>(null);
   const onTelemetryRef = useRef(onTelemetry);
   const onHostUnreachableRef = useRef(onHostUnreachable);
   const pendingHitlCommandRef = useRef<{ commandId: string; cmd: ClientCommandMessage; riskLevel: RiskLevel } | null>(null);
+
+  isConnectedRef.current = isConnected;
+  quarantinedHostsRef.current = quarantinedHosts;
+  activeHitlEventRef.current = activeHitlEvent;
 
   useEffect(() => {
     targetIdRef.current = targetId;
@@ -323,10 +330,14 @@ export function useWorkerEngine({
             if (resolvedTargetId) {
               if (normalizedStatus === 'success') {
                 hostCircuitBreaker.recordSuccess(resolvedTargetId);
-                setCircuitTrippedHosts((prev) => prev.filter((id) => id !== resolvedTargetId));
+                setCircuitTrippedHosts((prev) =>
+                  prev.includes(resolvedTargetId) ? prev.filter((id) => id !== resolvedTargetId) : prev
+                );
               } else if (normalizedStatus === 'failed') {
                 if (hostCircuitBreaker.recordFailure(resolvedTargetId)) {
-                  setCircuitTrippedHosts((prev) => Array.from(new Set([...prev, resolvedTargetId])));
+                  setCircuitTrippedHosts((prev) =>
+                    prev.includes(resolvedTargetId) ? prev : [...prev, resolvedTargetId]
+                  );
                 }
               }
             }
@@ -337,14 +348,42 @@ export function useWorkerEngine({
       }
     };
 
+    worker.onerror = (err: ErrorEvent) => {
+      setIsConnected(false);
+      setIsConnecting(false);
+      setIsReconnecting(false);
+      setIsSendingCommand(false);
+      setIsCapturingScreen(false);
+      setIsVaultEncrypted(false);
+      setHeartbeatStatus('idle');
+      logStore.addLog(
+        'SYSTEM_MDNS',
+        targetIdRef.current || 'GATEWAY',
+        'error',
+        `Network worker error: ${err.message || 'unexpected failure'}`
+      );
+    };
+
+    worker.onmessageerror = () => {
+      logStore.addLog(
+        'SYSTEM_MDNS',
+        targetIdRef.current || 'GATEWAY',
+        'warn',
+        'Dropped malformed message from network worker.'
+      );
+    };
+
     return () => {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.onmessageerror = null;
       clearScreenFrames();
       worker.terminate();
     };
   }, []);
 
   const connect = useCallback((url?: string) => {
-    const targetUrl = url || wsUrl;
+    const targetUrl = url || wsUrlRef.current;
     if (wsUrlRef.current !== targetUrl) {
       clearScreenFrames();
       lastThumbnailSyncRef.current = 0;
@@ -362,7 +401,7 @@ export function useWorkerEngine({
       type: 'CONNECT',
       payload: { url: targetUrl, token },
     });
-  }, [wsUrl]);
+  }, []);
 
   const reconnectNow = useCallback(() => {
     setIsConnecting(true);
@@ -386,7 +425,7 @@ export function useWorkerEngine({
   }, []);
 
   const toggleQuarantine = useCallback((hostId: string) => {
-    const isQuarantined = quarantinedHosts.includes(hostId);
+    const isQuarantined = quarantinedHostsRef.current.includes(hostId);
     const updated = setHostQuarantined(hostId, !isQuarantined);
     setQuarantinedHostsList(updated);
     triggerHapticFeedback('warning');
@@ -396,11 +435,13 @@ export function useWorkerEngine({
       !isQuarantined ? 'warn' : 'info',
       !isQuarantined ? `Хост ${hostId} е поставен под КАРАНТИНА (мрежова изолация)` : `Хост ${hostId} е освободен от карантина`
     );
-  }, [quarantinedHosts]);
+  }, []);
 
   const resetHostCircuit = useCallback((hostId: string) => {
     hostCircuitBreaker.reset(hostId);
-    setCircuitTrippedHosts((prev) => prev.filter((id) => id !== hostId));
+    setCircuitTrippedHosts((prev) =>
+      prev.includes(hostId) ? prev.filter((id) => id !== hostId) : prev
+    );
     triggerHapticFeedback('light');
     logStore.addLog('MOBILE_CLIENT', hostId, 'info', `Прекъсвачът за ${hostId} бе ръчно нулиран.`);
   }, []);
@@ -411,20 +452,20 @@ export function useWorkerEngine({
     setActiveHitlEvent(null);
     logStore.addLog('MOBILE_CLIENT', 'ALL', 'error', '🚨 АВАРИЕН СТОП: Изпратен е Panic Kill сигнал към всички активни агенти!');
 
-    if (isConnected) {
+    if (isConnectedRef.current) {
       workerRef.current?.postMessage({
         type: 'SEND_JSON',
         payload: { action: 'panic_kill_all', timestamp: Date.now() },
       });
     }
-  }, [isConnected]);
+  }, []);
 
-  const sendCommand = useCallback(
-    (cmd: ClientCommandMessage) => {
+  const sendCommand = useCallback((cmd: ClientCommandMessage) => {
       const isBg = useUIStore.getState().language === 'bg';
+      const connectedNow = isConnectedRef.current;
 
       // 1. Quarantined Host Gate (strict: never bypass via substring tricks)
-      if (quarantinedHosts.includes(cmd.target_id)) {
+      if (quarantinedHostsRef.current.includes(cmd.target_id)) {
         triggerHapticFeedback('warning');
         setSecurityAlert({
           title: isBg ? 'Хост под Карантина' : 'Host Under Quarantine',
@@ -513,7 +554,7 @@ export function useWorkerEngine({
       // when connected to a live Host Agent, let the Host Agent's signed APPROVAL_REQUIRED
       // challenge act as the single authoritative HITL prompt (prevents duplicate HITL popups).
       const requiresLocalPreHitlGate =
-        !isConnected &&
+        !connectedNow &&
         (verdict.requiresHoldConfirmation ||
           verdict.category === 'CRITICAL_DESTRUCTIVE' ||
           (verdict.category === 'HIGH_RISK' && useUIStore.getState().isHitlEnabled));
@@ -538,7 +579,7 @@ export function useWorkerEngine({
         return;
       }
 
-      if (isConnected) {
+      if (connectedNow) {
         workerRef.current?.postMessage({
           type: 'SEND_JSON',
           payload: {
@@ -567,13 +608,11 @@ export function useWorkerEngine({
           timestamp: new Date().toLocaleTimeString(isBg ? 'bg-BG' : 'en-GB', { hour12: false }),
         });
       }
-    },
-    [isConnected, quarantinedHosts]
-  );
+  }, []);
 
   const sendInputOpcode = useCallback(
     (opcode: number, data: Record<string, any> | string): boolean => {
-      if (!isConnected || !workerRef.current) {
+      if (!isConnectedRef.current || !workerRef.current) {
         return false;
       }
       workerRef.current.postMessage({
@@ -585,18 +624,19 @@ export function useWorkerEngine({
       });
       return true;
     },
-    [isConnected]
+    []
   );
 
   const resolveHitl = useCallback(
     (commandId: string, decision: 'APPROVED' | 'REJECTED') => {
-      const prevHitl = activeHitlEvent;
+      const prevHitl = activeHitlEventRef.current;
+      const connectedNow = isConnectedRef.current;
       const pendingLocal = pendingHitlCommandRef.current;
       pendingHitlCommandRef.current = null;
       setActiveHitlEvent(null);
 
       if (pendingLocal && pendingLocal.commandId === commandId) {
-        if (decision === 'APPROVED' && isConnected) {
+        if (decision === 'APPROVED' && connectedNow) {
           setIsSendingCommand(true);
           workerRef.current?.postMessage({
             type: 'SEND_JSON',
@@ -630,7 +670,7 @@ export function useWorkerEngine({
         return;
       }
 
-      if (isConnected) {
+      if (connectedNow) {
         if (decision === 'APPROVED') {
           setIsSendingCommand(true);
         }
@@ -662,12 +702,12 @@ export function useWorkerEngine({
         });
       }
     },
-    [isConnected, activeHitlEvent]
+    []
   );
 
   const requestScreenRefresh = useCallback(
     (_deviceId: string, dimensions?: { width: number; height: number }, silent = false) => {
-      if (isConnected) {
+      if (isConnectedRef.current) {
         if (!silent && !useScreenStore.getState().screenBase64) {
           setIsCapturingScreen(true);
         }
@@ -691,7 +731,7 @@ export function useWorkerEngine({
         setIsCapturingScreen(false);
       }
     },
-    [isConnected]
+    []
   );
 
   const clearUnreachableAlert = useCallback(() => setUnreachableAlert(null), []);

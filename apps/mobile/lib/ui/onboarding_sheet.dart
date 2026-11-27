@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/fluid_theme.dart';
@@ -37,15 +36,25 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
     if (mounted) Navigator.of(context).pop();
   }
 
-  void _nextPage() {
-    unawaited(HapticFeedback.selectionClick().catchError((_) {}));
-    if (_currentPage < _totalPages - 1) {
+  void _goToPage(int index) {
+    final disableAnim = MediaQuery.disableAnimationsOf(context);
+    if (disableAnim) {
+      _pageController.jumpToPage(index);
+    } else {
       unawaited(
-        _pageController.nextPage(
-          duration: const Duration(milliseconds: 280),
+        _pageController.animateToPage(
+          index,
+          duration: const Duration(milliseconds: 260),
           curve: Curves.easeOutCubic,
         ),
       );
+    }
+  }
+
+  void _nextPage() {
+    unawaited(HapticFeedback.selectionClick().catchError((_) {}));
+    if (_currentPage < _totalPages - 1) {
+      _goToPage(_currentPage + 1);
     } else {
       _completeAndClose();
     }
@@ -53,12 +62,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
 
   void _prevPage() {
     if (_currentPage > 0) {
-      unawaited(
-        _pageController.previousPage(
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOutCubic,
-        ),
-      );
+      _goToPage(_currentPage - 1);
     }
   }
 
@@ -71,7 +75,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final sigma = palette.glass.blurSigma;
+    final disableAnim = MediaQuery.disableAnimationsOf(context);
     final steps = <Map<String, dynamic>>[
       {
         'title': 'Welcome to AI NetController',
@@ -248,7 +252,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
               if (_currentPage > 0)
                 TextButton(
                   style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
+                    minimumSize: const Size(44, 40),
                     padding: EdgeInsets.symmetric(
                         horizontal: isUltraCompact ? 8 : 14),
                   ),
@@ -264,7 +268,7 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
               else
                 TextButton(
                   style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
+                    minimumSize: const Size(44, 40),
                     padding: EdgeInsets.symmetric(
                         horizontal: isUltraCompact ? 8 : 14),
                   ),
@@ -281,16 +285,32 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                 mainAxisSize: MainAxisSize.min,
                 children: List.generate(_totalPages, (i) {
                   final active = i == _currentPage;
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    margin: const EdgeInsets.symmetric(horizontal: 2.5),
-                    width: active ? (isUltraCompact ? 16 : 22) : 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: active
-                          ? palette.primary
-                          : palette.textTertiary.withValues(alpha: 0.3),
-                      borderRadius: BorderRadius.circular(999),
+                  return Semantics(
+                    button: true,
+                    selected: active,
+                    label: 'Step ${i + 1} of $_totalPages',
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _goToPage(i),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 3,
+                          vertical: 8,
+                        ),
+                        child: AnimatedContainer(
+                          duration: disableAnim
+                              ? Duration.zero
+                              : const Duration(milliseconds: 220),
+                          width: active ? (isUltraCompact ? 16 : 22) : 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: active
+                                ? palette.primary
+                                : palette.textTertiary.withValues(alpha: 0.35),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
                     ),
                   );
                 }),
@@ -299,13 +319,12 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: palette.primary,
-                    foregroundColor:
-                        palette.isDaylight ? Colors.white : const Color(0xFF090B1D),
+                    foregroundColor: palette.onPrimary,
                     elevation: 0,
                     shape: const StadiumBorder(),
                     padding: EdgeInsets.symmetric(
                       horizontal: isUltraCompact ? 14 : 20,
-                      vertical: isShort ? 8 : 12,
+                      vertical: isShort ? 9 : 12,
                     ),
                   ),
                   onPressed: _nextPage,
@@ -330,39 +349,36 @@ class _AdaptiveOnboardingSheetState extends State<AdaptiveOnboardingSheet> {
     return SafeArea(
       child: Center(
         heightFactor: 1.0,
-        child: Container(
-          constraints: BoxConstraints(
-            maxHeight: (size.height * 0.86).clamp(180.0, 540.0),
-            maxWidth: 520,
-          ),
-          margin: EdgeInsets.all(isShort ? 8 : 12),
-          decoration: BoxDecoration(
-            color: palette.surface
-                .withValues(alpha: palette.isDaylight ? 0.94 : 0.96),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(
-              color: palette.isDaylight
-                  ? Colors.white.withValues(alpha: 0.9)
-                  : palette.primary.withValues(alpha: 0.36),
-              width: 1.2,
+        child: RepaintBoundary(
+          child: Container(
+            constraints: BoxConstraints(
+              maxHeight: (size.height * 0.86).clamp(180.0, 540.0),
+              maxWidth: 520,
             ),
-            boxShadow: [
-              BoxShadow(
-                color: palette.primary
-                    .withValues(alpha: palette.isDaylight ? 0.14 : 0.22),
-                blurRadius: 32,
-                offset: const Offset(0, 12),
+            margin: EdgeInsets.all(isShort ? 8 : 12),
+            decoration: BoxDecoration(
+              color: palette.surface
+                  .withValues(alpha: palette.isDaylight ? 0.96 : 0.97),
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: palette.isDaylight
+                    ? Colors.white.withValues(alpha: 0.9)
+                    : palette.primary.withValues(alpha: 0.36),
+                width: 1.2,
               ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(28),
-            child: sigma > 0
-                ? BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-                    child: content,
-                  )
-                : content,
+              boxShadow: [
+                BoxShadow(
+                  color: palette.primary
+                      .withValues(alpha: palette.isDaylight ? 0.14 : 0.22),
+                  blurRadius: 32,
+                  offset: const Offset(0, 12),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: content,
+            ),
           ),
         ),
       ),

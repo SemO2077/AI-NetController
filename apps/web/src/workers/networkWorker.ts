@@ -289,6 +289,7 @@ function stopHeartbeat() {
     clearTimeout(pongTimeoutTimer);
     pongTimeoutTimer = null;
   }
+  pendingPings.clear();
   missedPings = 0;
 }
 
@@ -300,9 +301,22 @@ function clearConnectionWatchdog() {
 }
 
 function establishConnection(url: string, token: string = currentToken) {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   clearConnectionWatchdog();
   clearAuthHandshakeTimer();
   stopHeartbeat();
+
+  const switchedEndpoint = url !== currentUrl;
+  if (switchedEndpoint) {
+    outboundQueue.length = 0;
+    latencyHead = 0;
+    latencyCount = 0;
+    lastRttSample = 0;
+    jitter = 0.8;
+  }
 
   if (socket) {
     try {
@@ -388,7 +402,6 @@ function establishConnection(url: string, token: string = currentToken) {
     ws.onopen = () => {
       if (socket !== ws) return;
       clearConnectionWatchdog();
-      reconnectAttempts = 0;
       autoReconnectEnabled = true;
 
       // Wait for binary OP_AUTH HMAC-SHA256 challenge-response; never transmit raw PSK on ws.onopen
@@ -458,6 +471,7 @@ function establishConnection(url: string, token: string = currentToken) {
           }
 
           if (json.event === 'AUTHENTICATED') {
+            reconnectAttempts = 0;
             sessionAuthenticated = true;
             clearAuthHandshakeTimer();
             self.postMessage({ type: 'STATUS', status: 'connected' });
@@ -728,6 +742,7 @@ function parseBinaryFrame(bytes: Uint8Array) {
     // which would otherwise be misclassified as a 16-byte HMAC nonce challenge.
     const statusStr = payloadSlice.length > 0 ? UTF8_DECODER.decode(payloadSlice).trim() : '';
     if (statusStr === 'OK_ECDH_VAULT') {
+      reconnectAttempts = 0;
       vaultHandshakePending = false;
       vaultEstablished = true;
       sessionVault?.confirmEstablished();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X,
@@ -54,6 +54,13 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
   const [pairingPin, setPairingPin] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const timer = window.setTimeout(() => nameInputRef.current?.focus(), 60);
+    return () => window.clearTimeout(timer);
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -100,7 +107,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
   const liveValidation = useMemo(() => {
     const trimmedName = name.trim();
     const trimmedIp = ip.trim();
-    const ipValid = IPV4_REGEX.test(trimmedIp);
+    const ipValid = IPV4_REGEX.test(trimmedIp) && trimmedIp !== '0.0.0.0';
     const macClean = mac.trim().replace(/[:.-]/g, '');
     const macHexOnly = /^[0-9A-Fa-f]*$/.test(macClean);
     const macValid = macClean.length === 12 && /^[0-9A-Fa-f]{12}$/.test(macClean);
@@ -158,10 +165,10 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
       newErrors.name = isBg ? 'Въведете име на хоста' : 'Please enter a hostname';
     }
 
-    if (!ip.trim() || !IPV4_REGEX.test(ip.trim())) {
+    if (!ip.trim() || !IPV4_REGEX.test(ip.trim()) || ip.trim() === '0.0.0.0') {
       newErrors.ip = isBg
-        ? 'Невалиден IPv4 адрес (напр. 192.168.1.120)'
-        : 'Invalid IPv4 address (e.g. 192.168.1.120)';
+        ? 'Невалиден IPv4 адрес (напр. 192.168.1.120; 0.0.0.0 не е валиден хост)'
+        : 'Invalid IPv4 address (e.g. 192.168.1.120; 0.0.0.0 is reserved)';
     }
 
     const macClean = mac.trim().replace(/[:.-]/g, '');
@@ -265,6 +272,9 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
     <AnimatePresence>
       {isOpen && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={editingHost ? (isBg ? 'Редактиране на устройство' : 'Edit Device') : isBg ? 'Добавяне на устройство' : 'Add Host Device'}
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               triggerHapticFeedback('light');
@@ -279,13 +289,13 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
             initial="initial"
             animate="animate"
             exit="exit"
-            className="relative w-full max-w-lg glass-liquid-modal rounded-[28px] overflow-hidden my-auto landscape-compact-modal"
+            className="relative w-full max-w-lg max-h-[92dvh] flex flex-col glass-liquid-modal rounded-[28px] overflow-hidden my-auto landscape-compact-modal"
           >
             {/* Specular Accent Rim */}
-            <div className="h-1 w-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)]" />
+            <div className="h-1 w-full bg-gradient-to-r from-[var(--theme-accent)] via-[var(--theme-secondary)] to-[var(--theme-tertiary)] shrink-0" />
 
             {/* Modal Header */}
-            <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-[var(--glass-border)]">
+            <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-[var(--surface-border-subtle)] shrink-0">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-10 h-10 squircle-badge squircle-hero shrink-0">
                   {editingHost ? (
@@ -330,15 +340,16 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
             </div>
 
             <form
+              id="add-host-form"
               onSubmit={handleSubmit}
-              className="p-5 sm:p-6 space-y-4 max-h-[82dvh] overflow-y-auto bouncy-scroll"
+              className="p-5 sm:p-6 space-y-4 flex-1 min-h-0 overflow-y-auto bouncy-scroll"
             >
               {/* Host Name Field */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-xs font-display font-semibold ink-primary">
                     {isBg ? 'Име на хоста' : 'Hostname'}{' '}
-                    <span className="text-[var(--accent-primary)]">*</span>
+                    <span className="text-[var(--theme-accent)]">*</span>
                   </label>
                   {liveValidation.nameValid && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border border-emerald-500/25">
@@ -348,6 +359,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                   )}
                 </div>
                 <input
+                  ref={nameInputRef}
                   type="text"
                   value={name}
                   onChange={(e) => {
@@ -360,7 +372,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                   className={`w-full px-3.5 py-2.5 rounded-2xl liquid-terminal-entry font-mono text-xs ink-primary placeholder:opacity-55 focus:outline-none transition border ${
                     errors.name
                       ? 'border-rose-500/70'
-                      : 'border-[var(--glass-border)] focus:border-[var(--accent-primary)]'
+                      : 'border-[var(--surface-border-subtle)] focus:border-[var(--theme-accent)]'
                   }`}
                 />
                 {errors.name && (
@@ -377,7 +389,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-display font-semibold ink-primary">
                       {isBg ? 'IPv4 адрес' : 'IPv4 Address'}{' '}
-                      <span className="text-[var(--accent-primary)]">*</span>
+                      <span className="text-[var(--theme-accent)]">*</span>
                     </label>
                     {liveValidation.ipEntered && (
                       <span
@@ -402,7 +414,19 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                     type="text"
                     value={ip}
                     onChange={(e) => {
-                      setIp(e.target.value);
+                      const raw = e.target.value;
+                      // Smart extract when user pastes "ws://192.168.1.50:8765" or "192.168.1.50:8765"
+                      const uriMatch = raw.trim().match(/^(?:wss?|https?):\/\/([^:/\s]+)(?::(\d{1,5}))?/i) ||
+                        raw.trim().match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/);
+                      if (uriMatch) {
+                        setIp(uriMatch[1]);
+                        if (uriMatch[2]) {
+                          setPort(uriMatch[2].slice(0, 5));
+                          if (errors.port) setErrors((p) => ({ ...p, port: '' }));
+                        }
+                      } else {
+                        setIp(raw);
+                      }
                       if (errors.ip) setErrors((p) => ({ ...p, ip: '' }));
                     }}
                     placeholder="192.168.1.120"
@@ -411,7 +435,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                         ? 'border-rose-500/70'
                         : liveValidation.ipValid
                         ? 'border-emerald-500/45 focus:border-emerald-500'
-                        : 'border-[var(--glass-border)] focus:border-[var(--accent-primary)]'
+                        : 'border-[var(--surface-border-subtle)] focus:border-[var(--theme-accent)]'
                     }`}
                   />
                   {errors.ip && (
@@ -443,7 +467,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                     className={`w-full px-3.5 py-2.5 rounded-2xl liquid-terminal-entry font-mono text-xs ink-primary placeholder:opacity-55 focus:outline-none transition border ${
                       errors.port
                         ? 'border-rose-500/70'
-                        : 'border-[var(--glass-border)] focus:border-[var(--accent-primary)]'
+                        : 'border-[var(--surface-border-subtle)] focus:border-[var(--theme-accent)]'
                     }`}
                   />
                   {errors.port && (
@@ -466,7 +490,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                         <button
                           type="button"
                           onClick={handleAutoFormatMac}
-                          className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--accent-primary)]/15 text-[var(--accent-primary)] border border-[var(--accent-primary)]/30 hover:bg-[var(--accent-primary)]/25 transition inline-flex items-center gap-1 cursor-pointer"
+                          className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--theme-accent)]/15 text-[var(--theme-accent)] border border-[var(--theme-accent)]/30 hover:bg-[var(--theme-accent)]/25 transition inline-flex items-center gap-1 cursor-pointer"
                           title={isBg ? 'Форматирай като AA:BB:CC:DD:EE:FF' : 'Auto-format AA:BB:CC:DD:EE:FF'}
                         >
                           <Wand2 className="w-2.5 h-2.5" />
@@ -501,7 +525,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                         ? 'border-rose-500/70'
                         : liveValidation.macValid
                         ? 'border-emerald-500/45 focus:border-emerald-500'
-                        : 'border-[var(--glass-border)] focus:border-[var(--accent-primary)]'
+                        : 'border-[var(--surface-border-subtle)] focus:border-[var(--theme-accent)]'
                     }`}
                   />
                   {errors.mac && (
@@ -582,8 +606,8 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                         }}
                         className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition text-xs font-display cursor-pointer ${
                           isSelected
-                            ? 'bg-[var(--accent-primary)]/14 border-[var(--accent-primary)]/50 text-[var(--accent-primary)] font-bold shadow-sm'
-                            : 'glass-liquid-subtle border-[var(--glass-border)] ink-secondary hover:ink-primary'
+                            ? 'bg-[var(--theme-accent)]/14 border-[var(--theme-accent)]/50 text-[var(--theme-accent)] font-bold shadow-sm'
+                            : 'glass-liquid-subtle border-[var(--surface-border-subtle)] ink-secondary hover:ink-primary'
                         }`}
                       >
                         <Icon className="w-4 h-4" />
@@ -600,7 +624,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                   <label className="block text-xs font-display font-semibold ink-primary mb-2">
                     {isBg ? 'Операционна система' : 'Operating System'}
                   </label>
-                  <div className="grid grid-cols-2 gap-1.5 p-1 rounded-full glass-liquid-subtle border border-[var(--glass-border)]">
+                  <div className="grid grid-cols-2 gap-1.5 p-1 rounded-full glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                     <button
                       type="button"
                       onClick={() => {
@@ -636,7 +660,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                   <label className="block text-xs font-display font-semibold ink-primary mb-2">
                     {isBg ? 'Начален статус' : 'Initial State'}
                   </label>
-                  <div className="grid grid-cols-2 gap-1.5 p-1 rounded-full glass-liquid-subtle border border-[var(--glass-border)]">
+                  <div className="grid grid-cols-2 gap-1.5 p-1 rounded-full glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                     <button
                       type="button"
                       onClick={() => {
@@ -672,17 +696,17 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
               </div>
 
               {/* Collapsible Optional Tags & Presets */}
-              <div className="rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+              <div className="rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] overflow-hidden">
                 <button
                   type="button"
                   onClick={() => {
                     triggerHapticFeedback('light');
                     setShowAdvanced((v) => !v);
                   }}
-                  className="w-full px-3.5 py-2.5 flex items-center justify-between text-xs font-display font-semibold ink-primary hover:bg-[var(--glass-surface-hover)] transition cursor-pointer"
+                  className="w-full px-3.5 py-2.5 flex items-center justify-between text-xs font-display font-semibold ink-primary hover:bg-[var(--surface-pill-hover)] transition cursor-pointer"
                 >
                   <span className="flex items-center gap-2">
-                    <Tag className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                    <Tag className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                     <span>
                       {isBg ? 'Етикети и организация (по избор)' : 'Tags & Organization (Optional)'}
                     </span>
@@ -699,7 +723,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
-                      className="overflow-hidden border-t border-[var(--glass-border)]"
+                      className="overflow-hidden border-t border-[var(--surface-border-subtle)]"
                     >
                       <div className="p-3.5 space-y-2.5">
                         <div className="relative">
@@ -708,7 +732,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                             value={tagsInput}
                             onChange={(e) => setTagsInput(e.target.value)}
                             placeholder="Lab, Production, Storage, AI"
-                            className="w-full px-3.5 py-2 pl-9 rounded-xl liquid-terminal-entry border border-[var(--glass-border)] focus:border-[var(--accent-primary)] ink-primary font-mono text-xs focus:outline-none transition"
+                            className="w-full px-3.5 py-2 pl-9 rounded-xl liquid-terminal-entry border border-[var(--surface-border-subtle)] focus:border-[var(--theme-accent)] ink-primary font-mono text-xs focus:outline-none transition"
                           />
                           <Tag className="w-3.5 h-3.5 ink-muted absolute left-3 top-2.5 pointer-events-none" />
                         </div>
@@ -725,7 +749,7 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                                 onClick={() => handleToggleQuickTag(tag)}
                                 className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition cursor-pointer border ${
                                   active
-                                    ? 'bg-[var(--accent-primary)]/18 text-[var(--accent-primary)] border-[var(--accent-primary)]/40 font-semibold'
+                                    ? 'bg-[var(--theme-accent)]/18 text-[var(--theme-accent)] border-[var(--theme-accent)]/40 font-semibold'
                                     : 'liquid-control-pill ink-secondary hover:ink-primary'
                                 }`}
                               >
@@ -739,43 +763,44 @@ export const AddHostModal: React.FC<AddHostModalProps> = ({
                   )}
                 </AnimatePresence>
               </div>
-
-              {/* Footer Buttons */}
-              <div className="pt-3 border-t border-[var(--glass-border)] flex items-center justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    triggerHapticFeedback('light');
-                    onClose();
-                  }}
-                  className="min-h-[42px] px-4 py-2 rounded-full liquid-control-pill ink-secondary hover:ink-primary font-display text-xs font-semibold transition cursor-pointer"
-                >
-                  {isBg ? 'Отказ' : 'Cancel'}
-                </button>
-                <motion.button
-                  type="submit"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.96 }}
-                  transition={SPRING_POP}
-                  className="min-h-[42px] px-5 py-2 rounded-full liquid-hero-btn preserve-white font-display text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                >
-                  {editingHost ? (
-                    <Save className="w-4 h-4" />
-                  ) : (
-                    <Plus className="w-4 h-4 stroke-[2.5]" />
-                  )}
-                  <span>
-                    {editingHost
-                      ? isBg
-                        ? 'Запази промените'
-                        : 'Save Changes'
-                      : isBg
-                      ? 'Добави устройство'
-                      : 'Add Device'}
-                  </span>
-                </motion.button>
-              </div>
             </form>
+
+            {/* Sticky Footer Buttons */}
+            <div className="px-5 sm:px-6 py-3.5 border-t border-[var(--surface-border-subtle)] glass-liquid-subtle flex items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHapticFeedback('light');
+                  onClose();
+                }}
+                className="min-h-[42px] px-4 py-2 rounded-full liquid-control-pill ink-secondary hover:ink-primary font-display text-xs font-semibold transition cursor-pointer"
+              >
+                {isBg ? 'Отказ' : 'Cancel'}
+              </button>
+              <motion.button
+                type="submit"
+                form="add-host-form"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.96 }}
+                transition={SPRING_POP}
+                className="min-h-[42px] px-5 py-2 rounded-full liquid-hero-btn preserve-white font-display text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                {editingHost ? (
+                  <Save className="w-4 h-4" />
+                ) : (
+                  <Plus className="w-4 h-4 stroke-[2.5]" />
+                )}
+                <span>
+                  {editingHost
+                    ? isBg
+                      ? 'Запази промените'
+                      : 'Save Changes'
+                    : isBg
+                    ? 'Добави устройство'
+                    : 'Add Device'}
+                </span>
+              </motion.button>
+            </div>
           </motion.div>
         </div>
       )}

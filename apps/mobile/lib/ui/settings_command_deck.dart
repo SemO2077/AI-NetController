@@ -43,15 +43,17 @@ class _SearchableSettingEntry {
   });
 
   bool matches(String queryLower) {
-    if (title.toLowerCase().contains(queryLower) ||
-        subtitle.toLowerCase().contains(queryLower) ||
-        category.toLowerCase().contains(queryLower)) {
-      return true;
+    final tokens = queryLower
+        .split(RegExp(r'\s+'))
+        .where((t) => t.isNotEmpty)
+        .toList(growable: false);
+    if (tokens.isEmpty) return true;
+    final haystack =
+        '${title.toLowerCase()} ${subtitle.toLowerCase()} ${category.toLowerCase()} ${keywords.join(' ').toLowerCase()}';
+    for (final token in tokens) {
+      if (!haystack.contains(token)) return false;
     }
-    for (final kw in keywords) {
-      if (kw.toLowerCase().contains(queryLower)) return true;
-    }
-    return false;
+    return true;
   }
 }
 
@@ -166,55 +168,15 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
       widget.onOpenDiscoveryPortDialog!(currentPort);
       return;
     }
-    final ctrl = TextEditingController(text: currentPort.toString());
-    String? errorMsg;
-    await showDialog<void>(
+    final int? parsed = await showDialog<int>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: ctx.palette.surfaceElevated,
-          title: const Text('LAN Discovery Port'),
-          content: TextField(
-            controller: ctrl,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: 'TCP WebSocket Port',
-              hintText: '8765',
-              errorText: errorMsg,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final parsed = int.tryParse(ctrl.text.trim());
-                if (!NetworkValidators.isValidPort(parsed)) {
-                  setDialogState(() {
-                    errorMsg = 'Enter a valid port (1 - 65535)';
-                  });
-                  return;
-                }
-                unawaited(
-                  ref
-                      .read(appPreferencesProvider.notifier)
-                      .setCustomScanPort(parsed!),
-                );
-                Navigator.of(ctx).pop();
-                _notify('Default scan port updated to $parsed.');
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
-    ).whenComplete(() {
-      unawaited(
-        Future<void>.delayed(const Duration(milliseconds: 300), ctrl.dispose),
-      );
-    });
+      builder: (_) => _DiscoveryPortDialog(initialPort: currentPort),
+    );
+    if (parsed == null || !mounted) return;
+    unawaited(
+      ref.read(appPreferencesProvider.notifier).setCustomScanPort(parsed),
+    );
+    _notify('Default scan port updated to $parsed.');
   }
 
   void _handleOpenOnboarding() {
@@ -453,7 +415,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: palette.primary,
-                        foregroundColor: Colors.white,
+                        foregroundColor: palette.onPrimary,
                       ),
                       onPressed: () {
                         unawaited(
@@ -478,122 +440,28 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
 
   Future<void> _showImportConfigDialog() async {
     _hapticTap();
-    final ctrl = TextEditingController();
-    String? errorMsg;
-
-    await showDialog<void>(
+    final result = await showDialog<
+        ({bool ok, String message, List<Map<String, dynamic>> importedHosts})>(
       context: context,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (dialogCtx, setDialogState) {
-          final palette = dialogCtx.palette;
-          return AlertDialog(
-            backgroundColor: palette.surfaceElevated,
-            insetPadding: const EdgeInsets.symmetric(
-              horizontal: 20,
-              vertical: 24,
-            ),
-            title: const Text('Import Config JSON'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Paste a version 1 Config JSON backup. Preferences and sanitized host records will be validated; saved secrets remain protected.',
-                    style: TextStyle(
-                      color: palette.textSecondary,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    key: const ValueKey('import-config-json-input'),
-                    controller: ctrl,
-                    minLines: 4,
-                    maxLines: 8,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 11.5,
-                      color: palette.textPrimary,
-                    ),
-                    decoration: InputDecoration(
-                      hintText: '{"version": 1, "preferences": {...}}',
-                      errorText: errorMsg,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () async {
-                        final data = await Clipboard.getData(
-                          Clipboard.kTextPlain,
-                        );
-                        final text = data?.text ?? '';
-                        if (text.trim().isNotEmpty) {
-                          ctrl.text = text;
-                          setDialogState(() => errorMsg = null);
-                        }
-                      },
-                      icon: const Icon(Icons.content_paste_rounded, size: 16),
-                      label: const Text(
-                        'Paste Clipboard',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogCtx).pop(),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                key: const ValueKey('import-config-json-submit'),
-                onPressed: () async {
-                  final res = await ref
-                      .read(appPreferencesProvider.notifier)
-                      .importConfigJson(ctrl.text);
-                  if (!dialogCtx.mounted) return;
-                  if (!res.ok) {
-                    setDialogState(() => errorMsg = res.message);
-                    return;
-                  }
-                  if (res.importedHosts.isNotEmpty) {
-                    widget.onImportSanitizedHosts?.call(res.importedHosts);
-                  }
-                  await ref
-                      .read(historyProvider.notifier)
-                      .recordSystem(
-                        title: 'Configuration Restored',
-                        detail: res.message,
-                        status: 'success',
-                      );
-                  if (!dialogCtx.mounted) return;
-                  Navigator.of(dialogCtx).pop();
-                  if (!mounted) return;
-                  _notify(
-                    res.message,
-                    accentColor: context.palette.success,
-                  );
-                },
-                child: const Text('Import'),
-              ),
-            ],
-          );
-        },
+      builder: (_) => _ImportConfigDialog(
+        onImport: (raw) =>
+            ref.read(appPreferencesProvider.notifier).importConfigJson(raw),
       ),
-    ).whenComplete(() {
-      unawaited(
-        Future<void>.delayed(const Duration(milliseconds: 300), ctrl.dispose),
-      );
-    });
+    );
+    if (result == null || !result.ok || !mounted) return;
+    if (result.importedHosts.isNotEmpty) {
+      widget.onImportSanitizedHosts?.call(result.importedHosts);
+    }
+    await ref.read(historyProvider.notifier).recordSystem(
+          title: 'Configuration Restored',
+          detail: result.message,
+          status: 'success',
+        );
+    if (!mounted) return;
+    _notify(
+      result.message,
+      accentColor: context.palette.success,
+    );
   }
 
   Future<void> _confirmResetAll() async {
@@ -634,7 +502,9 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
   Widget build(BuildContext context) {
     final prefs = ref.watch(appPreferencesProvider);
     final prefsNotifier = ref.read(appPreferencesProvider.notifier);
-    final historyEntries = ref.watch(historyProvider);
+    final historyCount = ref.watch(
+      historyProvider.select((entries) => entries.length),
+    );
     final palette = context.palette;
     final String queryLower = _searchQuery.trim().toLowerCase();
 
@@ -660,7 +530,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
           _buildOperationalBentoGrid(
             context,
             prefs: prefs,
-            historyCount: historyEntries.length,
+            historyCount: historyCount,
             palette: palette,
           ),
           const SizedBox(height: 14),
@@ -792,6 +662,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                     : Icons.lock_open_rounded,
                 label: vaultLocked ? 'Vault Locked' : 'Setup Needed',
                 color: vaultLocked ? palette.success : palette.warning,
+                onTap: () => _jumpToHub(SettingsDeckHub.security),
               ),
               _telemetryBadge(
                 context,
@@ -805,12 +676,14 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                 label:
                     '${prefs.targetFps}fps • ${prefs.streamQualityPreset.toUpperCase()}',
                 color: palette.primary,
+                onTap: () => _jumpToHub(SettingsDeckHub.streaming),
               ),
               _telemetryBadge(
                 context,
                 icon: Icons.bolt_rounded,
                 label: 'WoL UDP ${prefs.wolPort}',
                 color: palette.secondary,
+                onTap: () => _jumpToHub(SettingsDeckHub.wol),
               ),
             ],
           ),
@@ -819,14 +692,26 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
     );
   }
 
+  void _jumpToHub(SettingsDeckHub hub) {
+    _hapticTap();
+    if (_searchQuery.isNotEmpty) {
+      _searchController.clear();
+    }
+    setState(() {
+      _searchQuery = '';
+      _activeHub = hub;
+    });
+  }
+
   Widget _telemetryBadge(
     BuildContext context, {
     required IconData icon,
     required String label,
     required Color color,
+    VoidCallback? onTap,
   }) {
     final palette = context.palette;
-    return Container(
+    final Widget badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
         color: color.withValues(alpha: palette.isDaylight ? 0.11 : 0.17),
@@ -852,6 +737,15 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
             ),
           ),
         ],
+      ),
+    );
+    if (onTap == null) return badge;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: badge,
       ),
     );
   }
@@ -1062,13 +956,17 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
     final String? effectiveBadge = badgeText ?? (isModified ? 'Modified' : null);
     final Color effectiveBadgeColor = badgeColor ?? palette.warning;
 
-    return FluidPressScale(
-      pressedScale: 0.96,
-      onTap: () {
-        _hapticTap();
-        setState(() => _activeHub = hub);
-      },
-      child: AnimatedContainer(
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '$title hub, $readout',
+      child: FluidPressScale(
+        pressedScale: 0.96,
+        onTap: () {
+          _hapticTap();
+          setState(() => _activeHub = hub);
+        },
+        child: AnimatedContainer(
         key: key,
         duration: dur,
         curve: Curves.easeOutCubic,
@@ -1171,6 +1069,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -1624,7 +1523,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                         isSun ? Icons.wb_sunny_rounded : Icons.nightlight_round,
                         size: 16,
                         color: selected
-                            ? Colors.white
+                            ? palette.onHeroGradient
                             : (isSun
                                   ? const Color(0xFFF59E0B)
                                   : palette.primary),
@@ -1637,7 +1536,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: selected
-                                ? Colors.white
+                                ? palette.onHeroGradient
                                 : palette.textPrimary,
                             fontWeight: FontWeight.w700,
                             fontSize: 12,
@@ -1705,6 +1604,10 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
           runSpacing: 10,
           children: CyberAccentPreset.values.map((preset) {
             final swatchColor = preset.resolvedPrimary(prefs.themeMode);
+            final swatchSecondary = preset.resolvedSecondary(prefs.themeMode);
+            final swatchMid =
+                Color.lerp(swatchColor, swatchSecondary, 0.5) ?? swatchColor;
+            final swatchOnFill = CyberPalette.contrastInkFor(swatchMid);
             final isSelected = prefs.accent == preset;
             return Semantics(
               button: true,
@@ -1735,7 +1638,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                               end: Alignment.bottomRight,
                               colors: [
                                 swatchColor,
-                                preset.resolvedSecondary(prefs.themeMode),
+                                swatchSecondary,
                               ],
                             )
                           : null,
@@ -1766,7 +1669,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                           width: 14,
                           height: 14,
                           decoration: BoxDecoration(
-                            color: isSelected ? Colors.white : swatchColor,
+                            color: isSelected ? swatchOnFill : swatchColor,
                             shape: BoxShape.circle,
                             boxShadow: [
                               BoxShadow(
@@ -1788,7 +1691,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                           _formatEnumLabel(preset),
                           style: TextStyle(
                             color: isSelected
-                                ? Colors.white
+                                ? swatchOnFill
                                 : palette.textPrimary,
                             fontWeight: isSelected
                                 ? FontWeight.w800
@@ -2188,6 +2091,9 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
       title: 'Trackpad Pointer Sensitivity',
       subtitle: 'Cursor velocity gain when using Trackpad (PAD) mode.',
       readout: '${prefs.trackpadSensitivity.toStringAsFixed(1)}x',
+      minLabel: '0.6x',
+      maxLabel: '3.0x',
+      defaultValue: 1.6,
       value: prefs.trackpadSensitivity.clamp(0.6, 3.0),
       min: 0.6,
       max: 3.0,
@@ -2209,6 +2115,9 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
       title: 'Long-Press Right-Click Delay',
       subtitle: 'Hold threshold before triggering right-click context menu.',
       readout: '${prefs.longPressDelayMs}ms',
+      minLabel: '250ms',
+      maxLabel: '700ms',
+      defaultValue: 460.0,
       value: prefs.longPressDelayMs.clamp(250, 700).toDouble(),
       min: 250,
       max: 700,
@@ -2231,6 +2140,9 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
       title: '2-Finger Scroll Speed',
       subtitle: 'Scroll wheel velocity multiplier during two-finger drag.',
       readout: '${prefs.scrollSensitivity.toStringAsFixed(1)}x',
+      minLabel: '0.5x',
+      maxLabel: '3.0x',
+      defaultValue: 1.6,
       value: prefs.scrollSensitivity.clamp(0.5, 3.0),
       min: 0.5,
       max: 3.0,
@@ -2246,12 +2158,16 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
     required String title,
     required String subtitle,
     required String readout,
+    required String minLabel,
+    required String maxLabel,
+    required double defaultValue,
     required double value,
     required double min,
     required double max,
     required int divisions,
     required ValueChanged<double> onChanged,
   }) {
+    final bool isDefault = (value - defaultValue).abs() < 1e-6;
     return _buildGlassCardShell(
       context,
       child: Column(
@@ -2270,13 +2186,55 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                readout,
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w800,
-                  color: palette.primary,
-                  fontSize: context.fluidFont(11.5),
+              Tooltip(
+                message: isDefault ? 'Default value' : 'Tap to restore default',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: isDefault
+                      ? null
+                      : () {
+                          _hapticTap();
+                          onChanged(defaultValue);
+                        },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: palette.primary.withValues(
+                        alpha: palette.isDaylight ? 0.10 : 0.16,
+                      ),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: palette.primary.withValues(
+                          alpha: isDefault ? 0.25 : 0.50,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          readout,
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w800,
+                            color: palette.primary,
+                            fontSize: context.fluidFont(11.5),
+                          ),
+                        ),
+                        if (!isDefault) ...[
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.restart_alt_rounded,
+                            size: 12,
+                            color: palette.primary,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -2297,6 +2255,30 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
             divisions: divisions,
             activeColor: palette.primary,
             onChanged: onChanged,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  minLabel,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: context.fluidFont(9.5),
+                    color: palette.textTertiary,
+                  ),
+                ),
+                Text(
+                  maxLabel,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: context.fluidFont(9.5),
+                    color: palette.textTertiary,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -2471,7 +2453,7 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                 key: const ValueKey('export-config-json-btn'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: palette.primary,
-                  foregroundColor: Colors.white,
+                  foregroundColor: palette.onPrimary,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(13),
                   ),
@@ -3240,6 +3222,47 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
                     fontSize: context.fluidFont(11),
                   ),
                 ),
+                const SizedBox(height: 12),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: const <String>[
+                    'fps',
+                    'trackpad',
+                    'WoL',
+                    'vault',
+                    'TLS',
+                    'backup',
+                    'accent',
+                  ].map((term) {
+                    return ActionChip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text(
+                        term,
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: context.fluidFont(10.5),
+                          fontWeight: FontWeight.w700,
+                          color: palette.primary,
+                        ),
+                      ),
+                      side: BorderSide(
+                        color: palette.primary.withValues(alpha: 0.35),
+                      ),
+                      onPressed: () {
+                        _hapticTap();
+                        _searchController.value = TextEditingValue(
+                          text: term,
+                          selection: TextSelection.collapsed(
+                            offset: term.length,
+                          ),
+                        );
+                        setState(() => _searchQuery = term);
+                      },
+                    );
+                  }).toList(growable: false),
+                ),
               ],
             ),
           )
@@ -3260,6 +3283,195 @@ class _SettingsCommandDeckState extends ConsumerState<SettingsCommandDeck> {
             ),
             item.builder(context, prefs, prefsNotifier, palette),
           ],
+      ],
+    );
+  }
+}
+
+class _DiscoveryPortDialog extends StatefulWidget {
+  final int initialPort;
+
+  const _DiscoveryPortDialog({required this.initialPort});
+
+  @override
+  State<_DiscoveryPortDialog> createState() => _DiscoveryPortDialogState();
+}
+
+class _DiscoveryPortDialogState extends State<_DiscoveryPortDialog> {
+  late final TextEditingController _ctrl;
+  String? _errorMsg;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialPort.toString());
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return AlertDialog(
+      backgroundColor: palette.surfaceElevated,
+      title: const Text('LAN Discovery Port'),
+      content: TextField(
+        controller: _ctrl,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(
+          labelText: 'TCP WebSocket Port',
+          hintText: '8765',
+          errorText: _errorMsg,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: palette.primary,
+            foregroundColor: palette.onPrimary,
+          ),
+          onPressed: () {
+            final parsed = int.tryParse(_ctrl.text.trim());
+            if (!NetworkValidators.isValidPort(parsed)) {
+              setState(() => _errorMsg = 'Enter a valid port (1 - 65535)');
+              return;
+            }
+            Navigator.of(context).pop(parsed);
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ImportConfigDialog extends StatefulWidget {
+  final Future<
+          ({bool ok, String message, List<Map<String, dynamic>> importedHosts})>
+      Function(String rawJson) onImport;
+
+  const _ImportConfigDialog({required this.onImport});
+
+  @override
+  State<_ImportConfigDialog> createState() => _ImportConfigDialogState();
+}
+
+class _ImportConfigDialogState extends State<_ImportConfigDialog> {
+  late final TextEditingController _ctrl;
+  String? _errorMsg;
+  bool _isImporting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return AlertDialog(
+      backgroundColor: palette.surfaceElevated,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      title: const Text('Import Config JSON'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Paste a version 1 Config JSON backup. Preferences and sanitized host records will be validated; saved secrets remain protected.',
+              style: TextStyle(color: palette.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              key: const ValueKey('import-config-json-input'),
+              controller: _ctrl,
+              minLines: 4,
+              maxLines: 8,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11.5,
+                color: palette.textPrimary,
+              ),
+              decoration: InputDecoration(
+                hintText: '{"version": 1, "preferences": {...}}',
+                errorText: _errorMsg,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _isImporting
+                    ? null
+                    : () async {
+                        final data = await Clipboard.getData(
+                          Clipboard.kTextPlain,
+                        );
+                        final text = data?.text ?? '';
+                        if (text.trim().isNotEmpty && mounted) {
+                          _ctrl.text = text;
+                          setState(() => _errorMsg = null);
+                        }
+                      },
+                icon: const Icon(Icons.content_paste_rounded, size: 16),
+                label: const Text(
+                  'Paste Clipboard',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isImporting ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          key: const ValueKey('import-config-json-submit'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: palette.primary,
+            foregroundColor: palette.onPrimary,
+          ),
+          onPressed: _isImporting
+              ? null
+              : () async {
+                  final navigator = Navigator.of(context);
+                  setState(() => _isImporting = true);
+                  final res = await widget.onImport(_ctrl.text);
+                  if (!mounted) return;
+                  if (!res.ok) {
+                    setState(() {
+                      _isImporting = false;
+                      _errorMsg = res.message;
+                    });
+                    return;
+                  }
+                  navigator.pop(res);
+                },
+          child: Text(_isImporting ? 'Importing...' : 'Import'),
+        ),
       ],
     );
   }

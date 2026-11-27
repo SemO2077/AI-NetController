@@ -22,6 +22,7 @@ class SettingsHostSummary {
   final bool isOnline;
   final String osName;
   final bool useTls;
+  final bool isPinned;
 
   const SettingsHostSummary({
     required this.id,
@@ -32,6 +33,7 @@ class SettingsHostSummary {
     this.isOnline = false,
     this.osName = '',
     this.useTls = false,
+    this.isPinned = false,
   });
 
   bool get hasValidMac => NetworkValidators.normalizeMac(mac) != null;
@@ -46,6 +48,7 @@ class SettingsHostSummary {
     'mac': mac,
     'osName': osName,
     'useTls': useTls,
+    if (isPinned) 'isPinned': true,
   };
 }
 
@@ -90,6 +93,7 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
   String? _selectedHostId;
   String _selectedHostName = '';
   String _historyQuery = '';
+  String? _historyStatusFilter; // null = all, 'sent', 'failed'
   String? _macValidationError;
   bool _isSendingSingle = false;
   bool _isWakingAll = false;
@@ -146,6 +150,11 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
   @override
   void didUpdateWidget(covariant WolHubPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (_selectedHostId != null &&
+        !widget.hosts.any((h) => h.id == _selectedHostId)) {
+      _selectedHostId = null;
+      _selectedHostName = '';
+    }
     if (_selectedHostId == null &&
         _macController.text.isEmpty &&
         _ipController.text.isEmpty &&
@@ -440,138 +449,33 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
   }
 
   Future<void> _showCustomPortDialog(int currentPort) async {
-    final ctrl = TextEditingController(text: currentPort.toString());
-    String? errorMsg;
-    await showDialog<void>(
+    final int? parsed = await showDialog<int>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: ctx.palette.surfaceElevated,
-          title: const Text('Custom WoL UDP Port'),
-          content: TextField(
-            key: const ValueKey('wol-custom-port-input'),
-            controller: ctrl,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: 'UDP Port (1 - 65535)',
-              hintText: '9',
-              errorText: errorMsg,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final parsed = int.tryParse(ctrl.text.trim());
-                if (!NetworkValidators.isValidPort(parsed)) {
-                  setDialogState(() {
-                    errorMsg = 'Enter a valid port (1 - 65535)';
-                  });
-                  return;
-                }
-                unawaited(
-                  ref.read(appPreferencesProvider.notifier).setWolPort(parsed!),
-                );
-                Navigator.of(ctx).pop();
-                _notify('WoL UDP port updated to $parsed.');
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
-    ).whenComplete(() {
-      unawaited(
-        Future<void>.delayed(const Duration(milliseconds: 300), ctrl.dispose),
-      );
-    });
+      builder: (_) => _WolCustomPortDialog(initialPort: currentPort),
+    );
+    if (parsed == null || !mounted) return;
+    unawaited(ref.read(appPreferencesProvider.notifier).setWolPort(parsed));
+    _notify('WoL UDP port updated to $parsed.');
   }
 
   Future<void> _showBroadcastOverrideDialog(String currentOverride) async {
-    final ctrl = TextEditingController(text: currentOverride);
-    String? errorMsg;
-    await showDialog<void>(
+    final String? nextBroadcast = await showDialog<String>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: ctx.palette.surfaceElevated,
-          title: const Text('Broadcast IP Override'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Leave blank to use automatic global (255.255.255.255) + directed /24 subnet broadcast.',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: ctx.palette.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                key: const ValueKey('wol-custom-broadcast-input'),
-                controller: ctrl,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: 'Broadcast IPv4 Address',
-                  hintText: '192.168.1.255',
-                  errorText: errorMsg,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                unawaited(
-                  ref
-                      .read(appPreferencesProvider.notifier)
-                      .setWolBroadcastOverride(''),
-                );
-                Navigator.of(ctx).pop();
-                _notify('WoL broadcast reset to Auto Subnet.');
-              },
-              child: const Text('Auto Subnet'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final trimmed = ctrl.text.trim();
-                if (trimmed.isNotEmpty &&
-                    !NetworkValidators.isValidIpv4(trimmed)) {
-                  setDialogState(() {
-                    errorMsg = 'Enter a valid IPv4 address (e.g. 192.168.1.255)';
-                  });
-                  return;
-                }
-                unawaited(
-                  ref
-                      .read(appPreferencesProvider.notifier)
-                      .setWolBroadcastOverride(trimmed),
-                );
-                Navigator.of(ctx).pop();
-                _notify(
-                  trimmed.isEmpty
-                      ? 'WoL broadcast set to Auto Subnet.'
-                      : 'WoL broadcast override set to $trimmed.',
-                );
-              },
-              child: const Text('Apply'),
-            ),
-          ],
-        ),
+      builder: (_) => _WolBroadcastOverrideDialog(
+        initialOverride: currentOverride,
       ),
-    ).whenComplete(() {
-      unawaited(
-        Future<void>.delayed(const Duration(milliseconds: 300), ctrl.dispose),
-      );
-    });
+    );
+    if (nextBroadcast == null || !mounted) return;
+    unawaited(
+      ref
+          .read(appPreferencesProvider.notifier)
+          .setWolBroadcastOverride(nextBroadcast),
+    );
+    _notify(
+      nextBroadcast.isEmpty
+          ? 'WoL broadcast set to Auto Subnet.'
+          : 'WoL broadcast override set to $nextBroadcast.',
+    );
   }
 
   Future<void> _confirmClearWolHistory() async {
@@ -638,7 +542,17 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final prefs = ref.watch(appPreferencesProvider);
+    final wolPrefs = ref.watch(
+      appPreferencesProvider.select(
+        (p) => (
+          wolPort: p.wolPort,
+          wolBroadcastOverride: p.wolBroadcastOverride,
+          wolBurstCount: p.wolBurstCount,
+          wolSendGratuitousArp: p.wolSendGratuitousArp,
+          isWolModified: p.isModified(SettingsSection.wol),
+        ),
+      ),
+    );
     final prefsNotifier = ref.read(appPreferencesProvider.notifier);
     final allHistory = ref.watch(historyProvider);
     final wolEntries = allHistory
@@ -649,9 +563,21 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        _buildQuickDispatcherCard(context, prefs),
+        _buildQuickDispatcherCard(
+          context,
+          wolPort: wolPrefs.wolPort,
+          wolBurstCount: wolPrefs.wolBurstCount,
+        ),
         const SizedBox(height: 12),
-        _buildTuningCard(context, prefs, prefsNotifier),
+        _buildTuningCard(
+          context,
+          wolPort: wolPrefs.wolPort,
+          wolBroadcastOverride: wolPrefs.wolBroadcastOverride,
+          wolBurstCount: wolPrefs.wolBurstCount,
+          wolSendGratuitousArp: wolPrefs.wolSendGratuitousArp,
+          isModified: wolPrefs.isWolModified,
+          prefsNotifier: prefsNotifier,
+        ),
         const SizedBox(height: 12),
         _buildWolHistoryCard(context, wolEntries),
       ],
@@ -693,9 +619,10 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
   }
 
   Widget _buildQuickDispatcherCard(
-    BuildContext context,
-    AppPreferencesState prefs,
-  ) {
+    BuildContext context, {
+    required int wolPort,
+    required int wolBurstCount,
+  }) {
     final palette = context.palette;
     final offlineWithMacCount = widget.hosts
         .where((h) => !h.isOnline && h.hasValidMac)
@@ -745,7 +672,7 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                     ),
                     const SizedBox(height: 1),
                     Text(
-                      '102-byte IEEE 802.3 Magic Packet • UDP ${prefs.wolPort} • ${prefs.wolBurstCount}x burst',
+                      '102-byte IEEE 802.3 Magic Packet • UDP $wolPort • ${wolBurstCount}x burst',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -835,82 +762,99 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
             ),
           ],
           const SizedBox(height: 12),
-          TextField(
-            key: const ValueKey('wol-mac-input'),
-            controller: _macController,
-            textCapitalization: TextCapitalization.characters,
-            style: TextStyle(
-              color: palette.textPrimary,
-              fontFamily: 'monospace',
-              fontSize: context.fluidFont(12.5),
-            ),
-            onChanged: (_) {
-              if (_macValidationError != null || _selectedHostId != null) {
-                setState(() {
-                  _macValidationError = null;
-                  _selectedHostId = null;
-                  _selectedHostName = '';
-                });
-              }
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _macController,
+            builder: (context, macVal, _) {
+              return TextField(
+                key: const ValueKey('wol-mac-input'),
+                controller: _macController,
+                textCapitalization: TextCapitalization.characters,
+                style: TextStyle(
+                  color: palette.textPrimary,
+                  fontFamily: 'monospace',
+                  fontSize: context.fluidFont(12.5),
+                ),
+                onChanged: (_) {
+                  if (_macValidationError != null || _selectedHostId != null) {
+                    setState(() {
+                      _macValidationError = null;
+                      _selectedHostId = null;
+                      _selectedHostName = '';
+                    });
+                  }
+                },
+                decoration: InputDecoration(
+                  isDense: true,
+                  labelText: 'Target MAC Address',
+                  hintText: 'AA:BB:CC:DD:EE:FF',
+                  errorText: _macValidationError,
+                  prefixIcon: const Icon(Icons.memory_rounded, size: 18),
+                  suffixIcon: macVal.text.isNotEmpty
+                      ? IconButton(
+                          tooltip: 'Clear MAC',
+                          icon: const Icon(Icons.close_rounded, size: 17),
+                          onPressed: () {
+                            setState(() {
+                              _macController.clear();
+                              _macValidationError = null;
+                              _selectedHostId = null;
+                              _selectedHostName = '';
+                            });
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: palette.surface.withValues(alpha: 0.55),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: palette.glassBorderIdle),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: palette.glassBorderIdle),
+                  ),
+                ),
+              );
             },
-            decoration: InputDecoration(
-              isDense: true,
-              labelText: 'Target MAC Address',
-              hintText: 'AA:BB:CC:DD:EE:FF',
-              errorText: _macValidationError,
-              prefixIcon: const Icon(Icons.memory_rounded, size: 18),
-              suffixIcon: _macController.text.isNotEmpty
-                  ? IconButton(
-                      tooltip: 'Clear MAC',
-                      icon: const Icon(Icons.close_rounded, size: 17),
-                      onPressed: () {
-                        setState(() {
-                          _macController.clear();
-                          _macValidationError = null;
-                          _selectedHostId = null;
-                          _selectedHostName = '';
-                        });
-                      },
-                    )
-                  : null,
-              filled: true,
-              fillColor: palette.surface.withValues(alpha: 0.55),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: palette.glassBorderIdle),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: palette.glassBorderIdle),
-              ),
-            ),
           ),
           const SizedBox(height: 10),
-          TextField(
-            key: const ValueKey('wol-ip-input'),
-            controller: _ipController,
-            keyboardType: TextInputType.url,
-            style: TextStyle(
-              color: palette.textPrimary,
-              fontFamily: 'monospace',
-              fontSize: context.fluidFont(12),
-            ),
-            decoration: InputDecoration(
-              isDense: true,
-              labelText: 'Target Host IP (optional, for directed subnet ARP)',
-              hintText: '192.168.1.50',
-              prefixIcon: const Icon(Icons.lan_rounded, size: 18),
-              filled: true,
-              fillColor: palette.surface.withValues(alpha: 0.55),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: palette.glassBorderIdle),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: palette.glassBorderIdle),
-              ),
-            ),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _ipController,
+            builder: (context, ipVal, _) {
+              return TextField(
+                key: const ValueKey('wol-ip-input'),
+                controller: _ipController,
+                keyboardType: TextInputType.url,
+                style: TextStyle(
+                  color: palette.textPrimary,
+                  fontFamily: 'monospace',
+                  fontSize: context.fluidFont(12),
+                ),
+                decoration: InputDecoration(
+                  isDense: true,
+                  labelText: 'Target Host IP (optional, for directed subnet ARP)',
+                  hintText: '192.168.1.50',
+                  prefixIcon: const Icon(Icons.lan_rounded, size: 18),
+                  suffixIcon: ipVal.text.isNotEmpty
+                      ? IconButton(
+                          tooltip: 'Clear IP',
+                          icon: const Icon(Icons.close_rounded, size: 17),
+                          onPressed: () => _ipController.clear(),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: palette.surface.withValues(alpha: 0.55),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: palette.glassBorderIdle),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: palette.glassBorderIdle),
+                  ),
+                ),
+              );
+            },
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -923,7 +867,7 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                   key: const ValueKey('wol-send-btn'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: palette.primary,
-                    foregroundColor: Colors.white,
+                    foregroundColor: palette.onPrimary,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
                       vertical: 11,
@@ -934,12 +878,12 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                   ),
                   onPressed: _isSendingSingle ? null : _sendSinglePacket,
                   icon: _isSendingSingle
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 15,
                           height: 15,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: Colors.white,
+                            color: palette.onPrimary,
                           ),
                         )
                       : const Icon(Icons.bolt_rounded, size: 17),
@@ -992,14 +936,17 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
   }
 
   Widget _buildTuningCard(
-    BuildContext context,
-    AppPreferencesState prefs,
-    AppPreferencesNotifier prefsNotifier,
-  ) {
+    BuildContext context, {
+    required int wolPort,
+    required String wolBroadcastOverride,
+    required int wolBurstCount,
+    required bool wolSendGratuitousArp,
+    required bool isModified,
+    required AppPreferencesNotifier prefsNotifier,
+  }) {
     final palette = context.palette;
-    final bool isModified = prefs.isModified(SettingsSection.wol);
-    final bool isCustomPort = prefs.wolPort != 7 && prefs.wolPort != 9;
-    final bool hasCustomBroadcast = prefs.wolBroadcastOverride.trim().isNotEmpty;
+    final bool isCustomPort = wolPort != 7 && wolPort != 9;
+    final bool hasCustomBroadcast = wolBroadcastOverride.trim().isNotEmpty;
 
     return _buildGlassCard(
       context,
@@ -1057,15 +1004,15 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                 ChoiceChip(
                   key: ValueKey('wol-port-$port'),
                   label: Text('UDP $port'),
-                  selected: prefs.wolPort == port,
+                  selected: wolPort == port,
                   selectedColor: palette.primary.withValues(alpha: 0.22),
                   labelStyle: TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 11.5,
-                    fontWeight: prefs.wolPort == port
+                    fontWeight: wolPort == port
                         ? FontWeight.w800
                         : FontWeight.w600,
-                    color: prefs.wolPort == port
+                    color: wolPort == port
                         ? palette.primary
                         : palette.textSecondary,
                   ),
@@ -1077,7 +1024,7 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
               ChoiceChip(
                 key: const ValueKey('wol-port-custom'),
                 label: Text(
-                  isCustomPort ? 'Custom (${prefs.wolPort})' : 'Custom...',
+                  isCustomPort ? 'Custom ($wolPort)' : 'Custom...',
                 ),
                 selected: isCustomPort,
                 selectedColor: palette.secondary.withValues(alpha: 0.22),
@@ -1091,7 +1038,7 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                 ),
                 onSelected: (_) {
                   _hapticTap();
-                  unawaited(_showCustomPortDialog(prefs.wolPort));
+                  unawaited(_showCustomPortDialog(wolPort));
                 },
               ),
             ],
@@ -1133,7 +1080,7 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                 key: const ValueKey('wol-broadcast-custom'),
                 label: Text(
                   hasCustomBroadcast
-                      ? prefs.wolBroadcastOverride
+                      ? wolBroadcastOverride
                       : 'Custom IPv4...',
                 ),
                 selected: hasCustomBroadcast,
@@ -1151,7 +1098,7 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                 onSelected: (_) {
                   _hapticTap();
                   unawaited(
-                    _showBroadcastOverrideDialog(prefs.wolBroadcastOverride),
+                    _showBroadcastOverrideDialog(wolBroadcastOverride),
                   );
                 },
               ),
@@ -1175,15 +1122,15 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                 ChoiceChip(
                   key: ValueKey('wol-burst-$count'),
                   label: Text('${count}x'),
-                  selected: prefs.wolBurstCount == count,
+                  selected: wolBurstCount == count,
                   selectedColor: palette.primary.withValues(alpha: 0.22),
                   labelStyle: TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 11.5,
-                    fontWeight: prefs.wolBurstCount == count
+                    fontWeight: wolBurstCount == count
                         ? FontWeight.w800
                         : FontWeight.w600,
-                    color: prefs.wolBurstCount == count
+                    color: wolBurstCount == count
                         ? palette.primary
                         : palette.textSecondary,
                   ),
@@ -1223,7 +1170,7 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
               const SizedBox(width: 8),
               Switch.adaptive(
                 key: const ValueKey('wol-garp-switch'),
-                value: prefs.wolSendGratuitousArp,
+                value: wolSendGratuitousArp,
                 activeTrackColor: palette.primary.withValues(alpha: 0.5),
                 activeThumbColor: palette.primary,
                 onChanged: (enabled) {
@@ -1250,16 +1197,21 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
         .length;
 
     final String q = _historyQuery.trim().toLowerCase();
-    final List<ActivityHistoryEntry> filtered = q.isEmpty
-        ? wolEntries
-        : wolEntries
-              .where((e) {
-                final hay =
-                    '${e.hostName} ${e.hostIp} ${e.mac} ${e.title} ${e.detail} ${e.status} ${e.meta['broadcastIp'] ?? ''} ${e.meta['port'] ?? ''}'
-                        .toLowerCase();
-                return hay.contains(q);
-              })
-              .toList(growable: false);
+    final List<ActivityHistoryEntry> filtered = wolEntries
+        .where((e) {
+          if (_historyStatusFilter == 'sent' && e.status == 'failed') {
+            return false;
+          }
+          if (_historyStatusFilter == 'failed' && e.status != 'failed') {
+            return false;
+          }
+          if (q.isEmpty) return true;
+          final hay =
+              '${e.hostName} ${e.hostIp} ${e.mac} ${e.title} ${e.detail} ${e.status} ${e.meta['broadcastIp'] ?? ''} ${e.meta['port'] ?? ''}'
+                  .toLowerCase();
+          return hay.contains(q);
+        })
+        .toList(growable: false);
 
     return _buildGlassCard(
       context,
@@ -1304,16 +1256,37 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                 context,
                 label: 'Total $totalCount',
                 color: palette.primary,
+                selected: _historyStatusFilter == null,
+                onTap: () {
+                  _hapticTap();
+                  setState(() => _historyStatusFilter = null);
+                },
               ),
               _statPill(
                 context,
                 label: 'Sent $sentCount',
                 color: palette.success,
+                selected: _historyStatusFilter == 'sent',
+                onTap: () {
+                  _hapticTap();
+                  setState(
+                    () => _historyStatusFilter =
+                        _historyStatusFilter == 'sent' ? null : 'sent',
+                  );
+                },
               ),
               _statPill(
                 context,
                 label: 'Failed $failedCount',
                 color: failedCount > 0 ? palette.accent : palette.textSecondary,
+                selected: _historyStatusFilter == 'failed',
+                onTap: () {
+                  _hapticTap();
+                  setState(
+                    () => _historyStatusFilter =
+                        _historyStatusFilter == 'failed' ? null : 'failed',
+                  );
+                },
               ),
             ],
           ),
@@ -1391,6 +1364,20 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
                       fontSize: context.fluidFont(10.5),
                     ),
                   ),
+                  if (wolEntries.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        _historySearchController.clear();
+                        setState(() {
+                          _historyQuery = '';
+                          _historyStatusFilter = null;
+                        });
+                      },
+                      icon: const Icon(Icons.clear_all_rounded, size: 15),
+                      label: const Text('Reset Filter'),
+                    ),
+                  ],
                 ],
               ),
             )
@@ -1600,14 +1587,23 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
     BuildContext context, {
     required String label,
     required Color color,
+    bool selected = false,
+    VoidCallback? onTap,
   }) {
     final palette = context.palette;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+    final Widget pill = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: palette.isDaylight ? 0.10 : 0.16),
+        color: color.withValues(
+          alpha: selected
+              ? (palette.isDaylight ? 0.18 : 0.28)
+              : (palette.isDaylight ? 0.09 : 0.14),
+        ),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
+        border: Border.all(
+          color: color.withValues(alpha: selected ? 0.72 : 0.35),
+          width: selected ? 1.4 : 1.0,
+        ),
       ),
       child: Text(
         label,
@@ -1617,6 +1613,15 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
           fontSize: context.fluidFont(10),
           fontWeight: FontWeight.w800,
         ),
+      ),
+    );
+    if (onTap == null) return pill;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: pill,
       ),
     );
   }
@@ -1641,6 +1646,158 @@ class _WolHubPanelState extends ConsumerState<WolHubPanel> {
           fontWeight: FontWeight.w600,
         ),
       ),
+    );
+  }
+}
+
+class _WolCustomPortDialog extends StatefulWidget {
+  final int initialPort;
+
+  const _WolCustomPortDialog({required this.initialPort});
+
+  @override
+  State<_WolCustomPortDialog> createState() => _WolCustomPortDialogState();
+}
+
+class _WolCustomPortDialogState extends State<_WolCustomPortDialog> {
+  late final TextEditingController _ctrl;
+  String? _errorMsg;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialPort.toString());
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return AlertDialog(
+      backgroundColor: palette.surfaceElevated,
+      title: const Text('Custom WoL UDP Port'),
+      content: TextField(
+        key: const ValueKey('wol-custom-port-input'),
+        controller: _ctrl,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(
+          labelText: 'UDP Port (1 - 65535)',
+          hintText: '9',
+          errorText: _errorMsg,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: palette.primary,
+            foregroundColor: palette.onPrimary,
+          ),
+          onPressed: () {
+            final parsed = int.tryParse(_ctrl.text.trim());
+            if (!NetworkValidators.isValidPort(parsed)) {
+              setState(() => _errorMsg = 'Enter a valid port (1 - 65535)');
+              return;
+            }
+            Navigator.of(context).pop(parsed);
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _WolBroadcastOverrideDialog extends StatefulWidget {
+  final String initialOverride;
+
+  const _WolBroadcastOverrideDialog({required this.initialOverride});
+
+  @override
+  State<_WolBroadcastOverrideDialog> createState() =>
+      _WolBroadcastOverrideDialogState();
+}
+
+class _WolBroadcastOverrideDialogState
+    extends State<_WolBroadcastOverrideDialog> {
+  late final TextEditingController _ctrl;
+  String? _errorMsg;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialOverride);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return AlertDialog(
+      backgroundColor: palette.surfaceElevated,
+      title: const Text('Broadcast IP Override'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Leave blank to use automatic global (255.255.255.255) + directed /24 subnet broadcast.',
+            style: TextStyle(fontSize: 12, color: palette.textSecondary),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            key: const ValueKey('wol-custom-broadcast-input'),
+            controller: _ctrl,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: 'Broadcast IPv4 Address',
+              hintText: '192.168.1.255',
+              errorText: _errorMsg,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(''),
+          child: const Text('Auto Subnet'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: palette.primary,
+            foregroundColor: palette.onPrimary,
+          ),
+          onPressed: () {
+            final trimmed = _ctrl.text.trim();
+            if (trimmed.isNotEmpty && !NetworkValidators.isValidIpv4(trimmed)) {
+              setState(
+                () => _errorMsg =
+                    'Enter a valid IPv4 address (e.g. 192.168.1.255)',
+              );
+              return;
+            }
+            Navigator.of(context).pop(trimmed);
+          },
+          child: const Text('Apply'),
+        ),
+      ],
     );
   }
 }

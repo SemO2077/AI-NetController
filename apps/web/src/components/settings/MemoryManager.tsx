@@ -13,10 +13,13 @@ import {
   AlertTriangle,
   Search,
   X,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { HostDevice } from '../../types';
 import { useTranslation } from '../../i18n/useTranslation';
 import { triggerHapticFeedback } from '../../services/hapticService';
+import { copyToClipboard } from '../../utils/clipboard';
 import { SPRING_BUBBLY, SPRING_POP } from '../../utils/springPhysics';
 
 interface MemoryManagerProps {
@@ -102,14 +105,14 @@ export function localizeRuleText(rule: string, isBg: boolean): string {
   return rule;
 }
 
-export const MemoryManager: React.FC<MemoryManagerProps> = ({
+const MemoryManagerComponent: React.FC<MemoryManagerProps> = ({
   hosts,
   onUpdateInstructions,
 }) => {
   const { language } = useTranslation();
   const isBg = language === 'bg';
 
-    const [selectedHostId, setSelectedHostId] = useState<string>(hosts[0]?.id || '');
+  const [selectedHostId, setSelectedHostId] = useState<string>(hosts[0]?.id || '');
   useEffect(() => {
     if (hosts.length > 0 && (!selectedHostId || !hosts.some((h) => h.id === selectedHostId))) {
       setSelectedHostId(hosts[0].id);
@@ -123,8 +126,12 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
   const [ruleSearch, setRuleSearch] = useState('');
   const [confirmClearRam, setConfirmClearRam] = useState(false);
   const [savedFeedback, setSavedFeedback] = useState(false);
+  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const feedbackTimerRef = useRef<number | null>(null);
+  const duplicateTimerRef = useRef<number | null>(null);
+  const copiedTimerRef = useRef<number | null>(null);
   const onUpdateInstructionsRef = useRef(onUpdateInstructions);
   onUpdateInstructionsRef.current = onUpdateInstructions;
 
@@ -134,6 +141,14 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
         window.clearTimeout(feedbackTimerRef.current);
         feedbackTimerRef.current = null;
       }
+      if (duplicateTimerRef.current !== null) {
+        window.clearTimeout(duplicateTimerRef.current);
+        duplicateTimerRef.current = null;
+      }
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -141,6 +156,7 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
     if (!selectedHostId || typeof fetch !== 'function') return;
     const controller = new AbortController();
     setSyncError(null);
+    setConfirmClearRam(false);
     fetch(`/api/memory/${encodeURIComponent(selectedHostId)}`, {
       credentials: 'include',
       signal: controller.signal,
@@ -174,6 +190,40 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
       feedbackTimerRef.current = null;
       setSavedFeedback(false);
     }, 2200);
+  };
+
+  const showDuplicateNotice = (msg: string) => {
+    setDuplicateNotice(msg);
+    if (duplicateTimerRef.current !== null) {
+      window.clearTimeout(duplicateTimerRef.current);
+    }
+    duplicateTimerRef.current = window.setTimeout(() => {
+      duplicateTimerRef.current = null;
+      setDuplicateNotice(null);
+    }, 2400);
+  };
+
+  const handleCopyText = (key: string, text: string) => {
+    if (!text) return;
+    triggerHapticFeedback('light');
+    copyToClipboard(text);
+    setCopiedKey(key);
+    if (copiedTimerRef.current !== null) {
+      window.clearTimeout(copiedTimerRef.current);
+    }
+    copiedTimerRef.current = window.setTimeout(() => {
+      copiedTimerRef.current = null;
+      setCopiedKey(null);
+    }, 1800);
+  };
+
+  const hasMatchingRule = (list: string[], candidate: string) => {
+    const norm = candidate.trim().toLowerCase();
+    return list.some(
+      (r) =>
+        r.trim().toLowerCase() === norm ||
+        localizeRuleText(r, isBg).trim().toLowerCase() === norm
+    );
   };
 
   const persistMemoryUpdate = async (
@@ -213,21 +263,33 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
 
   const handleAddPersistent = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPersistentRule.trim() || !selectedHost) return;
+    const cleaned = newPersistentRule.trim();
+    if (!cleaned || !selectedHost) return;
+    if (hasMatchingRule(persistentRules, cleaned)) {
+      triggerHapticFeedback('warning');
+      showDuplicateNotice(
+        isBg ? 'Това постоянно правило вече съществува.' : 'This persistent rule already exists.'
+      );
+      return;
+    }
     triggerHapticFeedback('medium');
-    const updated = [...persistentRules, newPersistentRule.trim()];
+    const updated = [...persistentRules, cleaned];
     setNewPersistentRule('');
+    setDuplicateNotice(null);
     void persistMemoryUpdate(selectedHost.id, 'persistent', updated);
   };
 
   const handleAddPresetRule = (type: 'persistent' | 'session', text: string) => {
     if (!selectedHost) return;
-    triggerHapticFeedback('light');
     const currentList = type === 'persistent' ? persistentRules : sessionRules;
-    const alreadyExists = currentList.some(
-      (r) => localizeRuleText(r, isBg).toLowerCase() === text.toLowerCase()
-    );
-    if (alreadyExists) return;
+    if (hasMatchingRule(currentList, text)) {
+      showDuplicateNotice(
+        isBg ? 'Шаблонът вече е добавен за този хост.' : 'Template is already active for this host.'
+      );
+      return;
+    }
+    triggerHapticFeedback('light');
+    setDuplicateNotice(null);
     void persistMemoryUpdate(selectedHost.id, type, [...currentList, text]);
   };
 
@@ -240,10 +302,19 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
 
   const handleAddSession = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newSessionRule.trim() || !selectedHost) return;
+    const cleaned = newSessionRule.trim();
+    if (!cleaned || !selectedHost) return;
+    if (hasMatchingRule(sessionRules, cleaned)) {
+      triggerHapticFeedback('warning');
+      showDuplicateNotice(
+        isBg ? 'Тази сесийна инструкция вече е в RAM.' : 'This session instruction is already in RAM.'
+      );
+      return;
+    }
     triggerHapticFeedback('medium');
-    const updated = [...sessionRules, newSessionRule.trim()];
+    const updated = [...sessionRules, cleaned];
     setNewSessionRule('');
+    setDuplicateNotice(null);
     void persistMemoryUpdate(selectedHost.id, 'session', updated);
   };
 
@@ -347,14 +418,14 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
         </div>
       </div>
 
-      {/* Sync Toast Banner */}
+      {/* Sync / Duplicate / Error Toast Banners */}
       <AnimatePresence>
         {savedFeedback && (
           <motion.div
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            className="p-3 bg-emerald-500/14 border border-emerald-500/35 rounded-2xl text-emerald-400 text-xs font-medium flex items-center gap-2"
+            className="p-3 bg-emerald-500/14 border border-emerald-500/35 rounded-2xl text-emerald-600 dark:text-emerald-400 text-xs font-medium flex items-center gap-2"
           >
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             <span>
@@ -364,15 +435,46 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
             </span>
           </motion.div>
         )}
+        {duplicateNotice && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className="p-3 bg-amber-500/14 border border-amber-500/35 rounded-2xl text-amber-700 dark:text-amber-300 text-xs font-medium flex items-center justify-between gap-2"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{duplicateNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDuplicateNotice(null)}
+              className="p-1 ink-muted hover:ink-primary cursor-pointer"
+              aria-label={isBg ? 'Затвори' : 'Dismiss'}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
+        )}
         {syncError && (
           <motion.div
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            className="p-3 bg-amber-500/14 border border-amber-500/35 rounded-2xl text-amber-400 text-xs font-medium flex items-center gap-2"
+            className="p-3 bg-amber-500/14 border border-amber-500/35 rounded-2xl text-amber-700 dark:text-amber-400 text-xs font-medium flex items-center justify-between gap-2"
           >
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <span>{syncError}</span>
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{syncError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSyncError(null)}
+              className="p-1 ink-muted hover:ink-primary cursor-pointer"
+              aria-label={isBg ? 'Затвори' : 'Dismiss'}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -442,11 +544,17 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
         </div>
 
         <div className="relative sm:w-52 shrink-0">
-          <Search className="w-3.5 h-3.5 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <Search className="w-3.5 h-3.5 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none z-10" />
           <input
             type="text"
             value={ruleSearch}
             onChange={(e) => setRuleSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && ruleSearch) {
+                e.stopPropagation();
+                setRuleSearch('');
+              }
+            }}
             placeholder={isBg ? 'Филтрирай правила...' : 'Filter rules...'}
             className="w-full h-10 pl-9 pr-8 rounded-full glass-liquid-subtle text-xs ink-primary placeholder:text-[var(--ink-secondary)] placeholder:opacity-80 focus:border-cyan-400 focus:outline-none"
           />
@@ -454,7 +562,8 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
             <button
               type="button"
               onClick={() => setRuleSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer"
+              aria-label={isBg ? 'Изчисти филтъра' : 'Clear filter'}
+              className="absolute right-3 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer z-10"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -465,7 +574,7 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
       {/* 3. Active Tab Content Panel */}
       {activeTab === 'persistent' ? (
         <div className="rounded-[24px] glass-liquid-subtle p-4 sm:p-5 space-y-4 w-full min-w-0">
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-white/[0.08]">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--surface-border-subtle)]">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 squircle-badge squircle-emerald flex items-center justify-center shrink-0">
                 <ShieldCheck className="w-4 h-4" />
@@ -476,9 +585,39 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
                   : 'Persistent System Rules'}
               </h3>
             </div>
-            <span className="text-[10.5px] bg-emerald-500/14 text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/35 font-mono font-bold shrink-0">
-              config.json
-            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {persistentRules.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleCopyText(
+                      'all-persistent',
+                      persistentRules.map((r, i) => `${i + 1}. ${localizeRuleText(r, isBg)}`).join('\n')
+                    )
+                  }
+                  className="px-2.5 py-1 rounded-full liquid-control-pill text-[11px] font-semibold ink-secondary hover:ink-primary flex items-center gap-1 cursor-pointer"
+                  title={isBg ? 'Копирай всички правила' : 'Copy all rules'}
+                >
+                  {copiedKey === 'all-persistent' ? (
+                    <Check className="w-3 h-3 text-emerald-400" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                  <span>
+                    {copiedKey === 'all-persistent'
+                      ? isBg
+                        ? 'Копирани'
+                        : 'Copied'
+                      : isBg
+                      ? 'Копирай всички'
+                      : 'Copy All'}
+                  </span>
+                </button>
+              )}
+              <span className="text-[10.5px] bg-emerald-500/14 text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/35 font-mono font-bold shrink-0">
+                config.json
+              </span>
+            </div>
           </div>
 
           <p className="text-xs ink-secondary leading-relaxed">
@@ -494,7 +633,10 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
             <input
               type="text"
               value={newPersistentRule}
-              onChange={(e) => setNewPersistentRule(e.target.value)}
+              onChange={(e) => {
+                setNewPersistentRule(e.target.value);
+                if (duplicateNotice) setDuplicateNotice(null);
+              }}
               placeholder={
                 isBg
                   ? 'Ново постоянно правило (напр. Браузър по подразбиране е Brave)...'
@@ -516,65 +658,106 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
 
           <div className="space-y-2 max-h-60 overflow-y-auto pr-0.5 bouncy-scroll">
             {filteredPersistent.length === 0 ? (
-              <div className="text-xs ink-muted py-6 text-center rounded-2xl liquid-terminal-entry border border-dashed border-white/[0.15]">
-                {ruleQ
-                  ? isBg
-                    ? 'Няма съвпадащи правила.'
-                    : 'No rules match your filter.'
-                  : isBg
-                  ? 'Няма конфигурирани постоянни правила за този хост.'
-                  : 'No persistent rules configured for this host yet.'}
-              </div>
-            ) : (
-              filteredPersistent.map(({ origIdx, localized }) => (
-                <div
-                  key={origIdx}
-                  className="flex items-center justify-between gap-3 p-3 liquid-terminal-entry rounded-2xl text-xs ink-primary transition"
-                >
-                  <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                    <span className="w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                      {origIdx + 1}
-                    </span>
-                    <span className="leading-relaxed break-words min-w-0">{localized}</span>
-                  </div>
+              <div className="text-xs ink-muted py-6 px-4 text-center rounded-2xl liquid-terminal-entry border border-dashed border-[var(--surface-border-subtle)] space-y-2">
+                <div>
+                  {ruleQ
+                    ? isBg
+                      ? 'Няма съвпадащи правила.'
+                      : 'No rules match your filter.'
+                    : isBg
+                    ? 'Няма конфигурирани постоянни правила за този хост.'
+                    : 'No persistent rules configured for this host yet.'}
+                </div>
+                {ruleQ && (
                   <button
                     type="button"
-                    onClick={() => handleRemovePersistent(origIdx)}
-                    className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center text-rose-400 shrink-0 cursor-pointer"
-                    title={isBg ? 'Изтрий правило' : 'Delete rule'}
-                    aria-label={isBg ? 'Изтрий правило' : 'Delete rule'}
+                    onClick={() => setRuleSearch('')}
+                    className="px-3 py-1 rounded-full liquid-control-pill text-[11px] font-semibold ink-primary cursor-pointer"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    {isBg ? 'Изчисти филтъра' : 'Reset Filter'}
                   </button>
-                </div>
-              ))
+                )}
+              </div>
+            ) : (
+              filteredPersistent.map(({ origIdx, localized }) => {
+                const rowCopyKey = `p-${origIdx}`;
+                return (
+                  <div
+                    key={origIdx}
+                    className="flex items-center justify-between gap-2.5 p-3 liquid-terminal-entry rounded-2xl text-xs ink-primary transition"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                      <span className="w-5 h-5 rounded-full bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                        {origIdx + 1}
+                      </span>
+                      <span className="leading-relaxed break-words min-w-0">{localized}</span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText(rowCopyKey, localized)}
+                        className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center ink-secondary hover:ink-primary shrink-0 cursor-pointer"
+                        title={isBg ? 'Копирай правило' : 'Copy rule'}
+                        aria-label={isBg ? 'Копирай правило' : 'Copy rule'}
+                      >
+                        {copiedKey === rowCopyKey ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemovePersistent(origIdx)}
+                        className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center text-rose-400 shrink-0 cursor-pointer"
+                        title={isBg ? 'Изтрий правило' : 'Delete rule'}
+                        aria-label={isBg ? 'Изтрий правило' : 'Delete rule'}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
 
           {/* 1-Tap Quick Rule Templates */}
-          <div className="pt-3 border-t border-white/[0.08] space-y-2">
+          <div className="pt-3 border-t border-[var(--surface-border-subtle)] space-y-2">
             <div className="flex items-center gap-1.5 text-[11px] font-display font-bold text-emerald-400">
               <Sparkles className="w-3.5 h-3.5" />
               <span>{isBg ? 'Бързи шаблони с 1 клик:' : '1-Tap Quick Rule Templates:'}</span>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {persistentPresets.map((preset, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleAddPresetRule('persistent', preset)}
-                  className="text-left px-3 py-1.5 rounded-full liquid-control-pill text-[11px] ink-primary transition cursor-pointer flex items-center gap-1.5"
-                >
-                  <Plus className="w-3 h-3 text-emerald-400 shrink-0" />
-                  <span className="line-clamp-1">{preset}</span>
-                </button>
-              ))}
+              {persistentPresets.map((preset, idx) => {
+                const isAdded = hasMatchingRule(persistentRules, preset);
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    disabled={isAdded}
+                    onClick={() => handleAddPresetRule('persistent', preset)}
+                    className={`text-left px-3 py-1.5 rounded-full text-[11px] transition flex items-center gap-1.5 ${
+                      isAdded
+                        ? 'bg-emerald-500/14 border border-emerald-500/35 text-emerald-600 dark:text-emerald-300 opacity-80 cursor-default'
+                        : 'liquid-control-pill ink-primary cursor-pointer'
+                    }`}
+                  >
+                    {isAdded ? (
+                      <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                    ) : (
+                      <Plus className="w-3 h-3 text-emerald-400 shrink-0" />
+                    )}
+                    <span className="line-clamp-1">{preset}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
       ) : (
         <div className="rounded-[24px] glass-liquid-subtle p-4 sm:p-5 space-y-4 w-full min-w-0">
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-white/[0.08]">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--surface-border-subtle)]">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 squircle-badge squircle-violet flex items-center justify-center shrink-0">
                 <Cpu className="w-4 h-4" />
@@ -583,7 +766,35 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
                 {isBg ? 'Сесийни инструкции (RAM)' : 'Session Instructions (RAM)'}
               </h3>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+              {sessionRules.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleCopyText(
+                      'all-session',
+                      sessionRules.map((r, i) => `${i + 1}. ${localizeRuleText(r, isBg)}`).join('\n')
+                    )
+                  }
+                  className="px-2.5 py-1 rounded-full liquid-control-pill text-[11px] font-semibold ink-secondary hover:ink-primary flex items-center gap-1 cursor-pointer"
+                  title={isBg ? 'Копирай всички инструкции' : 'Copy all instructions'}
+                >
+                  {copiedKey === 'all-session' ? (
+                    <Check className="w-3 h-3 text-emerald-400" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                  <span>
+                    {copiedKey === 'all-session'
+                      ? isBg
+                        ? 'Копирани'
+                        : 'Copied'
+                      : isBg
+                      ? 'Копирай всички'
+                      : 'Copy All'}
+                  </span>
+                </button>
+              )}
               <span className="text-[10.5px] bg-violet-500/14 text-violet-300 px-2.5 py-0.5 rounded-full border border-violet-400/35 font-mono font-bold">
                 {isBg ? 'Само в RAM' : 'RAM Only'}
               </span>
@@ -634,7 +845,10 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
             <input
               type="text"
               value={newSessionRule}
-              onChange={(e) => setNewSessionRule(e.target.value)}
+              onChange={(e) => {
+                setNewSessionRule(e.target.value);
+                if (duplicateNotice) setDuplicateNotice(null);
+              }}
               placeholder={
                 isBg
                   ? 'Нова временна инструкция (напр. Не питай за потвърждение при малки ъпдейти)...'
@@ -656,58 +870,99 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
 
           <div className="space-y-2 max-h-60 overflow-y-auto pr-0.5 bouncy-scroll">
             {filteredSession.length === 0 ? (
-              <div className="text-xs ink-muted py-6 text-center rounded-2xl liquid-terminal-entry border border-dashed border-white/[0.15]">
-                {ruleQ
-                  ? isBg
-                    ? 'Няма съвпадащи инструкции.'
-                    : 'No instructions match your filter.'
-                  : isBg
-                  ? 'Няма активни сесийни инструкции в RAM паметта.'
-                  : 'No active session instructions in RAM.'}
-              </div>
-            ) : (
-              filteredSession.map(({ origIdx, localized }) => (
-                <div
-                  key={origIdx}
-                  className="flex items-center justify-between gap-3 p-3 liquid-terminal-entry rounded-2xl text-xs ink-primary transition"
-                >
-                  <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                    <span className="w-5 h-5 rounded-full bg-violet-500/15 border border-violet-400/35 text-violet-300 font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                      {origIdx + 1}
-                    </span>
-                    <span className="leading-relaxed break-words min-w-0">{localized}</span>
-                  </div>
+              <div className="text-xs ink-muted py-6 px-4 text-center rounded-2xl liquid-terminal-entry border border-dashed border-[var(--surface-border-subtle)] space-y-2">
+                <div>
+                  {ruleQ
+                    ? isBg
+                      ? 'Няма съвпадащи инструкции.'
+                      : 'No instructions match your filter.'
+                    : isBg
+                    ? 'Няма активни сесийни инструкции в RAM паметта.'
+                    : 'No active session instructions in RAM.'}
+                </div>
+                {ruleQ && (
                   <button
                     type="button"
-                    onClick={() => handleRemoveSession(origIdx)}
-                    className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center text-rose-400 shrink-0 cursor-pointer"
-                    title={isBg ? 'Изтрий инструкция' : 'Delete instruction'}
-                    aria-label={isBg ? 'Изтрий инструкция' : 'Delete instruction'}
+                    onClick={() => setRuleSearch('')}
+                    className="px-3 py-1 rounded-full liquid-control-pill text-[11px] font-semibold ink-primary cursor-pointer"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    {isBg ? 'Изчисти филтъра' : 'Reset Filter'}
                   </button>
-                </div>
-              ))
+                )}
+              </div>
+            ) : (
+              filteredSession.map(({ origIdx, localized }) => {
+                const rowCopyKey = `s-${origIdx}`;
+                return (
+                  <div
+                    key={origIdx}
+                    className="flex items-center justify-between gap-2.5 p-3 liquid-terminal-entry rounded-2xl text-xs ink-primary transition"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                      <span className="w-5 h-5 rounded-full bg-violet-500/15 border border-violet-400/35 text-violet-300 font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                        {origIdx + 1}
+                      </span>
+                      <span className="leading-relaxed break-words min-w-0">{localized}</span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText(rowCopyKey, localized)}
+                        className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center ink-secondary hover:ink-primary shrink-0 cursor-pointer"
+                        title={isBg ? 'Копирай инструкция' : 'Copy instruction'}
+                        aria-label={isBg ? 'Копирай инструкция' : 'Copy instruction'}
+                      >
+                        {copiedKey === rowCopyKey ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSession(origIdx)}
+                        className="w-8 h-8 rounded-full liquid-control-pill flex items-center justify-center text-rose-400 shrink-0 cursor-pointer"
+                        title={isBg ? 'Изтрий инструкция' : 'Delete instruction'}
+                        aria-label={isBg ? 'Изтрий инструкция' : 'Delete instruction'}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
 
-          <div className="pt-3 border-t border-white/[0.08] space-y-2">
+          <div className="pt-3 border-t border-[var(--surface-border-subtle)] space-y-2">
             <div className="flex items-center gap-1.5 text-[11px] font-display font-bold text-violet-300">
               <Sparkles className="w-3.5 h-3.5" />
               <span>{isBg ? 'Бързи сесийни шаблони:' : '1-Tap Session Templates:'}</span>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {sessionPresets.map((preset, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleAddPresetRule('session', preset)}
-                  className="text-left px-3 py-1.5 rounded-full liquid-control-pill text-[11px] ink-primary transition cursor-pointer flex items-center gap-1.5"
-                >
-                  <Plus className="w-3 h-3 text-violet-300 shrink-0" />
-                  <span className="line-clamp-1">{preset}</span>
-                </button>
-              ))}
+              {sessionPresets.map((preset, idx) => {
+                const isAdded = hasMatchingRule(sessionRules, preset);
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    disabled={isAdded}
+                    onClick={() => handleAddPresetRule('session', preset)}
+                    className={`text-left px-3 py-1.5 rounded-full text-[11px] transition flex items-center gap-1.5 ${
+                      isAdded
+                        ? 'bg-violet-500/14 border border-violet-400/35 text-violet-600 dark:text-violet-300 opacity-80 cursor-default'
+                        : 'liquid-control-pill ink-primary cursor-pointer'
+                    }`}
+                  >
+                    {isAdded ? (
+                      <Check className="w-3 h-3 text-violet-400 shrink-0" />
+                    ) : (
+                      <Plus className="w-3 h-3 text-violet-300 shrink-0" />
+                    )}
+                    <span className="line-clamp-1">{preset}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -715,4 +970,6 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({
     </div>
   );
 };
+
+export const MemoryManager = React.memo(MemoryManagerComponent);
 

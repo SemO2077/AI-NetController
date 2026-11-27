@@ -390,7 +390,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
         ? `Налични са ${availableAiUpdates} AI актуализации и ${availableDaemonUpdates} обновления за хост демона.`
         : `${availableAiUpdates} AI Model updates and ${availableDaemonUpdates} Host Daemon updates available.`;
       badgeColor =
-        'bg-[var(--accent-primary)]/15 text-[var(--accent-primary)] border-[var(--accent-primary)]/35';
+        'bg-[var(--theme-accent)]/15 text-[var(--theme-accent)] border-[var(--theme-accent)]/35';
     }
 
     return {
@@ -417,8 +417,6 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
     }
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose, isUpdatingAll, isCheckingAll]);
-
-  if (!isOpen) return null;
 
   const runServerCheck = async (
     scope: 'all' | 'ai_engine' | 'host_daemon',
@@ -723,8 +721,13 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
   const aiModelsCount = components.filter((c) => c.category === 'ai_model').length;
 
   return (
+    <AnimatePresence>
+      {isOpen && (
     <div
       id="system-update-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label={isBg ? 'Център за системни и AI обновления' : 'System & AI Update Center'}
       onClick={(e) => {
         if (e.target === e.currentTarget && !isUpdatingAll && !isCheckingAll) {
           triggerHapticFeedback('light');
@@ -743,10 +746,10 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
         className="w-full max-w-5xl glass-liquid-modal rounded-[28px] flex flex-col max-h-[92dvh] overflow-hidden"
       >
         {/* Top Accent Specular Bar */}
-        <div className="h-1 w-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)] shrink-0" />
+        <div className="h-1 w-full bg-gradient-to-r from-[var(--theme-accent)] via-[var(--theme-secondary)] to-[var(--theme-tertiary)] shrink-0" />
 
         {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-[var(--glass-border)] flex flex-col gap-3 shrink-0">
+        <div className="p-4 sm:p-5 border-b border-[var(--surface-border-subtle)] flex flex-col gap-3 shrink-0">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3 min-w-0 flex-1">
               <div className="w-10 h-10 squircle-badge squircle-hero shrink-0 mt-0.5">
@@ -761,7 +764,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                       ? 'Център за системни и AI обновления'
                       : 'System & AI Update Center'}
                   </h2>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--accent-primary)]/14 text-[var(--accent-primary)] border border-[var(--accent-primary)]/30 shrink-0">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--theme-accent)]/14 text-[var(--theme-accent)] border border-[var(--theme-accent)]/30 shrink-0">
                     v0.90.0 OTA
                   </span>
                 </div>
@@ -815,7 +818,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
               className="min-h-[38px] flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full liquid-control-pill ink-primary font-display text-xs font-bold transition cursor-pointer disabled:opacity-50"
             >
               <Search
-                className={`w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0 ${
+                className={`w-3.5 h-3.5 text-[var(--theme-accent)] shrink-0 ${
                   isCheckingAll ? 'animate-spin' : ''
                 }`}
               />
@@ -906,7 +909,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
           {/* 3 Hero KPI Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {/* Card 1: Compatibility */}
-            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] flex flex-col justify-between gap-3 min-w-0">
+            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex flex-col justify-between gap-3 min-w-0">
               <div className="space-y-2 min-w-0">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
@@ -937,16 +940,16 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                   {systemCompatibility.summary}
                 </p>
               </div>
-              <div className="pt-2 border-t border-[var(--glass-border)] flex items-center justify-between gap-2 text-[10.5px] font-mono ink-muted">
+              <div className="pt-2 border-t border-[var(--surface-border-subtle)] flex items-center justify-between gap-2 text-[10.5px] font-mono ink-muted">
                 <span>{isBg ? 'Последна проверка:' : 'Last checked:'}</span>
-                <span className="text-[var(--accent-primary)] font-semibold tabular-nums">
+                <span className="text-[var(--theme-accent)] font-semibold tabular-nums">
                   {lastSystemAuditTime.split(' ')[1] || lastSystemAuditTime}
                 </span>
               </div>
             </div>
 
             {/* Card 2: AI Model Engine */}
-            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] flex flex-col justify-between gap-3 min-w-0">
+            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex flex-col justify-between gap-3 min-w-0">
               <div className="space-y-2 min-w-0">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
@@ -975,7 +978,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                     : 'Click "Check AI" to query local Ollama models and cloud runtime status.'}
                 </p>
               </div>
-              <div className="pt-2 border-t border-[var(--glass-border)] flex items-center justify-between gap-2 flex-wrap">
+              <div className="pt-2 border-t border-[var(--surface-border-subtle)] flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-[10.5px] font-mono ink-muted">
                   {aiModelsCount > 0
                     ? isBg
@@ -1009,7 +1012,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
             </div>
 
             {/* Card 3: Host Daemon */}
-            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] flex flex-col justify-between gap-3 min-w-0">
+            <div className="p-4 rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] flex flex-col justify-between gap-3 min-w-0">
               <div className="space-y-2 min-w-0">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
@@ -1034,7 +1037,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                     : 'Host Daemon is up to date with protocol AI-NET/3.0.'}
                 </p>
               </div>
-              <div className="pt-2 border-t border-[var(--glass-border)] flex items-center justify-between gap-2 flex-wrap">
+              <div className="pt-2 border-t border-[var(--surface-border-subtle)] flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-[10.5px] font-mono ink-muted">
                   {isBg ? 'Job Objects & AEAD' : 'Job Objects & AEAD'}
                 </span>
@@ -1063,7 +1066,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
           </div>
 
           {/* Sliding Pill Category Filters */}
-          <div className="p-1.5 rounded-full glass-liquid-subtle border border-[var(--glass-border)] flex items-center gap-1 overflow-x-auto scrollbar-none">
+          <div className="p-1.5 rounded-full glass-liquid-subtle border border-[var(--surface-border-subtle)] flex items-center gap-1 overflow-x-auto scrollbar-none">
             {[
               {
                 id: 'all',
@@ -1137,8 +1140,8 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                   id={`update-comp-${comp.id}`}
                   className={`p-3.5 sm:p-4 rounded-3xl glass-liquid-subtle border transition-all ${
                     isUpdating
-                      ? 'border-[var(--accent-primary)]/60 shadow-md'
-                      : 'border-[var(--glass-border)] hover:border-[var(--accent-primary)]/40'
+                      ? 'border-[var(--theme-accent)]/60 shadow-md'
+                      : 'border-[var(--surface-border-subtle)] hover:border-[var(--theme-accent)]/40'
                   }`}
                 >
                   <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
@@ -1183,7 +1186,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                           onClick={() =>
                             setExpandedCompId((prev) => (prev === comp.id ? null : comp.id))
                           }
-                          className="inline-flex items-center gap-1 text-[11px] font-display font-semibold text-[var(--accent-primary)] hover:underline cursor-pointer"
+                          className="inline-flex items-center gap-1 text-[11px] font-display font-semibold text-[var(--theme-accent)] hover:underline cursor-pointer"
                         >
                           <span>
                             {isExpanded
@@ -1204,7 +1207,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                     </div>
 
                     {/* Actions */}
-                    <div className="flex items-center justify-end gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[var(--glass-border)]">
+                    <div className="flex items-center justify-end gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[var(--surface-border-subtle)]">
                       <button
                         type="button"
                         onClick={() => handleCheckSingleComponent(comp.id)}
@@ -1213,7 +1216,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                       >
                         <Search
                           className={`w-3 h-3 shrink-0 ${
-                            isTargetChecking ? 'animate-spin text-[var(--accent-primary)]' : 'ink-muted'
+                            isTargetChecking ? 'animate-spin text-[var(--theme-accent)]' : 'ink-muted'
                           }`}
                         />
                         <span>
@@ -1269,25 +1272,25 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                         exit={{ height: 0, opacity: 0 }}
                         className="overflow-hidden"
                       >
-                        <div className="mt-3 pt-3 border-t border-[var(--glass-border)] space-y-2 text-[11px]">
+                        <div className="mt-3 pt-3 border-t border-[var(--surface-border-subtle)] space-y-2 text-[11px]">
                           <div className="flex flex-wrap items-center gap-1.5 font-mono">
-                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--glass-border)] ink-secondary">
+                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--surface-border-subtle)] ink-secondary">
                               {isBg ? 'Текуща:' : 'Current:'}{' '}
                               <strong className="ink-primary">{comp.currentVersion}</strong>
                             </span>
-                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--glass-border)] ink-secondary">
+                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--surface-border-subtle)] ink-secondary">
                               {isBg ? 'Нова:' : 'Latest:'}{' '}
-                              <strong className="text-[var(--accent-primary)]">
+                              <strong className="text-[var(--theme-accent)]">
                                 {comp.latestVersion}
                               </strong>
                             </span>
-                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--glass-border)] ink-secondary">
+                            <span className="px-2.5 py-0.5 rounded-full liquid-terminal-entry border border-[var(--surface-border-subtle)] ink-secondary">
                               {localizedDrift}
                             </span>
                           </div>
                           <p className="ink-secondary">{localizedReq}</p>
                           {comp.releaseNotes && (
-                            <div className="p-2.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] ink-secondary leading-relaxed">
+                            <div className="p-2.5 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] ink-secondary leading-relaxed">
                               {comp.releaseNotes}
                             </div>
                           )}
@@ -1297,9 +1300,9 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                   </AnimatePresence>
 
                   {isUpdating && (
-                    <div className="mt-3 w-full bg-[var(--glass-border)] rounded-full h-2 overflow-hidden">
+                    <div className="mt-3 w-full bg-[var(--surface-border-subtle)] rounded-full h-2 overflow-hidden">
                       <div
-                        className="bg-gradient-to-r from-[var(--accent-primary)] to-[var(--accent-secondary)] h-2 rounded-full transition-all duration-200"
+                        className="bg-gradient-to-r from-[var(--theme-accent)] to-[var(--theme-secondary)] h-2 rounded-full transition-all duration-200"
                         style={{ width: `${comp.progress}%` }}
                       />
                     </div>
@@ -1310,17 +1313,17 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
           </div>
 
           {/* Collapsible Orchestration Audit Log Drawer */}
-          <div className="rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+          <div className="rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] overflow-hidden">
             <button
               type="button"
               onClick={() => {
                 triggerHapticFeedback('light');
                 setShowAuditLog((v) => !v);
               }}
-              className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--glass-surface-hover)] transition cursor-pointer"
+              className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--surface-pill-hover)] transition cursor-pointer"
             >
               <span className="flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                <Terminal className="w-4 h-4 text-[var(--theme-accent)] shrink-0" />
                 <span>
                   {isBg
                     ? 'Журнал на обновленията и Drift анализа'
@@ -1342,10 +1345,10 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden border-t border-[var(--glass-border)]"
+                  className="overflow-hidden border-t border-[var(--surface-border-subtle)]"
                 >
                   <div className="p-3">
-                    <div className="liquid-terminal-entry rounded-xl p-3 max-h-36 overflow-y-auto bouncy-scroll space-y-1 border border-[var(--glass-border)] ink-secondary font-mono text-[10.5px]">
+                    <div className="liquid-terminal-entry rounded-xl p-3 max-h-36 overflow-y-auto bouncy-scroll space-y-1 border border-[var(--surface-border-subtle)] ink-secondary font-mono text-[10.5px]">
                       {updateLogs.slice(-16).map((entry) => (
                         <div key={entry.id} className="leading-snug break-words">
                           {entry.text}
@@ -1360,5 +1363,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
         </div>
       </motion.div>
     </div>
+      )}
+    </AnimatePresence>
   );
 };

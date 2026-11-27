@@ -5,6 +5,23 @@ interface ScreenState {
   setScreenBase64: (url: string | null) => void;
 }
 
+const pendingRevokeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function revokeBlobNow(url: string) {
+  const existing = pendingRevokeTimers.get(url);
+  if (existing) {
+    clearTimeout(existing);
+    pendingRevokeTimers.delete(url);
+  }
+  if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 function scheduleBlobRevoke(url: string | null) {
   if (
     url &&
@@ -12,14 +29,17 @@ function scheduleBlobRevoke(url: string | null) {
     typeof URL !== 'undefined' &&
     typeof URL.revokeObjectURL === 'function'
   ) {
+    if (pendingRevokeTimers.has(url)) return;
     // Delay revocation slightly so in-flight <img> paints complete without ERR_FILE_NOT_FOUND
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      pendingRevokeTimers.delete(url);
       try {
         URL.revokeObjectURL(url);
       } catch {
         // ignore
       }
     }, 1000);
+    pendingRevokeTimers.set(url, timer);
   }
 }
 
@@ -62,5 +82,12 @@ export function getLatestScreenFrame(): ArrayBuffer | null {
 
 export function clearScreenFrames(): void {
   latestFrameBuffer = null;
+  const current = useScreenStore.getState().screenBase64;
   useScreenStore.getState().setScreenBase64(null);
+  if (current && current.startsWith('blob:')) {
+    revokeBlobNow(current);
+  }
+  for (const url of Array.from(pendingRevokeTimers.keys())) {
+    revokeBlobNow(url);
+  }
 }

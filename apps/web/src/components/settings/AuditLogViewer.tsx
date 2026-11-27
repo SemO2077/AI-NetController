@@ -71,7 +71,7 @@ function downloadFile(filename: string, content: string, mime: string) {
   URL.revokeObjectURL(url);
 }
 
-export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
+export const AuditLogViewer: React.FC<AuditLogViewerProps> = React.memo(({
   executionLogs = [],
   onOpenLiveConsole,
 }) => {
@@ -240,13 +240,17 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
   }, [executionLogs, rawStoreLogs, daemonLogs]);
 
   const counts = useMemo(() => {
-    return {
-      total: items.length,
-      command: items.filter((i) => i.category === 'command').length,
-      security: items.filter((i) => i.category === 'security').length,
-      daemon: items.filter((i) => i.category === 'daemon').length,
-      error: items.filter((i) => i.severity === 'error' || i.severity === 'warn').length,
-    };
+    let command = 0;
+    let security = 0;
+    let daemon = 0;
+    let error = 0;
+    for (const i of items) {
+      if (i.category === 'command') command += 1;
+      else if (i.category === 'security') security += 1;
+      else if (i.category === 'daemon') daemon += 1;
+      if (i.severity === 'error' || i.severity === 'warn') error += 1;
+    }
+    return { total: items.length, command, security, daemon, error };
   }, [items]);
 
   const filteredItems = useMemo(() => {
@@ -290,6 +294,26 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
       [headers.join(','), ...rows].join('\n'),
       'text/csv;charset=utf-8'
     );
+  };
+
+  const handleCopyAllFiltered = () => {
+    if (filteredItems.length === 0) return;
+    triggerHapticFeedback('light');
+    const summary = filteredItems
+      .map(
+        (item) =>
+          `[${item.timestamp}] [${item.sourceLabel}] [${item.target}] ${item.title}${
+            item.detail ? `\n${item.detail}` : ''
+          }`
+      )
+      .join('\n\n');
+    copyToClipboard(summary);
+    setCopiedId('__all__');
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = window.setTimeout(() => {
+      copyTimerRef.current = null;
+      setCopiedId((prev) => (prev === '__all__' ? null : prev));
+    }, 1600);
   };
 
   const handleCopyEntry = (item: UnifiedAuditItem) => {
@@ -401,6 +425,25 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
             <>
               <button
                 type="button"
+                onClick={handleCopyAllFiltered}
+                disabled={filteredItems.length === 0}
+                className="h-8.5 px-3 rounded-full liquid-control-pill text-[11px] font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-45"
+                title={isBg ? 'Копирай филтрираните записи' : 'Copy filtered entries'}
+              >
+                {copiedId === '__all__' ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-400" />
+                    <span className="text-emerald-400">{isBg ? 'Копирано' : 'Copied'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-cyan-400" />
+                    <span className="hidden sm:inline">{isBg ? 'Копирай' : 'Copy'}</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => handleExport('csv')}
                 className="h-8.5 px-3 rounded-full liquid-control-pill text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
               >
@@ -459,40 +502,76 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
         </div>
       </div>
 
-      {/* 4 KPI Summary Pills */}
+      {/* 4 Interactive KPI Filter Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-        <div className="rounded-2xl liquid-terminal-entry px-3.5 py-2.5">
+        <button
+          type="button"
+          onClick={() => {
+            triggerHapticFeedback('selection');
+            setCategoryFilter('all');
+          }}
+          className={`text-left rounded-2xl liquid-terminal-entry px-3.5 py-2.5 transition cursor-pointer ${
+            categoryFilter === 'all' ? 'ring-2 ring-[var(--theme-accent)]/50' : 'hover:border-cyan-400/40'
+          }`}
+        >
           <div className="text-[10px] ink-muted font-semibold uppercase tracking-wide">
             {isBg ? 'Общо събития' : 'Total Audited'}
           </div>
           <div className="text-base font-extrabold font-mono ink-primary tabular-nums mt-0.5">
             {counts.total}
           </div>
-        </div>
-        <div className="rounded-2xl liquid-terminal-entry px-3.5 py-2.5 border border-sky-400/25">
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            triggerHapticFeedback('selection');
+            setCategoryFilter('command');
+          }}
+          className={`text-left rounded-2xl liquid-terminal-entry px-3.5 py-2.5 border border-sky-400/25 transition cursor-pointer ${
+            categoryFilter === 'command' ? 'ring-2 ring-sky-400/60' : 'hover:border-sky-400/50'
+          }`}
+        >
           <div className="text-[10px] text-sky-400 font-semibold uppercase tracking-wide">
             {isBg ? 'Shell команди' : 'Shell Commands'}
           </div>
           <div className="text-base font-extrabold font-mono text-sky-400 tabular-nums mt-0.5">
             {counts.command}
           </div>
-        </div>
-        <div className="rounded-2xl liquid-terminal-entry px-3.5 py-2.5 border border-violet-400/25">
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            triggerHapticFeedback('selection');
+            setCategoryFilter('security');
+          }}
+          className={`text-left rounded-2xl liquid-terminal-entry px-3.5 py-2.5 border border-violet-400/25 transition cursor-pointer ${
+            categoryFilter === 'security' ? 'ring-2 ring-violet-400/60' : 'hover:border-violet-400/50'
+          }`}
+        >
           <div className="text-[10px] text-violet-300 font-semibold uppercase tracking-wide">
             {isBg ? 'Сигурност / HITL' : 'Security & HITL'}
           </div>
           <div className="text-base font-extrabold font-mono text-violet-300 tabular-nums mt-0.5">
             {counts.security}
           </div>
-        </div>
-        <div className="rounded-2xl liquid-terminal-entry px-3.5 py-2.5 border border-rose-400/25">
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            triggerHapticFeedback('selection');
+            setCategoryFilter('error');
+          }}
+          className={`text-left rounded-2xl liquid-terminal-entry px-3.5 py-2.5 border border-rose-400/25 transition cursor-pointer ${
+            categoryFilter === 'error' ? 'ring-2 ring-rose-400/60' : 'hover:border-rose-400/50'
+          }`}
+        >
           <div className="text-[10px] text-rose-400 font-semibold uppercase tracking-wide">
             {isBg ? 'Предупреждения' : 'Alerts & Errors'}
           </div>
           <div className="text-base font-extrabold font-mono text-rose-400 tabular-nums mt-0.5">
             {counts.error}
           </div>
-        </div>
+        </button>
       </div>
 
       {/* Filter Pills + Search */}
@@ -541,11 +620,17 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
         </div>
 
         <div className="relative flex-1 min-w-0">
-          <Search className="w-3.5 h-3.5 text-cyan-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <Search className="w-3.5 h-3.5 text-[var(--theme-accent)] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none z-10" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchQuery) {
+                e.preventDefault();
+                setSearchQuery('');
+              }
+            }}
             placeholder={
               isBg
                 ? 'Търси команда, хост, политика или изход...'
@@ -557,7 +642,7 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
             <button
               type="button"
               onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer"
+              className="absolute right-3 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer z-10"
               aria-label="Clear search"
             >
               <X className="w-3.5 h-3.5" />
@@ -569,7 +654,7 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
       {/* Audit Trail Timeline */}
       <div className="rounded-[22px] liquid-terminal-entry divide-y divide-white/[0.08] max-h-[26rem] overflow-y-auto bouncy-scroll">
         {filteredItems.length === 0 ? (
-          <div className="p-8 text-center space-y-2">
+          <div className="p-8 text-center space-y-2.5">
             <div className="w-11 h-11 squircle-badge squircle-violet mx-auto flex items-center justify-center opacity-85">
               <ShieldCheck className="w-5 h-5" />
             </div>
@@ -587,6 +672,18 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
                 ? 'Изпълнени команди, HITL проверки за сигурност и системни събития от PC демона ще се появят тук в реално време.'
                 : 'Executed remote shell commands, HITL approval decisions, and PC host daemon security events will stream here automatically.'}
             </p>
+            {items.length > 0 && (categoryFilter !== 'all' || searchQuery.trim()) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCategoryFilter('all');
+                  setSearchQuery('');
+                }}
+                className="px-3.5 py-1.5 rounded-full liquid-control-pill text-xs font-semibold ink-primary cursor-pointer"
+              >
+                {isBg ? 'Изчисти филтрите' : 'Reset Filters'}
+              </button>
+            )}
           </div>
         ) : (
           filteredItems.map((item) => {
@@ -698,4 +795,5 @@ export const AuditLogViewer: React.FC<AuditLogViewerProps> = ({
       </div>
     </div>
   );
-};
+});
+AuditLogViewer.displayName = 'AuditLogViewer';

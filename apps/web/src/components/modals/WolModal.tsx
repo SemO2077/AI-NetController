@@ -69,6 +69,8 @@ export const WolModal: React.FC<WolModalProps> = ({
   const [mac, setMac] = useState(device?.mac || hosts[0]?.mac || '');
   const [broadcastIp, setBroadcastIp] = useState('255.255.255.255');
   const [port, setPort] = useState(9);
+  const [portInput, setPortInput] = useState('9');
+  const [copiedMac, setCopiedMac] = useState(false);
   const [secureOnPassword, setSecureOnPassword] = useState('');
   const [showAdvancedHex, setShowAdvancedHex] = useState(false);
   const [packet, setPacket] = useState<WolPacketPayload | null>(null);
@@ -95,22 +97,31 @@ export const WolModal: React.FC<WolModalProps> = ({
     };
   }, []);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  const IPV4_REGEX = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 
   // Schedules State
   const [schedules, setSchedules] = useState<WolSchedule[]>(() => externalSchedules || loadWolSchedules());
   const [isAddingSchedule, setIsAddingSchedule] = useState(false);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (isAddingSchedule) {
+          setIsAddingSchedule(false);
+          setEditingScheduleId(null);
+          setFormError(null);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isAddingSchedule, onClose]);
+
   const [recentlyFiredId, setRecentlyFiredId] = useState<string | null>(null);
   const [confirmDeleteScheduleId, setConfirmDeleteScheduleId] = useState<string | null>(null);
   const [confirmRestoreDefaults, setConfirmRestoreDefaults] = useState(false);
@@ -148,14 +159,25 @@ export const WolModal: React.FC<WolModalProps> = ({
     }
   }, [isOpen, initialTab]);
 
+  const isBroadcastIpValid = IPV4_REGEX.test(broadcastIp.trim());
+
   useEffect(() => {
     if (!mac.trim()) {
       setPacket(null);
       setError(null);
       return;
     }
+    if (!isBroadcastIpValid) {
+      setPacket(null);
+      setError(
+        isBg
+          ? 'Невалиден Broadcast IPv4 адрес (напр. 255.255.255.255 или 192.168.1.255).'
+          : 'Invalid Broadcast IPv4 address (e.g. 255.255.255.255 or 192.168.1.255).'
+      );
+      return;
+    }
     try {
-      const generated = generateMagicPacket(mac, broadcastIp, port, secureOnPassword);
+      const generated = generateMagicPacket(mac, broadcastIp.trim(), port, secureOnPassword);
       setPacket(generated);
       setError(null);
     } catch (err: any) {
@@ -179,7 +201,7 @@ export const WolModal: React.FC<WolModalProps> = ({
         setError(null);
       }
     }
-  }, [mac, broadcastIp, port, secureOnPassword, isBg, macTouched]);
+  }, [mac, broadcastIp, isBroadcastIpValid, port, secureOnPassword, isBg, macTouched]);
 
   const persistSchedules = (newSchedules: WolSchedule[]) => {
     setSchedules(newSchedules);
@@ -360,9 +382,19 @@ export const WolModal: React.FC<WolModalProps> = ({
       return;
     }
 
+    const cleanBroadcast = formBroadcastIp.trim() || '255.255.255.255';
+    if (!IPV4_REGEX.test(cleanBroadcast)) {
+      setFormError(
+        isBg
+          ? 'Невалиден Broadcast IPv4 адрес (напр. 192.168.1.255).'
+          : 'Invalid Broadcast IPv4 address (e.g. 192.168.1.255).'
+      );
+      return;
+    }
+
     if (formTargetType === 'custom_mac') {
       try {
-        generateMagicPacket(formTargetMac, formBroadcastIp, formPort);
+        generateMagicPacket(formTargetMac, cleanBroadcast, formPort);
       } catch {
         setFormError(
           isBg
@@ -437,6 +469,23 @@ export const WolModal: React.FC<WolModalProps> = ({
     hosts.find((h) => h.id === selectedDirectHostId) ||
     (selectedDirectHostId === device?.id ? device : null);
 
+  const derivedSubnetBroadcast = (() => {
+    const ipStr = activeDirectHost?.ip || '';
+    const parts = ipStr.split('.');
+    if (parts.length === 4 && IPV4_REGEX.test(ipStr) && ipStr !== '127.0.0.1') {
+      return `${parts[0]}.${parts[1]}.${parts[2]}.255`;
+    }
+    return '192.168.1.255';
+  })();
+
+  const handleCopyMac = () => {
+    if (!mac.trim()) return;
+    triggerHapticFeedback('light');
+    copyToClipboard(mac.trim().toUpperCase());
+    setCopiedMac(true);
+    scheduleTimer(() => setCopiedMac(false), 1600);
+  };
+
   const normalizedMacHex = mac.replace(/[^a-fA-F0-9]/g, '').toUpperCase();
   const isMacValid = normalizedMacHex.length === 12;
   const formattedMacSuggestion = isMacValid
@@ -446,7 +495,12 @@ export const WolModal: React.FC<WolModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center select-none sm:p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={isBg ? 'Събуждане по мрежата (WoL)' : 'Wake-on-LAN Controller'}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center select-none sm:p-4"
+        >
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -639,7 +693,7 @@ export const WolModal: React.FC<WolModalProps> = ({
                             placeholder="00:1A:2B:3C:4D:5E"
                             className="flex-1 min-w-0 min-h-[40px] liquid-terminal-entry rounded-full px-3.5 py-2 text-xs ink-primary font-mono focus:border-cyan-400 focus:outline-none"
                           />
-                          {formattedMacSuggestion && formattedMacSuggestion !== mac && (
+                          {formattedMacSuggestion && formattedMacSuggestion !== mac ? (
                             <button
                               type="button"
                               onClick={() => setMac(formattedMacSuggestion)}
@@ -648,7 +702,21 @@ export const WolModal: React.FC<WolModalProps> = ({
                             >
                               AA:BB
                             </button>
-                          )}
+                          ) : mac.trim() ? (
+                            <button
+                              type="button"
+                              onClick={handleCopyMac}
+                              className="w-10 min-h-[40px] rounded-full liquid-control-pill flex items-center justify-center ink-secondary hover:ink-primary shrink-0 cursor-pointer"
+                              title={isBg ? 'Копирай MAC' : 'Copy MAC'}
+                              aria-label={isBg ? 'Копирай MAC' : 'Copy MAC'}
+                            >
+                              {copiedMac ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                              )}
+                            </button>
+                          ) : null}
                         </div>
                       </div>
 
@@ -662,20 +730,22 @@ export const WolModal: React.FC<WolModalProps> = ({
                             value={broadcastIp}
                             onChange={(e) => setBroadcastIp(e.target.value)}
                             placeholder="255.255.255.255"
-                            className="flex-1 min-w-0 min-h-[40px] liquid-terminal-entry rounded-full px-3.5 py-2 text-xs ink-primary font-mono focus:border-cyan-400 focus:outline-none"
+                            className={`flex-1 min-w-0 min-h-[40px] liquid-terminal-entry rounded-full px-3.5 py-2 text-xs ink-primary font-mono focus:outline-none ${
+                              !isBroadcastIpValid ? 'border-rose-500/70' : 'focus:border-cyan-400'
+                            }`}
                           />
                           <button
                             type="button"
                             onClick={() =>
                               setBroadcastIp(
-                                broadcastIp === '255.255.255.255' ? '192.168.1.255' : '255.255.255.255'
+                                broadcastIp === '255.255.255.255' ? derivedSubnetBroadcast : '255.255.255.255'
                               )
                             }
                             className="px-3 min-h-[40px] rounded-full liquid-control-pill text-[10px] font-mono font-bold text-cyan-400 shrink-0 cursor-pointer"
                             title={
                               isBg
-                                ? 'Превключи между глобален и локален субнет адрес'
-                                : 'Toggle Global / Subnet broadcast'
+                                ? `Превключи между 255.255.255.255 и ${derivedSubnetBroadcast}`
+                                : `Toggle Global / Subnet (${derivedSubnetBroadcast})`
                             }
                           >
                             .255
@@ -684,21 +754,41 @@ export const WolModal: React.FC<WolModalProps> = ({
                       </div>
 
                       <div className="sm:col-span-2">
-                        <label className="block text-[11px] font-semibold ink-secondary mb-1">
-                          {isBg ? 'UDP порт' : 'Port'}
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[11px] font-semibold ink-secondary">
+                            {isBg ? 'UDP порт' : 'Port'}
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = port === 9 ? 7 : 9;
+                              setPort(next);
+                              setPortInput(String(next));
+                            }}
+                            className="text-[10px] font-mono font-bold text-cyan-400 hover:underline cursor-pointer"
+                            title={isBg ? 'Превключи порт 9 / 7' : 'Toggle standard UDP 9 / 7'}
+                          >
+                            {port === 9 ? ':7' : ':9'}
+                          </button>
+                        </div>
                         <input
-                          type="number"
-                          min={1}
-                          max={65535}
-                          value={port}
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={5}
+                          value={portInput}
                           onChange={(e) => {
-                            const parsed = parseInt(e.target.value, 10);
-                            setPort(
-                              Number.isFinite(parsed)
-                                ? Math.min(65535, Math.max(1, parsed))
-                                : 9
-                            );
+                            const digits = e.target.value.replace(/\D/g, '').slice(0, 5);
+                            setPortInput(digits);
+                            const parsed = parseInt(digits, 10);
+                            if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 65535) {
+                              setPort(parsed);
+                            }
+                          }}
+                          onBlur={() => {
+                            const parsed = parseInt(portInput, 10);
+                            const safe = Number.isFinite(parsed) ? Math.min(65535, Math.max(1, parsed)) : 9;
+                            setPort(safe);
+                            setPortInput(String(safe));
                           }}
                           className="w-full min-h-[40px] liquid-terminal-entry rounded-full px-2.5 py-2 text-xs ink-primary font-mono text-center focus:border-cyan-400 focus:outline-none"
                         />
@@ -1127,6 +1217,19 @@ export const WolModal: React.FC<WolModalProps> = ({
 
                   {/* Schedules Cards List */}
                   <div className="space-y-2.5">
+                    {schedules.length === 0 && !isAddingSchedule && (
+                      <div className="rounded-[24px] glass-liquid-subtle p-6 text-center space-y-2">
+                        <Clock className="w-7 h-7 ink-muted mx-auto opacity-70" />
+                        <p className="text-xs font-display font-bold ink-primary">
+                          {isBg ? 'Няма конфигурирани WoL графици' : 'No Wake-on-LAN Schedules Yet'}
+                        </p>
+                        <p className="text-[11px] ink-muted max-w-xs mx-auto">
+                          {isBg
+                            ? 'Създайте нов график за автоматично сутрешно събуждане или възстановете стандартните.'
+                            : 'Create a recurring wake schedule or restore the default lab templates above.'}
+                        </p>
+                      </div>
+                    )}
                     {schedules.map((schedule) => {
                       const localized = localizeWolSchedule(schedule, language);
                       const nextRun = calculateNextRun(schedule, new Date(), language);

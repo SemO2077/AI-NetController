@@ -75,6 +75,7 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
   const [rebuildMessage, setRebuildMessage] = useState<string | null>(null);
   const [showCliDrawer, setShowCliDrawer] = useState(false);
   const [showPatchNotes, setShowPatchNotes] = useState(false);
+  const [fileFilter, setFileFilter] = useState('');
   const timersRef = useRef<Set<number>>(new Set());
 
   const scheduleTimer = useCallback((fn: () => void, ms: number) => {
@@ -194,9 +195,7 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
     return () => controller.abort();
   }, [isOpen]);
 
-  if (!isOpen) return null;
-
-  const filteredSnippets =
+  const categorySnippets =
     selectedCategory === 'all' || selectedCategory === 'releases'
       ? liveSnippets
       : liveSnippets.filter((s) => {
@@ -224,6 +223,15 @@ export const CodeExportModal: React.FC<CodeExportModalProps> = ({ isOpen, onClos
           }
           return true;
         });
+
+  const normalizedFileFilter = fileFilter.trim().toLowerCase();
+  const filteredSnippets = normalizedFileFilter
+    ? categorySnippets.filter(
+        (s) =>
+          s.filename.toLowerCase().includes(normalizedFileFilter) ||
+          s.description.toLowerCase().includes(normalizedFileFilter)
+      )
+    : categorySnippets;
 
   const currentFile =
     filteredSnippets.find((f) => f.filename === activeFilename) ||
@@ -421,7 +429,12 @@ python scripts/publish_release.py --platform all`;
   ];
 
   return (
+    <AnimatePresence>
+      {isOpen && (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={isBg ? 'Бинарни релийзи и сорс код' : 'Release Binaries & Source Code'}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           triggerHapticFeedback('light');
@@ -439,10 +452,10 @@ python scripts/publish_release.py --platform all`;
         className="relative w-full max-w-5xl max-h-[92vh] flex flex-col rounded-[28px] glass-liquid-modal overflow-hidden"
       >
         {/* Specular Top Accent */}
-        <div className="h-1 w-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)] shrink-0" />
+        <div className="h-1 w-full bg-gradient-to-r from-[var(--theme-accent)] via-[var(--theme-secondary)] to-[var(--theme-tertiary)] shrink-0" />
 
         {/* Header Bar */}
-        <div className="px-4 sm:px-6 py-4 border-b border-[var(--glass-border)] flex items-start sm:items-center justify-between gap-2.5 shrink-0">
+        <div className="px-4 sm:px-6 py-4 border-b border-[var(--surface-border-subtle)] flex items-start sm:items-center justify-between gap-2.5 shrink-0">
           <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
             <div className="w-10 h-10 squircle-badge squircle-hero shrink-0">
               <Code2 className="w-5 h-5" />
@@ -456,7 +469,7 @@ python scripts/publish_release.py --platform all`;
                   v0.90.0
                 </span>
                 {rebuildMessage && (
-                  <span className="text-[11px] font-mono text-[var(--accent-primary)] font-semibold">
+                  <span className="text-[11px] font-mono text-[var(--theme-accent)] font-semibold">
                     {rebuildMessage}
                   </span>
                 )}
@@ -508,7 +521,7 @@ python scripts/publish_release.py --platform all`;
         </div>
 
         {/* Sliding Pill Category Bar */}
-        <div className="px-4 sm:px-6 py-2.5 glass-liquid-subtle border-b border-[var(--glass-border)] flex items-center gap-1.5 overflow-x-auto shrink-0 scrollbar-none">
+        <div className="px-4 sm:px-6 py-2.5 glass-liquid-subtle border-b border-[var(--surface-border-subtle)] flex items-center gap-1.5 overflow-x-auto shrink-0 scrollbar-none">
           {navCategories.map((cat) => {
             const Icon = cat.icon;
             const isActive = selectedCategory === cat.id;
@@ -574,7 +587,7 @@ python scripts/publish_release.py --platform all`;
                   download="SHA256SUMS.txt"
                   className="min-h-[36px] px-3 py-1.5 rounded-full liquid-control-pill text-xs font-mono font-semibold ink-primary flex items-center gap-1.5 transition"
                 >
-                  <FileText className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                  <FileText className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                   <span>SHA256SUMS.txt</span>
                 </a>
                 <button
@@ -584,7 +597,7 @@ python scripts/publish_release.py --platform all`;
                   className="min-h-[36px] px-3 py-1.5 rounded-full liquid-control-pill text-xs font-display font-semibold ink-primary flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
                 >
                   <RefreshCw
-                    className={`w-3.5 h-3.5 text-[var(--accent-primary)] ${
+                    className={`w-3.5 h-3.5 text-[var(--theme-accent)] ${
                       isRebuilding ? 'animate-spin' : ''
                     }`}
                   />
@@ -616,7 +629,7 @@ python scripts/publish_release.py --platform all`;
                 return (
                   <div
                     key={art.filename}
-                    className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 flex flex-col justify-between space-y-3 hover:border-[var(--accent-primary)]/45 transition"
+                    className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 flex flex-col justify-between space-y-3 hover:border-[var(--theme-accent)]/45 transition"
                   >
                     <div className="space-y-2.5">
                       <div className="flex items-center justify-between gap-2">
@@ -638,7 +651,7 @@ python scripts/publish_release.py --platform all`;
                       <p className="text-[11px] ink-secondary leading-snug">{art.platform}</p>
                     </div>
 
-                    <div className="space-y-2.5 pt-2.5 border-t border-[var(--glass-border)]">
+                    <div className="space-y-2.5 pt-2.5 border-t border-[var(--surface-border-subtle)]">
                       <div className="flex items-center justify-between text-[10.5px] font-mono ink-muted gap-2">
                         <span className="truncate" title={art.sha256}>
                           SHA256: {art.sha256.slice(0, 12)}…
@@ -651,7 +664,7 @@ python scripts/publish_release.py --platform all`;
                             setCopiedSha(art.filename);
                             scheduleTimer(() => setCopiedSha(null), 1800);
                           }}
-                          className="text-[var(--accent-primary)] font-semibold hover:underline cursor-pointer shrink-0"
+                          className="text-[var(--theme-accent)] font-semibold hover:underline cursor-pointer shrink-0"
                         >
                           {copiedSha === art.filename
                             ? isBg
@@ -683,17 +696,17 @@ python scripts/publish_release.py --platform all`;
             </div>
 
             {/* Collapsible Progressive Disclosure: CI Publish CLI */}
-            <div className="rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+            <div className="rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] overflow-hidden">
               <button
                 type="button"
                 onClick={() => {
                   triggerHapticFeedback('light');
                   setShowCliDrawer((v) => !v);
                 }}
-                className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--glass-surface-hover)] transition cursor-pointer"
+                className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--surface-pill-hover)] transition cursor-pointer"
               >
                 <span className="flex items-center gap-2 min-w-0">
-                  <Terminal className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                  <Terminal className="w-4 h-4 text-[var(--theme-accent)] shrink-0" />
                   <span className="truncate">
                     {isBg
                       ? 'Публикуване в GitHub / GitLab Releases (CLI / CI Pipeline)'
@@ -712,7 +725,7 @@ python scripts/publish_release.py --platform all`;
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: 'auto', opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
-                    className="overflow-hidden border-t border-[var(--glass-border)]"
+                    className="overflow-hidden border-t border-[var(--surface-border-subtle)]"
                   >
                     <div className="p-4 space-y-2.5">
                       <div className="flex justify-end">
@@ -724,7 +737,7 @@ python scripts/publish_release.py --platform all`;
                           {copiedGhCmd ? (
                             <Check className="w-3.5 h-3.5 text-emerald-500" />
                           ) : (
-                            <Copy className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                            <Copy className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                           )}
                           <span>
                             {copiedGhCmd
@@ -737,7 +750,7 @@ python scripts/publish_release.py --platform all`;
                           </span>
                         </button>
                       </div>
-                      <pre className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] font-mono text-[11px] ink-primary overflow-x-auto leading-relaxed">
+                      <pre className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] font-mono text-[11px] ink-primary overflow-x-auto leading-relaxed">
                         <code>{ghReleaseCommands}</code>
                       </pre>
                     </div>
@@ -748,14 +761,14 @@ python scripts/publish_release.py --platform all`;
 
             {/* Collapsible Progressive Disclosure: Official Patch Notes */}
             {patchNotes && (
-              <div className="rounded-2xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+              <div className="rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)] overflow-hidden">
                 <button
                   type="button"
                   onClick={() => {
                     triggerHapticFeedback('light');
                     setShowPatchNotes((v) => !v);
                   }}
-                  className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--glass-surface-hover)] transition cursor-pointer"
+                  className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--surface-pill-hover)] transition cursor-pointer"
                 >
                   <span className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -773,10 +786,10 @@ python scripts/publish_release.py --platform all`;
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
-                      className="overflow-hidden border-t border-[var(--glass-border)]"
+                      className="overflow-hidden border-t border-[var(--surface-border-subtle)]"
                     >
                       <div className="p-4">
-                        <pre className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] font-mono text-[11px] ink-secondary max-h-64 overflow-y-auto bouncy-scroll whitespace-pre-wrap leading-relaxed">
+                        <pre className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] font-mono text-[11px] ink-secondary max-h-64 overflow-y-auto bouncy-scroll whitespace-pre-wrap leading-relaxed">
                           {patchNotes}
                         </pre>
                       </div>
@@ -788,32 +801,59 @@ python scripts/publish_release.py --platform all`;
           </div>
         ) : (
           <>
-            {/* Sub-header File Selector Bar */}
-            <div className="px-4 sm:px-6 py-2 glass-liquid-subtle border-b border-[var(--glass-border)] flex items-center gap-1.5 overflow-x-auto shrink-0 scrollbar-thin">
-              {filteredSnippets.map((file) => (
-                <button
-                  key={file.filename}
-                  type="button"
-                  onClick={() => {
-                    triggerHapticFeedback('light');
-                    setActiveFilename(file.filename);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono transition whitespace-nowrap cursor-pointer border ${
-                    activeFilename === file.filename
-                      ? 'bg-[var(--accent-primary)]/16 text-[var(--accent-primary)] border-[var(--accent-primary)]/40 font-bold'
-                      : 'ink-secondary hover:ink-primary border-transparent hover:bg-[var(--glass-surface-hover)]'
-                  }`}
-                >
-                  <FileCode className="w-3.5 h-3.5 shrink-0" />
-                  <span>{file.filename}</span>
-                </button>
-              ))}
+            {/* Sub-header File Selector Bar + Quick File Search */}
+            <div className="px-4 sm:px-6 py-2 glass-liquid-subtle border-b border-[var(--surface-border-subtle)] flex items-center gap-2 shrink-0">
+              <div className="relative w-36 sm:w-48 shrink-0">
+                <input
+                  type="text"
+                  value={fileFilter}
+                  onChange={(e) => setFileFilter(e.target.value)}
+                  placeholder={isBg ? 'Филтър файлове...' : 'Filter files...'}
+                  className="w-full h-7 pl-2.5 pr-6 rounded-full liquid-terminal-entry border border-[var(--surface-border-subtle)] text-[11px] font-mono ink-primary placeholder:opacity-60 focus:outline-none focus:border-[var(--theme-accent)]"
+                />
+                {fileFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setFileFilter('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 ink-muted hover:ink-primary cursor-pointer"
+                    aria-label="Clear file filter"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto flex-1 scrollbar-none">
+                {filteredSnippets.length === 0 ? (
+                  <span className="text-[11px] font-mono ink-muted px-2">
+                    {isBg ? 'Няма съвпадащи файлове' : 'No matching files'}
+                  </span>
+                ) : (
+                  filteredSnippets.map((file) => (
+                    <button
+                      key={file.filename}
+                      type="button"
+                      onClick={() => {
+                        triggerHapticFeedback('light');
+                        setActiveFilename(file.filename);
+                      }}
+                      className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono transition whitespace-nowrap cursor-pointer border shrink-0 ${
+                        activeFilename === file.filename
+                          ? 'bg-[var(--theme-accent)]/16 text-[var(--theme-accent)] border-[var(--theme-accent)]/40 font-bold'
+                          : 'ink-secondary hover:ink-primary border-transparent hover:bg-[var(--surface-pill-hover)]'
+                      }`}
+                    >
+                      <FileCode className="w-3.5 h-3.5 shrink-0" />
+                      <span>{file.filename}</span>
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
 
             {/* File Metadata & Quick Actions */}
-            <div className="px-4 sm:px-6 py-2.5 border-b border-[var(--glass-border)] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+            <div className="px-4 sm:px-6 py-2.5 border-b border-[var(--surface-border-subtle)] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-2 text-xs min-w-0">
-                <span className="px-2.5 py-0.5 rounded-full bg-[var(--accent-primary)]/15 border border-[var(--accent-primary)]/30 text-[var(--accent-primary)] font-mono text-[10px] font-bold uppercase shrink-0">
+                <span className="px-2.5 py-0.5 rounded-full bg-[var(--theme-accent)]/15 border border-[var(--theme-accent)]/30 text-[var(--theme-accent)] font-mono text-[10px] font-bold uppercase shrink-0">
                   {currentFile.language}
                 </span>
                 <span className="ink-primary font-display font-semibold break-words truncate">
@@ -830,7 +870,7 @@ python scripts/publish_release.py --platform all`;
                   {copied ? (
                     <Check className="w-3.5 h-3.5 text-emerald-500" />
                   ) : (
-                    <Copy className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                    <Copy className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                   )}
                   <span>{copied ? (isBg ? 'Копирано!' : 'Copied!') : isBg ? 'Копирай' : 'Copy'}</span>
                 </button>
@@ -856,7 +896,7 @@ python scripts/publish_release.py --platform all`;
         )}
 
         {/* Footer Info Bar */}
-        <div className="px-4 sm:px-6 py-2.5 glass-liquid-subtle border-t border-[var(--glass-border)] flex items-center justify-between text-[11px] font-mono ink-muted shrink-0">
+        <div className="px-4 sm:px-6 py-2.5 glass-liquid-subtle border-t border-[var(--surface-border-subtle)] flex items-center justify-between text-[11px] font-mono ink-muted shrink-0">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
             <span>
@@ -869,5 +909,7 @@ python scripts/publish_release.py --platform all`;
         </div>
       </motion.div>
     </div>
+      )}
+    </AnimatePresence>
   );
 };

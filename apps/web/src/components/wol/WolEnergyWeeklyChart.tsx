@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useId } from 'react';
 import { motion } from 'motion/react';
 import {
   ResponsiveContainer,
@@ -108,7 +108,7 @@ const WeeklyEnergyTooltip: React.FC<{
   );
 };
 
-export const WolEnergyWeeklyChart: React.FC<WolEnergyWeeklyChartProps> = ({
+const WolEnergyWeeklyChartComponent: React.FC<WolEnergyWeeklyChartProps> = ({
   schedules = [],
   hostCount = 15,
   activeHoursPerDay,
@@ -122,6 +122,9 @@ export const WolEnergyWeeklyChart: React.FC<WolEnergyWeeklyChartProps> = ({
   const isBg = language === 'bg';
   const themeMode = useUIStore((s) => s.themeMode);
   const isLight = themeMode === 'light';
+  const chartUid = useId().replace(/:/g, '');
+  const baselineGradId = `wolBaselineGrad-${chartUid}`;
+  const scheduledGradId = `wolScheduledGrad-${chartUid}`;
 
   const initialScheduledHours = activeHoursPerDay ?? 8;
   const [scheduledDayActiveHours, setScheduledDayActiveHours] = useState<number>(
@@ -405,11 +408,11 @@ export const WolEnergyWeeklyChart: React.FC<WolEnergyWeeklyChartProps> = ({
             barGap={6}
           >
             <defs>
-              <linearGradient id="wolBaselineGrad" x1="0" y1="0" x2="0" y2="1">
+              <linearGradient id={baselineGradId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#f43f5e" stopOpacity={isLight ? 0.72 : 0.78} />
                 <stop offset="100%" stopColor="#fb7185" stopOpacity={isLight ? 0.24 : 0.25} />
               </linearGradient>
-              <linearGradient id="wolScheduledGrad" x1="0" y1="0" x2="0" y2="1">
+              <linearGradient id={scheduledGradId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={isLight ? '#7c3aed' : '#c084fc'} stopOpacity={0.98} />
                 <stop offset="100%" stopColor={isLight ? '#0ea5e9' : '#38bdf8'} stopOpacity={0.78} />
               </linearGradient>
@@ -454,14 +457,14 @@ export const WolEnergyWeeklyChart: React.FC<WolEnergyWeeklyChartProps> = ({
             <Bar
               name="baselineVal"
               dataKey={activeMetricView === 'kwh' ? 'baselineKwh' : 'baselineCost'}
-              fill="url(#wolBaselineGrad)"
+              fill={`url(#${baselineGradId})`}
               radius={[8, 8, 2, 2]}
               maxBarSize={28}
             />
             <Bar
               name="scheduledVal"
               dataKey={activeMetricView === 'kwh' ? 'scheduledKwh' : 'scheduledCost'}
-              fill="url(#wolScheduledGrad)"
+              fill={`url(#${scheduledGradId})`}
               radius={[8, 8, 2, 2]}
               maxBarSize={28}
             />
@@ -504,3 +507,5 @@ export const WolEnergyWeeklyChart: React.FC<WolEnergyWeeklyChartProps> = ({
     </div>
   );
 };
+
+export const WolEnergyWeeklyChart = React.memo(WolEnergyWeeklyChartComponent);

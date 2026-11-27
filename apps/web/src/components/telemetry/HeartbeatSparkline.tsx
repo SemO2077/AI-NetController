@@ -141,6 +141,7 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
                 cy={svgData.lastPoint.y}
                 r="2"
                 fill={colorConfig.stroke}
+                style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
                 className="animate-ping"
               />
             )}
@@ -241,6 +242,7 @@ const HeartbeatSparklineComponent: React.FC<HeartbeatSparklineProps> = ({
                 cy={svgData.lastPoint.y}
                 r="3.5"
                 fill={colorConfig.stroke}
+                style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
                 className="animate-ping"
               />
               <circle

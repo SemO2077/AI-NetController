@@ -56,7 +56,7 @@ const ACCENT_DOTS: Array<{
   },
 ];
 
-export const ThemeQuickControls: React.FC<ThemeQuickControlsProps> = ({
+const ThemeQuickControlsComponent: React.FC<ThemeQuickControlsProps> = ({
   showAccentDots = true,
   compact = false,
   className = '',
@@ -74,8 +74,10 @@ export const ThemeQuickControls: React.FC<ThemeQuickControlsProps> = ({
     const el = triggerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
+    const menuWidth = 228;
     const top = Math.min(window.innerHeight - 120, Math.round(rect.bottom + 8));
-    const right = Math.max(12, Math.round(window.innerWidth - rect.right));
+    const maxRight = Math.max(12, window.innerWidth - menuWidth - 12);
+    const right = Math.min(maxRight, Math.max(12, Math.round(window.innerWidth - rect.right)));
     setMenuPos({ top, right });
   }, []);
 
@@ -241,3 +243,5 @@ export const ThemeQuickControls: React.FC<ThemeQuickControlsProps> = ({
     </div>
   );
 };
+
+export const ThemeQuickControls = React.memo(ThemeQuickControlsComponent);

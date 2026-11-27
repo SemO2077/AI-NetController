@@ -848,6 +848,7 @@ class DaemonServer:
             self.worker_process.join(timeout=3)
             if self.worker_process.is_alive():
                 self.worker_process.terminate()
+                self.worker_process.join(timeout=1.5)
             self.worker_process = None
         self._cleanup_shm()
         try:
@@ -996,7 +997,8 @@ def main():
                 except (ImportError, ModuleNotFoundError):
                     from agent.agent_gui import HostDaemonState, HostDaemonDesktopGUI, HAS_TKINTER
                 if HAS_TKINTER:
-                    gui_state = HostDaemonState(host=bind_host, port=bind_port)
+                    effective_host = getattr(ws_daemon, "host", None) or bind_host or "0.0.0.0"
+                    gui_state = HostDaemonState(host=effective_host, port=effective_port)
                     if ws_daemon:
                         ws_daemon.gui_state = gui_state
                         if hasattr(ws_daemon, "_sync_gui_state_on_attach"):

@@ -72,6 +72,7 @@ class FileTransferEngine {
   static int _idCounter = 100;
   int _txSeq = 0;
   bool _isCancelled = false;
+  VoidCallback? _onCancelWake;
 
   /// Initiates, chunks, and streams a file to the host over binary sink.
   /// Provide [packetBuilder] (e.g. `client.encryptFrame`) to encrypt chunks
@@ -100,6 +101,8 @@ class FileTransferEngine {
         waiter.complete();
       }
     }
+
+    _onCancelWake = wakeWaiter;
 
     final StreamSubscription<ProtocolPacket> ackSub = ackStream.listen(
       (pkt) {
@@ -294,6 +297,25 @@ class FileTransferEngine {
         );
       }
 
+      if (_isCancelled) {
+        final Uint8List abortPayload = Uint8List(5);
+        ByteData.sublistView(abortPayload)
+          ..setUint8(0, kFileCmdAbort)
+          ..setUint32(1, transferId, Endian.big);
+        sendPacket(buildFrame(abortPayload));
+
+        yield TransferProgress(
+          transferId: transferId,
+          filename: filename,
+          totalBytes: totalBytes,
+          bytesSent: bytesSent,
+          speedBytesPerSec: 0,
+          eta: Duration.zero,
+          state: TransferState.cancelled,
+        );
+        return;
+      }
+
       if (hostError != null) {
         yield TransferProgress(
           transferId: transferId,
@@ -332,6 +354,7 @@ class FileTransferEngine {
         errorMessage: e.toString(),
       );
     } finally {
+      _onCancelWake = null;
       await raf?.close();
       stopwatch.stop();
       await ackSub.cancel();
@@ -340,6 +363,7 @@ class FileTransferEngine {
 
   void cancel() {
     _isCancelled = true;
+    _onCancelWake?.call();
   }
 }
 
@@ -354,52 +378,102 @@ class FileTransferProgressDialog extends StatelessWidget {
     required this.onCancel,
   });
 
+  static String _formatEta(Duration eta) {
+    final int totalSec = eta.inSeconds;
+    if (totalSec <= 0) return '<1s';
+    if (totalSec < 60) return '${totalSec}s';
+    final int mins = totalSec ~/ 60;
+    final int secs = totalSec % 60;
+    return '${mins}m ${secs.toString().padLeft(2, '0')}s';
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    final bool isHashing = progress.state == TransferState.hashing;
+    final bool isCompleted = progress.state == TransferState.completed;
+    final bool isFailed = progress.state == TransferState.failed;
+    final bool isCancelled = progress.state == TransferState.cancelled;
+
+    final Color ringColor = isCompleted
+        ? palette.success
+        : (isFailed || isCancelled)
+            ? palette.accent
+            : palette.primary;
+
+    final String stateLabel = switch (progress.state) {
+      TransferState.hashing => 'HASHING',
+      TransferState.transferring => 'TRANSFER',
+      TransferState.completed => 'VERIFIED',
+      TransferState.failed => 'FAILED',
+      TransferState.cancelled => 'CANCELLED',
+      TransferState.idle => 'READY',
+    };
+
     return Dialog(
       backgroundColor: palette.surfaceElevated,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
-        side: BorderSide(color: palette.primary.withValues(alpha: 0.35)),
+        side: BorderSide(color: ringColor.withValues(alpha: 0.42)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Circular Indicator with Center Percentage
+            // Circular Indicator with Center Percentage / Status
             SizedBox(
-              width: 110,
-              height: 110,
+              width: 112,
+              height: 112,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  CircularProgressIndicator(
-                    value: progress.fraction,
-                    strokeWidth: 8,
-                    backgroundColor: palette.dividerColor,
-                    valueColor: AlwaysStoppedAnimation<Color>(palette.primary),
+                  SizedBox(
+                    width: 104,
+                    height: 104,
+                    child: CircularProgressIndicator(
+                      value: isHashing ? null : progress.fraction,
+                      strokeWidth: 7,
+                      backgroundColor: palette.dividerColor,
+                      valueColor: AlwaysStoppedAnimation<Color>(ringColor),
+                    ),
                   ),
                   Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        '${progress.percentage}%',
-                        style: TextStyle(
-                          color: palette.textPrimary,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'monospace',
+                      if (isCompleted)
+                        Icon(
+                          Icons.check_rounded,
+                          color: palette.success,
+                          size: 32,
+                        )
+                      else if (isFailed || isCancelled)
+                        Icon(
+                          isFailed
+                              ? Icons.error_outline_rounded
+                              : Icons.cancel_outlined,
+                          color: palette.accent,
+                          size: 30,
+                        )
+                      else
+                        Text(
+                          isHashing ? 'SHA' : '${progress.percentage}%',
+                          style: TextStyle(
+                            color: palette.textPrimary,
+                            fontSize: isHashing ? 18 : 22,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                          ),
                         ),
-                      ),
+                      const SizedBox(height: 2),
                       Text(
-                        progress.state == TransferState.hashing
-                            ? 'HASHING'
-                            : 'TRANSFER',
+                        stateLabel,
                         style: TextStyle(
-                          color: palette.textSecondary,
+                          color: (isCompleted || isFailed || isCancelled)
+                              ? ringColor
+                              : palette.textSecondary,
                           fontSize: 9,
+                          fontWeight: FontWeight.w700,
                           letterSpacing: 1.2,
                         ),
                       ),
@@ -408,13 +482,14 @@ class FileTransferProgressDialog extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
 
             // Filename
             Text(
               progress.filename,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: palette.textPrimary,
                 fontWeight: FontWeight.bold,
@@ -423,30 +498,67 @@ class FileTransferProgressDialog extends StatelessWidget {
             ),
             const SizedBox(height: 8),
 
-            // Speed & ETA
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  progress.speedFormatted,
+            // Speed & ETA or Hashing / Error details
+            if (isFailed &&
+                progress.errorMessage != null &&
+                progress.errorMessage!.trim().isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: palette.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border:
+                      Border.all(color: palette.accent.withValues(alpha: 0.40)),
+                ),
+                child: Text(
+                  progress.errorMessage!,
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: palette.success,
-                    fontSize: 12,
-                    fontFamily: 'monospace',
+                    color: palette.textPrimary,
+                    fontSize: 11.5,
+                    height: 1.35,
                   ),
                 ),
-                Text(' • ', style: TextStyle(color: palette.textTertiary)),
-                Text(
-                  'ETA: ${progress.eta.inSeconds}s',
-                  style: TextStyle(
-                    color: palette.textSecondary,
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                  ),
+              )
+            else if (isHashing)
+              Text(
+                'Computing SHA-256 integrity hash...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: palette.textSecondary,
+                  fontSize: 11.5,
+                  fontFamily: 'monospace',
                 ),
-              ],
-            ),
-            const SizedBox(height: 24),
+              )
+            else
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    progress.speedFormatted,
+                    style: TextStyle(
+                      color: palette.success,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                  Text(' • ', style: TextStyle(color: palette.textTertiary)),
+                  Text(
+                    isCompleted
+                        ? 'SHA-256 OK'
+                        : 'ETA: ${_formatEta(progress.eta)}',
+                    style: TextStyle(
+                      color: palette.textSecondary,
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
+              ),
+            const SizedBox(height: 22),
 
             // Action Button
             if (progress.state == TransferState.transferring ||
@@ -462,7 +574,7 @@ class FileTransferProgressDialog extends StatelessWidget {
                 ),
                 child: const Text('CANCEL TRANSFER'),
               )
-            else if (progress.state == TransferState.completed)
+            else if (isCompleted)
               ElevatedButton(
                 onPressed: () => Navigator.of(context).pop(),
                 style: ElevatedButton.styleFrom(

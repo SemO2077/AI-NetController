@@ -324,8 +324,6 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
     primaryAdapterMac,
   ]);
 
-  if (!isOpen) return null;
-
   const dispatchAction = async (action: string, extra?: Record<string, any>) => {
     triggerHapticFeedback('medium');
     setIsLoadingAction(action);
@@ -393,19 +391,44 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   const handleApplyPort = (e: React.FormEvent) => {
     e.preventDefault();
     const num = Number(portInput);
-    if (Number.isInteger(num) && num >= 1024 && num <= 65535) {
-      setIsEditingPort(false);
-      dispatchAction('update_port', { port: num });
+    if (!Number.isInteger(num) || num < 1024 || num > 65535) {
+      setActionError(
+        isBg
+          ? 'Невалиден TCP порт — изберете стойност между 1024 и 65535.'
+          : 'Invalid TCP port — choose a value between 1024 and 65535.'
+      );
+      return;
     }
+    setActionError(null);
+    setIsEditingPort(false);
+    dispatchAction('update_port', { port: num });
   };
 
   const handleManualBanSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanIp = manualBanIp.trim();
-    if (!cleanIp) return;
+    const ipv4Re = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    if (!cleanIp || !ipv4Re.test(cleanIp)) {
+      setActionError(
+        isBg
+          ? 'Въведете валиден IPv4 адрес за блокиране (напр. 192.168.1.205).'
+          : 'Enter a valid IPv4 address to blacklist (e.g. 192.168.1.205).'
+      );
+      return;
+    }
+    const cleanMac = manualBanMac.trim();
+    if (cleanMac && !/^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(cleanMac)) {
+      setActionError(
+        isBg
+          ? 'Невалиден MAC формат (очаква се AA:BB:CC:DD:EE:FF или оставете празно).'
+          : 'Invalid MAC format (expected AA:BB:CC:DD:EE:FF or leave empty).'
+      );
+      return;
+    }
+    setActionError(null);
     dispatchAction('blacklist_client', {
       ip: cleanIp,
-      mac: manualBanMac.trim() || '00:00:00:00:00:00',
+      mac: cleanMac.toUpperCase() || '00:00:00:00:00:00',
       device: manualBanDevice.trim() || `Manual IP Ban (${cleanIp})`,
       reason:
         manualBanReason.trim() ||
@@ -472,7 +495,12 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
   const passedAvCount = avChecks.filter((c) => c.passed).length;
 
   return (
+    <AnimatePresence>
+      {isOpen && (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={isBg ? `PC Демон център — ${daemon.hostname}` : `Host Control Center — ${daemon.hostname}`}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           triggerHapticFeedback('light');
@@ -490,10 +518,10 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
         className="relative w-full max-w-5xl max-h-[93vh] flex flex-col rounded-[28px] glass-liquid-modal overflow-hidden"
       >
         {/* Top Accent Specular Bar */}
-        <div className="h-1 w-full bg-gradient-to-r from-[var(--accent-primary)] via-[var(--accent-secondary)] to-[var(--accent-tertiary)] shrink-0" />
+        <div className="h-1 w-full bg-gradient-to-r from-[var(--theme-accent)] via-[var(--theme-secondary)] to-[var(--theme-tertiary)] shrink-0" />
 
         {/* Header */}
-        <div className="px-4 sm:px-6 py-4 border-b border-[var(--glass-border)] flex flex-wrap items-center justify-between gap-3 shrink-0">
+        <div className="px-4 sm:px-6 py-4 border-b border-[var(--surface-border-subtle)] flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 squircle-badge squircle-hero shrink-0">
               <Monitor className="w-5 h-5" />
@@ -562,7 +590,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                 }}
                 className="hidden sm:flex min-h-[38px] px-3 py-1.5 rounded-full liquid-control-pill text-xs font-mono font-semibold ink-primary items-center gap-1.5 transition cursor-pointer"
               >
-                <FileCode className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                <FileCode className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                 <span>agent_gui.py</span>
               </button>
             )}
@@ -582,8 +610,8 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
         </div>
 
         {/* Sub-Window Pill Tabs + Quick Pairing PIN */}
-        <div className="px-4 sm:px-6 py-2.5 glass-liquid-subtle border-b border-[var(--glass-border)] flex items-center justify-between gap-2 flex-wrap shrink-0">
-          <div className="flex items-center gap-1 p-1 rounded-full liquid-terminal-entry border border-[var(--glass-border)] overflow-x-auto scrollbar-none">
+        <div className="px-4 sm:px-6 py-2.5 glass-liquid-subtle border-b border-[var(--surface-border-subtle)] flex items-center justify-between gap-2 flex-wrap shrink-0">
+          <div className="flex items-center gap-1 p-1 rounded-full liquid-terminal-entry border border-[var(--surface-border-subtle)] overflow-x-auto scrollbar-none">
             {[
               {
                 id: 'overview' as const,
@@ -699,29 +727,29 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
             <>
               {/* Quick Telemetry KPI Pills */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                   <div className="text-[11px] ink-muted font-display font-semibold">
                     CPU ({daemon.cpuCores} {isBg ? 'ядра' : 'cores'})
                   </div>
                   <div className="text-lg font-mono font-extrabold ink-primary tabular-nums mt-0.5">
                     {daemon.cpuPercent}%
                   </div>
-                  <div className="mt-1.5 w-full h-1.5 rounded-full bg-[var(--glass-border)] overflow-hidden">
+                  <div className="mt-1.5 w-full h-1.5 rounded-full bg-[var(--surface-border-subtle)] overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-[var(--accent-primary)] to-[var(--accent-secondary)] transition-all duration-300"
+                      className="h-full rounded-full bg-gradient-to-r from-[var(--theme-accent)] to-[var(--theme-secondary)] transition-all duration-300"
                       style={{ width: `${Math.min(100, Math.max(3, daemon.cpuPercent))}%` }}
                     />
                   </div>
                 </div>
 
-                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                   <div className="text-[11px] ink-muted font-display font-semibold">
                     RAM ({daemon.ramUsedGb}/{daemon.ramTotalGb} GB)
                   </div>
                   <div className="text-lg font-mono font-extrabold ink-primary tabular-nums mt-0.5">
                     {daemon.ramPercent}%
                   </div>
-                  <div className="mt-1.5 w-full h-1.5 rounded-full bg-[var(--glass-border)] overflow-hidden">
+                  <div className="mt-1.5 w-full h-1.5 rounded-full bg-[var(--surface-border-subtle)] overflow-hidden">
                     <div
                       className="h-full rounded-full bg-gradient-to-r from-violet-500 to-sky-500 transition-all duration-300"
                       style={{ width: `${Math.min(100, Math.max(3, daemon.ramPercent))}%` }}
@@ -729,7 +757,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   </div>
                 </div>
 
-                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                   <div className="text-[11px] ink-muted font-display font-semibold">
                     {isBg ? 'Свързани клиенти' : 'Active Peers'}
                   </div>
@@ -740,7 +768,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setActiveTab('devices')}
-                      className="text-[11px] font-display font-semibold text-[var(--accent-primary)] hover:underline cursor-pointer"
+                      className="text-[11px] font-display font-semibold text-[var(--theme-accent)] hover:underline cursor-pointer"
                     >
                       {isBg ? 'Управление →' : 'Manage →'}
                     </button>
@@ -750,7 +778,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   </div>
                 </div>
 
-                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--glass-border)]">
+                <div className="p-3 rounded-2xl glass-liquid-subtle border border-[var(--surface-border-subtle)]">
                   <div className="text-[11px] ink-muted font-display font-semibold">
                     {isBg ? 'Целеви стрийм FPS' : 'Stream Target FPS'}
                   </div>
@@ -762,7 +790,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                         onClick={() => dispatchAction('set_target_fps', { fps: fpsOpt })}
                         className={`flex-1 py-1 rounded-full text-[11px] font-mono font-bold border cursor-pointer transition ${
                           (daemon.targetFps || 60) === fpsOpt
-                            ? 'bg-[var(--accent-primary)]/18 text-[var(--accent-primary)] border-[var(--accent-primary)]/45'
+                            ? 'bg-[var(--theme-accent)]/18 text-[var(--theme-accent)] border-[var(--theme-accent)]/45'
                             : 'liquid-control-pill ink-secondary hover:ink-primary'
                         }`}
                       >
@@ -774,7 +802,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
               </div>
 
               {/* Endpoint & Pairing Card */}
-              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 space-y-3">
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 squircle-badge squircle-sky">
@@ -792,12 +820,12 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                   {/* WS URI + Port + mDNS */}
                   <div className="space-y-2.5">
-                    <div className="flex items-center justify-between gap-2 liquid-terminal-entry border border-[var(--glass-border)] rounded-2xl px-3.5 py-2.5">
+                    <div className="flex items-center justify-between gap-2 liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-2xl px-3.5 py-2.5">
                       <div className="min-w-0">
                         <div className="text-[10px] ink-muted">
                           {isBg ? 'Локален WebSocket адрес' : 'Local WebSocket URI'}
                         </div>
-                        <div className="text-xs sm:text-sm font-mono font-bold text-[var(--accent-primary)] truncate tabular-nums">
+                        <div className="text-xs sm:text-sm font-mono font-bold text-[var(--theme-accent)] truncate tabular-nums">
                           {daemon.wsUri}
                         </div>
                       </div>
@@ -809,14 +837,14 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                         {copiedUri ? (
                           <Check className="w-3.5 h-3.5 text-emerald-500" />
                         ) : (
-                          <Copy className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                          <Copy className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                         )}
                         <span>{copiedUri ? (isBg ? 'Копирано' : 'Copied') : isBg ? 'Копирай' : 'Copy'}</span>
                       </button>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2.5">
-                      <div className="liquid-terminal-entry border border-[var(--glass-border)] rounded-2xl p-2.5 flex items-center justify-between">
+                      <div className="liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-2xl p-2.5 flex items-center justify-between">
                         <div>
                           <div className="text-[10px] ink-muted">{isBg ? 'Порт' : 'Port'}</div>
                           {isEditingPort ? (
@@ -827,7 +855,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                                 max={65535}
                                 value={portInput}
                                 onChange={(e) => setPortInput(e.target.value)}
-                                className="w-18 px-2 py-0.5 rounded-lg glass-liquid-subtle border border-[var(--accent-primary)] text-xs font-mono ink-primary"
+                                className="w-18 px-2 py-0.5 rounded-lg glass-liquid-subtle border border-[var(--theme-accent)] text-xs font-mono ink-primary"
                               />
                               <button
                                 type="submit"
@@ -846,14 +874,14 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                           <button
                             type="button"
                             onClick={() => setIsEditingPort(true)}
-                            className="text-[11px] font-display font-semibold text-[var(--accent-primary)] hover:underline cursor-pointer"
+                            className="text-[11px] font-display font-semibold text-[var(--theme-accent)] hover:underline cursor-pointer"
                           >
                             {isBg ? 'Промени' : 'Edit'}
                           </button>
                         )}
                       </div>
 
-                      <div className="liquid-terminal-entry border border-[var(--glass-border)] rounded-2xl p-2.5 flex items-center justify-between">
+                      <div className="liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-2xl p-2.5 flex items-center justify-between">
                         <div className="min-w-0">
                           <div className="text-[10px] ink-muted">mDNS ZeroConf</div>
                           <div className="text-xs font-mono font-bold ink-primary truncate">
@@ -876,7 +904,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   </div>
 
                   {/* HMAC Key Card */}
-                  <div className="liquid-terminal-entry border border-[var(--glass-border)] rounded-2xl p-3.5 flex flex-col justify-between gap-2.5">
+                  <div className="liquid-terminal-entry border border-[var(--surface-border-subtle)] rounded-2xl p-3.5 flex flex-col justify-between gap-2.5">
                     <div className="min-w-0">
                       <div className="text-[11px] font-display font-semibold ink-secondary flex items-center gap-1.5">
                         <KeyRound className="w-3.5 h-3.5 text-amber-500" />
@@ -925,7 +953,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
               </div>
 
               {/* Operator Controls & Local Security Shields */}
-              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 space-y-3">
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 squircle-badge squircle-violet">
@@ -949,7 +977,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     className={`min-h-[42px] px-3.5 py-2 rounded-2xl font-display text-xs font-bold flex items-center justify-center gap-2 border transition cursor-pointer ${
                       daemon.isPaused
                         ? 'bg-emerald-500/18 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
-                        : 'bg-[var(--accent-primary)]/14 text-[var(--accent-primary)] border-[var(--accent-primary)]/35'
+                        : 'bg-[var(--theme-accent)]/14 text-[var(--theme-accent)] border-[var(--theme-accent)]/35'
                     }`}
                   >
                     {daemon.isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
@@ -993,7 +1021,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     className="min-h-[42px] px-3.5 py-2 rounded-2xl liquid-control-pill font-display text-xs font-bold ink-primary flex items-center justify-center gap-2 transition cursor-pointer"
                   >
                     <RefreshCw
-                      className={`w-4 h-4 text-[var(--accent-primary)] ${
+                      className={`w-4 h-4 text-[var(--theme-accent)] ${
                         isLoadingAction === 'run_diagnostics' ? 'animate-spin' : ''
                       }`}
                     />
@@ -1095,14 +1123,14 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
               </div>
 
               {/* Collapsible Progressive Disclosure: AV-Safe Binary Integrity */}
-              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] overflow-hidden">
                 <button
                   type="button"
                   onClick={() => {
                     triggerHapticFeedback('light');
                     setShowAvChecks((v) => !v);
                   }}
-                  className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--glass-surface-hover)] transition cursor-pointer"
+                  className="w-full px-4 py-3 flex items-center justify-between gap-2 text-xs font-display font-bold ink-primary hover:bg-[var(--surface-pill-hover)] transition cursor-pointer"
                 >
                   <span className="flex items-center gap-2 min-w-0">
                     <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -1127,13 +1155,13 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
-                      className="overflow-hidden border-t border-[var(--glass-border)]"
+                      className="overflow-hidden border-t border-[var(--surface-border-subtle)]"
                     >
                       <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
                         {avChecks.map((chk) => (
                           <div
                             key={chk.key}
-                            className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-start gap-2.5"
+                            className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex items-start gap-2.5"
                           >
                             {chk.passed ? (
                               <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
@@ -1161,7 +1189,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
           {/* TAB 2: PEERS & FIREWALL BLACKLIST */}
           {activeTab === 'devices' && (
             <div className="space-y-4">
-              <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 squircle-badge squircle-sky shrink-0">
                     <Users className="w-4.5 h-4.5" />
@@ -1182,7 +1210,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
               </div>
 
               {daemon.connectedClients.length === 0 ? (
-                <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-8 text-center space-y-2">
+                <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-8 text-center space-y-2">
                   <Users className="w-8 h-8 ink-muted mx-auto" />
                   <div className="text-sm font-display font-bold ink-primary">
                     {isBg ? 'Няма активни сесии в момента' : 'No Active Sessions Currently'}
@@ -1203,7 +1231,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     return (
                       <div
                         key={peer.id}
-                        className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+                        className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
                       >
                         <div className="flex items-start gap-3 min-w-0">
                           <div className="w-10 h-10 squircle-badge squircle-sky shrink-0">
@@ -1214,7 +1242,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                               <span className="font-display text-sm font-bold ink-primary">
                                 {peer.device}
                               </span>
-                              <span className="text-xs font-mono font-semibold text-[var(--accent-primary)] tabular-nums">
+                              <span className="text-xs font-mono font-semibold text-[var(--theme-accent)] tabular-nums">
                                 {peer.ip}
                               </span>
                               {peer.mac && (
@@ -1262,7 +1290,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                             onClick={() => dispatchAction('toggle_client_input', { clientId: peer.id })}
                             className={`min-h-[34px] px-3 py-1 rounded-full font-display text-xs font-semibold flex items-center gap-1 border transition cursor-pointer ${
                               inputAllowed
-                                ? 'bg-[var(--accent-primary)]/14 border-[var(--accent-primary)]/35 text-[var(--accent-primary)]'
+                                ? 'bg-[var(--theme-accent)]/14 border-[var(--theme-accent)]/35 text-[var(--theme-accent)]'
                                 : 'bg-amber-500/15 border-amber-500/35 text-amber-700 dark:text-amber-300'
                             }`}
                           >
@@ -1310,7 +1338,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
 
               {/* Firewall Blacklist */}
               <div className="rounded-3xl glass-liquid-subtle border border-rose-500/30 p-4 space-y-3.5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-[var(--glass-border)]">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-[var(--surface-border-subtle)]">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 squircle-badge squircle-rose shrink-0">
                       <Ban className="w-4 h-4" />
@@ -1372,21 +1400,21 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                     value={manualBanIp}
                     onChange={(e) => setManualBanIp(e.target.value)}
                     placeholder={isBg ? 'IP адрес (192.168.1.205)' : 'IP Address (192.168.1.205)'}
-                    className="sm:col-span-3 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--glass-border)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
+                    className="sm:col-span-3 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--surface-border-subtle)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
                   />
                   <input
                     type="text"
                     value={manualBanMac}
                     onChange={(e) => setManualBanMac(e.target.value)}
                     placeholder={isBg ? 'MAC (по избор)' : 'MAC (optional)'}
-                    className="sm:col-span-3 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--glass-border)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
+                    className="sm:col-span-3 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--surface-border-subtle)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
                   />
                   <input
                     type="text"
                     value={manualBanReason}
                     onChange={(e) => setManualBanReason(e.target.value)}
                     placeholder={isBg ? 'Причина за блокиране' : 'Ban reason'}
-                    className="sm:col-span-4 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--glass-border)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
+                    className="sm:col-span-4 px-3 py-2 rounded-xl liquid-terminal-entry border border-[var(--surface-border-subtle)] text-xs font-mono ink-primary outline-none focus:border-rose-500"
                   />
                   <button
                     type="submit"
@@ -1398,7 +1426,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                 </form>
 
                 {blacklistedList.length === 0 ? (
-                  <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] text-xs ink-muted text-center">
+                  <div className="p-3.5 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] text-xs ink-muted text-center">
                     {isBg ? 'Няма блокирани IP/MAC адреси.' : 'No blacklisted IP or MAC addresses.'}
                   </div>
                 ) : (
@@ -1451,7 +1479,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
                 <div className="lg:col-span-7 space-y-4">
                   {/* Adapters & Startup */}
-                  <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 space-y-3">
+                  <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <h3 className="font-display text-sm font-bold ink-primary">
                         {isBg ? '1. Мрежови адаптери и стартиране' : '1. Network Adapters & Startup'}
@@ -1465,12 +1493,12 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                       {daemon.activeAdapters.map((nic, i) => (
                         <div
                           key={i}
-                          className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] flex items-center justify-between text-xs font-mono"
+                          className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] flex items-center justify-between text-xs font-mono"
                         >
                           <div>
                             <div className="ink-primary font-bold">{nic.name}</div>
                             <div className="text-[11px] ink-secondary">
-                              IPv4: <span className="text-[var(--accent-primary)]">{nic.ipv4}</span> ·
+                              IPv4: <span className="text-[var(--theme-accent)]">{nic.ipv4}</span> ·
                               MAC: <span className="text-emerald-600 dark:text-emerald-300">{nic.mac}</span>
                             </div>
                           </div>
@@ -1487,7 +1515,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                         onClick={() => dispatchAction('run_diagnostics')}
                         className="min-h-[36px] px-3.5 py-1.5 rounded-full liquid-control-pill ink-primary font-display text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                       >
-                        <RefreshCw className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                        <RefreshCw className="w-3.5 h-3.5 text-[var(--theme-accent)]" />
                         <span>{isBg ? 'Провери портове и WoL' : 'Verify Ports & WoL'}</span>
                       </button>
 
@@ -1512,7 +1540,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   </div>
 
                   {/* Security Profiles */}
-                  <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] p-4 space-y-3">
+                  <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] p-4 space-y-3">
                     <h3 className="font-display text-sm font-bold ink-primary">
                       {isBg ? '2. Профил за сигурност' : '2. Security & Remote Access Profile'}
                     </h3>
@@ -1550,14 +1578,14 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                             }
                             className={`p-3 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
                               isSelected
-                                ? 'bg-[var(--accent-primary)]/14 border-[var(--accent-primary)]/50'
-                                : 'liquid-terminal-entry border-[var(--glass-border)] hover:border-[var(--accent-primary)]/35'
+                                ? 'bg-[var(--theme-accent)]/14 border-[var(--theme-accent)]/50'
+                                : 'liquid-terminal-entry border-[var(--surface-border-subtle)] hover:border-[var(--theme-accent)]/35'
                             }`}
                           >
                             <div className="text-xs font-display font-bold ink-primary flex items-center justify-between gap-1">
                               <span>{prof.title}</span>
                               {isSelected && (
-                                <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
+                                <CheckCircle2 className="w-3.5 h-3.5 text-[var(--theme-accent)] shrink-0" />
                               )}
                             </div>
                             <p className="text-[11px] ink-secondary mt-1.5 leading-snug">{prof.desc}</p>
@@ -1569,11 +1597,11 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                 </div>
 
                 {/* White-Framed QR + Complete Setup */}
-                <div className="lg:col-span-5 rounded-3xl glass-liquid-subtle border border-[var(--accent-primary)]/30 p-4 flex flex-col justify-between space-y-4">
+                <div className="lg:col-span-5 rounded-3xl glass-liquid-subtle border border-[var(--theme-accent)]/30 p-4 flex flex-col justify-between space-y-4">
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <h3 className="font-display text-sm font-bold ink-primary flex items-center gap-2">
-                        <QrCode className="w-4 h-4 text-[var(--accent-primary)]" />
+                        <QrCode className="w-4 h-4 text-[var(--theme-accent)]" />
                         <span>{isBg ? '3. Сдвояване с QR + PIN' : '3. Phone QR + PIN'}</span>
                       </h3>
                       <span className="text-xs font-mono font-bold text-amber-600 dark:text-amber-300">
@@ -1581,7 +1609,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex flex-col items-center text-center p-4 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] space-y-3">
+                    <div className="flex flex-col items-center text-center p-4 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] space-y-3">
                       {qrDataUrl && (
                         <div className="w-36 h-36 rounded-2xl bg-white p-2.5 shadow-md border border-black/10 flex items-center justify-center">
                           <img
@@ -1623,7 +1651,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
           )}
 
           {/* Collapsible Progressive Disclosure: Live Daemon Event Log */}
-          <div className="rounded-3xl glass-liquid-subtle border border-[var(--glass-border)] overflow-hidden">
+          <div className="rounded-3xl glass-liquid-subtle border border-[var(--surface-border-subtle)] overflow-hidden">
             <div className="px-4 py-3 flex items-center justify-between gap-2">
               <button
                 type="button"
@@ -1633,7 +1661,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                 }}
                 className="flex items-center gap-2 text-xs font-display font-bold ink-primary cursor-pointer"
               >
-                <Terminal className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                <Terminal className="w-4 h-4 text-[var(--theme-accent)] shrink-0" />
                 <span>
                   {isBg ? 'Журнал на събитията на PC демона' : 'Live PC Daemon Event Log'}
                 </span>
@@ -1685,10 +1713,10 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden border-t border-[var(--glass-border)]"
+                  className="overflow-hidden border-t border-[var(--surface-border-subtle)]"
                 >
                   <div className="p-3">
-                    <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--glass-border)] font-mono text-[11px] max-h-40 overflow-y-auto bouncy-scroll space-y-1">
+                    <div className="p-3 rounded-2xl liquid-terminal-entry border border-[var(--surface-border-subtle)] font-mono text-[11px] max-h-40 overflow-y-auto bouncy-scroll space-y-1">
                       {daemon.logs.length === 0 ? (
                         <div className="ink-muted text-center py-2">
                           {isBg ? 'Няма записани събития.' : 'No daemon log entries yet.'}
@@ -1706,7 +1734,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
                                   : entry.level === 'SECURITY'
                                   ? 'text-emerald-600 dark:text-emerald-400'
                                   : entry.level === 'DIAG'
-                                  ? 'text-[var(--accent-primary)]'
+                                  ? 'text-[var(--theme-accent)]'
                                   : 'ink-secondary'
                               }`}
                             >
@@ -1725,5 +1753,7 @@ export const PcDaemonGuiModal: React.FC<PcDaemonGuiModalProps> = ({
         </div>
       </motion.div>
     </div>
+      )}
+    </AnimatePresence>
   );
 };
