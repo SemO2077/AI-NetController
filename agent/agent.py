@@ -2100,6 +2100,7 @@ class HostAgentDaemon:
         self._client_last_frame_sent_ts: Dict[WebSocketServerProtocol, float] = {}
         self._client_credit_waiting: Set[WebSocketServerProtocol] = set()
         self._client_pressed_buttons: Dict[WebSocketServerProtocol, Set[str]] = {}
+        self._pressed_buttons_lock = threading.Lock()
         self._crypto_executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="CryptoTx"
         )
@@ -3324,6 +3325,18 @@ class HostAgentDaemon:
             self._tray_thread = tray_thread
         tray_thread.start()
 
+    def _record_client_button_state(self, ws: WebSocketServerProtocol, btn_name: str, down: bool) -> None:
+        """Thread-safely tracks per-client pressed mouse buttons for disconnect/panic cleanup."""
+        with self._pressed_buttons_lock:
+            if down:
+                self._client_pressed_buttons.setdefault(ws, set()).add(btn_name)
+            else:
+                held = self._client_pressed_buttons.get(ws)
+                if held is not None:
+                    held.discard(btn_name)
+                    if not held:
+                        self._client_pressed_buttons.pop(ws, None)
+
     def _release_held_mouse_buttons_sync(self, buttons: Set[str]) -> None:
         """Releases any stuck mouse buttons on the host OS without raising."""
         if not buttons or pyautogui is None:
@@ -3337,27 +3350,31 @@ class HostAgentDaemon:
             except Exception:
                 pass
 
-    def _release_client_held_buttons(self, ws: Optional[WebSocketServerProtocol] = None) -> None:
-        """Releases mouse buttons held by a disconnected client (or all clients if ws is None)."""
+    def _drain_and_release_buttons_sync(self, ws: Optional[WebSocketServerProtocol] = None) -> None:
+        """Atomically pops held buttons under lock and releases them on the host OS."""
         buttons_to_release: Set[str] = set()
-        if ws is None:
-            for btns in self._client_pressed_buttons.values():
-                buttons_to_release.update(btns)
-            self._client_pressed_buttons.clear()
-        else:
-            btns = self._client_pressed_buttons.pop(ws, None)
-            if btns:
-                buttons_to_release.update(btns)
-        if not buttons_to_release:
-            return
+        with self._pressed_buttons_lock:
+            if ws is None:
+                for btns in self._client_pressed_buttons.values():
+                    buttons_to_release.update(btns)
+                self._client_pressed_buttons.clear()
+            else:
+                btns = self._client_pressed_buttons.pop(ws, None)
+                if btns:
+                    buttons_to_release.update(btns)
+        if buttons_to_release:
+            self._release_held_mouse_buttons_sync(buttons_to_release)
+
+    def _release_client_held_buttons(self, ws: Optional[WebSocketServerProtocol] = None) -> None:
+        """Releases mouse buttons held by a disconnected client FIFO after queued input tasks."""
         exec_obj = self._input_executor
         if exec_obj is not None and self.is_running:
             try:
-                exec_obj.submit(self._release_held_mouse_buttons_sync, buttons_to_release)
+                exec_obj.submit(self._drain_and_release_buttons_sync, ws)
                 return
             except RuntimeError:
                 pass
-        self._release_held_mouse_buttons_sync(buttons_to_release)
+        self._drain_and_release_buttons_sync(ws)
 
     def kill_all_tasks(self):
         """Emergency Panic Switch: Terminates all active child processes, approvals, vaults, and sockets."""
@@ -4934,12 +4951,7 @@ class HostAgentDaemon:
                             if spec is not None:
                                 state_dir, btn_name = spec
                                 if ws is not None:
-                                    if state_dir == "down":
-                                        self._client_pressed_buttons.setdefault(ws, set()).add(btn_name)
-                                    else:
-                                        held = self._client_pressed_buttons.get(ws)
-                                        if held is not None:
-                                            held.discard(btn_name)
+                                    self._record_client_button_state(ws, btn_name, state_dir == "down")
                                 if use_w32 and _win32_mouse_button_abs(tx, ty, button=btn_name, down=(state_dir == "down")):
                                     return
                                 if state_dir == "down":
@@ -5113,7 +5125,7 @@ class HostAgentDaemon:
                     raw_btn = str(data.get("button", "left")).lower()
                     btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
                     if ws is not None:
-                        self._client_pressed_buttons.setdefault(ws, set()).add(btn)
+                        self._record_client_button_state(ws, btn, True)
                     target = _resolve_target_xy()
                     if target is not None:
                         if not (use_w32 and _win32_mouse_button_abs(target[0], target[1], button=btn, down=True)):
@@ -5125,9 +5137,7 @@ class HostAgentDaemon:
                     raw_btn = str(data.get("button", "left")).lower()
                     btn = raw_btn if raw_btn in ("left", "right", "middle") else "left"
                     if ws is not None:
-                        held = self._client_pressed_buttons.get(ws)
-                        if held is not None:
-                            held.discard(btn)
+                        self._record_client_button_state(ws, btn, False)
                     target = _resolve_target_xy()
                     if target is not None:
                         if not (use_w32 and _win32_mouse_button_abs(target[0], target[1], button=btn, down=False)):
@@ -6069,8 +6079,7 @@ class HostAgentDaemon:
         self.active_nonces.clear()
 
     def _close_sync_handles(self) -> None:
-        """Releases file writers, held mouse buttons, executors, screen encoder thread pools, monitor handles, and job objects."""
-        self._release_client_held_buttons(None)
+        """Releases file writers, executors, held mouse buttons, screen encoder thread pools, monitor handles, and job objects."""
         if self.file_writer:
             try:
                 self.file_writer.abort_all()
@@ -6084,6 +6093,8 @@ class HostAgentDaemon:
                     exec_obj.shutdown(wait=True, cancel_futures=True)
                 except Exception:
                     pass
+        # Drain any still-held mouse buttons after _input_executor finishes all in-flight tasks
+        self._release_client_held_buttons(None)
         self.screen_pipeline.close()
         if self.multi_monitor:
             try:

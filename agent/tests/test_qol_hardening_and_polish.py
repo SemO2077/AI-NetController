@@ -320,6 +320,77 @@ class TestAgentCoreQOLHardening(unittest.IsolatedAsyncioTestCase):
         fake_gui.mouseUp.assert_called_once_with(button="left", _pause=False)
         self.assertNotIn(ws, daemon._client_pressed_buttons)
 
+    async def test_pressed_buttons_fifo_release_and_concurrent_panic_safety(self):
+        daemon = self._make_daemon()
+        daemon.view_only_mode = False
+        fake_gui = mock.MagicMock()
+        events = []
+        started = threading.Event()
+        gate = threading.Event()
+
+        def _blocked_mouse_down(**kwargs):
+            started.set()
+            gate.wait(timeout=2.0)
+            events.append(("down", kwargs.get("button")))
+
+        def _record_mouse_up(**kwargs):
+            events.append(("up", kwargs.get("button")))
+
+        fake_gui.mouseDown.side_effect = _blocked_mouse_down
+        fake_gui.mouseUp.side_effect = _record_mouse_up
+
+        ws = _ScriptedWs()
+        daemon.clients.add(ws)
+        daemon.authenticated_clients.add(ws)
+
+        with mock.patch.object(agent_mod, "pyautogui", fake_gui):
+            # Start an in-flight mouse_down on _input_executor, then immediately trigger disconnect release
+            down_task = asyncio.create_task(
+                daemon._process_virtual_input(
+                    json.dumps({"action": "mouse_down", "button": "left"}).encode("utf-8"),
+                    ws=ws,
+                )
+            )
+            await asyncio.to_thread(started.wait, 2.0)
+            # Release submitted while mouse_down is still executing on _input_executor
+            daemon._release_client_held_buttons(ws)
+            gate.set()
+            await down_task
+            # Wait for FIFO-queued release task on single-worker _input_executor
+            await asyncio.to_thread(daemon._input_executor.submit(lambda: None).result, 2.0)
+
+        self.assertEqual(events, [("down", "left"), ("up", "left")])
+        self.assertNotIn(ws, daemon._client_pressed_buttons)
+
+        # Stress concurrent mutations + kill_all_tasks() across threads (no dict-size RuntimeError)
+        errors = []
+        stop_flag = threading.Event()
+        peers = [_ScriptedWs(remote_address=("127.0.0.1", 56000 + i)) for i in range(6)]
+
+        def _mutator():
+            try:
+                while not stop_flag.is_set():
+                    for p in peers:
+                        daemon._record_client_button_state(p, "left", True)
+                        daemon._record_client_button_state(p, "right", True)
+                        daemon._record_client_button_state(p, "left", False)
+            except Exception as exc:
+                errors.append(exc)
+
+        t = threading.Thread(target=_mutator, daemon=True)
+        t.start()
+        try:
+            with mock.patch.object(agent_mod, "pyautogui", mock.MagicMock()):
+                for _ in range(15):
+                    daemon._drain_and_release_buttons_sync(None)
+                    await asyncio.sleep(0.002)
+        finally:
+            stop_flag.set()
+            t.join(timeout=2.0)
+        daemon._drain_and_release_buttons_sync(None)
+        self.assertEqual(errors, [])
+        self.assertEqual(daemon._client_pressed_buttons, {})
+
     async def test_key_and_hotkey_aliases_normalize_and_preserve_blocked_combos(self):
         daemon = self._make_daemon()
         daemon.view_only_mode = False
