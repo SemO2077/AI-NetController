@@ -408,6 +408,8 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                                     if (widget.isPinned &&
                                         (isCompactCard ||
                                             isTightHeight ||
+                                            (constraints.maxWidth.isFinite &&
+                                                constraints.maxWidth < 330) ||
                                             widget.onTogglePin == null)) ...[
                                       Icon(
                                         Icons.star_rounded,
@@ -470,7 +472,9 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                           ],
                           if (widget.onTogglePin != null &&
                               !isCompactCard &&
-                              !isTightHeight) ...[
+                              !isTightHeight &&
+                              (!constraints.maxWidth.isFinite ||
+                                  constraints.maxWidth >= 330)) ...[
                             const SizedBox(width: 4),
                             _PinIconButton(
                               key: ValueKey('device-card-pin-${widget.id}'),
@@ -937,104 +941,107 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
     final int? latency = widget.latencyMs;
     final bool ipCopied = _copiedFieldId == 'ip';
 
-    return Row(
-      children: [
-        // Live status dot pill
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-          decoration: BoxDecoration(
-            color: statusColor.withValues(
-              alpha: palette.isDaylight ? 0.13 : 0.18,
-            ),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: statusColor.withValues(alpha: 0.42)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 5.5,
-                height: 5.5,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: statusColor,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                statusLabel,
-                style: TextStyle(
-                  fontSize: context.fluidFont(9.5),
-                  fontWeight: FontWeight.w700,
-                  color: statusColor,
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (isOnline && latency != null && latency > 0) ...[
-          const SizedBox(width: 5),
-          Builder(
-            builder: (_) {
-              final Color latColor = _latencyColor(palette, latency);
-              return Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                decoration: BoxDecoration(
-                  color: latColor.withValues(
-                    alpha: palette.isDaylight ? 0.10 : 0.16,
-                  ),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: latColor.withValues(alpha: 0.35)),
-                ),
-                child: Text(
-                  '${latency}ms',
-                  style: TextStyle(
-                    fontSize: context.fluidFont(9.5),
-                    fontWeight: FontWeight.w700,
-                    fontFamily: 'monospace',
-                    color: latColor,
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-        if (widget.useTls && !isCompact) ...[
-          const SizedBox(width: 5),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Live status dot pill
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
             decoration: BoxDecoration(
-              color: palette.primary.withValues(
-                alpha: palette.isDaylight ? 0.10 : 0.16,
+              color: statusColor.withValues(
+                alpha: palette.isDaylight ? 0.13 : 0.18,
               ),
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(
-                color: palette.primary.withValues(alpha: 0.32),
-              ),
+              border: Border.all(color: statusColor.withValues(alpha: 0.42)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.lock_rounded, size: 9, color: palette.primary),
-                const SizedBox(width: 2),
+                Container(
+                  width: 5.5,
+                  height: 5.5,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: statusColor,
+                  ),
+                ),
+                const SizedBox(width: 4),
                 Text(
-                  'TLS',
+                  statusLabel,
                   style: TextStyle(
-                    fontSize: context.fluidFont(8.5),
+                    fontSize: context.fluidFont(9.5),
                     fontWeight: FontWeight.w700,
-                    fontFamily: 'monospace',
-                    color: palette.primary,
+                    color: statusColor,
+                    letterSpacing: 0.2,
                   ),
                 ),
               ],
             ),
           ),
-        ],
-        const SizedBox(width: 5),
-        Flexible(
-          child: Tooltip(
+          if (isOnline && latency != null && latency > 0) ...[
+            const SizedBox(width: 5),
+            Builder(
+              builder: (_) {
+                final Color latColor = _latencyColor(palette, latency);
+                return Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: latColor.withValues(
+                      alpha: palette.isDaylight ? 0.10 : 0.16,
+                    ),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: latColor.withValues(alpha: 0.35)),
+                  ),
+                  child: Text(
+                    '${latency}ms',
+                    style: TextStyle(
+                      fontSize: context.fluidFont(9.5),
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                      color: latColor,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+          if (widget.useTls && !isCompact) ...[
+            const SizedBox(width: 5),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: palette.primary.withValues(
+                  alpha: palette.isDaylight ? 0.10 : 0.16,
+                ),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: palette.primary.withValues(alpha: 0.32),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lock_rounded, size: 9, color: palette.primary),
+                  const SizedBox(width: 2),
+                  Text(
+                    'TLS',
+                    style: TextStyle(
+                      fontSize: context.fluidFont(8.5),
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                      color: palette.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(width: 5),
+          Tooltip(
             message: 'Tap to copy IP (${widget.ip})',
             child: Material(
               color: Colors.transparent,
@@ -1050,20 +1057,17 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Flexible(
-                        child: Text(
-                          widget.ip,
-                          style: TextStyle(
-                            fontSize: context.fluidFont(10.0),
-                            fontWeight: FontWeight.w600,
-                            color: ipCopied
-                                ? palette.success
-                                : palette.textSecondary,
-                            fontFamily: 'monospace',
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                      Text(
+                        widget.ip,
+                        style: TextStyle(
+                          fontSize: context.fluidFont(10.0),
+                          fontWeight: FontWeight.w600,
+                          color: ipCopied
+                              ? palette.success
+                              : palette.textSecondary,
+                          fontFamily: 'monospace',
                         ),
+                        maxLines: 1,
                       ),
                       if (ipCopied) ...[
                         const SizedBox(width: 3),
@@ -1079,8 +1083,8 @@ class _ResponsiveDeviceCardState extends State<ResponsiveDeviceCard>
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
