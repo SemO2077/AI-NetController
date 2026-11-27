@@ -1,8 +1,8 @@
 {
   "name": "ai-netcontroller",
   "private": true,
-  "version": "0.90.0",
-  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.90.00)",
+  "version": "0.100.0",
+  "description": "AI NetController — Network Workstation Fleet Manager, Wake-on-LAN Orchestrator & Remote Diagnostics (Beta 0.100.00)",
   "license": "MIT",
   "repository": {
     "type": "git",

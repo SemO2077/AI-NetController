@@ -3,7 +3,7 @@ setlocal
 title AI NetController -- PC ^& Phone Setup Launcher
 color 0B
 echo ============================================================================
-echo   AI NetController v0.90.0 ^(Beta 0.90.00^) -- PC ^& Phone Setup Launcher
+echo   AI NetController v0.100.0 ^(Beta 0.100.00^) -- PC ^& Phone Setup Launcher
 echo ============================================================================
 echo.
 

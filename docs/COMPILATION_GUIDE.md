@@ -1,6 +1,6 @@
 # Compilation & Release Packaging Guide
 
-Instructions for building the **AI NetController** (`v0.90.0` / Beta `0.90.00`) web bundle, Windows Host Agent binaries, and Android APKs from source.
+Instructions for building the **AI NetController** (`v0.100.0` / Beta `0.100.00`) web bundle, Windows Host Agent binaries, and Android APKs from source.
 
 ## 1. Web Production Bundle (`apps/web/`)
 
@@ -31,7 +31,7 @@ python scripts/build_release_binaries.py --exe-only
 npm run build:exe
 ```
 
-This packages the agent via PyInstaller (`agent/build_agent.spec`, warm incremental cache by default, `--onedir` + standalone EXE, `upx=False`, PerMonitorV2 manifest, 3D Cyber-Glass icons, and incremental Authenticode signing via `agent/sign_binary.ps1`), outputs `AI_NetController_HostAgent_v0.90.0_win64.exe` and `AI_NetController_HostAgent_v0.90.0_win64_portable.zip` to `public/releases/v0.90.0/`, and updates `SHA256SUMS.txt` and `RELEASE_MANIFEST.json`. Pass `--onedir-only` or `--fast` for rapid local dev iteration, or `--clean` to rebuild from a cold PyInstaller cache.
+This packages the agent via PyInstaller (`agent/build_agent.spec`, warm incremental cache by default, `--onedir` + standalone EXE, `upx=False`, PerMonitorV2 manifest, 3D Cyber-Glass icons, and incremental Authenticode signing via `agent/sign_binary.ps1`), outputs `AI_NetController_HostAgent_v0.100.0_win64.exe` and `AI_NetController_HostAgent_v0.100.0_win64_portable.zip` to `public/releases/v0.100.0/`, and updates `SHA256SUMS.txt` and `RELEASE_MANIFEST.json`. Pass `--onedir-only` or `--fast` for rapid local dev iteration, or `--clean` to rebuild from a cold PyInstaller cache.
 
 ## 3. Android Companion Application (`apps/mobile/`)
 
@@ -52,7 +52,7 @@ npm run build:apk
 BUILD_APK.bat --fast --install
 ```
 
-Generated APKs are placed under `apps/mobile/build/app/outputs/flutter-apk/` and staged to `public/releases/v0.90.0/AI_NetController_v0.90.0_arm64-v8a.apk` and `public/releases/v0.90.0/AI_NetController_v0.90.0.apk` with updated `SHA256SUMS.txt` and `RELEASE_MANIFEST.json`.
+Generated APKs are placed under `apps/mobile/build/app/outputs/flutter-apk/` and staged to `public/releases/v0.100.0/AI_NetController_v0.100.0_arm64-v8a.apk` and `public/releases/v0.100.0/AI_NetController_v0.100.0.apk` with updated `SHA256SUMS.txt` and `RELEASE_MANIFEST.json`.
 
 ### Embedded WebView Shell APK Fallback
 
@@ -77,14 +77,14 @@ npm run verify:daemon
 
 ## 4. Checksum Verification
 
-Verify release artifact integrity against `public/releases/v0.90.0/SHA256SUMS.txt`:
+Verify release artifact integrity against `public/releases/v0.100.0/SHA256SUMS.txt`:
 
 ```powershell
-Get-FileHash public\releases\v0.90.0\* -Algorithm SHA256
+Get-FileHash public\releases\v0.100.0\* -Algorithm SHA256
 ```
 
 ```bash
-sha256sum -c public/releases/v0.90.0/SHA256SUMS.txt
+sha256sum -c public/releases/v0.100.0/SHA256SUMS.txt
 ```
 
 ## 5. Publishing Releases (GitHub & GitLab)
@@ -96,12 +96,12 @@ Publish built release artifacts and checksums from `public/releases/<tag>/` to b
 python scripts/publish_release.py --platform all --dry-run
 
 # Publish to both GitHub Releases and GitLab Releases + Generic Packages
-python scripts/publish_release.py --platform all --tag v0.90.0
+python scripts/publish_release.py --platform all --tag v0.100.0
 ```
 
 You can also target a single mirror directly:
 
 ```bash
-python scripts/publish_github_release.py --tag v0.90.0
-python scripts/publish_gitlab_release.py --tag v0.90.0
+python scripts/publish_github_release.py --tag v0.100.0
+python scripts/publish_gitlab_release.py --tag v0.100.0
 ```

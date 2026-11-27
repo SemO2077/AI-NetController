@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [v0.100.0] (Beta 0.100.00) - 2026-11-27
+
+### Host Agent Hardening, Telemetry & Desktop Ergonomics (`agent/`)
+- **Concurrency, Teardown & Input Reliability (`agent/agent.py`, `agent/network_fuzzer_shield.py`, `agent/multi_monitor_streamer.py`)**:
+  - Guarded `_client_pressed_buttons` with `_pressed_buttons_lock` and FIFO `_input_executor` draining to eliminate cross-thread dict-mutation races and stuck mouse buttons on client disconnect or panic stop.
+  - Eliminated synchronous stop `RuntimeWarning`s and stale UDP `8766` port bind contention, released idle screen-capture buffers after 15s, serialized DXGI switches via `_dxgi_lock`, invalidated MSS monitor caches on hot-plug, normalized web/mobile key aliases while preserving blocked combos, added Win32 UTF-16 clipboard retry fallback, and hardened IPv4-mapped IPv6 geofencing.
+- **Config, TLS, File Writer & Desktop GUI Polish (`agent/daemon_config.py`, `agent/tls_manager.py`, `agent/host_file_writer.py`, `agent/agent_gui.py`, `agent/cyber_ui_theme.py`)**:
+  - Cached hardened config directories (`_HARDENED_DIRS`) to avoid per-second NTFS ACL writes, zeroized decrypted DPAPI buffers before `LocalFree`, serialized TLS generation (`_TLS_LOCK`), added file-transfer abort & concurrent disk-space reservation checks, and added backward-compatible additive `OP_TELEMETRY` capability/status fields.
+  - Cancelled all dangling Tkinter `after` timers across theme swaps and teardown, added inline `"COPIED ✓"` feedback, `COPY IP`, Console `Copy Logs`, live dynamic system tray tooltips with quick-copy actions, PIN `<60s` expiry tint, and upgraded contrast/QR quiet zone.
+
+### Mobile Companion Fleet UX, Contrast & Streaming Controls (`apps/mobile/`)
+- **Fleet Cards, Pinning, Sorting, Contrast & Settings (`main.dart`, `fluid_theme.dart`, `responsive_device_card.dart`, `settings_command_deck.dart`, `wol_hub_panel.dart`, `activity_history_panel.dart`, `adaptive_layout_builder.dart`)**:
+  - Added WCAG luminance-aware `CyberPalette.contrastInkFor()` inks across all presets/polarities/glass modes, pinned hosts (`isPinned`), persisted `FleetSortMode`, `Pinned` filter chip, one-tap copy for IP/MAC/Endpoint, and narrow (`280px` at `1.35×` text scale) card + `NavigationRail` overflow fixes.
+  - Upgraded tokenized Settings search with suggestion chips, WoL quick-clear & status filters, Activity History `Errors (N)` filter & filtered export, `StatefulWidget` dialog controller disposal, capped `BackdropFilter` sigma, and `RepaintBoundary`/`.select(...)` rebuild reductions.
+- **Fullscreen Streaming HUD, Remote Keyboard & Pipeline Hardening (`fullscreen_stream_page.dart`, `viewport_stream_widget.dart`, `remote_keyboard_bar.dart`, `host_connection_client.dart`, `frame_decrypt_isolate.dart`, `file_transfer_engine.dart`)**:
+  - Isolated 120Hz pinch-to-zoom & restore pill inside `ValueNotifier`, added dock `FPS:15/30/60` toggle, RTT health badges, Daylight glass status cards, 3-finger HUD toggle, sticky 1-shot/locked modifier latches + macros + `PUSH`/`PULL` clipboard pills on `RemoteKeyboardBar`, `FrameDecryptIsolate` `onExit` fallback, and immediate `FileTransferEngine` cancel wakeup.
+
+### Web Console UI Polish, Screen Viewer HUD, Terminal & Server Hardening (`apps/web/`)
+- **Fleet Dashboard, Host Cards, Theme & Topology (`FleetDashboard.tsx`, `HostCard.tsx`, `NetworkTopologyGraph.tsx`, `index.css`, `server.ts`, `networkWorker.ts`, `i18n/translations.ts`)**:
+  - Balanced 3-column desktop grid without expanded orphan gaps, eliminated collapsed title truncation & redundant expanded actions, added `Pinned` filter, `Load` sort, `Servers` count badge, comfortable copyable IP/MAC/WS-URI/Pin/RTT pills, Topology `RTT: —` & empty-state card + mobile filters, 221-key BG/EN i18n parity checks, Tailwind v4 `@utility ink-*` helpers, reduced-motion/hidden-tab GPU animation pauses, atomic `server.ts` JSON writes, and coalesced `/api/hosts/scan`.
+- **Screen Viewer, Terminal, Omnibar, Settings & Modals (`ScreenViewerModal.tsx`, `CommandTerminal.tsx`, `CommandOmnibar.tsx`, `SettingsScreen.tsx`, `AuditLogViewer.tsx`, `MemoryManager.tsx`, `GeminiChatbot.tsx`, modals)**:
+  - Hid cursor reticle until live unpaused frames stream, restored Dark/Light contrast inside `.dark-video-stage`, added 2-row Stream HUD (`1080p/720p/480p`, `60/30/15fps`, zoom, monitor switch, Quick Actions scroll arrows & macros) with DOM-ref cursor updates, persisted terminal history & `.txt` export, centered Omnibar with interactive mode pills, mobile-wrapping Settings tabs, and canonical CSS token cleanup across all modals.
+- **Unified `v0.100.0` (`Beta 0.100.00` / `0.100.00`) Release**: Bumped all Node/Web (`0.100.0`), Python Host Agent (`0.100.0` / PE & MSIX `0.100.0.0`), Flutter/Android (`0.100.0+1000` / `versionCode 1000` / `0.100.00-beta`), documentation, and release artifacts/manifests.
+
+---
+
 ## [v0.90.0] (Beta 0.90.00) - 2026-11-22
 
 ### Performance, Screen Streaming & Low-Latency Input

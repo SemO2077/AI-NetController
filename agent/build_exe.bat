@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 title AI NetController Host Agent -- Instant Windows EXE Builder
 echo ============================================================================
-echo   AI NetController Host Agent v0.90.0 (Beta 0.90.00) -- Instant EXE Builder
+echo   AI NetController Host Agent v0.100.0 (Beta 0.100.00) -- Instant EXE Builder
 echo   (Warm-Cache PyInstaller --onedir + Standalone EXE ^| Zero UPX ^| Signed)
 echo ============================================================================
 echo.
@@ -68,7 +68,7 @@ if exist "..\scripts\build_release_binaries.py" (
     if exist "dist\AI_NetController_HostAgent_standalone.exe" (
         echo   Standalone   : %CD%\dist\AI_NetController_HostAgent_standalone.exe
     )
-    echo   Releases Dir : %CD%\..\public\releases\v0.90.0\
+    echo   Releases Dir : %CD%\..\public\releases\v0.100.0\
     echo ============================================================================
     if "%CI%"=="" if "!NO_PAUSE!"=="0" pause
     exit /b 0

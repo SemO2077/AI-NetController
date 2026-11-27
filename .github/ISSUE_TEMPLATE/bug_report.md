@@ -12,7 +12,7 @@ labels: bug
 - [ ] Packaging / Release scripts (`scripts/`)
 
 ## Environment
-- Version / Tag (e.g., `v0.90.0`):
+- Version / Tag (e.g., `v0.100.0`):
 - OS / Android Version:
 - Python / Node.js / Flutter Version (if running from source):
 

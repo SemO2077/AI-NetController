@@ -171,20 +171,23 @@ Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Cert -HashAlgorith
     "filename": "PATCH_NOTES.md",
     "language": "markdown",
     "category": "docs",
-    "description": "Beta v0.90.00 Release Patch Notes — Full Security Hardening, 60 FPS Hardware Screen Streaming, Mutual ECDH/AEAD Vault, Encrypted PIN Pairing & Ergonomic Control UX",
-    "code": `# Patch Notes — AI NetController v0.90.0 (Beta 0.90.00)
+    "description": "Beta v0.100.00 Release Patch Notes — Cross-Tier QOL Refinement, Dual-Polarity Cyber Glass Contrast, Host Agent Hardening, Mobile Streaming HUD & Web Console Ergonomics",
+    "code": `# Patch Notes — AI NetController v0.100.0 (Beta 0.100.00)
 
-**Version:** Beta 0.90.00 (v0.90.0)
+**Version:** Beta 0.100.00 (v0.100.0)
 **Protocol Version:** AI-NET/3.0-SECURE
 
-## 1. Zero-Bufferbloat 60 FPS Screen Streaming & Multi-Monitor Parity (agent/, apps/web/, apps/mobile/)
-- Upgraded Host Daemon AdaptiveScreenPipeline with Per-Monitor V2 DPI awareness, 2D strided delta hashing, TJFLAG_FASTDCT SIMD encoding, and backpressure-guarded explicit OP_FRAME_SYNC frame delivery.
-- Upgraded Web ScreenViewerModal with hardware-accelerated <canvas> + createImageBitmap + requestAnimationFrame decoding, debounced viewport negotiation, multi-monitor switching, and bidirectional clipboard sync.
-- Upgraded Flutter Mobile ZeroGcVideoPipeline with ring-buffer copy-on-write race protection, single-flight ui.instantiateImageCodec hardware decoding, and lifecycle-aware FrameSync heartbeats.
+## 1. Python Host Agent Hardening, Telemetry & Tray/GUI Ergonomics (agent/)
+- Guarded _client_pressed_buttons with a lock and FIFO _input_executor drain, eliminated shutdown RuntimeWarnings and UDP 8766 port reuse races, released idle capture buffers after 15s, serialized DXGI switches, cached NTFS directory ACLs, and zeroized DPAPI plaintext buffers before LocalFree.
+- Added backward-compatible additive OP_TELEMETRY capability/status fields, live dynamic tray tooltips with quick-copy actions, and clean Tkinter timer teardown across live theme swaps.
 
-## 2. Full-Stack Cryptographic Vault & Security Hardening (agent/, apps/web/, apps/mobile/)
-- Implemented Mutual X25519 + HKDF-SHA256 + ChaCha20-Poly1305 AEAD Vault (INIT_ECDH_VAULT_M / CST_ECDH_V2) and encrypted PIN pairing (CST-PAIR-X25519-V1) across Python Host Daemon, Node/Web Control Server, and Flutter Mobile Client.
-- Hardened command_ast_firewall.py against PowerShell evasion cmdlets, enforced DNS rebinding & SSRF LAN guards on /api/* and WebWorker sockets, and enforced Android Keystore AES-GCM secret storage + Biometric HITL gating.
+## 2. Flutter Mobile Fleet UX, WCAG Contrast & Streaming Controls (apps/mobile/)
+- Added WCAG luminance-aware CyberPalette contrast inks across Dark & Daylight modes, pinned hosts, persisted FleetSortMode, 1-tap IP/MAC/Endpoint copy, tokenized Settings search, WoL & Activity History filters, and narrow-screen (280px @ 1.35x) overflow fixes.
+- Isolated 120Hz pinch-to-zoom via ValueNotifier, added dock FPS toggling, sticky 1-shot/locked RemoteKeyboardBar modifier latches + macros + clipboard pills, and FrameDecryptIsolate onExit fallback.
+
+## 3. Web Control Console Polish, Screen Viewer HUD, Terminal & Server Reliability (apps/web/)
+- Balanced 3-column desktop HostCard grid without orphan gaps, prevented title truncation, added Pinned filter, Load sort, Topology empty state + mobile filters, 221-key BG/EN i18n parity, and atomic server.ts writes.
+- Upgraded ScreenViewerModal with hidden pre-stream reticle, crisp .dark-video-stage contrast, 2-row responsive Stream HUD, DOM-ref cursor updates, persisted terminal Up/Down history, centered Omnibar, and canonical CSS token cleanup across all modals.
 `
   }
 ];

@@ -560,7 +560,7 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                             ? 'Вариант Б: Самостоятелен Windows .EXE'
                             : 'Option B: Standalone Windows .EXE'}
                         </span>
-                        <span className="text-[10px] font-mono ink-muted">v0.90.0</span>
+                        <span className="text-[10px] font-mono ink-muted">v0.100.0</span>
                       </div>
                       <p className="text-[11px] ink-secondary leading-snug">
                         {isBg
@@ -570,14 +570,14 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       <a
                         href={
                           setupInfo?.exeDownloadUrl ||
-                          '/releases/v0.90.0/AI_NetController_HostAgent_v0.90.0_win64.exe'
+                          '/releases/v0.100.0/AI_NetController_HostAgent_v0.100.0_win64.exe'
                         }
-                        download="AI_NetController_HostAgent_v0.90.0_win64.exe"
+                        download="AI_NetController_HostAgent_v0.100.0_win64.exe"
                         onClick={() => triggerHapticFeedback('medium')}
                         className="inline-flex min-h-[40px] px-4 py-2 rounded-full liquid-control-pill ink-primary font-display font-semibold text-xs items-center gap-2 transition cursor-pointer"
                       >
                         <Download className="w-4 h-4 text-emerald-500" />
-                        <span>AI_NetController_HostAgent_v0.90.0_win64.exe</span>
+                        <span>AI_NetController_HostAgent_v0.100.0_win64.exe</span>
                       </a>
                     </div>
 
@@ -794,9 +794,9 @@ export const QuickSetupModal: React.FC<QuickSetupModalProps> = ({
                       <a
                         href={
                           setupInfo?.apkDownloadUrl ||
-                          '/releases/v0.90.0/AI_NetController_v0.90.0_arm64-v8a.apk'
+                          '/releases/v0.100.0/AI_NetController_v0.100.0_arm64-v8a.apk'
                         }
-                        download="AI_NetController_v0.90.0_arm64-v8a.apk"
+                        download="AI_NetController_v0.100.0_arm64-v8a.apk"
                         onClick={() => triggerHapticFeedback('medium')}
                         className="min-h-[42px] px-3.5 py-2 rounded-full liquid-control-pill ink-primary font-display font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                       >

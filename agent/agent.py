@@ -2758,7 +2758,7 @@ class HostAgentDaemon:
         self.loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
         self._stream_wake_event = asyncio.Event()
-        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.90.0)...")
+        logger.info("Initializing AI NetController Host Agent & OS Bridge (v0.100.0)...")
 
         # Initialize TLS BEFORE mDNS so TXT records accurately advertise tls=1 and full SHA-256 fp
         ssl_ctx = None
@@ -3051,7 +3051,7 @@ class HostAgentDaemon:
 
             desc = {
                 'os': platform.system(),
-                'version': '0.90.0',
+                'version': '0.100.0',
                 'ai': 'ollama-bridge',
                 'hostname': hostname,
                 'tls': '1' if self.tls_fingerprint else '0',
@@ -3268,7 +3268,7 @@ class HostAgentDaemon:
                 pystray.MenuItem("Open Control Center", _show_gui, default=True),
                 pystray.MenuItem("Install / Customize PC Features...", _install),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("AI NetController Beta 0.90.00", lambda: None, enabled=False),
+                pystray.MenuItem("AI NetController Beta 0.100.00", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Active Clients: {len(self.authenticated_clients)}", lambda: None, enabled=False),
                 pystray.MenuItem(lambda text: f"Endpoint: {self._get_local_ip()}:{self._get_effective_ws_port()}", lambda: None, enabled=False),
                 pystray.MenuItem("Copy LAN Endpoint", _copy_endpoint_tray),
@@ -5880,7 +5880,7 @@ class HostAgentDaemon:
         return {
             "hostname": self._hostname,
             "os": self._os_name,
-            "version": "0.90.0",
+            "version": "0.100.0",
             "is_running": self.is_running,
             "is_paused": self.is_paused,
             "is_locked": bool(self._lock_check_cache[1]),
@@ -5972,7 +5972,7 @@ class HostAgentDaemon:
                     "capture_backend": cap_backend,
                     "jpeg_encoder": jpeg_enc,
                     "os": self._os_name,
-                    "version": "0.90.0",
+                    "version": "0.100.0",
                     "protocol": "CST/3.0",
                     "local_ip": self._get_local_ip(),
                     "mac": self._get_primary_mac(),

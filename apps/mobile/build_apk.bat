@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 title AI NetController Mobile -- Instant Release APK Builder
 echo ============================================================================
-echo   AI NetController Mobile v0.90.0 (Beta 0.90.00) -- Instant APK Builder
+echo   AI NetController Mobile v0.100.0 (Beta 0.100.00) -- Instant APK Builder
 echo   (Warm-Cache Incremental Build ^| Direct Touchscreen ^& LAN UDP Discovery)
 echo ============================================================================
 echo.

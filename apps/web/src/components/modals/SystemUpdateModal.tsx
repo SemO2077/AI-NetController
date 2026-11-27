@@ -74,20 +74,20 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     name: 'AI NetController Host Agent (EXE + GUI)',
     category: 'core_system',
     engineType: 'host_daemon',
-    currentVersion: 'v0.90.0',
-    latestVersion: 'v0.90.0',
+    currentVersion: 'v0.100.0',
+    latestVersion: 'v0.100.0',
     description:
       'Native Desktop GUI Control Center, Binary WebSocket Server (0xC5,0x71), Signed Build',
     size: '18.2 MB',
     status: 'up_to_date',
     progress: 100,
     driftSeverity: 'none',
-    driftDescription: 'Synchronized with Beta v0.90.0',
+    driftDescription: 'Synchronized with Beta v0.100.0',
     compatibilityRequirement: 'Core supervisor required by local & cloud AI execution bridge.',
-    minRequiredDaemonVersion: 'v0.90.0',
+    minRequiredDaemonVersion: 'v0.100.0',
     lastCheckedAt: 'Pending check',
     releaseNotes:
-      'Beta 0.90.0: Zero-bufferbloat 60 FPS hardware screen streaming, Mutual X25519 + ChaCha20-Poly1305 AEAD Vault, encrypted CST-PAIR-X25519-V1 PIN pairing, and security-hardened cross-platform architecture.',
+      'Beta 0.100.00: Zero-bufferbloat 60 FPS hardware screen streaming, Mutual X25519 + ChaCha20-Poly1305 AEAD Vault, encrypted CST-PAIR-X25519-V1 PIN pairing, and security-hardened cross-platform architecture.',
   },
   {
     id: 'ast-security-rules',
@@ -103,8 +103,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     progress: 100,
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Requires Host Daemon v0.90.0 for NFKC & caret normalization',
-    minRequiredDaemonVersion: 'v0.90.0',
+    compatibilityRequirement: 'Requires Host Daemon v0.100.0 for NFKC & caret normalization',
+    minRequiredDaemonVersion: 'v0.100.0',
     lastCheckedAt: 'Pending check',
     releaseNotes:
       'Updated heuristics for obfuscated PowerShell/LOLBin execution and symlink traversal.',
@@ -123,7 +123,7 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
     compatibilityRequirement: 'Dual-stack IPv4/IPv6 compliant',
-    minRequiredDaemonVersion: 'v0.90.0',
+    minRequiredDaemonVersion: 'v0.100.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Latest RFC 6762 beacon engine.',
   },
@@ -140,8 +140,8 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     progress: 100,
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
-    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.90.0',
-    minRequiredDaemonVersion: 'v0.90.0',
+    compatibilityRequirement: 'Requires Host Agent Daemon >= v0.100.0',
+    minRequiredDaemonVersion: 'v0.100.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'AVX2/NEON SIMD color space transformation and multi-monitor enumeration.',
   },
@@ -159,7 +159,7 @@ const INITIAL_COMPONENTS: UpdatableComponent[] = [
     driftSeverity: 'none',
     driftDescription: 'No version drift (Up to date)',
     compatibilityRequirement: 'Supports IPv4 Directed Broadcast and persistent schedules',
-    minRequiredDaemonVersion: 'v0.90.0',
+    minRequiredDaemonVersion: 'v0.100.0',
     lastCheckedAt: 'Pending check',
     releaseNotes: 'Backed by persistent disk schedule storage and NIC WakeOnMagicPacket audit.',
   },
@@ -172,7 +172,7 @@ const COMPONENT_BG_MAP: Record<
   'deepseek-r1': {
     description: 'Локален модел за разсъждение (верига от мисли и синтез на системни команди)',
     driftDescription: '1 минорна версия назад (v1.4 -> v1.5.2)',
-    compatibilityRequirement: 'Изисква хост демон >= v0.90.0 за поточно предаване',
+    compatibilityRequirement: 'Изисква хост демон >= v0.100.0 за поточно предаване',
   },
   'qwen25-coder': {
     description: 'Автономен генератор на код и скриптове с проверка на синтаксиса',
@@ -182,7 +182,7 @@ const COMPONENT_BG_MAP: Record<
   'llama33-70b': {
     description: 'Водещ оркестратор за многохостов флот и автономно планиране на задачи',
     driftDescription: '1 минорна версия назад (v3.2.0 -> v3.3.1)',
-    compatibilityRequirement: 'Съвместим с хост демон v0.90.0 за няколко монитора',
+    compatibilityRequirement: 'Съвместим с хост демон v0.100.0 за няколко монитора',
   },
   'llama32-3b': {
     description: 'Лек 3B локален резервен модел (<1.8GB VRAM)',
@@ -192,14 +192,14 @@ const COMPONENT_BG_MAP: Record<
   'cst-host-agent': {
     description:
       'Графичен контролен център за настолен компютър, двоичен сървър и сертифициран компилатор',
-    driftDescription: 'Синхронизиран с Beta v0.90.0',
+    driftDescription: 'Синхронизиран с Beta v0.100.0',
     compatibilityRequirement: 'Основен супервайзър за AI и отдалечено управление.',
   },
   'ast-security-rules': {
     description:
       'Правила за карантина на високорискови команди (изтриване, форматиране, акаунти)',
     driftDescription: 'Актуална политика за сигурност',
-    compatibilityRequirement: 'Изисква хост демон v0.90.0 за NFKC нормализиране',
+    compatibilityRequirement: 'Изисква хост демон v0.100.0 за NFKC нормализиране',
   },
   'zeroconf-mdns': {
     description: 'Откриване на мрежови интерфейси по RFC 6762 и активен кеш на адреси',
@@ -209,7 +209,7 @@ const COMPONENT_BG_MAP: Record<
   'turbojpeg-pipeline': {
     description: 'Бързо хеширане на делта кадри под 5ms и споделена памет за видео поток',
     driftDescription: 'Актуална версия (v1.8.0)',
-    compatibilityRequirement: 'Изисква хост демон >= v0.90.0',
+    compatibilityRequirement: 'Изисква хост демон >= v0.100.0',
   },
   'directed-wol-engine': {
     description: 'Мрежов двигател за насочени пакети за събуждане през маршрутизатори',
@@ -252,7 +252,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
   const nextLogIdRef = React.useRef<number>(4);
   const [updateLogs, setUpdateLogs] = useState<Array<{ id: number; text: string }>>([
-    { id: 1, text: '[INIT] System & AI Model Registry initialized (Beta v0.90.0).' },
+    { id: 1, text: '[INIT] System & AI Model Registry initialized (Beta v0.100.0).' },
     { id: 2, text: '[INFO] Gemini & Local Ollama Runtime checks ready.' },
     { id: 3, text: '[READY] Update Center ready to query /api/update/status and /api/update/check.' },
   ]);
@@ -353,7 +353,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
 
   const systemCompatibility = useMemo(() => {
     const daemonComp = components.find((c) => c.id === 'cst-host-agent');
-    const daemonVersion = daemonComp ? daemonComp.currentVersion : 'v0.90.0';
+    const daemonVersion = daemonComp ? daemonComp.currentVersion : 'v0.100.0';
     const isDaemonLatest =
       daemonComp?.status === 'up_to_date' || daemonComp?.status === 'completed';
 
@@ -765,7 +765,7 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                       : 'System & AI Update Center'}
                   </h2>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--theme-accent)]/14 text-[var(--theme-accent)] border border-[var(--theme-accent)]/30 shrink-0">
-                    v0.90.0 OTA
+                    v0.100.0 OTA
                   </span>
                 </div>
                 <p className="text-xs ink-secondary mt-0.5 break-words leading-snug">
@@ -1030,8 +1030,8 @@ export const SystemUpdateModal: React.FC<SystemUpdateModalProps> = ({
                 <p className="text-[11.5px] ink-secondary leading-snug break-words">
                   {systemCompatibility.availableDaemonUpdates > 0
                     ? isBg
-                      ? 'Налична е актуализация за v0.90.0 хост агента.'
-                      : 'Host Agent update available for v0.90.0.'
+                      ? 'Налична е актуализация за v0.100.0 хост агента.'
+                      : 'Host Agent update available for v0.100.0.'
                     : isBg
                     ? 'Хост демонът е синхронизиран с протокол AI-NET/3.0.'
                     : 'Host Daemon is up to date with protocol AI-NET/3.0.'}

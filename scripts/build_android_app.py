@@ -192,7 +192,7 @@ def setup_staging():
     rel_tag = _get_release_tag()
     rel_src = os.path.join(ROOT_DIR, "public", "releases", rel_tag)
     if not os.path.exists(rel_src):
-        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.90.0")
+        rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.100.0")
     if not os.path.exists(rel_src):
         rel_src = os.path.join(ROOT_DIR, "public", "releases", "v0.70.0")
     rel_dst = os.path.join(STAGE_DIR, "assets", "dist", "releases", rel_tag)
@@ -209,11 +209,11 @@ def _get_release_tag():
     if os.path.exists(pkg_json):
         try:
             with open(pkg_json, "r", encoding="utf-8") as f:
-                v = str(json.load(f).get("version", "0.90.0")).strip()
+                v = str(json.load(f).get("version", "0.100.0")).strip()
                 return f"v{v}" if not v.startswith("v") else v
         except Exception:
             pass
-    return "v0.90.0"
+    return "v0.100.0"
 
 
 def _get_version_name():
@@ -666,8 +666,8 @@ def _ensure_flutter_gradle_setup(flutter_bin: str) -> None:
                     f"sdk.dir={sdk_esc}\n"
                     f"flutter.sdk={fl_esc}\n"
                     "flutter.buildMode=release\n"
-                    "flutter.versionName=0.90.0\n"
-                    "flutter.versionCode=900\n"
+                    "flutter.versionName=0.100.0\n"
+                    "flutter.versionCode=1000\n"
                 )
         except Exception:
             pass
